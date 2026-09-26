@@ -579,22 +579,26 @@ function App() {
                 "space-y-6 md:space-y-8 transition-all",
                 isFavoriteEditMode && "-m-4 md:-m-6 p-4 md:p-6 border-2 border-yellow-400/50 bg-yellow-400/5 rounded-ps-2xl"
               )}>
-                <div className="flex items-center justify-between">
-                  <h2 className={cn(
-                    "text-2xl font-bold tracking-tight",
-                    isFavoriteEditMode ? "text-yellow-400" : "text-white"
-                  )}>
-                    {isFavoriteEditMode ? (
-                      t("app.dashboard.editFavorites", "Edit Favorites")
-                    ) : (
-                      <>{t("app.dashboard.title_1", "Launch")} <span className="text-ps-blue">{t("app.dashboard.title_2", "Payload")}</span></>
-                    )}
-                  </h2>
+                {/* [CN-FORK] v0.5.1.7 主界面风格统一：hero 面板页头 + 渐变主标题 + 幽灵编辑按钮 */}
+                <div className="panel-card card-enter px-5 py-6 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 mb-1">NayePlmTools</p>
+                    <h2 className={cn(
+                      "text-2xl font-bold tracking-tight",
+                      isFavoriteEditMode ? "text-yellow-400" : "bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-ps-blue"
+                    )}>
+                      {isFavoriteEditMode ? (
+                        t("app.dashboard.editFavorites", "Edit Favorites")
+                      ) : (
+                        <>{t("app.dashboard.title_1", "Launch")} {t("app.dashboard.title_2", "Payload")}</>
+                      )}
+                    </h2>
+                  </div>
                   <button
                     onClick={() => setIsFavoriteEditMode(!isFavoriteEditMode)}
                     className={cn(
-                      "p-3 rounded-full transition-colors flex items-center justify-center",
-                      isFavoriteEditMode ? "bg-yellow-400/20 text-yellow-400" : "bg-white/5 text-zinc-400 hover:text-white hover:bg-white/10"
+                      "btn-ghost p-3 rounded-xl flex items-center justify-center shrink-0",
+                      isFavoriteEditMode && "!border-yellow-400/40 !bg-yellow-400/10 text-yellow-400"
                     )}
                     title={t("app.dashboard.editFavorites", "Edit Favorites")}
                   >
@@ -618,22 +622,32 @@ function App() {
                         <p className="text-white font-bold tracking-tight text-lg">{t("app.dashboard.empty.title", "Empty Library")}</p>
                         <p className="text-zinc-500 font-medium">{t("app.dashboard.empty.message", "Add payloads from the Cloud Hub to get started.")}</p>
                       </div>
-                      <button onClick={() => { setStorageScrollTarget('cloud-repository'); setView('storage'); }} className="px-8 py-3 bg-ps-blue text-white rounded-xl font-bold tracking-tight">{t("app.dashboard.empty.button", "Open Repository")}</button>
+                      <button onClick={() => { setStorageScrollTarget('cloud-repository'); setView('storage'); }} className="btn-primary px-8 py-3 font-bold tracking-tight">{t("app.dashboard.empty.button", "Open Repository")}</button>
                     </div>
                   </div>
                 ) : (
                   <div className="space-y-6 md:space-y-8">
                     {activeFavorites.length > 0 && (
                       <div className="space-y-4">
+                        {/* [CN-FORK] 分组标题：渐变图标盒 + chip 计数，与管理页板块头同构 */}
                         <div className="flex items-center gap-3">
-                          <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
-                          <span className="text-sm font-bold tracking-widest uppercase text-yellow-400">{txtFavorites}</span>
+                          <div className="p-2 rounded-xl bg-gradient-to-br from-yellow-400/25 to-yellow-400/5 ring-1 ring-inset ring-yellow-400/20">
+                            <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
+                          </div>
+                          <span className="text-sm font-semibold text-white">{txtFavorites}</span>
+                          <span className="chip chip-muted">{activeFavorites.length}</span>
                         </div>
                         <div className={gridCols}>
                           {activeFavorites.map(makeCard)}
                         </div>
                         <div className="border-t border-white/5 pt-8">
-                          <p className="text-sm font-bold tracking-widest uppercase text-zinc-500 mb-4">{txtOthers}</p>
+                          <div className="flex items-center gap-3 mb-4">
+                            <div className="p-2 rounded-xl bg-gradient-to-br from-ps-blue/30 to-ps-blue/5 ring-1 ring-inset ring-ps-blue/20">
+                              <Package className="w-4 h-4 text-ps-blue" />
+                            </div>
+                            <span className="text-sm font-semibold text-zinc-300">{txtOthers}</span>
+                            <span className="chip chip-muted">{unfavorited.length}</span>
+                          </div>
                           <div className={gridCols}>
                             {unfavorited.map(makeCard)}
                           </div>

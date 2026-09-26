@@ -10,7 +10,7 @@ const PayloadButton = ({ path, onClick, isLoading, sourceName, version, isFavori
     <button
       onClick={onClick}
       disabled={isLoading}
-      className="group glass-card p-4 rounded-ps-xl flex flex-col border border-white/5 hover:border-ps-blue hover:bg-ps-blue/5 transition-all text-left relative"
+      className="group card-enter p-4 rounded-xl flex flex-col bg-white/[0.02] border border-white/10 hover:border-ps-blue/50 hover:bg-white/[0.04] hover:shadow-[0_0_24px_rgba(0,149,255,0.1)] transition-all text-left relative"
     >
       <div className="flex items-start justify-between w-full z-10">
         <PayloadName path={path} version={version} className="text-white text-base" stacked />
@@ -67,7 +67,7 @@ const PayloadButton = ({ path, onClick, isLoading, sourceName, version, isFavori
           </button>
         </div>
       )}
-      <div className="absolute inset-0 rounded-ps-xl bg-ps-blue/0 group-hover:bg-ps-blue/5 transition-colors z-0 pointer-events-none" />
+      <div className="absolute inset-0 rounded-xl bg-ps-blue/0 group-hover:bg-ps-blue/5 transition-colors z-0 pointer-events-none" />
     </button>
   )
 }
