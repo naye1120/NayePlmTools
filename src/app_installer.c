@@ -173,7 +173,7 @@ int pldmgr_install_app_if_needed(void) {
   }
 
   pldmgr_log("[PLDMGR] Launcher app installed successfully.\n");
-  pldmgr_notify("NayePlmTools Ready!");
+  pldmgr_notify("NayePlmTools"); /* [CN-FORK] 简短占位：随后的启动通知会补发 IP:端口 */
   
   sceAppInstUtilTerminate();
   return 0;

@@ -103,7 +103,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.1.3'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.1.4'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 app.get('/list_payloads', (req, res) => {

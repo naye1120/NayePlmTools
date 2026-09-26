@@ -24,6 +24,7 @@
 #include "repository.h"
 #include "ps5_launcher.h"
 #include "app_installer.h"
+#include "utils.h" /* [CN-FORK] pldmgr_get_local_ip 提前取 IP */
 
 #define DEFAULT_PORT MENU_PORT
 
@@ -120,6 +121,10 @@ int main(int argc, char *argv[]) {
     PldmgrConfig cfg;
     config_read(&cfg);
 
+    /* [CN-FORK] IP 提前获取：供启动日志与最后一条通知复用（通知为排他显示，顺序见下方） */
+    char current_ip[64] = "unknown";
+    pldmgr_get_local_ip(current_ip, sizeof(current_ip));
+
     /* Install app if requested */
     if (cfg.auto_install_app) {
         pldmgr_install_app_if_needed();
@@ -147,24 +152,10 @@ int main(int argc, char *argv[]) {
     }
 
     pldmgr_log("[PLDMGR] Server is running. Visit /shutdown to exit.\n");
+    pldmgr_log("[PLDMGR] Web UI available at http://%s:%d\n", current_ip, port); /* [CN-FORK] 启动 debug 显示 ip 和端口 */
 
     /* Try cache refresh */
     repository_ensure_fresh(0);
-
-    /* Startup Notification - Only show if browser autostart is off */
-    char current_ip[64] = "unknown";
-    pldmgr_get_local_ip(current_ip, sizeof(current_ip));
-
-    pldmgr_log("[PLDMGR] Web UI available at http://%s:%d\n", current_ip, port); /* [CN-FORK] 启动 debug 显示 ip 和端口 */
-
-    if (!cfg.auto_browser_open) {
-        if (strcmp(current_ip, "unknown") != 0) {
-            pldmgr_notify("NayePlmTools v%s\nIP: %s\nPort: %d", MENU_VERSION,
-                          current_ip, port);
-        } else {
-            pldmgr_notify("NayePlmTools v%s\nWaiting for Network...", MENU_VERSION);
-        }
-    }
 
     /* Start Autoload Sequence (if config exists) */
     pldmgr_autoload_start();
@@ -173,6 +164,11 @@ int main(int argc, char *argv[]) {
         char browser_url[128];
         snprintf(browser_url, sizeof(browser_url), "http://127.0.0.1:%d", port);
         ps5_launch_browser(browser_url);
+    }
+
+    /* [CN-FORK] 启动通知最后才发：PS5 通知为排他显示，过早发送会被安装/自动加载等后续通知顶掉 */
+    if (!cfg.auto_browser_open && strcmp(current_ip, "unknown") != 0) {
+        pldmgr_notify("NayePlmTools Ready!\nIP: %s\nPort: %d", current_ip, port);
     }
 
     /* Watchdog and main loop */
@@ -205,7 +201,7 @@ int main(int argc, char *argv[]) {
                            current_ip);
             } else {
                 pldmgr_log("[PLDMGR] !!! Failed to restart server after standby!\n");
-                pldmgr_notify("Payload Manager: Server restart failed after standby");
+                pldmgr_notify("NayePlmTools: Server restart failed after standby");
                 strcpy(current_ip, "unknown");
             }
 
@@ -236,7 +232,7 @@ int main(int argc, char *argv[]) {
                 if (daemon) {
                     strcpy(current_ip, new_ip);
                     pldmgr_log("[PLDMGR] Server restored on %s:%d\n", current_ip, port);
-                    pldmgr_notify("Payload Manager: Service Restored\nIP: %s", current_ip);
+                    pldmgr_notify("NayePlmTools: Service Restored\nIP: %s", current_ip);
                 } else {
                     pldmgr_log("[PLDMGR] !!! Failed to restore server!\n");
                 }
@@ -261,7 +257,7 @@ int main(int argc, char *argv[]) {
                 } else {
                     pldmgr_log("[PLDMGR] !!! Failed to restart server after "
                                "network loss!\n");
-                    pldmgr_notify("Payload Manager: Server restart failed");
+                    pldmgr_notify("NayePlmTools: Server restart failed");
                 }
             }
         }

@@ -101,7 +101,7 @@ void* pldmgr_autoload_worker(void* arg) {
             if (!pldmgr_server_is_active()) {
                 char ip[64];
                 if (pldmgr_get_local_ip(ip, sizeof(ip)) != 0) strcpy(ip, "0.0.0.0");
-                pldmgr_notify("Payload Manager Running\nhttp://%s:%d", ip, MENU_PORT);
+                pldmgr_notify("NayePlmTools Running\nhttp://%s:%d", ip, MENU_PORT);
                 pldmgr_notify("Autoloading in %ds\nPress PS Button to Abort", auto_delay);
             }
 
