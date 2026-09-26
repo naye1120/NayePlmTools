@@ -98,7 +98,7 @@ static int needs_update(const char *path, const uint8_t *expected_data,
 }
 
 int pldmgr_install_app_if_needed(void) {
-  const char *title_id = "PLDM00001";
+  const char *title_id = "NAYE00001"; /* [CN-FORK] 必须与 assets/param.json 的 titleId 一致；PS5 格式 4字母+5数字 */
   char base_dir[256];
   char param_path[256];
   char icon_path[256];
@@ -126,10 +126,10 @@ int pldmgr_install_app_if_needed(void) {
 
   if (stat(base_dir, &st) == 0) {
     pldmgr_log("[PLDMGR] Updating existing app launcher (%s)...\n", title_id);
-    pldmgr_notify("Updating Payload Manager App...");
+    pldmgr_notify("Updating NayePlmTools...");
   } else {
     pldmgr_log("[PLDMGR] Installing browser launcher app (%s)...\n", title_id);
-    pldmgr_notify("Installing Payload Manager App...");
+    pldmgr_notify("Installing NayePlmTools...");
   }
 
   int err;
@@ -173,7 +173,7 @@ int pldmgr_install_app_if_needed(void) {
   }
 
   pldmgr_log("[PLDMGR] Launcher app installed successfully.\n");
-  pldmgr_notify("Payload Manager App Ready!");
+  pldmgr_notify("NayePlmTools Ready!");
   
   sceAppInstUtilTerminate();
   return 0;

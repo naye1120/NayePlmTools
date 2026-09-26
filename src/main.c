@@ -63,7 +63,7 @@ static pid_t find_pid(const char *name) {
         char *ki_tdname = (char *)&ptr[447];
 
         ptr += ki_structsize;
-        if (!strcmp(name, ki_tdname) && ki_pid != mypid) {
+        if (!strncmp(ki_tdname, name, strlen(name)) && ki_pid != mypid) { /* [CN-FORK] 前缀匹配，兼容线程名长度截断，确保旧进程必被 kill */
             pid = ki_pid;
         }
     }
@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
 
     syscall(SYS_thr_set_name, -1, "NayePlmTools.elf"); /* [CN-FORK] 进程/线程名，与 find_pid / 前端 critical 判断一致；上游为 "pldmgr.elf" */
 
-    while ((pid = find_pid("NayePlmTools.elf")) > 0) {
+    while ((pid = find_pid("NayePlmTools")) > 0) { /* [CN-FORK] 用不含 .elf 的安全前缀匹配旧进程 */
         if (kill(pid, SIGKILL)) {
             pldmgr_log("[PLDMGR] kill failed\n");
             return EXIT_FAILURE;

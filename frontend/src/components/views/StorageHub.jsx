@@ -202,11 +202,15 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
         </h2>
 
         {!isPS5 && (
-          <label className="inline-flex items-center space-x-2 px-4 py-2.5 bg-ps-blue hover:bg-ps-blue/80 text-white rounded-xl font-bold tracking-tight text-sm cursor-pointer transition-all shrink-0 transform active:scale-95">
-            <Upload className="w-4 h-4" />
-            <span>{t("storage_hub.upload_btn", "Upload ELF Payload")}</span>
-            <input type="file" className="hidden" onChange={onUpload} accept={isIOS ? undefined : ".elf,.bin"} />
-          </label>
+          <div className="flex items-center gap-3 shrink-0">
+            {/* [CN-FORK] 上传按钮前显示服务器 IP:端口 */}
+            <span className="text-sm font-mono text-zinc-400 tracking-tight">{ip}:8911</span>
+            <label className="inline-flex items-center space-x-2 px-4 py-2.5 bg-ps-blue hover:bg-ps-blue/80 text-white rounded-xl font-bold tracking-tight text-sm cursor-pointer transition-all shrink-0 transform active:scale-95">
+              <Upload className="w-4 h-4" />
+              <span>{t("storage_hub.upload_btn", "Upload ELF Payload")}</span>
+              <input type="file" className="hidden" onChange={onUpload} accept={isIOS ? undefined : ".elf,.bin"} />
+            </label>
+          </div>
         )}
       </div>
 
