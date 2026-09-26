@@ -82,6 +82,11 @@ $(ASSET_HEADER): $(FRONTEND_DIST)
 	$(PYTHON) tools/gen_assets.py $(FRONTEND_DIST) $(ASSET_HEADER) index_html
 
 $(MANIFEST_HEADER): $(FRONTEND_DIST)
+	@echo "Injecting build date into cache.appcache (AppCache update trigger)..."
+	@DATE=$$(date -u +"%Y-%m-%d %H:%M:%S UTC"); \
+	TMP=$$(mktemp "$${TMPDIR:-/tmp}/nayeplmtools.XXXXXX"); \
+	sed "s|\[\[BUILD_DATE\]\]|$$DATE|g" $(FRONTEND_MANIFEST) > $$TMP && mv $$TMP $(FRONTEND_MANIFEST); \
+	echo "Manifest build stamp: $$DATE"
 	@echo "Generating Manifest asset header..."
 	$(PYTHON) tools/gen_assets.py $(FRONTEND_MANIFEST) $(MANIFEST_HEADER) cache_appcache
 
