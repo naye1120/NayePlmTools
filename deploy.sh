@@ -7,11 +7,13 @@ if [ -z "$1" ]; then
 fi
 
 PS5_IP="$1"
-MENU_PORT="8084"
+MENU_PORT="8911" # [CN-FORK] Web 端口，上游默认 8084，与 pldmgr.h MENU_PORT 保持一致
 LOADER_PORT="9021"
-ELF="pldmgr.elf"
+# [CN-FORK] ELF 产物名带版本号，版本取自 pldmgr.h MENU_VERSION
+VERSION=$(grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $3}' | tr -d '"')
+ELF="NayePlmTools_${VERSION}.elf"
 
-echo "--- Deploying Payload Manager to $PS5_IP ---"
+echo "--- Deploying NayePlmTools to $PS5_IP ---"
 
 # 1. Build the React Frontend
 echo "[1/3] Building React Frontend..."

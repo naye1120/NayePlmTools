@@ -83,9 +83,9 @@ int main(int argc, char *argv[]) {
     unsigned short port = DEFAULT_PORT;
     pid_t pid;
 
-    syscall(SYS_thr_set_name, -1, "pldmgr.elf");
+    syscall(SYS_thr_set_name, -1, "NayePlmTools"); /* [CN-FORK] 进程名（ki_comm），与 find_pid / 前端 critical 判断一致；上游为 "pldmgr.elf" */
 
-    while ((pid = find_pid("pldmgr.elf")) > 0) {
+    while ((pid = find_pid("NayePlmTools")) > 0) {
         if (kill(pid, SIGKILL)) {
             pldmgr_log("[PLDMGR] kill failed\n");
             return EXIT_FAILURE;
@@ -93,7 +93,7 @@ int main(int argc, char *argv[]) {
         sleep(1);
     }
 
-    pldmgr_log("[PLDMGR] Starting Payload Manager v%s on port %d...\n",
+    pldmgr_log("[PLDMGR] Starting NayePlmTools v%s on port %d...\n",
                pldmgr_version_sig + 11, port);
 
     /* Check for Self-Update */
@@ -142,7 +142,7 @@ int main(int argc, char *argv[]) {
 
     if (NULL == daemon) {
         pldmgr_log("[PLDMGR] Failed to start HTTP daemon!\n");
-        pldmgr_notify("Error: HTTP Server Failed\nPort 8084 may be busy");
+        pldmgr_notify("Error: HTTP Server Failed\nPort 8911 may be busy");
         return 1;
     }
 
@@ -157,10 +157,10 @@ int main(int argc, char *argv[]) {
 
     if (!cfg.auto_browser_open) {
         if (strcmp(current_ip, "unknown") != 0) {
-            pldmgr_notify("Payload Manager v%s\nIP: %s\nPort: %d", MENU_VERSION,
+            pldmgr_notify("NayePlmTools v%s\nIP: %s\nPort: %d", MENU_VERSION,
                           current_ip, port);
         } else {
-            pldmgr_notify("Payload Manager v%s\nWaiting for Network...", MENU_VERSION);
+            pldmgr_notify("NayePlmTools v%s\nWaiting for Network...", MENU_VERSION);
         }
     }
 

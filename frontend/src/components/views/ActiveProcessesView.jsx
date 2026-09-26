@@ -53,7 +53,7 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
   }, [processes, showAll, search])
 
   const handleKill = (proc) => {
-    const isCritical = proc.name === 'pldmgr.elf' || proc.name === 'elfldr.elf';
+    const isCritical = proc.name === 'NayePlmTools' || proc.name === 'elfldr.elf';
     if (isCritical) {
       addToast(t("active_processes.cannot_kill", "Cannot kill {{name}}", { name: proc.name }), "error")
       return
@@ -81,9 +81,9 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
   }
 
   return (
-    <div className="space-y-12">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-8">
-        <h2 className="text-4xl font-extrabold text-white tracking-tight">
+    <div className="space-y-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <h2 className="text-2xl font-bold text-white tracking-tight">
           {t("active_processes.title_active", "Active")} <span className="text-ps-blue">{t("active_processes.title_processes", "Processes")}</span>
         </h2>
         <div className="flex items-center space-x-4">
@@ -142,20 +142,20 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
         ) : (
           <div className="grid grid-cols-1 gap-4">
             {filteredProcesses.map((p) => {
-              const critical = p.name === 'pldmgr.elf' || p.name === 'elfldr.elf';
+              const critical = p.name === 'NayePlmTools' || p.name === 'elfldr.elf';
               return (
                 <div key={p.pid} className={cn(
-                  "glass-card p-4 md:p-6 rounded-2xl flex flex-row items-center justify-between gap-4 border-white/10 hover:border-ps-blue/20 transition-all bg-white/[0.01]"
+                  "glass-card p-3 rounded-2xl flex flex-row items-center justify-between gap-3 border-white/10 hover:border-ps-blue/20 transition-all bg-white/[0.01]"
                 )}>
                   <div className="flex items-center space-x-4 min-w-0 flex-1">
                     <div className={cn(
                       "p-3 rounded-xl flex-shrink-0",
                       p.is_daemon ? "bg-ps-blue/10 text-ps-blue" : "bg-white/5 text-zinc-400"
                     )}>
-                      <Cpu className="w-6 h-6" />
+                      <Cpu className="w-5 h-5" />
                     </div>
                     <div className="min-w-0 flex-1 space-y-1">
-                      <h3 className="text-xl font-bold text-white truncate">{p.name}</h3>
+                      <h3 className="text-base font-bold text-white truncate">{p.name}</h3>
                       <div className="flex items-center space-x-4 text-xs font-mono text-zinc-500 uppercase tracking-wider">
                         <span>PID: <span className="text-zinc-300">{p.pid}</span></span>
                         <span>MEM: <span className="text-zinc-300">{p.memory.toFixed(1)} MiB</span></span>
@@ -177,7 +177,7 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
           </div>
         )}
 
-        <div className="flex items-start space-x-3 text-zinc-500 text-sm p-6 glass-card rounded-2xl border-white/5 bg-white/[0.01]">
+        <div className="flex items-start space-x-3 text-zinc-500 text-sm p-4 glass-card rounded-2xl border-white/5 bg-white/[0.01]">
           <Info className="w-5 h-5 shrink-0 text-ps-blue" />
           <div>
             <p className="font-bold text-white mb-1">{t("active_processes.note_title", "Note:")}</p>

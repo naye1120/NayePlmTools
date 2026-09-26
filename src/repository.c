@@ -666,7 +666,7 @@ int repository_check_self_update(char *out_path, size_t out_size) {
 
                         /* Look for .elf or .bin files that match our name */
                         if (strstr(sentry->d_name, ".elf") || strstr(sentry->d_name, ".bin")) {
-                            if (strcasestr(sentry->d_name, "pldmgr") || strcasestr(sentry->d_name, "payload-manager")) {
+                            if (strcasestr(sentry->d_name, "pldmgr") || strcasestr(sentry->d_name, "payload-manager") || strcasestr(sentry->d_name, "nayeplmtools")) {
                                 char full_path[512];
                                 snprintf(full_path, sizeof(full_path), "%s/%s", subdir_path, sentry->d_name);
 

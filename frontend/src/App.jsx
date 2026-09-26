@@ -416,8 +416,8 @@ function App() {
       <div className="min-h-screen ps5-bg text-zinc-100 font-ps5 flex flex-col items-center justify-center p-4 text-center">
         <div className="max-w-lg p-12 bg-black/40 rounded-3xl border border-white/5">
           <div className="text-7xl font-light text-zinc-400 mb-12 font-mono">:(</div>
-          <h1 className="text-2xl font-bold mb-4 text-zinc-300">{t("app.offline.title", "Payload Manager is not running...")}</h1>
-          <p className="text-lg text-zinc-400 leading-relaxed">{t("app.offline.message_1", "Please ensure you have loaded")} <strong>pldmgr.elf</strong> {t("app.offline.message_2", "on your PS5 before launching this application.")}</p>
+          <h1 className="text-2xl font-bold mb-4 text-zinc-300">{t("app.offline.title", "NayePlmTools is not running...")}</h1>
+          <p className="text-lg text-zinc-400 leading-relaxed">{t("app.offline.message_1", "Please ensure you have loaded")} <strong>NayePlmTools</strong> {t("app.offline.message_2", "on your PS5 before launching this application.")}</p>
         </div>
       </div>
     )
@@ -450,8 +450,8 @@ function App() {
       <Modal show={downloadModal.show} title={t("app.modals.installing.title", "Installing Payload")} onClose={() => { }}>
         <div className="space-y-6">
           <div className="flex justify-between items-end">
-            <span className="text-ps-blue font-black uppercase italic tracking-tighter text-2xl">{downloadModal.name}</span>
-            <span className="text-white font-bold text-xl">{downloadModal.progress}%</span>
+            <span className="text-ps-blue font-black uppercase italic tracking-tighter text-lg">{downloadModal.name}</span>
+            <span className="text-white font-bold text-base">{downloadModal.progress}%</span>
           </div>
           <div className="h-4 bg-white/5 rounded-full overflow-hidden border border-white/10 p-0.5">
             <div className="h-full bg-ps-blue rounded-full transition-all duration-500" style={{ width: `${downloadModal.progress}%` }} />
@@ -490,7 +490,7 @@ function App() {
               <div className="p-2 bg-ps-blue rounded-xl">
                 <LogoIcon className="w-6 h-6 text-white" />
               </div>
-              <span className="text-2xl font-bold tracking-tight text-white">PLDMGR</span>
+              <span className="text-2xl font-bold tracking-tight text-white">NayePlmTools</span>
             </div>
           </div>
 
@@ -508,6 +508,18 @@ function App() {
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} />
           </nav>
+          {/* [CN-FORK] 侧栏底部：fork 维护者 naye 常驻署名 + 当前版本 */}
+          <div className="pt-4 mt-2 border-t border-white/5 shrink-0 text-center px-2">
+            {sidebarExpanded ? (
+              <p className="text-[11px] text-zinc-600 font-medium tracking-wide whitespace-nowrap">
+                {t("app.fork.by", "Fork by {{maintainer}}", { maintainer: "naye" })}
+                <span className="mx-1 text-zinc-700">·</span>
+                <span className="font-mono">v{version}</span>
+              </p>
+            ) : (
+              <p className="text-[10px] text-zinc-700 font-mono">{version !== 'Loading...' ? `v${version}` : ''}</p>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -564,12 +576,12 @@ function App() {
             )
             return (
               <div className={cn(
-                "space-y-8 md:space-y-12 transition-all",
+                "space-y-6 md:space-y-8 transition-all",
                 isFavoriteEditMode && "-m-4 md:-m-6 p-4 md:p-6 border-2 border-yellow-400/50 bg-yellow-400/5 rounded-ps-2xl"
               )}>
                 <div className="flex items-center justify-between">
                   <h2 className={cn(
-                    "text-4xl font-extrabold tracking-tight",
+                    "text-2xl font-bold tracking-tight",
                     isFavoriteEditMode ? "text-yellow-400" : "text-white"
                   )}>
                     {isFavoriteEditMode ? (
@@ -592,7 +604,7 @@ function App() {
                 {loadingPayloads ? (
                   <div className={gridCols}>
                     {Array.from({ length: 4 }).map((_, i) => (
-                      <div key={i} className="glass-card p-6 rounded-ps-xl flex flex-col space-y-2 border-white/5">
+                      <div key={i} className="glass-card p-4 rounded-ps-xl flex flex-col space-y-2 border-white/5">
                         <div className="h-7 w-40 bg-white/5 rounded-lg" />
                         <div className="h-3 w-20 bg-white/5 rounded-md opacity-50" />
                       </div>
@@ -603,14 +615,14 @@ function App() {
                     <div className="col-span-full py-20 border-2 border-dashed border-white/5 rounded-ps-xl flex flex-col items-center justify-center space-y-6 bg-white/[0.01]">
                       <Package className="w-16 h-16 text-white/10" />
                       <div className="text-center">
-                        <p className="text-white font-extrabold tracking-tight text-2xl">{t("app.dashboard.empty.title", "Empty Library")}</p>
+                        <p className="text-white font-bold tracking-tight text-lg">{t("app.dashboard.empty.title", "Empty Library")}</p>
                         <p className="text-zinc-500 font-medium">{t("app.dashboard.empty.message", "Add payloads from the Cloud Hub to get started.")}</p>
                       </div>
                       <button onClick={() => { setStorageScrollTarget('cloud-repository'); setView('storage'); }} className="px-8 py-3 bg-ps-blue text-white rounded-xl font-bold tracking-tight">{t("app.dashboard.empty.button", "Open Repository")}</button>
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-8 md:space-y-12">
+                  <div className="space-y-6 md:space-y-8">
                     {activeFavorites.length > 0 && (
                       <div className="space-y-4">
                         <div className="flex items-center gap-3">
@@ -710,7 +722,7 @@ function App() {
             />
           )}
 
-          {view === 'donate' && <DonateView />}
+          {view === 'donate' && <DonateView version={version} />}
         </main>
       </div>
 

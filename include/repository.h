@@ -63,7 +63,7 @@ int repository_install_commit(const char *filename, const char *uploaded_temp_pa
  * Returns 0 on success. */
 int get_elf_pldmgr_version(const char *path, char *out_version, size_t out_size);
 
-/* Scan the payload storage for a newer pldmgr.elf.
+/* Scan the payload storage for a newer NayePlmTools ELF.
  * If found, writes the path to out_path and returns 0. */
 int repository_check_self_update(char *out_path, size_t out_size);
 

@@ -28,11 +28,11 @@ It is highly recommended to use **Payload Manager** together with an **Autoloade
 
 [Y2JB](https://github.com/itsPLK/ps5-y2jb-autoloader) | [BD-JB](https://github.com/itsPLK/ps5-bdjb-autoloader) | [Lua](https://github.com/itsPLK/ps5-lua-autoloader)
 
-`pldmgr.elf` is already included as the default payload in the latest versions of the Autoloaders linked above.
+`NayePlmTools_<version>.elf` is already included as the default payload in the latest versions of the Autoloaders linked above.
 
 If you are using an older version and don't want to update the entire autoloader, you can simply:
-1. Place `pldmgr.elf` into your `autoload` directory.
-2. Add `pldmgr.elf` as the only entry in your `autoload.txt` config file.
+1. Place `NayePlmTools_<version>.elf` into your `autoload` directory.
+2. Add `NayePlmTools_<version>.elf` as the only entry in your `autoload.txt` config file.
 
 ### Standalone / Manual Loading
 You can also manually load the manager like any other `.elf` file. Grab the latest version from the [Releases](https://github.com/itsPLK/ps5-payload-manager/releases) page.

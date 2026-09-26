@@ -8,5 +8,16 @@
   "settings.theme_title": "外观",
   "settings.theme_desc": "选择深色或浅色界面；「跟随系统」会随操作系统设置自动切换。",
   "settings.donate_title": "支持作者",
-  "settings.donate_desc": "如果喜欢这个项目，可以请作者喝一杯咖啡。"
+  "settings.donate_desc": "本程序是 naye 基于原作者 itsPLK 的 Payload Manager 维护的中文分支（当前 v0.5.1.1）。如果喜欢原作，可以请作者喝一杯咖啡。",
+  "donate.description": "如果你喜欢本项目，可以支持原作者。非常感谢！",
+  "donate.fork_title": "关于本 Fork",
+  "donate.fork_desc": "本程序是 Payload Manager 的分支，由 {{maintainer}} 维护。",
+  "donate.fork_original_author": "原作者",
+  "donate.fork_app_name": "程序名",
+  "donate.fork_upstream": "上游地址",
+  "donate.fork_upstream_version": "上游版本",
+  "donate.fork_version": "本 Fork 版本",
+  "donate.fork_donate_note": "上方捐赠按钮支持的是原作者 itsPLK，与本 fork 无关。",
+  "app.offline.title": "NayePlmTools 未运行…",
+  "app.fork.by": "由 {{maintainer}} 维护"
 }

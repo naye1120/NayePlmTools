@@ -199,7 +199,7 @@ size_t payload_mgr_list_json(char *json_buf, size_t buf_size) {
     int max = 256;
     int scan_usb = config_read_bool("SCAN_USB_PAYLOADS", 0);
 
-    /* Scan pldmgr subdirs (this includes PAYLOADS_STORAGE_DIR under /data/pldmgr) */
+    /* Scan pldmgr subdirs (this includes PAYLOADS_STORAGE_DIR under /data/nayeplmtools) */
     for (int i = 0; i < SCAN_DIRS_COUNT; i++) {
         scan_payloads_recursive(SCAN_DIRS[i], 0, &payloads, &count, max, 3);
     }

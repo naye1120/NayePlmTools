@@ -22,7 +22,7 @@ Use the Docker container to compile the Payload Manager. It is recommended to ru
 docker run --rm -v $(pwd):/src -w /src ps5-payload-sdk make clean all
 ```
 
-The resulting `pldmgr.elf` will be created in the root directory.
+The resulting `NayePlmTools_<version>.elf` will be created in the root directory.
 
 ## Automated Deploy
 
@@ -34,5 +34,5 @@ For a quick build & deploy cycle, use the `deploy.sh` script. It will automatica
 (Requires PS5 IP as the first argument).
 
 ## Manual Deploy
-1. Upload `pldmgr.elf` to your PS5 (e.g., via port 9021).
-2. The menu will be available at `http://[PS5_IP]:8084`.
+1. Upload `NayePlmTools_<version>.elf` to your PS5 (e.g., via port 9021).
+2. The menu will be available at `http://[PS5_IP]:8911`.

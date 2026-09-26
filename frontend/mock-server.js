@@ -103,16 +103,16 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('1.0.2-mock');
+  res.send('0.5.1.1'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 app.get('/list_payloads', (req, res) => {
   res.json({
     payloads: [
-      "/data/pldmgr/goldhen_v2.4b17.elf",
-      "/data/pldmgr/etaHEN_1.8.elf",
-      "/data/pldmgr/kstuff.elf",
-      "/mnt/usb0/pldmgr/linux_loader.elf"
+      "/data/nayeplmtools/goldhen_v2.4b17.elf",
+      "/data/nayeplmtools/etaHEN_1.8.elf",
+      "/data/nayeplmtools/kstuff.elf",
+      "/mnt/usb0/nayeplmtools/linux_loader.elf"
     ],
     meta: {
       // payloads with no entry here = local/direct upload (no badge shown)

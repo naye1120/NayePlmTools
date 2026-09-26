@@ -62,20 +62,20 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
       </button>
 
       <div className="space-y-4">
-        <h2 className="text-4xl font-extrabold text-white tracking-tight">
+        <h2 className="text-2xl font-bold text-white tracking-tight">
           {t("move_usb.title_1", "Import")} <span className="text-ps-blue">{t("move_usb.title_2", "to Internal")}</span>
         </h2>
         <p className="text-zinc-500 max-w-2xl">{t("move_usb.description", "Import the selected payload from your USB drive to the PS5's internal data storage.")}</p>
       </div>
 
-      <div className="glass-card p-6 md:p-10 rounded-ps-3xl border-white/10 bg-white/[0.02] space-y-8 md:space-y-10">
+      <div className="glass-card p-5 md:p-6 rounded-ps-2xl border-white/10 bg-white/[0.02] space-y-5 md:space-y-6">
         <div className="flex flex-col sm:flex-row items-center sm:items-start space-y-4 sm:space-y-0 sm:space-x-8 text-center sm:text-left">
-          <div className="p-4 md:p-6 bg-ps-blue/20 rounded-3xl border border-ps-blue/30 shrink-0">
-            <Usb className="w-8 h-8 md:w-10 md:h-10 text-ps-blue" />
+          <div className="p-3 md:p-4 bg-ps-blue/20 rounded-2xl border border-ps-blue/30 shrink-0">
+            <Usb className="w-6 h-6 md:w-7 md:h-7 text-ps-blue" />
           </div>
           <div className="space-y-1 md:space-y-2 min-w-0 flex-1">
             <p className="label-caps !text-ps-blue">{t("move_usb.source_path_label", "Source Path")}</p>
-            <p className="text-xl md:text-2xl font-black text-white italic tracking-tight truncate w-full">{path}</p>
+            <p className="text-base md:text-lg font-black text-white italic tracking-tight truncate w-full">{path}</p>
           </div>
         </div>
 
@@ -110,7 +110,7 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
                 </p>
               </div>
             </div>
-            <button onClick={onBack} className="w-full py-4 md:py-6 rounded-2xl bg-white/5 hover:bg-white/10 text-white font-black uppercase italic text-lg md:text-xl transition-all border border-white/10">{t("move_usb.return_btn", "Return to Storage Hub")}</button>
+            <button onClick={onBack} className="w-full py-3 md:py-4 rounded-2xl bg-white/5 hover:bg-white/10 text-white font-black uppercase italic text-base transition-all border border-white/10">{t("move_usb.return_btn", "Return to Storage Hub")}</button>
           </div>
         )}
 
@@ -126,10 +126,10 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
               </div>
             </div>
             <div className="flex flex-col sm:flex-row gap-4">
-              <button onClick={onBack} className="flex-1 py-4 md:py-6 rounded-2xl bg-white/5 hover:bg-white/10 text-white font-bold uppercase transition-all">{t("move_usb.cancel_btn", "Cancel")}</button>
+              <button onClick={onBack} className="flex-1 py-3 md:py-4 rounded-2xl bg-white/5 hover:bg-white/10 text-white font-bold uppercase transition-all">{t("move_usb.cancel_btn", "Cancel")}</button>
               <div className="flex flex-1 gap-2">
-                <button onClick={() => performMove(true, true)} className="flex-1 py-4 md:py-6 rounded-2xl bg-ps-blue/50 hover:bg-ps-blue/70 text-white font-black uppercase italic text-sm md:text-lg transition-all border border-ps-blue/30">{t("move_usb.overwrite_copy_btn", "Overwrite & Copy")}</button>
-                <button onClick={() => performMove(true, false)} className="flex-1 py-4 md:py-6 rounded-2xl bg-ps-blue hover:bg-ps-blue/80 text-white font-black uppercase italic text-sm md:text-lg transition-all shadow-xl shadow-ps-blue/20">{t("move_usb.overwrite_move_btn", "Overwrite & Move")}</button>
+                <button onClick={() => performMove(true, true)} className="flex-1 py-3 md:py-4 rounded-2xl bg-ps-blue/50 hover:bg-ps-blue/70 text-white font-black uppercase italic text-sm transition-all border border-ps-blue/30">{t("move_usb.overwrite_copy_btn", "Overwrite & Copy")}</button>
+                <button onClick={() => performMove(true, false)} className="flex-1 py-3 md:py-4 rounded-2xl bg-ps-blue hover:bg-ps-blue/80 text-white font-black uppercase italic text-sm transition-all shadow-xl shadow-ps-blue/20">{t("move_usb.overwrite_move_btn", "Overwrite & Move")}</button>
               </div>
             </div>
           </div>
@@ -147,8 +147,8 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
               </div>
             </div>
             <div className="flex flex-col sm:flex-row gap-4">
-              <button onClick={() => performMove(false, true)} className="flex-1 py-4 md:py-6 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-black uppercase italic text-lg md:text-xl transition-all border border-white/20">{t("move_usb.copy_btn", "Copy to Internal")}</button>
-              <button onClick={() => performMove(false, false)} className="flex-1 py-4 md:py-6 rounded-2xl bg-ps-blue hover:bg-ps-blue/80 text-white font-black uppercase italic text-lg md:text-xl transition-all shadow-2xl shadow-ps-blue/30">{t("move_usb.move_btn", "Move to Internal")}</button>
+              <button onClick={() => performMove(false, true)} className="flex-1 py-3 md:py-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-black uppercase italic text-base transition-all border border-white/20">{t("move_usb.copy_btn", "Copy to Internal")}</button>
+              <button onClick={() => performMove(false, false)} className="flex-1 py-3 md:py-4 rounded-2xl bg-ps-blue hover:bg-ps-blue/80 text-white font-black uppercase italic text-base transition-all shadow-2xl shadow-ps-blue/30">{t("move_usb.move_btn", "Move to Internal")}</button>
             </div>
           </div>
         )}

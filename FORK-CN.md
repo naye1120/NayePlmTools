@@ -120,11 +120,11 @@ npm.cmd run dev:mock               # 一键起 mock 后端(:8081) + vite(:5173)
 ```
 - 打开 http://localhost:5173 —— 全部后端 API 由 `mock-server.js` 模拟
   （payload 列表、仓库安装、autoload 时序、SSE 日志流都是真的交互）。
-- 无 mock 联调真机：`npm.cmd run dev` 前改 `vite.config.js` 代理端口 8081 → `PS5_IP:8084`。
+- 无 mock 联调真机：`npm.cmd run dev` 前改 `vite.config.js` 代理端口 8081 → `PS5_IP:8911`。
 - 生产构建验证：`npm.cmd run build`（单文件 dist/index.html，约 740KB / gzip 195KB）。
 - ESLint：`npm.cmd run lint`。
 
-### 构建真正的 pldmgr.elf（需 Linux 工具链环境）
+### 构建真正的 NayePlmTools ELF（需 Linux 工具链环境）
 
 > 本机（Windows）实测：未安装 Docker；装有 WSL2 (Ubuntu, default)。二选一即可，
 > 也可在任意 Linux 机器上完成。前端产物 `dist/index.html` 已由 `make frontend-build`
@@ -135,7 +135,7 @@ make frontend-build                                   # 生成 dist + 占位符�
 docker build -t ps5-payload-sdk -f Dockerfile.sdk .   # 拉取 ps5-payload-sdk
 # 注意：Makefile 引用 /opt/ps5-payload-sdk/bin/prospero-clang（旧版工具链名）
 #      新版 SDK 用 orbis-clang，需按本地 SDK 版本调整 Makefile CC/STRIP 路径
-docker run --rm -v $(pwd):/src -w /src ps5-payload-sdk make all   # 产出 pldmgr.elf
+docker run --rm -v $(pwd):/src -w /src ps5-payload-sdk make all   # 产出 NayePlmTools_<version>.elf
 ./deploy.sh [PS5_IP]                                  # shutdown → 构建 → socat 推送 :9021
 ```
 

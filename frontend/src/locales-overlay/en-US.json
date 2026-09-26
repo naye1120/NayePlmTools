@@ -7,5 +7,16 @@
   "settings.theme_title": "Appearance",
   "settings.theme_desc": "Choose dark or light interface; \"Auto\" follows your system preference.",
   "settings.donate_title": "Support the Project",
-  "settings.donate_desc": "If you like this project, you can buy the author a coffee."
+  "settings.donate_desc": "This is a fork maintained by naye, based on the original Payload Manager by itsPLK (v0.5.1.1). If you like it, you can buy the original author a coffee.",
+  "donate.description": "If you like this project, you can support the original author. Thank you very much!",
+  "donate.fork_title": "About This Fork",
+  "donate.fork_desc": "This is a fork of Payload Manager maintained by {{maintainer}}.",
+  "donate.fork_original_author": "Original author",
+  "donate.fork_app_name": "Application",
+  "donate.fork_upstream": "Upstream",
+  "donate.fork_upstream_version": "Upstream version",
+  "donate.fork_version": "This fork",
+  "donate.fork_donate_note": "Donations through the button above go to the original author (itsPLK), not this fork.",
+  "app.offline.title": "NayePlmTools is not running...",
+  "app.fork.by": "Fork by {{maintainer}}"
 }

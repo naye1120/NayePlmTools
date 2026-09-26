@@ -165,7 +165,7 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
     <div className="space-y-8 flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between shrink-0">
         <div className="flex flex-col">
-          <h2 className="text-4xl font-extrabold text-white tracking-tight">
+          <h2 className="text-2xl font-bold text-white tracking-tight">
             {t("autoload.sequence_title_1", "Autoload")} <span className="text-ps-blue">{t("autoload.sequence_title_2", "Sequence")}</span>
           </h2>
           <div className="h-6 mt-1 overflow-hidden">
@@ -190,7 +190,7 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
         </button>
       </div>
 
-      <div className="glass-panel p-6 rounded-ps-3xl border-white/10 flex-1 overflow-hidden flex flex-col min-h-0">
+      <div className="glass-panel p-4 rounded-ps-2xl border-white/10 flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-2 mb-2 pb-6">
           {autoloadList.map((p, i) => (
             <div key={`${p}-${i}`} className="relative flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10 animate-in slide-in-from-left duration-200">
@@ -223,10 +223,10 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
           <div className={cn("pt-4 mt-2", isPS5 ? "hidden" : "lg:hidden")}>
             <button
               onClick={() => setSubView('add')}
-              className="w-full flex items-center justify-center space-x-4 p-6 bg-ps-blue/10 hover:bg-ps-blue text-ps-blue hover:text-white rounded-2xl border border-dashed border-ps-blue/30 hover:border-ps-blue transition-all group shadow-lg"
+              className="w-full flex items-center justify-center space-x-3 p-4 bg-ps-blue/10 hover:bg-ps-blue text-ps-blue hover:text-white rounded-2xl border border-dashed border-ps-blue/30 hover:border-ps-blue transition-all group shadow-lg"
             >
-              <Activity className="w-6 h-6" />
-              <span className="font-black italic text-xl uppercase tracking-tighter">{t("autoload.add_item_btn", "Add Item to Sequence")}</span>
+              <Activity className="w-5 h-5" />
+              <span className="font-black italic text-base uppercase tracking-tighter">{t("autoload.add_item_btn", "Add Item to Sequence")}</span>
             </button>
           </div>
         </div>
@@ -265,7 +265,7 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
     <div className="h-full flex flex-col min-h-0">
       <div className="flex-1 flex flex-col min-h-0">
         <div className={cn(
-          "gap-12 h-full min-h-0",
+          "gap-6 h-full min-h-0",
           isPS5 ? "grid grid-cols-2" : "hidden lg:grid lg:grid-cols-2"
         )}>
           {renderAvailable()}

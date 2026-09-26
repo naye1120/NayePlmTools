@@ -93,27 +93,27 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
   /* ---- PS5 Mode: QR + URL only ---- */
   if (isPS5) {
     return (
-      <div className="max-w-3xl mx-auto space-y-12 pb-20">
+      <div className="max-w-3xl mx-auto space-y-8 pb-12">
         <div className="flex items-center space-x-6">
           <button
             onClick={onBack}
-            className="p-4 rounded-2xl bg-white/5 hover:bg-white/10 transition-all border border-white/10"
+            className="p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/10"
           >
-            <ArrowLeft className="w-7 h-7" />
+            <ArrowLeft className="w-5 h-5" />
           </button>
-          <h2 className="text-4xl font-extrabold text-white tracking-tight">
+          <h2 className="text-2xl font-bold text-white tracking-tight">
             {t("manage_sources.ps5_title_1", "Manage")} <span className="text-ps-blue">{t("manage_sources.ps5_title_2", "Sources")}</span>
           </h2>
         </div>
 
-        <div className="glass-card p-10 rounded-ps-3xl border border-white/10 flex flex-col items-center gap-8">
+        <div className="glass-card p-6 rounded-ps-2xl border border-white/10 flex flex-col items-center gap-6">
           <div className="bg-white p-6 rounded-3xl">
-            <QRCodeSVG value={`http://${ip}:8084`} size={180} level="M" />
+            <QRCodeSVG value={`http://${ip}:8911`} size={180} level="M" />
           </div>
-          <code className="text-white font-mono text-xl font-black opacity-90 italic tracking-tight uppercase">
-            {ip}:8084
+          <code className="text-white font-mono text-base font-black opacity-90 italic tracking-tight uppercase">
+            {ip}:8911
           </code>
-          <p className="text-zinc-400 text-center text-lg leading-relaxed max-w-md">
+          <p className="text-zinc-400 text-center text-sm leading-relaxed max-w-md">
             {t("manage_sources.ps5_description", "Open this address on your phone or PC to manage payload sources.")}
           </p>
         </div>
@@ -123,16 +123,16 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
 
   /* ---- Desktop Mode: full CRUD ---- */
   return (
-    <div className="w-full max-w-3xl mx-auto space-y-10 pb-20 min-w-0">
+    <div className="w-full max-w-3xl mx-auto space-y-8 pb-12 min-w-0">
       {/* Header */}
       <div className="flex items-center space-x-6">
         <button
           onClick={onBack}
           className="p-4 rounded-2xl bg-white/5 hover:bg-white/10 transition-all border border-white/10"
         >
-          <ArrowLeft className="w-7 h-7" />
+          <ArrowLeft className="w-5 h-5" />
         </button>
-        <h2 className="text-4xl font-extrabold text-white tracking-tight">
+        <h2 className="text-2xl font-bold text-white tracking-tight">
           {t("manage_sources.web_title_1", "Payload")} <span className="text-ps-blue">{t("manage_sources.web_title_2", "Sources")}</span>
         </h2>
       </div>
@@ -147,7 +147,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
             <div
               key={src.id}
               className={cn(
-                'group flex flex-col lg:flex-row lg:items-center gap-4 lg:gap-6 p-5 lg:p-6 glass-card rounded-2xl border transition-all w-full min-w-0 max-w-full overflow-hidden',
+                'group flex flex-col lg:flex-row lg:items-center gap-4 lg:gap-6 p-4 lg:p-5 glass-card rounded-2xl border transition-all w-full min-w-0 max-w-full overflow-hidden',
                 src.removable
                   ? 'border-white/10 hover:border-ps-blue/30'
                   : 'border-white/5 bg-white/[0.015]'
@@ -281,7 +281,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
           <span>{t("manage_sources.add_source_btn", "Add Source")}</span>
         </button>
       ) : (
-        <form onSubmit={handleAdd} className="p-6 glass-card rounded-2xl border border-white/10 space-y-4">
+        <form onSubmit={handleAdd} className="p-5 glass-card rounded-2xl border border-white/10 space-y-4">
           <p className="font-bold text-white text-lg">{t("manage_sources.add_new_title", "Add a New Source")}</p>
           <p className="text-sm text-zinc-500">
             {t("manage_sources.add_new_desc", "Paste the URL to a JSON file.")}

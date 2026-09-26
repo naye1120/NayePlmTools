@@ -17,7 +17,7 @@ const isFollowingBrowserLanguage = () => {
 
 const SettingRow = ({ title, description, children, icon: Icon, vertical }) => (
   <div className={cn(
-    "p-5 md:p-8 bg-white/[0.03] rounded-3xl border border-white/10 hover:border-ps-blue/30 transition-all group h-full",
+    "p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-ps-blue/30 transition-all group h-full",
     vertical ? "flex flex-col space-y-4" : "grid grid-cols-[1fr_auto] gap-x-4 gap-y-3 md:flex md:items-center md:justify-between md:gap-6"
   )}>
     <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
@@ -83,15 +83,15 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-16 pb-20">
+    <div className="max-w-5xl mx-auto space-y-10 pb-12">
       <div className="space-y-4">
-        <h2 className="text-4xl font-extrabold text-white tracking-tight">
+        <h2 className="text-2xl font-bold text-white tracking-tight">
           {t("settings.title", "Settings")}
         </h2>
       </div>
 
       {/* Startup Settings */}
-      <section className="space-y-8">
+      <section className="space-y-5">
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <SettingRow
             title={t("settings.language_title", "Language")}
@@ -208,13 +208,13 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </button>
           </SettingRow>
 
-          <div className="flex flex-col justify-between p-8 bg-white/[0.03] rounded-3xl border border-white/10 space-y-8 h-full">
+          <div className="flex flex-col justify-between p-5 bg-white/[0.03] rounded-2xl border border-white/10 space-y-4 h-full">
             <div className="flex justify-between items-center">
               <div className="space-y-1">
                 <p className="font-bold text-white uppercase text-lg tracking-tight">{t("settings.autoload_delay_title", "Autoload Delay")}</p>
                 <p className="text-sm text-zinc-500">{t("settings.autoload_delay_desc", "Wait time before the autoload sequence begins.")}</p>
               </div>
-              <span className="text-ps-blue font-black text-4xl italic tracking-tighter">{autoloadDelay}s</span>
+              <span className="text-ps-blue font-black text-2xl italic tracking-tighter">{autoloadDelay}s</span>
             </div>
 
             <div className="grid grid-cols-3 gap-4">
@@ -223,7 +223,7 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
                   key={s}
                   onClick={() => onSaveConfig({ AUTOLOAD_DELAY: s })}
                   className={cn(
-                    "py-5 rounded-2xl font-black text-xl transition-all border uppercase italic",
+                    "py-3 rounded-xl font-black text-base transition-all border uppercase italic",
                     autoloadDelay === s
                       ? "bg-ps-blue border-ps-blue text-white scale-[1.02]"
                       : "bg-white/5 border-white/10 text-zinc-500 hover:bg-white/10 hover:text-white"
@@ -238,8 +238,8 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
       </section>
 
       {/* Multi-Source */}
-      <section className="space-y-8">
-        <h3 className="label-caps !text-ps-blue !opacity-100 flex items-center space-x-4 text-xl tracking-[0.2em]">
+      <section className="space-y-5">
+        <h3 className="label-caps !text-ps-blue !opacity-100 flex items-center space-x-2 text-base tracking-[0.15em]">
           <Globe className="w-6 h-6" />
           <span>{t("settings.sources_title", "Payload Sources")}</span>
         </h3>
@@ -267,7 +267,7 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
           {multiSources && (
             <button
               onClick={() => onNavigate('sources')}
-              className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-5 md:p-8 bg-white/[0.03] rounded-3xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
+              className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
             >
               <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
                 <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
@@ -290,15 +290,15 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
       </section>
 
       {/* Diagnostics */}
-      <section className="space-y-8">
-        <h3 className="label-caps !text-ps-blue !opacity-100 flex items-center space-x-4 text-xl tracking-[0.2em]">
+      <section className="space-y-5">
+        <h3 className="label-caps !text-ps-blue !opacity-100 flex items-center space-x-2 text-base tracking-[0.15em]">
           <Terminal className="w-6 h-6" />
           <span>{t("settings.diagnostics_title", "Diagnostics")}</span>
         </h3>
 
         <button
           onClick={() => setShowLogs(true)}
-          className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-5 md:p-8 bg-white/[0.03] rounded-3xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
+          className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
         >
           <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
             <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
@@ -319,15 +319,15 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
       </section>
 
       {/* [CN-FORK] 支持作者：从移动端底部导航迁移至此，符合中文应用惯例 */}
-      <section className="space-y-8">
-        <h3 className="label-caps !text-ps-blue !opacity-100 flex items-center space-x-4 text-xl tracking-[0.2em]">
+      <section className="space-y-5">
+        <h3 className="label-caps !text-ps-blue !opacity-100 flex items-center space-x-2 text-base tracking-[0.15em]">
           <Heart className="w-6 h-6" />
           <span>{t("settings.donate_title", "Support the Project")}</span>
         </h3>
 
         <button
           onClick={() => onNavigate('donate')}
-          className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-5 md:p-8 bg-white/[0.03] rounded-3xl border border-white/10 hover:border-red-500/50 hover:bg-red-500/5 transition-all gap-x-4 gap-y-3 md:gap-6"
+          className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-red-500/50 hover:bg-red-500/5 transition-all gap-x-4 gap-y-3 md:gap-6"
         >
           <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
             <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-red-500/10 transition-colors shrink-0">

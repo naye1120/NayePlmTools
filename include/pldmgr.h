@@ -1,7 +1,7 @@
 #pragma once
 
 /* Network Settings */
-#define MENU_PORT 8084
+#define MENU_PORT 8911 /* [CN-FORK] Web 服务端口，上游默认 8084；main.c/autoload.c 均引用此宏。同步改动：assets/param.json 的 deeplinkUri、deploy.sh、前端 QR/显示(StorageHub/ManageSourcesView)、DEVELOPMENT.md、FORK-CN.md */
 #define ELFLDR_PORT 9021
 
 /* Routes */
@@ -38,11 +38,11 @@
 #define ROUTE_PROCESS_KILL "/process_kill"
 #define ROUTE_HISTORY_LIST "/history_list"
 
-#define MENU_VERSION "0.5.1"
-#define AUTOLOAD_CONFIG_PATH "/data/pldmgr/autoload.txt"
-#define PLDMGR_CONFIG_PATH "/data/pldmgr/pldmgr_config.txt"
-#define REPOSITORY_CACHE_PATH "/data/pldmgr/repository_cache.json"
-#define PAYLOADS_STORAGE_DIR "/data/pldmgr/payloads"
+#define MENU_VERSION "0.5.1.1" /* [CN-FORK] 本 fork 版本：在上游版本 0.5.1 后追加构建序号（.1）；上游基线为 0.5.1 */
+#define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
+#define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
+#define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"
+#define PAYLOADS_STORAGE_DIR "/data/nayeplmtools/payloads"
 #define REPOSITORY_SOURCE_URL                                                  \
   "https://itsplk.github.io/ps5-payloads-mirror/payloads.json"
 #define REPOSITORY_REFRESH_INTERVAL_SEC 86400
@@ -56,15 +56,15 @@ int pldmgr_server_is_active();
 #include "utils.h"
 
 /* Paths */
-#define BASE_DATA_DIR "/data/pldmgr"
-#define SOURCES_CONFIG_PATH "/data/pldmgr/sources.json"
+#define BASE_DATA_DIR "/data/nayeplmtools"
+#define SOURCES_CONFIG_PATH "/data/nayeplmtools/sources.json"
 #define MAX_SOURCES 50
 
 /* Scan Locations (Internal + 8 USB ports) */
 static const char *SCAN_DIRS[] = {
-    "/data/pldmgr",     "/mnt/usb0/pldmgr", "/mnt/usb1/pldmgr",
-    "/mnt/usb2/pldmgr", "/mnt/usb3/pldmgr", "/mnt/usb4/pldmgr",
-    "/mnt/usb5/pldmgr", "/mnt/usb6/pldmgr", "/mnt/usb7/pldmgr"};
+    "/data/nayeplmtools",     "/mnt/usb0/nayeplmtools", "/mnt/usb1/nayeplmtools",
+    "/mnt/usb2/nayeplmtools", "/mnt/usb3/nayeplmtools", "/mnt/usb4/nayeplmtools",
+    "/mnt/usb5/nayeplmtools", "/mnt/usb6/nayeplmtools", "/mnt/usb7/nayeplmtools"};
 #define SCAN_DIRS_COUNT 9
 
 /* Messages */
