@@ -38,7 +38,7 @@
 #define ROUTE_PROCESS_KILL "/process_kill"
 #define ROUTE_HISTORY_LIST "/history_list"
 
-#define MENU_VERSION "0.5.1.1" /* [CN-FORK] 本 fork 版本：在上游版本 0.5.1 后追加构建序号（.1）；上游基线为 0.5.1 */
+#define MENU_VERSION "0.5.1.2" /* [CN-FORK] 本 fork 版本：上游基线 0.5.1 + 构建序号（.2）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"
