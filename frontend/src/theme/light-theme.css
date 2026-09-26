@@ -1,0 +1,199 @@
+/* ============================================================================
+ * [CN-FORK] light-theme.css
+ * 浅色主题「类名重映射层」。
+ *
+ * 设计原则（fork 维护友好）：
+ *   本文件不修改任何上游组件的 Tailwind 类名，而是在 <html data-theme="light">
+ *   时把上游硬编码的「暗色工具类」整体重映射为浅色语义色。
+ *   上游后续更新只要沿用同一套色板类（white/black/zinc/ps-*），本层即持续有效；
+ *   若上游引入新颜色类，仅需在此追加一行映射。
+ *
+ * 浅色色板（贴近中文用户常用的微信/蚂蚁系浅色规范）：
+ *   画布   #f2f3f5   卡片 #ffffff
+ *   主文字 #17181a   次要 #5c6066   辅助 #8a8f99   禁用 #b6bac1
+ *   描边   rgba(23,24,26,.08 / .12)  主色保持 PS 蓝 #0095ff
+ * ==========================================================================*/
+
+/* ── 1. CSS 变量翻转（glass-panel / glass-card / .ps5-bg 等变量驱动的样式自动跟随）── */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-ps-black: #f2f3f5;
+  --color-ps-surface: #ffffff;
+  --color-ps-card: rgba(255, 255, 255, 0.92);
+  --color-ps-border: rgba(23, 24, 26, 0.08);
+}
+
+:root[data-theme="light"] body {
+  background-color: #f2f3f5 !important;
+  color: #17181a !important;
+}
+
+/* 浅色下卡片加投影，弥补白底失去的层次 */
+[data-theme="light"] .glass-card {
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.04);
+}
+[data-theme="light"] .glass-card:hover {
+  background: #ffffff !important;
+  box-shadow: 0 4px 12px rgba(16, 24, 40, 0.1);
+}
+
+/* ── 2. 文字颜色重映射 ── */
+[data-theme="light"] .text-white { color: #17181a !important; }
+[data-theme="light"] .hover\:text-white:hover { color: #17181a !important; }
+[data-theme="light"] .text-white\/80 { color: rgba(23, 24, 26, 0.8) !important; }
+[data-theme="light"] .text-white\/10 { color: rgba(23, 24, 26, 0.14) !important; }
+[data-theme="light"] .text-white\/5 { color: rgba(23, 24, 26, 0.1) !important; }
+
+[data-theme="light"] .text-zinc-100,
+[data-theme="light"] .text-zinc-200,
+[data-theme="light"] .text-zinc-300 { color: #2b2e33 !important; }
+[data-theme="light"] .text-zinc-400 { color: #4e5560 !important; }
+[data-theme="light"] .text-zinc-500 { color: #6c737d !important; }
+[data-theme="light"] .text-zinc-600 { color: #8a8f99 !important; }
+[data-theme="light"] .text-zinc-700 { color: #b0b5bd !important; }
+[data-theme="light"] .text-zinc-800 { color: #d3d7dd !important; }
+[data-theme="light"] .text-gray-500 { color: #6c737d !important; }
+[data-theme="light"] .placeholder-zinc-600::placeholder { color: #9aa0a8 !important; }
+
+/* 语义色：浅底上加深保证对比度 */
+[data-theme="light"] .text-red-400,
+[data-theme="light"] .text-red-400\/80,
+[data-theme="light"] .text-red-500,
+[data-theme="light"] .text-red-600 { color: #d92f24 !important; }
+[data-theme="light"] .hover\:text-red-600:hover { color: #b91c1c !important; }
+[data-theme="light"] .text-yellow-400 { color: #b45309 !important; }
+[data-theme="light"] .text-green-400 { color: #15803d !important; }
+[data-theme="light"] .text-emerald-400 { color: #047857 !important; }
+[data-theme="light"] .text-red-500\/60 { color: rgba(217, 47, 36, 0.75) !important; }
+/* 装饰性填充（星星/心形）保持高饱和，浅底可见 */
+[data-theme="light"] .fill-yellow-400 { fill: #f59e0b !important; color: #f59e0b !important; }
+[data-theme="light"] .fill-current { fill: currentColor; }
+
+/* ── 3. 背景重映射：半透明白「提亮」 → 半透明黑「压暗」 ── */
+[data-theme="light"] .bg-white\/5,
+[data-theme="light"] .hover\:bg-white\/5:hover,
+[data-theme="light"] .md\:bg-white\/5 { background-color: rgba(23, 24, 26, 0.04) !important; }
+[data-theme="light"] .bg-white\/10,
+[data-theme="light"] .hover\:bg-white\/10:hover { background-color: rgba(23, 24, 26, 0.07) !important; }
+[data-theme="light"] .bg-white\/20,
+[data-theme="light"] .hover\:bg-white\/20:hover,
+[data-theme="light"] .group-hover\:bg-white\/20 { background-color: rgba(23, 24, 26, 0.12) !important; }
+[data-theme="light"] .bg-white\/\[0\.01\] { background-color: rgba(23, 24, 26, 0.012) !important; }
+[data-theme="light"] .bg-white\/\[0\.015\] { background-color: rgba(23, 24, 26, 0.018) !important; }
+[data-theme="light"] .bg-white\/\[0\.02\],
+[data-theme="light"] .hover\:bg-white\/\[0\.02\]:hover { background-color: rgba(23, 24, 26, 0.025) !important; }
+[data-theme="light"] .bg-white\/\[0\.03\],
+[data-theme="light"] .hover\:bg-white\/\[0\.03\]:hover { background-color: rgba(23, 24, 26, 0.035) !important; }
+
+/* 深色玻璃容器 → 白色卡片 */
+[data-theme="light"] .bg-black\/20 { background-color: rgba(255, 255, 255, 0.65) !important; }
+[data-theme="light"] .bg-black\/40 { background-color: rgba(255, 255, 255, 0.92) !important; }
+[data-theme="light"] .bg-black\/50 { background-color: #ffffff !important; }
+[data-theme="light"] .bg-ps-black\/95 { background-color: rgba(242, 243, 245, 0.95) !important; }
+[data-theme="light"] .bg-ps-black { background-color: #ffffff !important; }
+[data-theme="light"] .bg-\[\#08080a\] { background-color: #ffffff !important; }
+[data-theme="light"] .bg-\[\#08080a\]\/95 { background-color: rgba(255, 255, 255, 0.95) !important; }
+[data-theme="light"] .bg-\[\#121214\] { background-color: #ffffff !important; color: #17181a !important; }
+
+/* 移动端底部导航（bg-black/80 之一）→ 白色悬浮栏；模态遮罩保持压暗 */
+[data-theme="light"] nav.bg-black\/80 {
+  background-color: rgba(255, 255, 255, 0.94) !important;
+  box-shadow: 0 -2px 16px rgba(16, 24, 40, 0.08);
+}
+
+/* 红色/绿色 Toast（深色系）→ 浅色通知条 */
+[data-theme="light"] .bg-red-950\/90 { background-color: #fdecec !important; }
+[data-theme="light"] .bg-red-950\/20 { background-color: #fdecec !important; }
+[data-theme="light"] .bg-red-950\/5 { background-color: rgba(217, 47, 36, 0.05) !important; }
+[data-theme="light"] .bg-red-600\/10,
+[data-theme="light"] .hover\:bg-red-600\/10:hover,
+[data-theme="light"] .bg-red-500\/10 { background-color: rgba(217, 47, 36, 0.07) !important; }
+[data-theme="light"] .bg-emerald-950\/90 { background-color: #e7f6ef !important; }
+[data-theme="light"] .bg-yellow-400\/5 { background-color: rgba(180, 83, 9, 0.06) !important; }
+[data-theme="light"] .bg-yellow-400\/20 { background-color: #f9e8c3 !important; }
+[data-theme="light"] .bg-transparent { background-color: transparent !important; }
+
+/* ── 4. 边框 / 分隔线 ── */
+[data-theme="light"] .border-white\/5,
+[data-theme="light"] .md\:border-white\/5 { border-color: rgba(23, 24, 26, 0.07) !important; }
+[data-theme="light"] .border-white\/10,
+[data-theme="light"] .hover\:border-white\/10:hover { border-color: rgba(23, 24, 26, 0.12) !important; }
+[data-theme="light"] .border-white\/20 { border-color: rgba(23, 24, 26, 0.18) !important; }
+[data-theme="light"] .divide-white\/5 > * + * { border-color: rgba(23, 24, 26, 0.07) !important; }
+[data-theme="light"] .border-red-500\/10 { border-color: rgba(217, 47, 36, 0.15) !important; }
+[data-theme="light"] .border-red-500\/20 { border-color: rgba(217, 47, 36, 0.2) !important; }
+[data-theme="light"] .border-red-500\/30 { border-color: rgba(217, 47, 36, 0.3) !important; }
+[data-theme="light"] .border-red-600\/20 { border-color: rgba(217, 47, 36, 0.2) !important; }
+[data-theme="light"] .border-yellow-400\/50 { border-color: rgba(180, 83, 9, 0.35) !important; }
+[data-theme="light"] .hover\:border-red-600:hover { border-color: #d92f24 !important; }
+
+/* ── 5. 滚动条 / 焦点环 ── */
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: #c8ccd2; }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: var(--color-ps-blue); }
+[data-theme="light"] .ps5-robust-spinner {
+  border-color: rgba(23, 24, 26, 0.08);
+  border-left-color: var(--color-ps-blue);
+}
+
+/* ── 6. 实心彩色底上的白字豁免（必须放在最后，靠源码顺序取胜）── */
+[data-theme="light"] .bg-ps-blue.text-white,
+[data-theme="light"] .bg-ps-blue .text-white,
+[data-theme="light"] .bg-red-600.text-white,
+[data-theme="light"] .bg-red-600 .text-white,
+[data-theme="light"] .bg-red-500.text-white,
+[data-theme="light"] .hover\:bg-ps-blue.text-white:hover,
+[data-theme="light"] .hover\:bg-ps-blue:hover .text-white,
+[data-theme="light"] .hover\:bg-ps-blue:hover .hover\:text-white,
+[data-theme="light"] .hover\:bg-red-600.text-white:hover,
+[data-theme="light"] .hover\:bg-red-600:hover .text-white,
+[data-theme="light"] .hover\:bg-red-500:hover .text-white,
+[data-theme="light"] .hover\:bg-\[\#007acc\]:hover .text-white,
+[data-theme="light"] .group\/btn:hover .group-hover\/btn\:text-white,
+[data-theme="light"] .bg-ps-blue .group-hover\:text-white:hover {
+  color: #ffffff !important;
+}
+
+/* 模态遮罩保持暗色压底（中文规范：遮罩不随主题反色）*/
+[data-theme="light"] .fixed.inset-0 .absolute.inset-0.bg-black\/80 {
+  background-color: rgba(15, 23, 42, 0.45) !important;
+}
+
+/* ============================================================================
+ * [CN-FORK] v1.1 视觉验收补丁（对应审查报告 Bug A~D）
+ * ==========================================================================*/
+
+/* Bug A：tailwind.config 里的字面色 ps-card/ps-border 不走 CSS 变量，需单独重映射 */
+[data-theme="light"] .bg-ps-card { background-color: rgba(255, 255, 255, 0.9) !important; }
+[data-theme="light"] .bg-ps-surface { background-color: #ffffff !important; }
+[data-theme="light"] .border-ps-border { border-color: rgba(23, 24, 26, 0.08) !important; }
+
+/* Bug B：带 important 修饰符的变体是独立类名（!text-white → .\!text-white），需单独映射 */
+[data-theme="light"] .\!text-white { color: #17181a !important; }
+[data-theme="light"] .\!text-ps-blue { color: #0072d6 !important; }
+
+/* Bug D：浅底上 PS 蓝小字加深保对比度（实心 bg-ps-blue 不受影响） */
+[data-theme="light"] .text-ps-blue,
+[data-theme="light"] .hover\:text-ps-blue:hover,
+[data-theme="light"] .group-hover\:text-ps-blue,
+[data-theme="light"] .text-ps-blue\/60,
+[data-theme="light"] .text-ps-blue\/80 { color: #0072d6 !important; }
+[data-theme="light"] .hover\:border-ps-blue:hover,
+[data-theme="light"] .border-ps-blue { border-color: #0072d6 !important; }
+
+/* emerald 系（成功态）补全：文字加深，实心底上白字保持 */
+[data-theme="light"] .text-emerald-400\/80 { color: #047857 !important; }
+[data-theme="light"] .text-emerald-500 { color: #047857 !important; }
+[data-theme="light"] .bg-emerald-500\/10 { background-color: rgba(4, 120, 87, 0.07) !important; }
+[data-theme="light"] .border-emerald-500\/20 { border-color: rgba(4, 120, 87, 0.2) !important; }
+
+/* Bug C：同元素同时带 hover:bg-ps-blue 与 hover:text-white 的情况（如侧栏汉堡按钮） */
+[data-theme="light"] .hover\:bg-ps-blue.hover\:text-white:hover,
+[data-theme="light"] .hover\:bg-red-600.hover\:text-white:hover,
+[data-theme="light"] .bg-emerald-600.text-white,
+[data-theme="light"] .hover\:bg-emerald-500.text-white:hover,
+[data-theme="light"] .bg-emerald-500 .text-white,
+[data-theme="light"] .bg-emerald-500.text-white,
+[data-theme="light"] .bg-emerald-600 .text-white,
+[data-theme="light"] .hover\:bg-emerald-500:hover .text-white {
+  color: #ffffff !important;
+}

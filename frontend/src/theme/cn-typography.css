@@ -1,0 +1,38 @@
+/* ============================================================================
+ * [CN-FORK] cn-typography.css
+ * 中文排版适配层：<html lang> 以 zh 开头时自动生效（由 useTheme/App 同步 i18n 语言）。
+ *
+ * 中文没有大小写、斜体对汉字无意义且发虚，因此：
+ *   1. 替换为中文优先字体栈（苹方 / 微软雅黑 / HarmonyOS Sans / Noto Sans SC）
+ *   2. 关闭 uppercase 变换与负字距、关闭斜体
+ *   3. 收敛过度字距（tracking-widest / [0.2em] / [0.3em]）
+ * 该文件同样零侵入：不改任何上游组件类名。
+ * ==========================================================================*/
+
+:root[lang^="zh"] body,
+:root[lang^="zh"] .font-ps5 {
+  font-family: "Inter", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei",
+    "Noto Sans SC", system-ui, -apple-system, sans-serif;
+}
+
+/* 全大写 → 无意义，直接关闭 */
+:root[lang^="zh"] .uppercase { text-transform: none; }
+
+/* 中文斜体渲染模糊，关闭 */
+:root[lang^="zh"] .italic { font-style: normal; }
+
+/* 负字距会让汉字挤在一起 */
+:root[lang^="zh"] .tracking-tighter,
+:root[lang^="zh"] .tracking-tight { letter-spacing: normal; }
+
+/* 过度拉宽的字距收敛到适合汉字的范围 */
+:root[lang^="zh"] .tracking-wide,
+:root[lang^="zh"] .tracking-widest { letter-spacing: 0.05em; }
+:root[lang^="zh"] .tracking-\[0\.2em\],
+:root[lang^="zh"] .tracking-\[0\.3em\] { letter-spacing: 0.1em; }
+
+/* 全局标题字距 */
+:root[lang^="zh"] h1,
+:root[lang^="zh"] h2,
+:root[lang^="zh"] h3,
+:root[lang^="zh"] h4 { letter-spacing: normal; }

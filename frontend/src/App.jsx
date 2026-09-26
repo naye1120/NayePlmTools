@@ -38,8 +38,12 @@ import LogViewer from './components/views/LogViewer'
 import ManageSourcesView from './components/views/ManageSourcesView'
 import ActiveProcessesView from './components/views/ActiveProcessesView'
 
+// [CN-FORK] 主题切换控件 + 中文排版开关（语言同步）
+import ThemeToggle from './theme/ThemeToggle'
+import { syncHtmlLang } from './theme/useTheme'
+
 function App() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [view, setView] = useState('dashboard')
   const [isFavoriteEditMode, setIsFavoriteEditMode] = useState(false)
   const mainRef = useRef(null)
@@ -50,6 +54,11 @@ function App() {
     }
     window.scrollTo(0, 0)
   }, [view])
+
+  // [CN-FORK] 把当前语言同步到 <html lang>，触发中文排版层
+  useEffect(() => {
+    syncHtmlLang(i18n.language)
+  }, [i18n.language])
 
   const [sidebarExpanded, setSidebarExpanded] = useState(() => {
     const saved = localStorage.getItem('sidebarExpanded')
@@ -487,15 +496,24 @@ function App() {
             </div>
           </div>
 
-          <nav className="flex-1 space-y-2">
+          {/* [CN-FORK] 菜单按「常用功能 / 系统管理」分组，符合中文后台习惯；视图 id 与上游保持一致 */}
+          <nav className="flex-1 space-y-2 overflow-y-auto custom-scrollbar">
+            {sidebarExpanded && (
+              <p className="label-caps px-4 pb-2 !text-zinc-500">{t("app.nav.group_main", "Main")}</p>
+            )}
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={LayoutDashboard} label={t("app.nav.dashboard", "Dashboard")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} />
+            {sidebarExpanded && (
+              <p className="label-caps px-4 pt-5 pb-2 !text-zinc-500">{t("app.nav.group_system", "System")}</p>
+            )}
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} />
           </nav>
 
-          <div className="pt-6 border-t border-white/5">
+          {/* [CN-FORK] 底部：外观切换 + 支持作者（从移动端底部导航移入设置/此处，底部栏不再展示捐赠） */}
+          <div className="pt-6 border-t border-white/5 space-y-2">
+            <ThemeToggle compact={!sidebarExpanded} />
             <NavButton
               sidebar
               sidebarExpanded={sidebarExpanded}
@@ -520,15 +538,7 @@ function App() {
         <NavButton showSeparator active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} mobileLabel={t("app.nav.auto_mobile", "Auto")} />
         <NavButton showSeparator active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} mobileLabel={t("app.nav.processes_mobile", "Processes")} />
         <NavButton showSeparator active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} mobileLabel={t("app.nav.settings", "Settings")} />
-        <NavButton
-          showSeparator
-          active={view === 'donate'}
-          onClick={() => setView('donate')}
-          icon={Heart}
-          label={t("app.nav.donate", "Donate")}
-          mobileLabel={t("app.nav.donate", "Donate")}
-          isDonate
-        />
+        {/* [CN-FORK] 捐赠不再占据移动端底部标签位，改由设置页「支持作者」入口进入 */}
       </nav>
 
       {/* MAIN CONTENT AREA */}

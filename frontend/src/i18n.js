@@ -39,6 +39,18 @@ for (const path in modules) {
   }
 }
 
+// [CN-FORK] Merge fork-local translation overlays kept OUTSIDE the Crowdin
+// submodule (frontend/src/locales-overlay). They can add new keys (theme, nav
+// groups, ...) and fine-tune existing ones without ever conflicting with
+// upstream translation syncs.
+const overlayModules = import.meta.glob('./locales-overlay/*.json', { eager: true });
+for (const path in overlayModules) {
+  const language = path.match(/\/([^/]+)\.json$/)[1];
+  const overlay = overlayModules[path].default || overlayModules[path];
+  const base = resources[language] ? resources[language].translation : {};
+  resources[language] = { translation: { ...base, ...overlay } };
+}
+
 i18n
   // detect user language
   // learn more: https://github.com/i18next/i18next-browser-languageDetector

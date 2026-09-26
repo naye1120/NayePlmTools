@@ -1,0 +1,11 @@
+{
+  "theme.auto": "Auto",
+  "theme.light": "Light",
+  "theme.dark": "Dark",
+  "app.nav.group_main": "Main",
+  "app.nav.group_system": "System",
+  "settings.theme_title": "Appearance",
+  "settings.theme_desc": "Choose dark or light interface; \"Auto\" follows your system preference.",
+  "settings.donate_title": "Support the Project",
+  "settings.donate_desc": "If you like this project, you can buy the author a coffee."
+}

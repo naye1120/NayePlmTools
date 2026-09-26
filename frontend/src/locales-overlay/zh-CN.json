@@ -1,0 +1,12 @@
+{
+  "theme.auto": "跟随系统",
+  "theme.light": "浅色",
+  "theme.dark": "深色",
+  "app.nav.group_main": "常用功能",
+  "app.nav.group_system": "系统管理",
+  "app.nav.donate": "支持作者",
+  "settings.theme_title": "外观",
+  "settings.theme_desc": "选择深色或浅色界面；「跟随系统」会随操作系统设置自动切换。",
+  "settings.donate_title": "支持作者",
+  "settings.donate_desc": "如果喜欢这个项目，可以请作者喝一杯咖啡。"
+}
