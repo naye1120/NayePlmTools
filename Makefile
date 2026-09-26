@@ -70,6 +70,14 @@ frontend-build:
 
 
 $(ASSET_HEADER): $(FRONTEND_DIST)
+	@echo "Injecting title into index.html..."
+	@VERSION=$$(grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"'); \
+	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown"); \
+	DATE=$$(date -u +"%Y-%m-%d %H:%M:%S UTC"); \
+	TITLE="NayePlmTools v$$VERSION by naye ($$COMMIT, built at $$DATE)"; \
+	TMP=$$(mktemp "$${TMPDIR:-/tmp}/nayeplmtools.XXXXXX"); \
+	sed "s|\[\[TITLE_PLACEHOLDER\]\]|$$TITLE|g" $(FRONTEND_DIST) > $$TMP && mv $$TMP $(FRONTEND_DIST); \
+	echo "Title set to: $$TITLE"
 	@echo "Generating asset header..."
 	$(PYTHON) tools/gen_assets.py $(FRONTEND_DIST) $(ASSET_HEADER) index_html
 

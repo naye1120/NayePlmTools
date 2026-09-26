@@ -83,9 +83,9 @@ int main(int argc, char *argv[]) {
     unsigned short port = DEFAULT_PORT;
     pid_t pid;
 
-    syscall(SYS_thr_set_name, -1, "NayePlmTools"); /* [CN-FORK] 进程名（ki_comm），与 find_pid / 前端 critical 判断一致；上游为 "pldmgr.elf" */
+    syscall(SYS_thr_set_name, -1, "NayePlmTools.elf"); /* [CN-FORK] 进程/线程名，与 find_pid / 前端 critical 判断一致；上游为 "pldmgr.elf" */
 
-    while ((pid = find_pid("NayePlmTools")) > 0) {
+    while ((pid = find_pid("NayePlmTools.elf")) > 0) {
         if (kill(pid, SIGKILL)) {
             pldmgr_log("[PLDMGR] kill failed\n");
             return EXIT_FAILURE;
@@ -154,6 +154,8 @@ int main(int argc, char *argv[]) {
     /* Startup Notification - Only show if browser autostart is off */
     char current_ip[64] = "unknown";
     pldmgr_get_local_ip(current_ip, sizeof(current_ip));
+
+    pldmgr_log("[PLDMGR] Web UI available at http://%s:%d\n", current_ip, port); /* [CN-FORK] 启动 debug 显示 ip 和端口 */
 
     if (!cfg.auto_browser_open) {
         if (strcmp(current_ip, "unknown") != 0) {

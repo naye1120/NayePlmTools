@@ -53,7 +53,7 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
   }, [processes, showAll, search])
 
   const handleKill = (proc) => {
-    const isCritical = proc.name === 'NayePlmTools' || proc.name === 'elfldr.elf';
+    const isCritical = proc.name.startsWith('NayePlmTools') || proc.name === 'elfldr.elf';
     if (isCritical) {
       addToast(t("active_processes.cannot_kill", "Cannot kill {{name}}", { name: proc.name }), "error")
       return
@@ -142,7 +142,7 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
         ) : (
           <div className="grid grid-cols-1 gap-4">
             {filteredProcesses.map((p) => {
-              const critical = p.name === 'NayePlmTools' || p.name === 'elfldr.elf';
+              const critical = p.name.startsWith('NayePlmTools') || p.name === 'elfldr.elf';
               return (
                 <div key={p.pid} className={cn(
                   "glass-card p-3 rounded-2xl flex flex-row items-center justify-between gap-3 border-white/10 hover:border-ps-blue/20 transition-all bg-white/[0.01]"
