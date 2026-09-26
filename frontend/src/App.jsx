@@ -7,7 +7,6 @@ import {
   Database,
   RefreshCw,
   Package,
-  Heart,
   Menu,
   Terminal,
   X,
@@ -38,8 +37,7 @@ import LogViewer from './components/views/LogViewer'
 import ManageSourcesView from './components/views/ManageSourcesView'
 import ActiveProcessesView from './components/views/ActiveProcessesView'
 
-// [CN-FORK] 主题切换控件 + 中文排版开关（语言同步）
-import ThemeToggle from './theme/ThemeToggle'
+// [CN-FORK] 中文排版开关（语言同步）；外观切换控件仅保留在设置页，不常驻侧栏
 import { syncHtmlLang } from './theme/useTheme'
 
 function App() {
@@ -478,7 +476,7 @@ function App() {
       <aside className={cn(
         "flex-col bg-black/40 border-r border-white/5 transition-all duration-500 z-[100] h-screen",
         isPS5 ? "flex" : "hidden md:flex",
-        sidebarExpanded ? "w-80" : "w-24"
+        sidebarExpanded ? "w-80" : "w-28"
       )}>
         <div className="p-6 flex flex-col h-full">
           <div className="flex items-center mb-12 h-10">
@@ -510,21 +508,6 @@ function App() {
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} />
           </nav>
-
-          {/* [CN-FORK] 底部：外观切换 + 支持作者（从移动端底部导航移入设置/此处，底部栏不再展示捐赠） */}
-          <div className="pt-6 border-t border-white/5 space-y-2">
-            <ThemeToggle compact={!sidebarExpanded} />
-            <NavButton
-              sidebar
-              sidebarExpanded={sidebarExpanded}
-              active={view === 'donate'}
-              onClick={() => setView('donate')}
-              icon={Heart}
-              label={t("app.nav.donate", "Donate")}
-              className={view === 'donate' ? "bg-red-600" : "text-red-500 hover:bg-red-600/10"}
-              isDonate
-            />
-          </div>
         </div>
       </aside>
 
