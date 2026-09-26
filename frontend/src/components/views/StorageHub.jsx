@@ -14,7 +14,7 @@ const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
       "flex flex-col md:flex-row justify-between gap-3 md:gap-6 p-4 transition-all",
       multiSources
         ? "hover:bg-white/[0.03]"
-        : "bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40",
+        : "bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 hover:bg-white/[0.04]",
       isPS5 ? "flex-row items-center" : "items-start md:items-center"
     )}
   >
@@ -27,11 +27,11 @@ const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
     <button
       onClick={() => onInstall(p, srcId === 'legacy-repo' ? null : srcId, srcUrl)}
       className={cn(
-        "flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm transition-all shrink-0",
-        isPS5 ? "w-auto px-8" : "w-full md:w-auto",
+        "flex items-center justify-center gap-2 px-4 py-2 font-semibold text-sm transition-all shrink-0",
         p.isUpdate
-          ? "bg-emerald-600 hover:bg-emerald-500 text-white"
-          : "bg-ps-blue hover:bg-ps-blue/90 text-white"
+          ? "bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-[0_4px_14px_rgba(5,150,105,0.3)]"
+          : "btn-primary px-6",
+        isPS5 ? "w-auto px-8" : "w-full md:w-auto"
       )}
     >
       <CloudDownload className="w-4 h-4" />
@@ -47,10 +47,17 @@ const CategoryGroup = ({ category, payloads, multiSources, isPS5, onInstall, src
     <div className="border-b border-white/5 last:border-0">
       <button 
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-white/5 transition-colors group/cat"
       >
-        <span className="font-semibold text-white/90 text-sm">{category} <span className="text-zinc-500">({payloads.length})</span></span>
-        <ChevronDown className={cn("w-5 h-5 text-zinc-500 transition-transform", expanded && "rotate-180")} />
+        {/* [CN-FORK] 分类行：主色竖条 + chip 计数 */}
+        <span className="flex items-center gap-2.5 font-semibold text-white/90 text-sm">
+          <span className="w-1 h-4 rounded-full bg-ps-blue/70 group-hover/cat:bg-ps-blue transition-colors" />
+          {category}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="chip chip-muted">{payloads.length}</span>
+          <ChevronDown className={cn("w-5 h-5 text-zinc-500 transition-transform", expanded && "rotate-180")} />
+        </span>
       </button>
       {expanded && (
         <div className={cn(
@@ -196,17 +203,19 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
 
   return (
     <div className="space-y-6">
-      {/* [CN-FORK] 风格统一：页头收敛为 text-xl，与板块标题形成清晰两级层次 */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <h2 className="text-xl font-bold text-white tracking-tight">
-          {t("storage_hub.title_1", "Payload")} <span className="text-ps-blue">{t("storage_hub.title_2", "Management")}</span>
-        </h2>
+      {/* [CN-FORK] 页头升级为 hero 面板：渐变主标题 + 服务器地址胶囊 + 渐变上传按钮 */}
+      <div className="panel-card card-enter px-5 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 mb-1">NayePlmTools</p>
+          <h2 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-white via-white to-ps-blue bg-clip-text text-transparent">
+            {t("storage_hub.title_1", "Payload")} {t("storage_hub.title_2", "Management")}
+          </h2>
+        </div>
 
         {!isPS5 && (
           <div className="flex items-center gap-3 shrink-0">
-            {/* [CN-FORK] 上传按钮前显示服务器 IP:端口 */}
-            <span className="text-xs font-mono text-zinc-500 tracking-tight">{ip}:8911</span>
-            <label className="inline-flex items-center gap-2 px-4 py-2 bg-ps-blue hover:bg-ps-blue/90 text-white rounded-lg font-semibold text-sm cursor-pointer transition-all shrink-0">
+            <span className="chip chip-muted font-mono">{ip}:8911</span>
+            <label className="btn-primary inline-flex items-center gap-2 px-4 py-2 text-sm cursor-pointer shrink-0">
               <Upload className="w-4 h-4" />
               <span>{t("storage_hub.upload_btn", "Upload ELF Payload")}</span>
               <input type="file" className="hidden" onChange={onUpload} accept={isIOS ? undefined : ".elf,.bin"} />
@@ -220,12 +229,13 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
       <section className="panel-card">
         <header className="panel-head">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
-              <Database className="w-4 h-4 text-ps-blue" />
+            {/* [CN-FORK] 彩色渐变图标盒 */}
+            <div className="p-2.5 rounded-xl bg-gradient-to-br from-ps-blue/30 to-ps-blue/5 ring-1 ring-inset ring-ps-blue/20 shrink-0">
+              <Database className="w-[18px] h-[18px] text-ps-blue" />
             </div>
             <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.installed_title", "Installed Payloads")}</h3>
           </div>
-          <span className="bg-white/5 px-2.5 py-0.5 rounded-full text-zinc-500 font-medium text-xs shrink-0">
+          <span className="chip shrink-0">
             {t("storage_hub.files_count", "{{count}} File", { count: internalPayloads.length })}
           </span>
         </header>
@@ -245,10 +255,10 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
               const remoteMatch = allRemote.find(rp => rp.filename === fileName || rp.installedFilename === fileName)
               const remoteVersion = remoteMatch?.version || (remoteMatch?.filename ? parsePayloadName(remoteMatch.filename).version : null)
               return (
-                <div key={path} className="group flex flex-col justify-center p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors gap-2 relative overflow-hidden">
+                <div key={path} className="group card-enter flex flex-col justify-center p-3.5 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 hover:bg-white/[0.04] hover:shadow-[0_0_20px_rgba(0,149,255,0.06)] transition-all gap-2 relative overflow-hidden">
                   <div className="flex flex-row items-center justify-between w-full gap-3">
                     <div className="flex items-center space-x-3 min-w-0 flex-1">
-                      <div className="p-2 bg-white/5 rounded-lg group-hover:bg-ps-blue/10 transition-colors shrink-0">
+                      <div className="p-2.5 bg-white/5 rounded-xl group-hover:bg-ps-blue/15 group-hover:shadow-[0_0_14px_rgba(0,149,255,0.15)] transition-all shrink-0">
                         <Package className="w-4 h-4 text-zinc-400 group-hover:text-ps-blue transition-colors" />
                       </div>
                       <div className="min-w-0 flex-1 space-y-0.5">
@@ -274,7 +284,7 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
                   {remoteMatch?.isUpdate && (
                     <button
                       onClick={() => onInstall(remoteMatch, remoteMatch.source_id, legacyRepoUrl)}
-                      className="w-full flex items-center justify-center gap-2 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold text-xs transition-all"
+                      className="w-full flex items-center justify-center gap-2 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold text-xs transition-all shadow-[0_4px_14px_rgba(5,150,105,0.25)]"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>
@@ -296,20 +306,20 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
       <section id="cloud-repository" className="panel-card">
         <header className="panel-head">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
-              <CloudDownload className="w-4 h-4 text-ps-blue" />
+            <div className="p-2.5 rounded-xl bg-gradient-to-br from-ps-blue/30 to-ps-blue/5 ring-1 ring-inset ring-ps-blue/20 shrink-0">
+              <CloudDownload className="w-[18px] h-[18px] text-ps-blue" />
             </div>
             <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.cloud_repo_title", "Cloud Repository")}</h3>
           </div>
-          <button onClick={() => fetchRemote(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-zinc-500 hover:text-ps-blue" title={t("storage_hub.retry_btn", "Retry Connection")}>
+          <button onClick={() => fetchRemote(true)} className="btn-ghost p-2 text-zinc-500 hover:text-ps-blue" title={t("storage_hub.retry_btn", "Retry Connection")}>
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
         </header>
 
         <div className="p-4 space-y-4">
         <div className="flex flex-col md:flex-row gap-3">
-          <div className="flex-1 flex items-center bg-black/40 border border-white/10 rounded-lg px-3.5 py-2 focus-within:border-ps-blue/50 transition-colors">
-            <Search className="w-4 h-4 text-zinc-500 mr-3" />
+          <div className="flex-1 flex items-center bg-black/40 border border-white/10 rounded-xl px-3.5 py-2.5 focus-within:border-ps-blue/60 focus-within:ring-2 focus-within:ring-ps-blue/15 focus-within:bg-black/60 transition-all">
+            <Search className="w-4 h-4 text-zinc-500 mr-3 shrink-0" />
             <input
               type="text"
               placeholder={t("storage_hub.search_placeholder", "Search payloads by name or description...")}
@@ -318,7 +328,7 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
               className="bg-transparent border-none outline-none text-white w-full text-sm font-medium placeholder:text-zinc-600"
             />
           </div>
-          <div className="relative flex-shrink-0 flex items-center bg-black/40 border border-white/10 rounded-lg pl-3.5 pr-9 py-2 focus-within:border-ps-blue/50 transition-colors cursor-pointer">
+          <div className="relative flex-shrink-0 flex items-center bg-black/40 border border-white/10 rounded-xl pl-3.5 pr-9 py-2.5 hover:border-white/20 focus-within:border-ps-blue/60 focus-within:ring-2 focus-within:ring-ps-blue/15 transition-all cursor-pointer">
             <span className="text-zinc-500 text-xs font-medium mr-2 whitespace-nowrap">
               {t("storage_hub.sort_by", "Sort by:")}
             </span>
@@ -354,7 +364,7 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
               <p className="text-sm font-semibold text-white">{t("storage_hub.repo_unavailable", "Repository Unavailable")}</p>
               <p className="text-zinc-500 text-xs mt-1">{t("storage_hub.repo_unavailable_desc", "Check your internet connection and try again.")}</p>
             </div>
-            <button onClick={() => fetchRemote(true)} className="px-5 py-2 bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg font-semibold text-xs transition-all">{t("storage_hub.retry_btn", "Retry Connection")}</button>
+            <button onClick={() => fetchRemote(true)} className="btn-ghost px-5 py-2 text-xs">{t("storage_hub.retry_btn", "Retry Connection")}</button>
           </div>
         ) : enrichedSources.length > 0 ? (
           /* ===== REPOSITORY CATALOGS ===== */
@@ -407,11 +417,11 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
 
               return (
                 <div key={src.id} className={cn(
-                  multiSources ? "bg-ps-card border border-ps-border rounded-ps-3xl overflow-hidden" : "flex flex-col space-y-4"
+                  multiSources ? "bg-ps-card border border-ps-border rounded-ps-3xl overflow-hidden hover:border-ps-blue/30 transition-colors" : "flex flex-col space-y-4"
                 )}>
                   {/* Last Sync for single-source mode */}
                   {!multiSources && src.last_update > 0 && (
-                    <p className="px-2 text-xs uppercase tracking-widest text-zinc-500">
+                    <p className="px-2 text-xs text-zinc-500 font-medium">
                       {t("storage_hub.last_sync", "Last Sync: {{date}}", { date: new Date(src.last_update * 1000).toLocaleString(i18n.resolvedLanguage) })}
                     </p>
                   )}
@@ -423,7 +433,7 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
                       className="w-full flex items-center justify-between p-4 md:p-5 hover:bg-white/5 transition-colors"
                     >
                     <div className="flex items-center space-x-4">
-                      <div className="p-2.5 bg-ps-blue/10 rounded-xl">
+                      <div className="p-3 rounded-xl bg-gradient-to-br from-ps-blue/30 to-ps-blue/5 ring-1 ring-inset ring-ps-blue/20">
                         <Globe className="w-5 h-5 text-ps-blue" />
                       </div>
                       <div className="text-left">
@@ -435,14 +445,14 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
                           </p>
                         )}
                         {src.last_update > 0 && (
-                          <p className="text-xs text-zinc-500 uppercase tracking-widest mt-1">
+                          <p className="text-xs text-zinc-500 mt-1">
                             {t("storage_hub.updated_at", "Updated {{date}}", { date: new Date(src.last_update * 1000).toLocaleString(i18n.resolvedLanguage) })}
                           </p>
                         )}
                       </div>
                     </div>
                     <div className="flex items-center space-x-3">
-                      <span className="px-3 py-1 rounded-full bg-white/5 text-zinc-500 text-xs font-bold">
+                      <span className="chip shrink-0">
                         {t("storage_hub.available_count", "{{count}} available", { count: availablePayloads.length })}
                       </span>
                       {enrichedSources.length > 1 && (
@@ -459,11 +469,11 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
                     )}>
                       {src.payloads.length === 0 ? (
                         <div className="py-12 flex flex-col items-center justify-center space-y-3 text-zinc-600">
-                          <p className="text-sm font-bold uppercase tracking-widest italic">{t("storage_hub.source_empty", "Source is empty")}</p>
+                          <p className="text-sm font-medium">{t("storage_hub.source_empty", "Source is empty")}</p>
                         </div>
                       ) : availablePayloads.length === 0 ? (
                         <div className="py-12 flex flex-col items-center justify-center space-y-3 text-zinc-600">
-                          <p className="text-sm font-bold uppercase tracking-widest italic">{t("storage_hub.all_installed", "All payloads installed")}</p>
+                          <p className="text-sm font-medium">{t("storage_hub.all_installed", "All payloads installed")}</p>
                         </div>
                       ) : hasMultipleCategories ? (
                         categories.map(cat => (
@@ -512,12 +522,12 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
       <section id="usb-storage" className="panel-card">
         <header className="panel-head">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
-              <HardDrive className="w-4 h-4 text-ps-blue" />
+            <div className="p-2.5 rounded-xl bg-gradient-to-br from-ps-blue/30 to-ps-blue/5 ring-1 ring-inset ring-ps-blue/20 shrink-0">
+              <HardDrive className="w-[18px] h-[18px] text-ps-blue" />
             </div>
             <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.usb_storage_title", "USB Storage")}</h3>
           </div>
-          <span className="bg-white/5 px-2.5 py-0.5 rounded-full text-zinc-500 font-medium text-xs shrink-0">
+          <span className="chip shrink-0">
             {t("storage_hub.files_count", "{{count}} File", { count: payloads.filter(p => p.includes('/mnt/usb')).length })}
           </span>
         </header>
@@ -546,9 +556,9 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
           ) : (
             payloads.filter(p => p.includes('/mnt/usb')).map((path) => {
               return (
-                <div key={path} className="group flex flex-row items-center justify-between p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors gap-3">
+                <div key={path} className="group card-enter flex flex-row items-center justify-between p-3.5 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 hover:bg-white/[0.04] hover:shadow-[0_0_20px_rgba(0,149,255,0.06)] transition-all gap-3">
                   <div className="flex items-center space-x-3 min-w-0">
-                    <div className="p-2 bg-white/5 rounded-lg group-hover:bg-ps-blue/10 transition-colors shrink-0">
+                    <div className="p-2.5 bg-white/5 rounded-xl group-hover:bg-ps-blue/15 group-hover:shadow-[0_0_14px_rgba(0,149,255,0.15)] transition-all shrink-0">
                       <Usb className="w-4 h-4 text-zinc-400 group-hover:text-ps-blue transition-colors" />
                     </div>
                     <div className="space-y-0.5 min-w-0 flex-1">
@@ -559,7 +569,7 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
                   <div className="flex items-center shrink-0">
                     <button
                       onClick={() => onImportFromUsb(path)}
-                      className="flex items-center gap-2 px-3 py-2 bg-white/5 hover:bg-ps-blue text-white rounded-lg font-semibold text-xs transition-all border border-white/10 hover:border-ps-blue group/btn"
+                      className="btn-ghost flex items-center gap-2 px-3.5 py-2 text-xs group/btn"
                     >
                       <Database className="w-4 h-4 text-ps-blue group-hover/btn:text-white transition-colors" />
                       <span>{t("storage_hub.move_internal_btn", "Move to Internal")}</span>
@@ -575,15 +585,15 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
       {/* Footer Info for PS5 */}
       {isPS5 && (
         <div className={cn(
-          /* [CN-FORK] 风格统一：QR 页脚改用 panel-card 体系，去掉 italic 装饰，与其他板块呼应 */
-          "panel-card p-5 flex items-center gap-6 bg-black/40",
+          /* [CN-FORK] QR 页脚：白底二维码加柔光环，标题主色竖条 */
+          "panel-card p-6 flex items-center gap-6 bg-black/40",
           isPS5 ? "flex-row" : "flex-col md:flex-row"
         )}>
           <div className="flex flex-col items-center space-y-3 shrink-0">
-            <div className="bg-white p-3 rounded-xl">
+            <div className="bg-white p-3 rounded-2xl shadow-[0_0_28px_rgba(0,149,255,0.18)] ring-1 ring-white/40">
               <QRCodeSVG value={`http://${ip}:8911`} size={isPS5 ? 140 : 120} level="M" />
             </div>
-            <code className="text-white font-mono text-sm font-semibold opacity-90">{ip}:8911</code>
+            <code className="chip chip-muted font-mono">{ip}:8911</code>
           </div>
           <div className="flex-1 space-y-2 text-center md:text-left">
             <h4 className="text-sm font-semibold text-white flex items-center justify-center md:justify-start gap-3">
