@@ -10,30 +10,31 @@ const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
   return (
   <div
     className={cn(
-      "flex flex-col md:flex-row justify-between gap-4 md:gap-8 p-6 md:p-8 transition-all",
+      /* [CN-FORK] 风格统一：列表行紧凑内边距，与全局 text-sm 尺度对齐 */
+      "flex flex-col md:flex-row justify-between gap-3 md:gap-6 p-4 transition-all",
       multiSources
         ? "hover:bg-white/[0.03]"
-        : "glass-card rounded-ps-3xl border border-white/10 hover:border-ps-blue/20 bg-white/[0.01]",
+        : "bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40",
       isPS5 ? "flex-row items-center" : "items-start md:items-center"
     )}
   >
-    <div className="space-y-2 min-w-0">
-      <PayloadName path={p.filename} version={p.version} className="text-base md:text-lg text-white" stacked lastUpdate={p.last_update} />
+    <div className="space-y-1 min-w-0">
+      <PayloadName path={p.filename} version={p.version} className="text-sm md:text-base text-white font-semibold" stacked lastUpdate={p.last_update} />
       {p.description && (
-        <p className="text-sm md:text-base text-zinc-400 font-medium leading-relaxed">{p.description}</p>
+        <p className="text-xs md:text-sm text-zinc-400 font-medium leading-relaxed">{p.description}</p>
       )}
     </div>
     <button
       onClick={() => onInstall(p, srcId === 'legacy-repo' ? null : srcId, srcUrl)}
       className={cn(
-        "flex items-center justify-center space-x-3 px-6 md:px-8 py-3 md:py-5 rounded-2xl font-bold text-lg transition-all shrink-0 transform active:scale-95",
-        isPS5 ? "w-auto px-12" : "w-full md:w-auto",
+        "flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm transition-all shrink-0",
+        isPS5 ? "w-auto px-8" : "w-full md:w-auto",
         p.isUpdate
           ? "bg-emerald-600 hover:bg-emerald-500 text-white"
-          : "bg-ps-blue hover:bg-ps-blue/80 text-white"
+          : "bg-ps-blue hover:bg-ps-blue/90 text-white"
       )}
     >
-      <CloudDownload className="w-5 h-5 md:w-6 md:h-6" />
+      <CloudDownload className="w-4 h-4" />
       <span>{p.isUpdate ? t("storage_hub.update_btn", "Update") : t("storage_hub.install_btn", "Install")}</span>
     </button>
   </div>
@@ -46,14 +47,14 @@ const CategoryGroup = ({ category, payloads, multiSources, isPS5, onInstall, src
     <div className="border-b border-white/5 last:border-0">
       <button 
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between p-4 md:p-6 hover:bg-white/5 transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors"
       >
-        <span className="font-bold text-white/80 uppercase tracking-widest text-sm">{category} ({payloads.length})</span>
+        <span className="font-semibold text-white/90 text-sm">{category} <span className="text-zinc-500">({payloads.length})</span></span>
         <ChevronDown className={cn("w-5 h-5 text-zinc-500 transition-transform", expanded && "rotate-180")} />
       </button>
       {expanded && (
         <div className={cn(
-          multiSources ? "divide-y divide-white/5 bg-black/20" : "grid grid-cols-1 gap-4 p-4",
+          multiSources ? "divide-y divide-white/5 bg-black/20" : "grid grid-cols-1 gap-2 p-3",
           "border-t border-white/5"
         )}>
           {payloads.map(p => (
@@ -194,18 +195,18 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
   }
 
   return (
-    <div className="space-y-8">
-      {/* [CN-FORK] 紧凑化：标题/上传按钮/已安装卡片整体收敛尺寸，与左侧菜单字号(约text-sm)协调 */}
+    <div className="space-y-6">
+      {/* [CN-FORK] 风格统一：页头收敛为 text-xl，与板块标题形成清晰两级层次 */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold text-white tracking-tight">
+        <h2 className="text-xl font-bold text-white tracking-tight">
           {t("storage_hub.title_1", "Payload")} <span className="text-ps-blue">{t("storage_hub.title_2", "Management")}</span>
         </h2>
 
         {!isPS5 && (
           <div className="flex items-center gap-3 shrink-0">
             {/* [CN-FORK] 上传按钮前显示服务器 IP:端口 */}
-            <span className="text-sm font-mono text-zinc-400 tracking-tight">{ip}:8911</span>
-            <label className="inline-flex items-center space-x-2 px-4 py-2.5 bg-ps-blue hover:bg-ps-blue/80 text-white rounded-xl font-bold tracking-tight text-sm cursor-pointer transition-all shrink-0 transform active:scale-95">
+            <span className="text-xs font-mono text-zinc-500 tracking-tight">{ip}:8911</span>
+            <label className="inline-flex items-center gap-2 px-4 py-2 bg-ps-blue hover:bg-ps-blue/90 text-white rounded-lg font-semibold text-sm cursor-pointer transition-all shrink-0">
               <Upload className="w-4 h-4" />
               <span>{t("storage_hub.upload_btn", "Upload ELF Payload")}</span>
               <input type="file" className="hidden" onChange={onUpload} accept={isIOS ? undefined : ".elf,.bin"} />
@@ -215,22 +216,25 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
       </div>
 
       {/* Installed Payloads Section */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between px-2">
-          <h3 className="label-caps !text-white flex items-center space-x-2 text-sm">
-            <Database className="w-5 h-5 text-ps-blue" />
-            <span>{t("storage_hub.installed_title", "Installed Payloads")}</span>
-          </h3>
-          <span className="bg-white/5 px-3 py-0.5 rounded-full text-zinc-500 font-bold text-xs">
+      {/* [CN-FORK] 风格统一：板块改用 panel-card 容器 + 标准板块头（图标盒/标题/计数/操作右侧），三板块结构一致 */}
+      <section className="panel-card">
+        <header className="panel-head">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
+              <Database className="w-4 h-4 text-ps-blue" />
+            </div>
+            <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.installed_title", "Installed Payloads")}</h3>
+          </div>
+          <span className="bg-white/5 px-2.5 py-0.5 rounded-full text-zinc-500 font-medium text-xs shrink-0">
             {t("storage_hub.files_count", "{{count}} File", { count: internalPayloads.length })}
           </span>
-        </div>
+        </header>
 
-        <div className={cn("grid gap-3", isPS5 ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3")}>
+        <div className={cn("p-4 grid gap-3", isPS5 ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3")}>
           {internalPayloads.length === 0 ? (
-            <div className="col-span-full py-20 border-2 border-dashed border-white/5 rounded-ps-3xl flex flex-col items-center justify-center space-y-4 bg-white/[0.01]">
-              <Package className="w-16 h-16 text-white/5" />
-              <p className="text-zinc-500 font-bold uppercase tracking-widest text-sm italic">{t("storage_hub.library_empty", "Library Empty")}</p>
+            <div className="col-span-full py-12 border-2 border-dashed border-white/10 rounded-xl flex flex-col items-center justify-center space-y-3">
+              <Package className="w-10 h-10 text-white/10" />
+              <p className="text-zinc-500 font-medium text-sm">{t("storage_hub.library_empty", "Library Empty")}</p>
             </div>
           ) : (
             internalPayloads.map((path) => {
@@ -241,14 +245,14 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
               const remoteMatch = allRemote.find(rp => rp.filename === fileName || rp.installedFilename === fileName)
               const remoteVersion = remoteMatch?.version || (remoteMatch?.filename ? parsePayloadName(remoteMatch.filename).version : null)
               return (
-                <div key={path} className="group flex flex-col justify-center p-3 glass-card rounded-ps-xl border-white/10 hover:border-ps-blue/30 gap-2 relative overflow-hidden">
+                <div key={path} className="group flex flex-col justify-center p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors gap-2 relative overflow-hidden">
                   <div className="flex flex-row items-center justify-between w-full gap-3">
                     <div className="flex items-center space-x-3 min-w-0 flex-1">
-                      <div className="p-2 bg-white/5 rounded-xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
-                        <Package className="w-5 h-5 text-zinc-400 group-hover:text-ps-blue transition-colors" />
+                      <div className="p-2 bg-white/5 rounded-lg group-hover:bg-ps-blue/10 transition-colors shrink-0">
+                        <Package className="w-4 h-4 text-zinc-400 group-hover:text-ps-blue transition-colors" />
                       </div>
                       <div className="min-w-0 flex-1 space-y-0.5">
-                        <PayloadName path={fileName} className="text-base text-white" stacked />
+                        <PayloadName path={fileName} className="text-sm text-white font-semibold" stacked />
                         {sourceBadge && (
                           <div className="flex items-center gap-1 text-zinc-500 text-[11px] select-none font-medium">
                             <Globe className="w-3.5 h-3.5" />
@@ -260,7 +264,7 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
                     <div className="flex items-center shrink-0">
                       <button
                         onClick={() => onDelete(fileName)}
-                        className="p-2 rounded-lg bg-red-950/20 text-red-500 border border-red-500/10 hover:bg-red-500 hover:text-white transition-all"
+                        className="p-2 rounded-lg bg-transparent text-zinc-500 border border-transparent hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/30 transition-all"
                         title={t("storage_hub.remove_payload", "Remove Payload")}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -270,7 +274,7 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
                   {remoteMatch?.isUpdate && (
                     <button
                       onClick={() => onInstall(remoteMatch, remoteMatch.source_id, legacyRepoUrl)}
-                      className="w-full flex items-center justify-center space-x-2 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold text-xs transition-all"
+                      className="w-full flex items-center justify-center gap-2 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold text-xs transition-all"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>
@@ -288,33 +292,37 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
       </section>
 
       {/* Cloud Repository Section */}
-      <section id="cloud-repository" className="space-y-6">
-        <div className="flex items-center justify-between px-2">
-          <h3 className="label-caps !text-white flex items-center space-x-4 text-lg" >
-            <CloudDownload className="w-6 h-6 text-ps-blue" />
-            <span>{t("storage_hub.cloud_repo_title", "Cloud Repository")}</span>
-          </h3>
-          <button onClick={() => fetchRemote(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-zinc-500 hover:text-ps-blue">
-            <RefreshCw className={cn("w-5 h-5", loading && "animate-spin")} />
+      {/* [CN-FORK] 风格统一：同样改用 panel-card + 标准板块头，刷新按钮收进头部右侧 */}
+      <section id="cloud-repository" className="panel-card">
+        <header className="panel-head">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
+              <CloudDownload className="w-4 h-4 text-ps-blue" />
+            </div>
+            <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.cloud_repo_title", "Cloud Repository")}</h3>
+          </div>
+          <button onClick={() => fetchRemote(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-zinc-500 hover:text-ps-blue" title={t("storage_hub.retry_btn", "Retry Connection")}>
+            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
-        </div>
+        </header>
 
-        <div className="flex flex-col md:flex-row gap-4">
-          <div className="flex-1 flex items-center bg-black/40 border border-white/10 rounded-2xl px-4 py-3 focus-within:border-ps-blue/50 transition-colors">
-            <Search className="w-5 h-5 text-zinc-500 mr-3" />
+        <div className="p-4 space-y-4">
+        <div className="flex flex-col md:flex-row gap-3">
+          <div className="flex-1 flex items-center bg-black/40 border border-white/10 rounded-lg px-3.5 py-2 focus-within:border-ps-blue/50 transition-colors">
+            <Search className="w-4 h-4 text-zinc-500 mr-3" />
             <input
               type="text"
               placeholder={t("storage_hub.search_placeholder", "Search payloads by name or description...")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="bg-transparent border-none outline-none text-white w-full font-medium placeholder:text-zinc-600"
+              className="bg-transparent border-none outline-none text-white w-full text-sm font-medium placeholder:text-zinc-600"
             />
           </div>
-          <div className="relative flex-shrink-0 flex items-center bg-black/40 border border-white/10 rounded-2xl pl-4 pr-10 py-3 focus-within:border-ps-blue/50 transition-colors cursor-pointer">
-            <span className="text-zinc-500 text-xs md:text-sm font-bold uppercase tracking-wider mr-2 whitespace-nowrap">
+          <div className="relative flex-shrink-0 flex items-center bg-black/40 border border-white/10 rounded-lg pl-3.5 pr-9 py-2 focus-within:border-ps-blue/50 transition-colors cursor-pointer">
+            <span className="text-zinc-500 text-xs font-medium mr-2 whitespace-nowrap">
               {t("storage_hub.sort_by", "Sort by:")}
             </span>
-            <span className="text-white font-bold text-xs md:text-sm">
+            <span className="text-white font-semibold text-xs md:text-sm">
               {sortMode === 'category' && t("storage_hub.sort_category", "Category")}
               {sortMode === 'update_time' && t("storage_hub.sort_time", "Update Time")}
               {sortMode === 'name' && t("storage_hub.sort_name", "Name")}
@@ -335,18 +343,18 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
         </div>
 
         {loading && !repoData ? (
-          <div className="py-24 glass-panel rounded-ps-3xl border-white/5 flex flex-col items-center justify-center space-y-6">
-            <Loader2 className="w-16 h-16 text-ps-blue animate-spin" />
-            <p className="label-caps">{t("storage_hub.syncing", "Syncing with Repository...")}</p>
+          <div className="py-16 flex flex-col items-center justify-center space-y-4">
+            <Loader2 className="w-8 h-8 text-ps-blue animate-spin" />
+            <p className="text-zinc-500 text-sm">{t("storage_hub.syncing", "Syncing with Repository...")}</p>
           </div>
         ) : error ? (
-          <div className="py-20 glass-card rounded-ps-3xl border-red-500/20 flex flex-col items-center justify-center space-y-6 bg-red-950/5">
-            <AlertTriangle className="w-16 h-16 text-red-500 opacity-50" />
+          <div className="py-12 rounded-xl border border-red-500/20 flex flex-col items-center justify-center space-y-4 bg-red-950/5">
+            <AlertTriangle className="w-10 h-10 text-red-500 opacity-60" />
             <div className="text-center">
-              <p className="text-base font-bold text-white uppercase tracking-tight">{t("storage_hub.repo_unavailable", "Repository Unavailable")}</p>
-              <p className="text-zinc-500 mt-1">{t("storage_hub.repo_unavailable_desc", "Check your internet connection and try again.")}</p>
+              <p className="text-sm font-semibold text-white">{t("storage_hub.repo_unavailable", "Repository Unavailable")}</p>
+              <p className="text-zinc-500 text-xs mt-1">{t("storage_hub.repo_unavailable_desc", "Check your internet connection and try again.")}</p>
             </div>
-            <button onClick={() => fetchRemote(true)} className="px-8 py-3 bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-xl font-bold uppercase text-xs transition-all">{t("storage_hub.retry_btn", "Retry Connection")}</button>
+            <button onClick={() => fetchRemote(true)} className="px-5 py-2 bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg font-semibold text-xs transition-all">{t("storage_hub.retry_btn", "Retry Connection")}</button>
           </div>
         ) : enrichedSources.length > 0 ? (
           /* ===== REPOSITORY CATALOGS ===== */
@@ -491,30 +499,34 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
             })}
           </div>
         ) : (
-          <div className="py-20 border-2 border-dashed border-white/5 rounded-ps-3xl flex flex-col items-center justify-center space-y-4 bg-white/[0.01]">
-            <CloudDownload className="w-16 h-16 text-white/5" />
-            <p className="text-zinc-500 font-bold uppercase tracking-widest text-sm italic">{t("storage_hub.repo_empty", "Repository is empty")}</p>
+          <div className="py-12 border-2 border-dashed border-white/10 rounded-xl flex flex-col items-center justify-center space-y-3">
+            <CloudDownload className="w-10 h-10 text-white/10" />
+            <p className="text-zinc-500 font-medium text-sm">{t("storage_hub.repo_empty", "Repository is empty")}</p>
           </div>
         )}
+        </div>
       </section>
 
       {/* USB Storage Section */}
-      <section id="usb-storage" className="space-y-6">
-        <div className="flex items-center justify-between px-2">
-          <h3 className="label-caps !text-ps-blue flex items-center space-x-2 text-sm">
-            <HardDrive className="w-6 h-6" />
-            <span>{t("storage_hub.usb_storage_title", "USB Storage")}</span>
-          </h3>
-          <span className="bg-ps-blue/5 px-4 py-1 rounded-full text-ps-blue font-bold text-xs border border-ps-blue/20">
+      {/* [CN-FORK] 风格统一：USB 板块同样 panel-card + 标准板块头，计数 badge 与另两板块同款式 */}
+      <section id="usb-storage" className="panel-card">
+        <header className="panel-head">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
+              <HardDrive className="w-4 h-4 text-ps-blue" />
+            </div>
+            <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.usb_storage_title", "USB Storage")}</h3>
+          </div>
+          <span className="bg-white/5 px-2.5 py-0.5 rounded-full text-zinc-500 font-medium text-xs shrink-0">
             {t("storage_hub.files_count", "{{count}} File", { count: payloads.filter(p => p.includes('/mnt/usb')).length })}
           </span>
-        </div>
+        </header>
 
-        <div className={cn("grid gap-4", isPS5 ? "grid-cols-2" : "grid-cols-1 lg:grid-cols-2")}>
+        <div className={cn("p-4 grid gap-3", isPS5 ? "grid-cols-2" : "grid-cols-1 lg:grid-cols-2")}>
           {payloads.filter(p => p.includes('/mnt/usb')).length === 0 ? (
-            <div className="col-span-full py-20 border-2 border-dashed border-white/5 rounded-ps-3xl flex flex-col items-center justify-center space-y-6 bg-white/[0.01]">
+            <div className="col-span-full py-12 border-2 border-dashed border-white/10 rounded-xl flex flex-col items-center justify-center space-y-4">
               <div className="relative">
-                <HardDrive className="w-16 h-16 text-white/5" />
+                <HardDrive className="w-10 h-10 text-white/10" />
                 {!config.SCAN_USB_PAYLOADS && (
                   <div className="absolute -top-1 -right-1 bg-amber-500/20 rounded-full p-1 border border-amber-500/50">
                     <AlertTriangle className="w-4 h-4 text-amber-500" />
@@ -522,7 +534,7 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
                 )}
               </div>
               <div className="text-center space-y-2">
-                <p className="text-zinc-500 font-bold uppercase tracking-widest text-sm italic">{t("storage_hub.no_usb_payloads", "No USB Payloads Found")}</p>
+                <p className="text-zinc-500 font-medium text-sm">{t("storage_hub.no_usb_payloads", "No USB Payloads Found")}</p>
                 {!config.SCAN_USB_PAYLOADS && (
                   <p className="text-xs text-zinc-600 max-w-xs mx-auto leading-relaxed">
                     {t("storage_hub.usb_scan_disabled_1", "Extended USB scanning is currently disabled.")} <br /> 
@@ -534,22 +546,22 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
           ) : (
             payloads.filter(p => p.includes('/mnt/usb')).map((path) => {
               return (
-                <div key={path} className="group flex flex-row items-center justify-between p-3 glass-card rounded-ps-xl border-white/10 hover:border-ps-blue/30 gap-3">
-                  <div className="flex items-center space-x-4 md:space-x-6 min-w-0">
-                    <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
-                      <Usb className="w-5 h-5 text-zinc-400 group-hover:text-ps-blue transition-colors" />
+                <div key={path} className="group flex flex-row items-center justify-between p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors gap-3">
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="p-2 bg-white/5 rounded-lg group-hover:bg-ps-blue/10 transition-colors shrink-0">
+                      <Usb className="w-4 h-4 text-zinc-400 group-hover:text-ps-blue transition-colors" />
                     </div>
-                    <div className="space-y-1 min-w-0 flex-1">
-                      <PayloadName path={path} className="text-base md:text-lg text-white" stacked hideIcon={true} />
-                      <p className="text-[10px] text-zinc-600 font-medium font-mono uppercase tracking-tighter opacity-60 truncate">{path}</p>
+                    <div className="space-y-0.5 min-w-0 flex-1">
+                      <PayloadName path={path} className="text-sm text-white font-semibold" stacked hideIcon={true} />
+                      <p className="text-[10px] text-zinc-600 font-mono truncate">{path}</p>
                     </div>
                   </div>
                   <div className="flex items-center shrink-0">
                     <button
                       onClick={() => onImportFromUsb(path)}
-                      className="flex items-center space-x-2 px-3 md:px-4 py-2 bg-white/5 hover:bg-ps-blue text-white rounded-lg font-bold text-xs transition-all border border-white/10 hover:border-ps-blue group/btn"
+                      className="flex items-center gap-2 px-3 py-2 bg-white/5 hover:bg-ps-blue text-white rounded-lg font-semibold text-xs transition-all border border-white/10 hover:border-ps-blue group/btn"
                     >
-                      <Database className="w-4 h-4 md:w-5 md:h-5 text-ps-blue group-hover/btn:text-white transition-colors" />
+                      <Database className="w-4 h-4 text-ps-blue group-hover/btn:text-white transition-colors" />
                       <span>{t("storage_hub.move_internal_btn", "Move to Internal")}</span>
                     </button>
                   </div>
@@ -563,21 +575,22 @@ const StorageHub = ({ payloads, payloadMeta, onInstall, onDelete, onUpload, onIm
       {/* Footer Info for PS5 */}
       {isPS5 && (
         <div className={cn(
-          "glass-card p-5 md:p-6 rounded-ps-2xl flex items-center gap-6 md:gap-8 border-white/10 bg-black/40 mt-8 md:mt-10",
+          /* [CN-FORK] 风格统一：QR 页脚改用 panel-card 体系，去掉 italic 装饰，与其他板块呼应 */
+          "panel-card p-5 flex items-center gap-6 bg-black/40",
           isPS5 ? "flex-row" : "flex-col md:flex-row"
         )}>
-          <div className="flex flex-col items-center space-y-4 md:space-y-6 shrink-0">
-            <div className="bg-white p-4 md:p-6 rounded-3xl">
-              <QRCodeSVG value={`http://${ip}:8911`} size={isPS5 ? 160 : 120} level="M" />
+          <div className="flex flex-col items-center space-y-3 shrink-0">
+            <div className="bg-white p-3 rounded-xl">
+              <QRCodeSVG value={`http://${ip}:8911`} size={isPS5 ? 140 : 120} level="M" />
             </div>
-            <code className="text-white font-mono text-base md:text-lg font-black opacity-90 italic tracking-tight uppercase">{ip}:8911</code>
+            <code className="text-white font-mono text-sm font-semibold opacity-90">{ip}:8911</code>
           </div>
-          <div className="flex-1 space-y-3 md:space-y-4 text-center md:text-left">
-            <h4 className="label-caps !text-white !opacity-100 text-base md:text-lg tracking-widest flex items-center justify-center md:justify-start space-x-3 md:space-x-4">
-              <div className="w-1.5 h-6 md:w-2 md:h-8 bg-ps-blue rounded-full" />
+          <div className="flex-1 space-y-2 text-center md:text-left">
+            <h4 className="text-sm font-semibold text-white flex items-center justify-center md:justify-start gap-3">
+              <div className="w-1 h-4 bg-ps-blue rounded-full" />
               <span>{t("storage_hub.remote_management_title", "Remote Management")}</span>
             </h4>
-            <p className="text-sm md:text-base text-zinc-400 leading-relaxed italic font-medium max-w-3xl">
+            <p className="text-sm text-zinc-400 leading-relaxed font-medium max-w-3xl">
               {t("storage_hub.remote_management_desc", "Access this dashboard from your computer or phone to manage and upload payloads directly from your local network.")}
             </p>
           </div>

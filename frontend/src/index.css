@@ -160,6 +160,24 @@ body {
   outline: none;
 }
 
+/* [CN-FORK] 统一板块容器：现代扁平卡片（固定圆角/描边/板块头），颜色走 CSS 变量双主题自动跟随 */
+.panel-card {
+  background: var(--color-ps-card);
+  border: 1px solid var(--color-ps-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  transition: border-color 0.2s ease;
+}
+.panel-card:hover { border-color: rgba(0, 149, 255, 0.25); }
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1.25rem;
+  border-bottom: 1px solid var(--color-ps-border);
+}
+
 /* Sidebar Item Focus */
 button:focus {
   outline: none;
