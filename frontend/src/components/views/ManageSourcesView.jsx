@@ -110,7 +110,8 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
           <div className="bg-white p-6 rounded-3xl">
             <QRCodeSVG value={`http://${ip}:8911`} size={180} level="M" />
           </div>
-          <code className="text-white font-mono text-base font-black opacity-90 italic tracking-tight uppercase">
+          {/* [CN-FORK] 同上：IP 地址用主题变量色，浅色主题直接跟随翻转 */}
+          <code className="text-ps-text font-mono text-base font-black opacity-90 italic tracking-tight uppercase">
             {ip}:8911
           </code>
           <p className="text-zinc-400 text-center text-sm leading-relaxed max-w-md">
@@ -174,7 +175,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
 
                   {/* Name (mobile only, inline header) */}
                   <div className="min-w-0 lg:hidden">
-                    <p className="font-bold text-white text-base leading-tight truncate">{src.name}</p>
+                    <p className="font-bold text-white text-xl leading-tight truncate">{src.name}</p>
                   </div>
                 </div>
 
@@ -216,7 +217,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
 
                 {/* Desktop-only Name + URL container */}
                 <div className="hidden lg:flex lg:flex-col flex-1 min-w-0">
-                  <p className="font-bold text-white text-base leading-tight truncate">{src.name}</p>
+                  <p className="font-bold text-white text-xl leading-tight truncate">{src.name}</p>
                   <p className="text-xs text-zinc-500 truncate mt-0.5 font-mono">{src.url}</p>
                 </div>
               </div>

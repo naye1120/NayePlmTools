@@ -10,7 +10,8 @@ import {
   Menu,
   Terminal,
   X,
-  Star
+  Star,
+  Link2
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -36,6 +37,11 @@ import MoveFromUsbView from './components/views/MoveFromUsbView'
 import LogViewer from './components/views/LogViewer'
 import ManageSourcesView from './components/views/ManageSourcesView'
 import ActiveProcessesView from './components/views/ActiveProcessesView'
+// [CN-FORK] 常用入口页；PKG安装：内嵌 PKG Manager 自带界面（:8844）到右侧内容区
+import CommonEntriesView from './components/views/CommonEntriesView'
+import PkgManagerFrame from './components/views/PkgManagerFrame'
+// [CN-FORK] 主页仪表盘
+import DashboardView from './components/views/DashboardView'
 
 // [CN-FORK] 中文排版开关（语言同步）；外观切换控件仅保留在设置页，不常驻侧栏
 import { syncHtmlLang } from './theme/useTheme'
@@ -487,9 +493,8 @@ function App() {
               <Menu className="w-6 h-6" />
             </button>
             <div className={cn("flex items-center space-x-3 transition-all duration-500", sidebarExpanded ? "opacity-100 scale-100" : "opacity-0 scale-90 absolute pointer-events-none")}>
-              <div className="p-2 bg-ps-blue rounded-xl">
-                <LogoIcon className="w-6 h-6 text-white" />
-              </div>
+              {/* [CN-FORK] 侧栏 logo 改用统一应用图标位图（自带深色圆角底，去掉原 bg-ps-blue 底板） */}
+              <LogoIcon className="w-9 h-9 rounded-xl" />
               <span className="text-2xl font-bold tracking-tight text-white">NayePlmTools</span>
             </div>
           </div>
@@ -502,6 +507,9 @@ function App() {
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={LayoutDashboard} label={t("app.nav.dashboard", "Dashboard")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} />
+            {/* [CN-FORK] 常用功能组：PKG安装（内嵌 :8844 界面）/ 常用入口 */}
+            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'pkg'} onClick={() => setView('pkg')} icon={Package} label={t("app.nav.pkg", "PKG Manager")} />
+            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'common_entries'} onClick={() => setView('common_entries')} icon={Link2} label={t("app.nav.common_entries", "Quick Links")} />
             {sidebarExpanded && (
               <p className="label-caps px-4 pt-5 pb-2 !text-zinc-500">{t("app.nav.group_system", "System")}</p>
             )}
@@ -542,133 +550,30 @@ function App() {
         isPS5 ? "h-screen flex-1 min-h-0" : "md:h-screen md:flex-1 md:min-h-0"
       )}>
         <main ref={mainRef} className={cn(
-          "custom-scrollbar max-w-[1800px] mx-auto w-full flex flex-col",
-          isPS5 ? "pt-16 px-16 pb-12 flex-1 overflow-y-auto" : "pt-6 px-6 pb-36 md:pt-16 md:px-16 md:pb-12 md:flex-1 md:overflow-y-auto"
+          "custom-scrollbar w-full flex flex-col",
+          /* [CN-FORK] 「PKG安装」要铺满整个模块页：四边内边距全清零、解除普通页面用的
+           * 1800px 居中宽度上限（超宽屏下它会让 iframe 左右留边）、改 overflow-hidden 让
+           * iframe 自己接管滚动。本项目没有 fixed 覆盖式顶栏（各视图自带 h1），pkg 视图里
+           * main 的第一个子元素就是 iframe，所以原先那 pt-16 只是 64px 纯空白，去掉不会遮内容。
+           * 手机端（<md）父容器没有 h-screen，flex-1 拿不到确定高度会让 iframe 塌成 150px，
+           * 故显式给一个「视口高 - 底部导航」的高度；md 以上交回 flex-1。 */
+          view === 'pkg'
+            ? (isPS5
+                ? "pt-0 px-0 pb-0 flex-1 overflow-hidden max-w-none"
+                : "pt-0 px-0 pb-0 max-w-none overflow-hidden h-[calc(100dvh_-_5rem)] md:h-auto md:flex-1")
+            : cn("max-w-[1800px] mx-auto",
+                isPS5 ? "pt-16 px-16 pb-12 flex-1 overflow-y-auto" : "pt-6 px-6 pb-36 md:pt-16 md:px-16 md:pb-12 md:flex-1 md:overflow-y-auto")
         )}>
-          {view === 'dashboard' && (() => {
-            const visiblePayloads = payloads.filter(p => !isSystemPayload(p))
-            const activeFavorites = favoritePayloads.filter(p => visiblePayloads.includes(p))
-            const unfavorited = visiblePayloads.filter(p => !favoritePayloads.includes(p))
-            
-            // Extract translations to variables for i18next-parser compatibility
-            const txtFavorites = t("app.dashboard.favorites", "Favorites")
-            const txtOthers = t("app.dashboard.others", "Others")
-
-            const gridCols = cn(
-              "grid gap-4 md:gap-6 transition-all",
-              isPS5 ? "grid-cols-3 xl:grid-cols-4" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-            )
-            const makeCard = (p) => (
-              <PayloadButton
-                key={p}
-                path={p}
-                onClick={() => isFavoriteEditMode ? toggleFavorite(p) : loadPayload(p)}
-                isLoading={loading && activeLoadingName === p.split('/').pop().replace(/\.(elf|bin)$/i, '').replace(/_/g, ' ')}
-                sourceName={config.MULTI_SOURCES_ENABLED ? (payloadMeta[p.split('/').pop()]?.source_name || null) : null}
-                version={payloadMeta[p.split('/').pop()]?.version || null}
-                isFavorite={favoritePayloads.includes(p)}
-                isLaunched={launchHistory.includes(p)}
-                isEditMode={isFavoriteEditMode}
-                onMoveFavorite={moveFavorite}
-                canMoveLeft={activeFavorites.indexOf(p) > 0}
-                canMoveRight={activeFavorites.indexOf(p) < activeFavorites.length - 1}
-              />
-            )
-            return (
-              <div className={cn(
-                "space-y-6 md:space-y-8 transition-all",
-                isFavoriteEditMode && "-m-4 md:-m-6 p-4 md:p-6 border-2 border-yellow-400/50 bg-yellow-400/5 rounded-ps-2xl"
-              )}>
-                {/* [CN-FORK] v0.5.1.7 主界面风格统一：hero 面板页头 + 渐变主标题 + 幽灵编辑按钮 */}
-                <div className="panel-card card-enter px-5 py-6 flex items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 mb-1">NayePlmTools</p>
-                    <h2 className={cn(
-                      "text-2xl font-bold tracking-tight",
-                      isFavoriteEditMode ? "text-yellow-400" : "bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-ps-blue"
-                    )}>
-                      {isFavoriteEditMode ? (
-                        t("app.dashboard.editFavorites", "Edit Favorites")
-                      ) : (
-                        <>{t("app.dashboard.title_1", "Launch")} {t("app.dashboard.title_2", "Payload")}</>
-                      )}
-                    </h2>
-                  </div>
-                  <button
-                    onClick={() => setIsFavoriteEditMode(!isFavoriteEditMode)}
-                    className={cn(
-                      "btn-ghost p-3 rounded-xl flex items-center justify-center shrink-0",
-                      isFavoriteEditMode && "!border-yellow-400/40 !bg-yellow-400/10 text-yellow-400"
-                    )}
-                    title={t("app.dashboard.editFavorites", "Edit Favorites")}
-                  >
-                    <Star className={cn("w-6 h-6", isFavoriteEditMode && "fill-yellow-400")} />
-                  </button>
-                </div>
-                {loadingPayloads ? (
-                  <div className={gridCols}>
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <div key={i} className="glass-card p-4 rounded-ps-xl flex flex-col space-y-2 border-white/5">
-                        <div className="h-7 w-40 bg-white/5 rounded-lg" />
-                        <div className="h-3 w-20 bg-white/5 rounded-md opacity-50" />
-                      </div>
-                    ))}
-                  </div>
-                ) : visiblePayloads.length === 0 ? (
-                  <div className={gridCols}>
-                    <div className="col-span-full py-20 border-2 border-dashed border-white/5 rounded-ps-xl flex flex-col items-center justify-center space-y-6 bg-white/[0.01]">
-                      <Package className="w-16 h-16 text-white/10" />
-                      <div className="text-center">
-                        <p className="text-white font-bold tracking-tight text-lg">{t("app.dashboard.empty.title", "Empty Library")}</p>
-                        <p className="text-zinc-500 font-medium">{t("app.dashboard.empty.message", "Add payloads from the Cloud Hub to get started.")}</p>
-                      </div>
-                      <button onClick={() => { setStorageScrollTarget('cloud-repository'); setView('storage'); }} className="btn-primary px-8 py-3 font-bold tracking-tight">{t("app.dashboard.empty.button", "Open Repository")}</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-6 md:space-y-8">
-                    {activeFavorites.length > 0 && (
-                      <div className="space-y-4">
-                        {/* [CN-FORK] 分组标题：渐变图标盒 + chip 计数，与管理页板块头同构 */}
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-xl bg-gradient-to-br from-yellow-400/25 to-yellow-400/5 ring-1 ring-inset ring-yellow-400/20">
-                            <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
-                          </div>
-                          <span className="text-sm font-semibold text-white">{txtFavorites}</span>
-                          <span className="chip chip-muted">{activeFavorites.length}</span>
-                        </div>
-                        <div className={gridCols}>
-                          {activeFavorites.map(makeCard)}
-                        </div>
-                        <div className="border-t border-white/5 pt-8">
-                          <div className="flex items-center gap-3 mb-4">
-                            <div className="p-2 rounded-xl bg-gradient-to-br from-ps-blue/30 to-ps-blue/5 ring-1 ring-inset ring-ps-blue/20">
-                              <Package className="w-4 h-4 text-ps-blue" />
-                            </div>
-                            <span className="text-sm font-semibold text-zinc-300">{txtOthers}</span>
-                            <span className="chip chip-muted">{unfavorited.length}</span>
-                          </div>
-                          <div className={gridCols}>
-                            {unfavorited.map(makeCard)}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {activeFavorites.length === 0 && (
-                      <div className={gridCols}>
-                        {visiblePayloads.map(makeCard)}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })()}
+          {/* [CN-FORK] 主页内容已清空（原 payload 启动网格/收藏编辑 UI 已移除，启动入口在「已安装」列表），预留后续开发 */}
+          {view === 'dashboard' && (
+            <DashboardView config={config} />
+          )}
 
           {view === 'storage' && (
             <StorageHub
               payloads={payloads}
               payloadMeta={payloadMeta}
+              loadPayload={loadPayload}
               onInstall={handleInstall}
               onDelete={handleDelete}
               onUpload={handleUpload}
@@ -737,6 +642,10 @@ function App() {
           )}
 
           {view === 'donate' && <DonateView version={version} />}
+
+          {/* [CN-FORK] 常用入口 / PKG安装（内嵌 PKG Manager 界面） */}
+          {view === 'common_entries' && <CommonEntriesView />}
+          {view === 'pkg' && <PkgManagerFrame />}
         </main>
       </div>
 

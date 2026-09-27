@@ -22,6 +22,7 @@
 #include "config.h"
 #include "http_server.h"
 #include "repository.h"
+#include "payload_mgr.h"  /* [CN-FORK] bootstrap_self_sync */
 #include "ps5_launcher.h"
 #include "app_installer.h"
 #include "utils.h" /* [CN-FORK] pldmgr_get_local_ip 提前取 IP */
@@ -157,6 +158,10 @@ int main(int argc, char *argv[]) {
     /* Try cache refresh */
     repository_ensure_fresh(0);
 
+    /* [CN-FORK] 启动自检：将已安装的 NayePlmTools 同步到 ps5_autoloader，
+     * 解决旧版本没有 sync 代码导致首次升级到 .20 时 ps5_autoloader 未更新的问题 */
+    payload_mgr_bootstrap_self_sync();
+
     /* Start Autoload Sequence (if config exists) */
     pldmgr_autoload_start();
 
@@ -166,9 +171,11 @@ int main(int argc, char *argv[]) {
         ps5_launch_browser(browser_url);
     }
 
-    /* [CN-FORK] 启动通知最后才发：PS5 通知为排他显示，过早发送会被安装/自动加载等后续通知顶掉 */
-    if (!cfg.auto_browser_open && strcmp(current_ip, "unknown") != 0) {
-        pldmgr_notify("NayePlmTools Ready!\nIP: %s\nPort: %d", current_ip, port);
+    /* [CN-FORK] 启动通知无条件压轴发送：PS5 通知为排他显示（最后一条生效），此前仅在关闭“自动开浏览器”时才发，
+       且会被装机/自动加载序列顶掉，导致左上角 IP:端口通知时有时无 */
+    if (strcmp(current_ip, "unknown") != 0) {
+        sleep(1); /* 等自动加载线程的倒计时通知先发出，本条作为最后一条胜出 */
+        pldmgr_notify("NayePlmTools v%s Ready!\nIP: %s\nPort: %d", MENU_VERSION, current_ip, port);
     }
 
     /* Watchdog and main loop */

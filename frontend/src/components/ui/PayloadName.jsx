@@ -18,7 +18,8 @@ const PayloadName = ({ path, version: repoVersion, className, versionClassName, 
       <div className="flex items-center space-x-2 min-w-0">
         {isDelay && !hideIcon && <Zap className="w-4 h-4 text-ps-blue shrink-0" />}
         {isUsb && !hideIcon && <Usb className="w-5 h-5 text-ps-blue shrink-0 mr-1" />}
-        <span className="font-bold truncate shrink leading-tight">{displayName}</span>
+        {/* [CN-FORK] 条目名字号定死为 text-xl，保证各页面（Dashboard/StorageHub/Autoload/Sources）完全统一，不受调用方 wrapper 字号影响 */}
+        <span className="text-xl font-bold truncate shrink leading-tight">{displayName}</span>
       </div>
       {(version || lastUpdate) && (
         <div className={cn("flex items-center", stacked ? "mt-1" : "")}>

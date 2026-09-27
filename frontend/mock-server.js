@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { fileURLToPath } from 'url';
 
 const app = express();
 app.use(cors());
@@ -56,6 +57,7 @@ const communityRepository = [
 ];
 
 let lastRepositoryUpdate = Math.floor(Date.now() / 1000);
+let readHardwareEnabled = true; // [CN-FORK] 模拟 READ_HARDWARE_INFO 开关持久化
 
 let mockSources = [
   { id: 'default', name: 'Official Repository', url: 'https://itsplk.github.io/ps5-payloads-mirror/payloads.json', removable: false },
@@ -103,7 +105,77 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.1.8'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.1.56'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+});
+
+// [CN-FORK] 当前游戏图标 mock：返回构建产物 icon.png（实机由 payload 读游戏 sce_sys/icon0.png）
+app.get('/game_icon', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.sendFile(fileURLToPath(new URL('./dist/icon.png', import.meta.url)), (err) => {
+    if (err) res.status(404).json({ error: 'no game icon' });
+  });
+});
+
+// [CN-FORK] PKG Manager 内置集成 mock：状态/启动/上传（实机由 pkgmanager.c 探活 8844 + elfldr 拉起）
+let pkgRunning = false;
+let pkgInstalled = '-';
+app.get('/pkgmanager_status', (req, res) => {
+  res.json({
+    running: pkgRunning,
+    port: 8844,
+    embedded_version: '1.4.0-CN',
+    installed_version: pkgInstalled,
+    file: pkgInstalled !== '-',
+  });
+});
+app.get('/pkgmanager_launch', (req, res) => {
+  pkgRunning = true;
+  if (pkgInstalled === '-') pkgInstalled = '1.4.0-CN';
+  res.json({ ok: true, message: 'OK' });
+});
+// [CN-FORK] 关闭 PKG Manager mock（实机由 pkgmanager.c 按进程名 SIGKILL）
+app.get('/pkgmanager_stop', (req, res) => {
+  if (!pkgRunning) {
+    return res.json({ ok: true, message: 'PKG Manager was not running' });
+  }
+  pkgRunning = false;
+  res.json({ ok: true, message: 'SIGKILL sent to 1 process(es)' });
+});
+app.post('/pkgmanager_upload', (req, res) => {
+  req.resume();
+  req.on('end', () => {
+    const m = /v([0-9][0-9A-Za-z.-]*)/.exec(req.query.filename || '');
+    pkgInstalled = m ? m[1] : 'unknown';
+    res.json({ ok: true, version: pkgInstalled });
+  });
+});
+
+// [CN-FORK] 常用入口 mock：内存清单 + 新增/删除（实机由 quicklinks.c 读写 /data 下 json 并 TCP 探活）
+const quicklinks = [
+  { name: 'PKG Manager', url: 'http://192.168.1.214:8844' },
+  { name: 'NAS 面板', url: 'http://192.168.1.10:5000' },
+];
+app.get('/quicklinks', (req, res) => {
+  res.json({ entries: quicklinks.map((e, i) => ({ ...e, alive: i === 0 })) });
+});
+app.get('/quicklinks_add', (req, res) => {
+  const { name, url } = req.query;
+  if (!name || !/^https?:\/\//.test(url || '')) {
+    return res.status(400).json({ ok: false, message: '参数不合法' });
+  }
+  if (quicklinks.some((e) => e.url === url)) {
+    return res.status(400).json({ ok: false, message: '该 URL 已存在' });
+  }
+  quicklinks.push({ name, url });
+  res.json({ ok: true, message: 'OK' });
+});
+app.get('/quicklinks_remove', (req, res) => {
+  const idx = parseInt(req.query.index, 10);
+  if (!(idx >= 0 && idx < quicklinks.length)) {
+    return res.status(400).json({ ok: false, message: '无效的条目序号' });
+  }
+  quicklinks.splice(idx, 1);
+  res.json({ ok: true, message: 'OK' });
 });
 
 app.get('/list_payloads', (req, res) => {
@@ -135,7 +207,33 @@ app.get('/get_config', (req, res) => {
     AUTOLOAD_LIST: "goldhen_v2.4b17.elf,etaHEN_1.8.elf",
     LAST_REPOSITORY_UPDATE: lastRepositoryUpdate,
     AUTO_INSTALL_APP: true,
-    MULTI_SOURCES_ENABLED: true
+    MULTI_SOURCES_ENABLED: true,
+    READ_HARDWARE_INFO: readHardwareEnabled
+  });
+});
+
+// [CN-FORK] 硬件信息端点，模拟 stats.c 的 JSON 结构（内存/显存/存储单位 MB）
+// 关闭 READ_HARDWARE_INFO 时返回 {enabled:false}，与后端行为一致
+app.get('/system_stats', (req, res) => {
+  if (!readHardwareEnabled) return res.json({ enabled: false });
+  const jitter = (base, range) => Math.round(base + Math.sin(Date.now() / 2000) * range);
+  res.json({
+    cpu: { usage: jitter(24, 8), temp: jitter(52, 4) },
+    gpu: { temp: jitter(48, 4) },
+    ssd: { temp: jitter(44, 3) },
+    fan: { duty: jitter(42, 8), max: 100 },
+    ram: { total: 16384, used: jitter(8400, 600) },
+    vram: { total: 12288, used: jitter(6250, 500) },
+    fps: 58 + Math.round(Math.sin(Date.now() / 1500) * 4),
+    game: { name: '血源诅咒 The Old Hunters', tid: 'PPSA00991' },
+    uptime: `2h 34m ${Math.floor(Date.now() / 1000) % 60}s`,
+    model: 'CFI-1209A 01', // [CN-FORK] 实机官方主机信息页同源（inst0.dat offset 0x14）
+    serial: 'F32B018RF11266783', // [CN-FORK] inst0.dat offset 0x40，实机验证值
+    firmware: '12.20', // [CN-FORK] api_version 0x12200005：(0x12 BCD=12).(0x20 BCD=20)，低 16 位不上界面
+    storage: [
+      { label: 'Internal storage', total: 825000, used: 420000, path: '/user' },
+      { label: 'NVME SSD', total: 1000000, used: 128500, path: '/mnt/ext0' }
+    ]
   });
 });
 
@@ -230,6 +328,9 @@ app.get('/repository_install', (req, res) => {
 app.post('/set_config', (req, res) => {
   console.log('Received Config:', req.body);
   logs.push(`[PLDMGR] Config updated: ${JSON.stringify(req.body)}`);
+  if (req.body && typeof req.body.READ_HARDWARE_INFO === 'boolean') {
+    readHardwareEnabled = req.body.READ_HARDWARE_INFO; // [CN-FORK]
+  }
   res.send('OK');
 });
 

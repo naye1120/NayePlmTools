@@ -1,9 +1,11 @@
 import React, { useState } from 'react'
-import { Terminal, ChevronRight, Globe, Languages, Palette, Heart } from 'lucide-react'
+import { Terminal, ChevronRight, Globe, Languages, Palette, Heart, ScrollText, X, Package } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../utils/helpers'
 // [CN-FORK] 外观（深/浅色）切换控件
 import ThemeToggle from '../../theme/ThemeToggle'
+// [CN-FORK] PKG Manager 管理卡片（上传更新/重启），侧栏菜单已改为直接跳转其界面
+import PkgManagerCard from './PkgManagerCard'
 
 const FOLLOW_BROWSER_LANGUAGE = '__auto__'
 
@@ -44,6 +46,7 @@ const SettingRow = ({ title, description, children, icon: Icon, vertical }) => (
 
 const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
   const { t, i18n } = useTranslation()
+  const [showChangelog, setShowChangelog] = useState(false)
   const autoOpen = config.AUTO_BROWSER_OPEN !== false
   const autoInstall = config.AUTO_INSTALL_APP !== false
   const autoloadDelay = config.AUTOLOAD_DELAY || 5
@@ -208,6 +211,25 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </button>
           </SettingRow>
 
+          {/* [CN-FORK] 读取硬件信息开关：控制首页仪表盘是否展示温度/风扇/内存/存储，同时控制后端 /system_stats */}
+          <SettingRow
+            title={t("settings.read_hw_title", "读取硬件信息")}
+            description={t("settings.read_hw_desc", "读取并在首页展示 PS5 的温度、风扇、内存、显存与存储等硬件信息。")}
+          >
+            <button
+              onClick={() => onSaveConfig({ READ_HARDWARE_INFO: !(config.READ_HARDWARE_INFO !== false) })}
+              className={cn(
+                "w-14 h-7 md:w-20 md:h-10 rounded-full transition-all relative p-1 md:p-1.5",
+                config.READ_HARDWARE_INFO !== false ? "bg-ps-blue" : "bg-white/10"
+              )}
+            >
+              <div className={cn(
+                "w-5 h-5 md:w-7 md:h-7 bg-white rounded-full transition-all",
+                config.READ_HARDWARE_INFO !== false ? "translate-x-7 md:translate-x-10" : "translate-x-0"
+              )} />
+            </button>
+          </SettingRow>
+
           <div className="flex flex-col justify-between p-5 bg-white/[0.03] rounded-2xl border border-white/10 space-y-4 h-full">
             <div className="flex justify-between items-center">
               <div className="space-y-1">
@@ -296,6 +318,7 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
           <span>{t("settings.diagnostics_title", "Diagnostics")}</span>
         </h3>
 
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <button
           onClick={() => setShowLogs(true)}
           className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
@@ -316,6 +339,38 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             {t("settings.log_viewer_desc", "Access real-time debug output from the Payload Manager daemon.")}
           </p>
         </button>
+
+        {/* [CN-FORK] 更新日志按钮 */}
+        <button
+          onClick={() => setShowChangelog(true)}
+          className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
+        >
+          <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
+            <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
+              <ScrollText className="w-5 h-5 md:w-6 md:h-6 text-zinc-500 group-hover:text-ps-blue transition-colors" />
+            </div>
+            <div className="space-y-1 min-w-0">
+              <p className="font-bold text-white uppercase text-base md:text-lg tracking-tight leading-tight">{t("settings.changelog_title", "Changelog")}</p>
+              <p className="hidden md:!block text-sm text-zinc-500 max-w-md leading-relaxed">{t("settings.changelog_desc", "View version update history for this fork.")}</p>
+            </div>
+          </div>
+          <div className="shrink-0 col-start-2 row-start-1 md:ml-8 self-center md:self-auto">
+            <ChevronRight className="w-6 h-6 md:w-8 md:h-8 text-zinc-700 group-hover:text-ps-blue group-hover:translate-x-2 transition-all" />
+          </div>
+          <p className="md:hidden col-span-2 text-xs text-zinc-500 leading-relaxed">
+            {t("settings.changelog_desc", "View version update history for this fork.")}
+          </p>
+        </button>
+        </div>
+      </section>
+
+      {/* [CN-FORK] PKG Manager 管理：侧栏「PKG安装」菜单直接跳转 :8844，这里保留上传更新与重启 */}
+      <section className="space-y-5">
+        <h3 className="label-caps !text-ps-blue !opacity-100 flex items-center space-x-2 text-base tracking-[0.15em]">
+          <Package className="w-6 h-6" />
+          <span>{t("settings.pkg_title", "PKG Manager")}</span>
+        </h3>
+        <PkgManagerCard />
       </section>
 
       {/* [CN-FORK] 支持作者：从移动端底部导航迁移至此，符合中文应用惯例 */}
@@ -347,7 +402,157 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
         </button>
       </section>
 
-
+      {/* [CN-FORK] 更新日志弹窗 */}
+      {showChangelog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => setShowChangelog(false)}>
+          <div className="bg-[#1a1a1e] border border-white/10 rounded-2xl w-full max-w-lg max-h-[70vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-white/10 shrink-0">
+              <h3 className="text-lg font-bold text-white uppercase tracking-tight">{t("settings.changelog_title", "Changelog")}</h3>
+              <button onClick={() => setShowChangelog(false)} className="p-2 rounded-lg hover:bg-white/10 transition-colors">
+                <X className="w-5 h-5 text-zinc-400" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-5 space-y-4 text-sm leading-relaxed">
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.56</p>
+                <p className="text-zinc-400">前端：「PKG安装」视图铺满整个模块页（四边内边距清零、解除 1800px 居中宽度上限、由 iframe 自己接管滚动；手机端不再塌成 150px 高）；设置页 PKG Manager 卡片新增「关闭」按钮，后端新增 /pkgmanager_stop 按进程名 SIGKILL pkg-manager.elf（只影响它自己；端口在响但找不到进程时报错而不误杀）；本地 dev 补全 pkgmanager_* 代理</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.55</p>
+                <p className="text-zinc-400">硬件信息改走官方 libkernel API（出处 ps5-payload-sdk samples/hwinfo，作者 John Törnblom）：型号 sceKernelGetHwModelName()、序列号 sceKernelGetHwSerialNumber()、系统版本字符串 sceKernelGetGenuineProsperoSystemSwVersion() 插到探测链最前，均声明为 weak + 运行时判空；inst0.dat / kenv / sysctl / RegMgr 降为兜底；官方值走新的宽松校验（避免误杀 "PlayStation 5"），会塞垃圾的源仍走严格白名单；/sysinfo_probe 逐项输出 sym/rc/val 与 SoC ID，一次实机就能定位；「支持作者」页新增「参考与致谢」，README Credits 同步补 4 组出处</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.54</p>
+                <p className="text-zinc-400">⚠ 回滚 .53 的进程内提权：实机验证该方案（SDK sysdebug RPC 族 kernel_set_ucred_*/rootvnode）在 12.20 HEN 上会导致整机死机，已默认永久禁用（代码存档、零内核调用）；.52 的系统版本修复（→12.20）保留，型号/序列号继续显 —</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.53</p>
+                <p className="text-zinc-400 line-through">型号/序列号攻坚：首次读 inst0.dat 前用 SDK 自带内核原语把自身进程提权为 root 再探测——⚠ 导致实机死机，已在 .54 禁用</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.52</p>
+                <p className="text-zinc-400">实机 probe 定位后修正：系统版本最终确定编码为 (major BCD&lt;&lt;24)|(minor BCD&lt;&lt;16)|build（0x12200005→12.20，与官方页一致，低 16 位含义未定不上界面）；型号白名单取消对 hw.model 内部标识（100-xxxxxxx）的放行，宁显 — 不显示错误型号；/root/data/inst0.dat 实机无读权限，新增 4 条候选路径探测，/sysinfo_probe 逐路径输出 open/errno 定位可读位置</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.51</p>
+                <p className="text-zinc-400">移除仪表盘“当前用户”格（.50 加的，直连 7788 头像服务 whoami），头部信息区恢复四格：型号/序列号/系统版本/开机时间</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.50（已撤销）</p>
+                <p className="text-zinc-400">仪表盘新增“当前用户”：直连头像服务（端口 7788）/api/avatar/whoami 显示登录用户名（30s 轮询，CORS 全开可跨域），头像服务未启动时静默显示 —；头部信息区改为五格</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.49（版本解码仍有误，见 .52）</p>
+                <p className="text-zinc-400">系统信息与官方“主机信息”页对齐：型号/序列号改从 /root/data/inst0.dat 读取（官方页同源，offset 0x14/0x40，读不到时回退旧探测）；系统版本修正解码——0x12200005 按 BCD 字节解为 12.20（与官方页一致，.46 的 34.00/.48 的 1.34 都是解错），build 非零时追加第三段；/sysinfo_probe 增加 inst0.dat 可读性与字段裸内容输出</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.48（版本解码已被 .49 修正）</p>
+                <p className="text-zinc-400">根据实机 /sysinfo_probe 输出修正系统信息探测：型号接上真数据（PS5 的 hw.model 实际返回空格补齐的 "100-xxxxxxx" 形态，旧白名单误杀）；系统版本改用真实编码 (major&lt;&lt;24)|(minor&lt;&lt;16)|build（0x12200005→1.34，与 websrv 的 api_version 常量吻合），不再按 SDK 文档的 BCD 格式误解；序列号确认 userland 无数据源（相关 sysctl 全部不存在），继续显示 —</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.47</p>
+                <p className="text-zinc-400">修正 .46 系统信息三项全部错乱的问题：kenv/sysctl 对不存在的变量会返回垃圾值，现在所有探测结果必须过严格格式白名单（型号=CUH/CFI 格式、序列号=12~17 位大写字母数字、版本=合理区间）才上界面；kernel_get_fw_version 读死的 dynlib handle 在我们进程里不对应 libc_internal，可疑值一律丢弃并回退 kern.osrelease；/sysinfo_probe 增加各数据源裸值输出便于定位</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.46（已被 .47 修正）</p>
+                <p className="text-zinc-400">系统信息补齐：仪表盘新增系统版本（改用 SDK 的 kernel_get_fw_version，纯 userland 读 libc_internal，不受版本仿冒影响）；主机型号改为 kenv→sysctl→RegMgr 三路探测；新增 /sysinfo_probe 诊断端点（dump 内核环境变量表，用于实机定位型号/序列号数据源）；序列号仍无可靠 userland 来源，探测命中前仍显示 —</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.45</p>
+                <p className="text-zinc-400">「PKG安装」内嵌界面铺满右侧：去掉内容区左右/底部留白，iframe 占满整个右侧区域；顶部 URL 栏取消，「新标签页打开」缩为右下角悬浮小按钮</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.44</p>
+                <p className="text-zinc-400">「PKG安装」改为内嵌运行：点击菜单不再跳转离开，而是在右侧内容区内嵌 PKG Manager 自带界面（iframe 指向 :8844，侧栏保留），未运行时自动拉起并等待就绪后加载；右上角提供「新标签页打开」作全屏备选</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.43</p>
+                <p className="text-zinc-400">「PKG安装」菜单改为一步直达：点击后若 PKG Manager 未运行则自动拉起并等待就绪，随后直接跳转到它自带的界面（:8844），不再经过中间管理页；原页面上的上传更新/启动重启/版本状态迁移到设置页新增的「PKG Manager」管理卡片</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.42</p>
+                <p className="text-zinc-400">「常用入口」页上线：可手动添加常用插件/局域网服务的快捷访问卡片（名称+URL，存主机端 quicklinks.json，多设备共享同一份），逐条 TCP 探活显示在线状态，点卡片新标签打开；启动通知加上了版本号</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.41</p>
+                <p className="text-zinc-400">内置 PKG Manager 基线升级到 v1.4.0-CN；上传校验策略修正：发现 PKGManager 发布的 ELF 里 PKGMGR_VER 签名串被其自身 --gc-sections 链接回收、实际不存在，改为 ELF 头 + 体积 + 二进制含 "PKG Manager" 字符串判身份，版本号按签名→上传文件名→unknown 顺序提取</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.40</p>
+                <p className="text-zinc-400">PKG Manager 内置上线：「PKG安装」页不再是占位页，可直接启动内置的 PKG Manager（独立守护进程，UI 端口 8844）并跳转其自带界面；支持手动上传新版 ELF 更新（ELF 头 + PKGMGR_VER 签名校验、原子覆盖），内置基线仅作离线保底</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.39</p>
+                <p className="text-zinc-400">PS4 兼容游戏图标修复（实机反馈）：新增 /user/appmeta/「TID」/icon0.png 候选；app.db iconPath 带 ?ts= 时间戳参数时先剥除再读文件</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.38</p>
+                <p className="text-zinc-400">游戏图标候选扩充：新增 app.db iconPath 列（系统真正显示的图标路径，含 PS4 兼容游戏）与 appmeta 缓存目录两级候选；全部落空时每个 tid 在日志页记一行 miss 诊断便于定位</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.37</p>
+                <p className="text-zinc-400">首页「当前游戏」图标上线：新增 /game_icon 端点，按 /user/app/「TID」/sce_sys/icon0.png → 沙盒 app0/sce_sys/icon0.png 顺序读取（psdevwiki 确认只有 PNG、无 gif），受同一硬件信息开关门控，读不到时回退占位图</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.36</p>
+                <p className="text-zinc-400">去掉设置页「读取硬件信息」行的脉冲图标（仅去图标，开关与说明不变）</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.35</p>
+                <p className="text-zinc-400">修复首页数据卡住不自动刷新：轮询改用 setInterval（旧链式 setTimeout 只要一次请求挂起就永久死链），加 1.8s 超时中断、防堆积、回到前台立即补拉；开机时间改为带秒（如 8h 39m 12s）</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.34</p>
+                <p className="text-zinc-400">首页仪表盘与侧栏菜单的标签/正文/卡片标题等小字整体放大 2px（FPS、温度、风扇% 等大号展示数字保持不变）</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.33</p>
+                <p className="text-zinc-400">修复首页放着不自动更新：轮询 /system_stats 加时间戳 + no-store，后端该路由回 Cache-Control: no-store，避免 PS5 浏览器缓存 GET 导致数值冻住</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.32</p>
+                <p className="text-zinc-400">存储按参考项目取数对齐：内置 SSD 读 /user（games+apps 分区）、内置 M.2 扩展盘用 getmntinfo 动态探测（同文件系统类型、容量最大、60s 重试），不再用错误的 /data、/mnt/ext 路径</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.31</p>
+                <p className="text-zinc-400">补上参考项目正常读取、之前遗漏的 SSD/硬盘温度（SoC sensor 1）；温度读取失败统一返回 -1、前端不再错显示 0°C</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.30</p>
+                <p className="text-zinc-400">首页接入真实 FPS（DCE 换帧计数 / OnionHEN）与当前运行游戏名（前台大应用 appinfo + app.db/param.sfo），均受“读取硬件信息”开关门控</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.29</p>
+                <p className="text-zinc-400">首页仪表盘接入硬件信息（CPU/GPU 温度、风扇、内存/显存、存储、开机时间）；设置新增“读取硬件信息”开关（默认开，关闭时显示 —）</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.27</p>
+                <p className="text-zinc-400">移除背景图尝试，恢复轻量状态</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.23–.26</p>
+                <p className="text-zinc-400">autoload.txt 写入格式修正（!延时 + 文件名）；有则更新无则追加，不影响其他程序</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.22</p>
+                <p className="text-zinc-400">启动自检支持 ps5_autoloader 空文件时主动登记</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.20–.21</p>
+                <p className="text-zinc-400">新增 ps5_autoloader 同步机制：安装 payload 后自动更新引导器目录；启动自检 bootstrap 解决旧版本无同步代码问题</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.18–.19</p>
+                <p className="text-zinc-400">浅色主题修复：新增 text-ps-text 语义变量 + 补全 text-white/90 透明度变体映射</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.11–.17</p>
+                <p className="text-zinc-400">UI 主题统一改造、分类组头、QR 页脚地址主题适配、侧栏导航优化</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

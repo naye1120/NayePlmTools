@@ -73,6 +73,8 @@
   --color-ps-surface: #101014;
   --color-ps-card: rgba(24, 24, 28, 0.8);
   --color-ps-border: rgba(255, 255, 255, 0.08);
+  /* [CN-FORK] 语义文字色：浅色主题由 light-theme.css 变量层翻转，不经类名重映射，老内核浏览器也生效 */
+  --color-ps-text: #f4f4f5;
   
   --font-inter: "Inter", system-ui, sans-serif;
   
@@ -160,102 +162,22 @@ body {
   outline: none;
 }
 
-/* [CN-FORK] 统一板块容器：现代深色面板（渐变面板底/16px 圆角/顶部高光条/主色光晕 hover），颜色走 CSS 变量双主题自动跟随 */
+/* [CN-FORK] 统一板块容器：现代扁平卡片（固定圆角/描边/板块头），颜色走 CSS 变量双主题自动跟随 */
 .panel-card {
-  position: relative;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008)), var(--color-ps-card);
-  border: 1px solid var(--color-ps-border);
-  border-radius: 1rem;
-  overflow: hidden;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
-}
-.panel-card:hover {
-  border-color: rgba(0, 149, 255, 0.35);
-  box-shadow: 0 0 32px rgba(0, 149, 255, 0.07);
-}
-/* 顶部主色高光条 */
-.panel-card::before {
-  content: "";
-  position: absolute;
-  top: 0; left: 10%; right: 10%; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(0, 149, 255, 0.55), transparent);
-  opacity: 0.7;
-  pointer-events: none;
-}
-[data-theme="light"] .panel-card {
   background: var(--color-ps-card);
-  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
+  border: 1px solid var(--color-ps-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  transition: border-color 0.2s ease;
 }
+.panel-card:hover { border-color: rgba(0, 149, 255, 0.25); }
 .panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 1rem 1.25rem;
+  padding: 0.875rem 1.25rem;
   border-bottom: 1px solid var(--color-ps-border);
-  background: linear-gradient(180deg, rgba(0, 149, 255, 0.05), transparent);
-}
-
-/* [CN-FORK] 主按钮：蓝渐变 + 主色光晕阴影 */
-.btn-primary {
-  background: linear-gradient(135deg, #33abff 0%, var(--color-ps-blue) 55%, #0077d6 100%);
-  color: #fff;
-  font-weight: 600;
-  border-radius: 0.625rem;
-  box-shadow: 0 4px 16px rgba(0, 149, 255, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  transition: all 0.2s ease;
-}
-.btn-primary:hover {
-  box-shadow: 0 6px 24px rgba(0, 149, 255, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  transform: translateY(-1px);
-}
-.btn-primary:active { transform: translateY(0); }
-[data-theme="light"] .btn-primary { color: #fff; }
-
-/* [CN-FORK] 次级幽灵按钮 */
-.btn-ghost {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--color-ps-border);
-  color: #e4e4e7;
-  font-weight: 600;
-  border-radius: 0.625rem;
-  transition: all 0.2s ease;
-}
-.btn-ghost:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(0, 149, 255, 0.4); color: #fff; }
-
-/* [CN-FORK] 板块头计数 chip */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.125rem 0.625rem;
-  border-radius: 9999px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--color-ps-blue);
-  background: rgba(0, 149, 255, 0.12);
-  border: 1px solid rgba(0, 149, 255, 0.25);
-  white-space: nowrap;
-}
-.chip-muted {
-  color: #a1a1aa;
-  background: rgba(255, 255, 255, 0.05);
-  border-color: var(--color-ps-border);
-}
-
-/* [CN-FORK] 卡片入场动画（克制：一次性浮现） */
-.card-enter {
-  animation: cardIn 0.35s cubic-bezier(0.4, 0, 0.2, 1) both;
-}
-@keyframes cardIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* [CN-FORK] 渐变分隔线（页面 hero 与内容区） */
-.hr-glow {
-  height: 1px;
-  border: 0;
-  background: linear-gradient(90deg, transparent, var(--color-ps-border) 20%, rgba(0, 149, 255, 0.35) 50%, var(--color-ps-border) 80%, transparent);
 }
 
 /* Sidebar Item Focus */

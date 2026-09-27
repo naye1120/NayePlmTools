@@ -27,7 +27,7 @@ const NavButton = ({ active, onClick, icon: Icon, label, mobileLabel, className,
         <span className={cn(
           "uppercase tracking-tighter transition-all duration-300 whitespace-nowrap overflow-hidden",
           sidebar
-            ? (sidebarExpanded ? "opacity-100 w-auto font-bold text-sm" : "opacity-0 w-0")
+            ? (sidebarExpanded ? "opacity-100 w-auto font-bold text-[16.5px]" : "opacity-0 w-0") /* [CN-FORK] 仅侧栏标签字号，较正文 text-base 大 2px（不影响全局）*/
             : (isPS5 ? "text-sm font-bold" : "text-[10px] md:text-sm")
         )}>
           <span className={cn((isPS5 || sidebar) ? "inline" : "hidden md:inline")}>{label}</span>

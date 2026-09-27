@@ -155,7 +155,7 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
                       <Cpu className="w-5 h-5" />
                     </div>
                     <div className="min-w-0 flex-1 space-y-1">
-                      <h3 className="text-base font-bold text-white truncate">{p.name}</h3>
+                      <h3 className="text-xl font-bold text-white truncate">{p.name}</h3>
                       <div className="flex items-center space-x-4 text-xs font-mono text-zinc-500 uppercase tracking-wider">
                         <span>PID: <span className="text-zinc-300">{p.pid}</span></span>
                         <span>MEM: <span className="text-zinc-300">{p.memory.toFixed(1)} MiB</span></span>

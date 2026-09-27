@@ -73,6 +73,12 @@ All translations are managed exclusively through Crowdin.
 - [John Törnblom](https://github.com/john-tornblom) - for the [shell UI installer](https://github.com/ps5-payload-dev/ftpsrv/blob/master/install-ps5.c) and various payloads used as reference.
 - [BenNoxXD](https://github.com/BenNoxXD) - for the [Disc Player App termination logic](https://github.com/BenNoxXD/PS5-BDJ-HEN-loader/blob/main/HENloader_C_part/src/kill_disc_player.c).
 - [owendswang](https://github.com/owendswang) - for [contributions](https://github.com/itsPLK/ps5-payload-manager/commits/main/?author=owendswang)
+<!-- [CN-FORK] 以下四条为本分支硬件信息采集改造（v0.5.1.55）所借鉴的开源出处，
+     与面板内「支持作者」页的「参考与致谢」列表保持同步。 -->
+- [John Törnblom](https://github.com/john-tornblom) - for the [ps5-payload-sdk hwinfo sample](https://github.com/ps5-payload-dev/sdk/tree/master/samples/hwinfo) proving that host model and serial number are plain libkernel calls (`sceKernelGetHwModelName` / `sceKernelGetHwSerialNumber`) with no privilege escalation, the [test_privileges sample](https://github.com/ps5-payload-dev/sdk/tree/master/samples/test_privileges) for the correct escalate-and-restore pattern plus read-only kernel constants (`TARGETID`, `SECURITY_FLAGS`, `UTOKEN_FLAGS`), and the [libkernel_sys stubs](https://github.com/ps5-payload-dev/sdk/blob/master/sce_stubs/libkernel_sys.c) used to verify those symbols are genuine libkernel exports.
+- [manos555555](https://github.com/manos555555) - for [PS5-Upload-Suite](https://github.com/manos555555/PS5-Upload-Suite/blob/main/payload/main.c), which confirms on real hardware that the model/serial APIs return usable values, and documents that `sceKernelIccGet*` causes crashes and that Sony's sensor APIs are not reentrant.
+- [drakmor](https://github.com/drakmor) - for [ps5-hwinfo](https://github.com/drakmor/ps5-hwinfo), used for the layout of the struct returned by `sceKernelGetProsperoSystemSwVersion`.
+- [Pharaoh2k](https://github.com/Pharaoh2k) - for [ps5debug-NG](https://github.com/Pharaoh2k/ps5debug-NG), whose `PROTOCOL.md` / `FW_VERSION` implementation independently cross-checks our BCD firmware decoding, and whose vendored SDK stub library was used for symbol verification.
 - Everyone else contributing to the PS5 homebrew scene.
 
 ## Donations

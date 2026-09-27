@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <fcntl.h>  /* [CN-FORK] open() for /game_icon */
+#include <unistd.h> /* [CN-FORK] close() for /game_icon */
 #include <sys/stat.h>
 #include <microhttpd.h>
 
@@ -23,6 +25,9 @@
 #include "history_mgr.h"
 #include "process_mgr.h"
 #include "ps5_launcher.h"
+#include "stats.h" /* [CN-FORK] 硬件信息读取 */
+#include "pkgmanager.h" /* [CN-FORK] PKG Manager 内置集成 */
+#include "quicklinks.h" /* [CN-FORK] 「常用入口」自定义快捷访问 */
 
 #include "assets_index_html.h"
 #include "assets_cache_appcache.h"
@@ -125,6 +130,8 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_REPO_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
+    if (strcmp(url, ROUTE_SYSTEM_STATS) == 0) return 1; /* [CN-FORK] 仪表盘轮询，降噪 */
+    if (strcmp(url, ROUTE_PKG_STATUS) == 0) return 1; /* [CN-FORK] PKG安装页轮询，降噪 */
     if (strcmp(url, "/events") == 0) return 1;
     return 0;
 }
@@ -184,6 +191,40 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             } else {
                 pldmgr_log("[PLDMGR] !!! Upload failed: Missing filename parameter\n");
                 status->error = 1;
+            }
+            *con_cls = status;
+            return MHD_YES;
+        }
+
+        /* [CN-FORK] /pkgmanager_upload：手动上传新版 PKG Manager ELF，裸 body 流式写 .tmp */
+        if (strncmp(url, ROUTE_PKG_UPLOAD, strlen(ROUTE_PKG_UPLOAD)) == 0 &&
+            strcmp(method, "POST") == 0) {
+            struct UploadStatus *status = malloc(sizeof(struct UploadStatus));
+            status->fp = NULL;
+            status->total_size = 0;
+            status->error = 0;
+            status->repo_url[0] = '\0';
+            /* filename 仅用于猜版本号（上传新版时二进制里未必有签名串），取 basename、不参与拼路径 */
+            const char *pkg_fname =
+                MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
+            if (pkg_fname) {
+                const char *base = strrchr(pkg_fname, '/');
+                base = base ? base + 1 : pkg_fname;
+                strncpy(status->filename, base, sizeof(status->filename) - 1);
+                status->filename[sizeof(status->filename) - 1] = '\0';
+            } else {
+                status->filename[0] = '\0';
+            }
+            strncpy(status->temp_path, PKGMGR_TMP_PATH, sizeof(status->temp_path) - 1);
+            status->temp_path[sizeof(status->temp_path) - 1] = '\0';
+            mkdir(BASE_DATA_DIR, 0777);
+            mkdir(PKGMGR_DIR, 0777);
+            status->fp = fopen(PKGMGR_TMP_PATH, "wb");
+            if (!status->fp) {
+                pldmgr_log("[PLDMGR] !!! PKG Manager upload: cannot open %s\n", PKGMGR_TMP_PATH);
+                status->error = 1;
+            } else {
+                pldmgr_log("[PLDMGR] Starting PKG Manager upload to: %s\n", PKGMGR_TMP_PATH);
             }
             *con_cls = status;
             return MHD_YES;
@@ -429,6 +470,56 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         }
     }
 
+    /* ── [CN-FORK] Chunked upload for /pkgmanager_upload ─────── */
+    if (strncmp(url, ROUTE_PKG_UPLOAD, strlen(ROUTE_PKG_UPLOAD)) == 0 && *con_cls != NULL) {
+        struct UploadStatus *status = (struct UploadStatus *)*con_cls;
+        if (*upload_data_size != 0) {
+            if (status->fp && !status->error) {
+                size_t written = fwrite(upload_data, 1, *upload_data_size, status->fp);
+                if (written != *upload_data_size)
+                    status->error = 1;
+                status->total_size += written;
+            }
+            *upload_data_size = 0;
+            return MHD_YES;
+        } else {
+            if (status->fp) {
+                fflush(status->fp);
+                fclose(status->fp);
+                status->fp = NULL;
+            }
+            int err = status->error;
+            char result[256] = "";
+            if (!err) {
+                if (pkgmanager_commit_upload(status->temp_path, status->filename, result, sizeof(result)) != 0)
+                    err = 1;
+            } else {
+                remove(status->temp_path);
+                snprintf(result, sizeof(result), "write error during upload");
+            }
+            pldmgr_log("[PLDMGR] PKG Manager upload finished: %zu bytes, err=%d\n",
+                       status->total_size, err);
+            free(status);
+            *con_cls = NULL;
+
+            char json[640];
+            char esc[512];
+            pldmgr_json_escape(result, esc, sizeof(esc));
+            if (err)
+                snprintf(json, sizeof(json), "{\"ok\":false,\"message\":\"%s\"}", esc);
+            else
+                snprintf(json, sizeof(json), "{\"ok\":true,\"version\":\"%s\"}", esc);
+            struct MHD_Response *resp_up = MHD_create_response_from_buffer(
+                strlen(json), (void *)json, MHD_RESPMEM_MUST_COPY);
+            MHD_add_response_header(resp_up, "Content-Type", "application/json");
+            add_cors_headers(resp_up);
+            enum MHD_Result ret_up = MHD_queue_response(
+                conn, err ? MHD_HTTP_BAD_REQUEST : MHD_HTTP_OK, resp_up);
+            MHD_destroy_response(resp_up);
+            return ret_up;
+        }
+    }
+
     /* ── Chunked upload for /repository_install_push ────────── */
     if (strncmp(url, ROUTE_REPO_INSTALL_PUSH, strlen(ROUTE_REPO_INSTALL_PUSH)) == 0) {
         struct UploadStatus *status = (struct UploadStatus *)*con_cls;
@@ -567,13 +658,13 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                                (void *)assets_favicon_svg,
                                                MHD_RESPMEM_PERSISTENT);
         MHD_add_response_header(resp, "Content-Type", "image/svg+xml");
-        MHD_add_response_header(resp, "Cache-Control", "max-age=604800");
+        MHD_add_response_header(resp, "Cache-Control", "no-cache, must-revalidate"); /* [CN-FORK] 图标随版本即时刷新，不吃 7 天缓存 */
     } else if (strcmp(url, "/icon.png") == 0) {
         resp = MHD_create_response_from_buffer(assets_icon_png_len,
                                                (void *)assets_icon_png,
                                                MHD_RESPMEM_PERSISTENT);
         MHD_add_response_header(resp, "Content-Type", "image/png");
-        MHD_add_response_header(resp, "Cache-Control", "max-age=604800");
+        MHD_add_response_header(resp, "Cache-Control", "no-cache, must-revalidate"); /* [CN-FORK] 图标随版本即时刷新，不吃 7 天缓存 */
 
     /* ── API routes ────────────────────────────────────────── */
     } else if (strcmp(url, ROUTE_CHECK) == 0) {
@@ -926,6 +1017,150 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                                (void *)resp_buf,
                                                MHD_RESPMEM_MUST_COPY);
         MHD_add_response_header(resp, "Content-Type", "application/json");
+    } else if (strcmp(url, ROUTE_SYSTEM_STATS) == 0) {
+        /* [CN-FORK] 硬件信息端点：受 READ_HARDWARE_INFO 开关控制，关闭时仅返回 {"enabled":false} */
+        char *resp_buf;
+        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+        if (oom_resp) {
+            enum MHD_Result r = MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+            MHD_destroy_response(oom_resp);
+            return r;
+        }
+        PldmgrConfig cfg;
+        config_read(&cfg);
+        size_t len;
+        if (cfg.read_hardware_info) {
+            len = pldmgr_get_system_stats_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        } else {
+            len = snprintf(resp_buf, RESPONSE_BUFFER_SIZE, "{\"enabled\":false}");
+        }
+        resp = MHD_create_response_from_buffer(len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        /* [CN-FORK] 仪表盘每 2s 轮询，禁用浏览器缓存，否则轮询命中缓存导致数值不更新 */
+        MHD_add_response_header(resp, "Cache-Control", "no-store, no-cache, must-revalidate");
+        MHD_add_response_header(resp, "Pragma", "no-cache");
+    } else if (strcmp(url, ROUTE_GAME_ICON) == 0) {
+        /* [CN-FORK] 当前游戏图标：只服务服务端自己探测的固定候选路径（tid 已验字母数字，无路径穿越），
+           与 /system_stats 同一 READ_HARDWARE_INFO 开关门控；前端 URL 带 ?tid= 作缓存 key */
+        PldmgrConfig cfg;
+        config_read(&cfg);
+        char icon_path[256];
+        struct stat icon_st;
+        int icon_fd = -1;
+        if (cfg.read_hardware_info && pldmgr_get_game_icon_path(icon_path, sizeof(icon_path))) {
+            icon_fd = open(icon_path, O_RDONLY);
+            if (icon_fd >= 0 && (fstat(icon_fd, &icon_st) != 0 || !S_ISREG(icon_st.st_mode)
+                                 || icon_st.st_size <= 0 || icon_st.st_size > 4 * 1024 * 1024)) {
+                close(icon_fd);
+                icon_fd = -1;
+            }
+        }
+        if (icon_fd >= 0) {
+            /* MHD_create_response_from_fd 接管 fd，响应销毁时自动关闭 */
+            resp = MHD_create_response_from_fd((size_t)icon_st.st_size, icon_fd);
+            MHD_add_response_header(resp, "Content-Type", "image/png");
+            MHD_add_response_header(resp, "Cache-Control", "public, max-age=3600");
+        } else {
+            static const char no_icon[] = "{\"error\":\"no game icon\"}";
+            resp = MHD_create_response_from_buffer(sizeof(no_icon) - 1, (void *)no_icon,
+                                                   MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            MHD_add_response_header(resp, "Cache-Control", "no-store");
+            http_status = MHD_HTTP_NOT_FOUND;
+        }
+    } else if (strcmp(url, ROUTE_PKG_STATUS) == 0) {
+        /* [CN-FORK] PKG Manager 状态：探活 8844 + 内置/当前版本 */
+        char pkg_json[512];
+        pkgmanager_status_json(pkg_json, sizeof(pkg_json));
+        resp = MHD_create_response_from_buffer(strlen(pkg_json), (void *)pkg_json,
+                                               MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_PKG_LAUNCH) == 0) {
+        /* [CN-FORK] 播种（如需要）并拉起 PKG Manager */
+        char lm[256] = "";
+        int lrc = pkgmanager_launch(lm, sizeof(lm));
+        char lesc[512], ljson[640];
+        pldmgr_json_escape(lm, lesc, sizeof(lesc));
+        snprintf(ljson, sizeof(ljson), "{\"ok\":%s,\"message\":\"%s\"}",
+                 lrc == 0 ? "true" : "false", lesc);
+        resp = MHD_create_response_from_buffer(strlen(ljson), (void *)ljson,
+                                               MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+        http_status = lrc == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR;
+    } else if (strcmp(url, ROUTE_PKG_STOP) == 0) {
+        /* [CN-FORK] 关闭 PKG Manager（按进程名 SIGKILL，不影响其它 payload）*/
+        char sm[256] = "";
+        int src = pkgmanager_stop(sm, sizeof(sm));
+        char sesc[512], sjson[640];
+        pldmgr_json_escape(sm, sesc, sizeof(sesc));
+        snprintf(sjson, sizeof(sjson), "{\"ok\":%s,\"message\":\"%s\"}",
+                 src == 0 ? "true" : "false", sesc);
+        resp = MHD_create_response_from_buffer(strlen(sjson), (void *)sjson,
+                                               MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+        http_status = src == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR;
+    } else if (strcmp(url, ROUTE_SYSINFO_PROBE) == 0) {
+        /* [CN-FORK] 诊断：fw/型号/序列号探测结果 + kenv 全量 dump（纯文本，受硬件信息开关门控） */
+        PldmgrConfig probe_cfg;
+        config_read(&probe_cfg);
+        if (!probe_cfg.read_hardware_info) {
+            static const char off_msg[] = "READ_HARDWARE_INFO disabled";
+            resp = MHD_create_response_from_buffer(sizeof(off_msg) - 1, (void *)off_msg,
+                                                   MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(resp, "Content-Type", "text/plain; charset=utf-8");
+            http_status = MHD_HTTP_FORBIDDEN;
+        } else {
+            char *resp_buf;
+            struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+            if (oom_resp)
+                return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+            int plen = stats_sysinfo_probe(resp_buf, RESPONSE_BUFFER_SIZE);
+            resp = MHD_create_response_from_buffer(plen > 0 ? (size_t)plen : 0, (void *)resp_buf,
+                                                   MHD_RESPMEM_MUST_FREE);
+            MHD_add_response_header(resp, "Content-Type", "text/plain; charset=utf-8");
+            MHD_add_response_header(resp, "Cache-Control", "no-store");
+        }
+    } else if (strcmp(url, ROUTE_QUICKLINKS) == 0) {
+        /* [CN-FORK] 常用入口：清单 + 逐条 TCP 探活（同步串行，进页面拉一次不轮询） */
+        char *resp_buf;
+        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+        if (oom_resp)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        quicklinks_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_QUICKLINKS_ADD) == 0) {
+        /* [CN-FORK] 常用入口：新增（GET 参数由 MHD 自动 URL 解码） */
+        const char *ql_name = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "name");
+        const char *ql_url = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "url");
+        char qmsg[256] = "";
+        int qrc = quicklinks_add(ql_name, ql_url, qmsg, sizeof(qmsg));
+        char qesc[512], qjson[640];
+        pldmgr_json_escape(qmsg, qesc, sizeof(qesc));
+        snprintf(qjson, sizeof(qjson), "{\"ok\":%s,\"message\":\"%s\"}",
+                 qrc == 0 ? "true" : "false", qesc);
+        resp = MHD_create_response_from_buffer(strlen(qjson), (void *)qjson, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+        if (qrc != 0) http_status = MHD_HTTP_BAD_REQUEST;
+    } else if (strcmp(url, ROUTE_QUICKLINKS_REMOVE) == 0) {
+        /* [CN-FORK] 常用入口：按下标删除 */
+        const char *ql_idx = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "index");
+        char qmsg[256] = "";
+        int qrc = ql_idx ? quicklinks_remove(atoi(ql_idx), qmsg, sizeof(qmsg))
+                         : (snprintf(qmsg, sizeof(qmsg), "缺少 index 参数"), -1);
+        char qesc[512], qjson[640];
+        pldmgr_json_escape(qmsg, qesc, sizeof(qesc));
+        snprintf(qjson, sizeof(qjson), "{\"ok\":%s,\"message\":\"%s\"}",
+                 qrc == 0 ? "true" : "false", qesc);
+        resp = MHD_create_response_from_buffer(strlen(qjson), (void *)qjson, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+        if (qrc != 0) http_status = MHD_HTTP_BAD_REQUEST;
     } else if (strcmp(url, ROUTE_GET_CONFIG) == 0) {
         PldmgrConfig cfg;
         config_read(&cfg);
@@ -959,12 +1194,13 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                      "REPOSITORY_UPDATE\":%ld,"
                      "\"AUTO_BROWSER_OPEN\":%s,\"AUTOLOAD_DELAY\":%d,\"KILL_DISC_"
                      "PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s,\"AUTO_INSTALL_APP\":%s,"
-                     "\"MULTI_SOURCES_ENABLED\":%s}",
+                     "\"MULTI_SOURCES_ENABLED\":%s,\"READ_HARDWARE_INFO\":%s}",
                      cfg.autoload_enabled ? "true" : "false", list_escaped, cfg.last_repository_update,
                      cfg.auto_browser_open ? "true" : "false", cfg.autoload_delay,
                      cfg.kill_disc_player ? "true" : "false", cfg.scan_usb_payloads ? "true" : "false",
                      cfg.auto_install_app ? "true" : "false",
-                     cfg.multi_sources_enabled ? "true" : "false");
+                     cfg.multi_sources_enabled ? "true" : "false",
+                     cfg.read_hardware_info ? "true" : "false");
             resp = MHD_create_response_from_buffer(strlen(resp_buf),
                                                    (void *)resp_buf,
                                                    MHD_RESPMEM_MUST_FREE);

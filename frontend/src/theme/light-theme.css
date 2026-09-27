@@ -21,6 +21,9 @@
   --color-ps-surface: #ffffff;
   --color-ps-card: rgba(255, 255, 255, 0.92);
   --color-ps-border: rgba(23, 24, 26, 0.08);
+  /* [CN-FORK] 语义文字色翻转：使用 var(--color-ps-text) 的元素（如云端仓库 IP 地址）直接跟随主题，
+     不依赖下方 !important 类名重映射（PS5 老内核 WebKit 上该机制不可靠） */
+  --color-ps-text: #17181a;
 }
 
 :root[data-theme="light"] body {
@@ -40,6 +43,7 @@
 /* ── 2. 文字颜色重映射 ── */
 [data-theme="light"] .text-white { color: #17181a !important; }
 [data-theme="light"] .hover\:text-white:hover { color: #17181a !important; }
+[data-theme="light"] .text-white\/90 { color: rgba(23, 24, 26, 0.9) !important; } /* [CN-FORK] 补漏：云端仓库分类组头用了 text-white/90，此前无映射导致浅色下白字 */
 [data-theme="light"] .text-white\/80 { color: rgba(23, 24, 26, 0.8) !important; }
 [data-theme="light"] .text-white\/10 { color: rgba(23, 24, 26, 0.14) !important; }
 [data-theme="light"] .text-white\/5 { color: rgba(23, 24, 26, 0.1) !important; }

@@ -22,6 +22,7 @@ void config_read(PldmgrConfig *cfg) {
     cfg->scan_usb_payloads     = 0;
     cfg->auto_install_app      = 1;
     cfg->multi_sources_enabled = 0;
+    cfg->read_hardware_info    = 1; /* [CN-FORK] 默认开启硬件读取 */
 
     f = fopen(PLDMGR_CONFIG_PATH, "r");
     if (!f)
@@ -44,6 +45,8 @@ void config_read(PldmgrConfig *cfg) {
             cfg->auto_install_app = atoi(line + 17);
         else if (strncmp(line, "MULTI_SOURCES_ENABLED=", 22) == 0)
             cfg->multi_sources_enabled = atoi(line + 22);
+        else if (strncmp(line, "READ_HARDWARE_INFO=", 19) == 0) /* [CN-FORK] */
+            cfg->read_hardware_info = atoi(line + 19);
     }
     fclose(f);
 }
@@ -64,6 +67,7 @@ int config_write(const PldmgrConfig *cfg) {
     fprintf(f, "SCAN_USB_PAYLOADS=%d\n",      cfg->scan_usb_payloads ? 1 : 0);
     fprintf(f, "AUTO_INSTALL_APP=%d\n",       cfg->auto_install_app ? 1 : 0);
     fprintf(f, "MULTI_SOURCES_ENABLED=%d\n",  cfg->multi_sources_enabled ? 1 : 0);
+    fprintf(f, "READ_HARDWARE_INFO=%d\n",     cfg->read_hardware_info ? 1 : 0); /* [CN-FORK] */
     fclose(f);
     return 0;
 }
@@ -204,6 +208,7 @@ int config_handle_set_json(const char *json_data) {
         cfg.scan_usb_payloads     = extract_json_bool(json_data, "SCAN_USB_PAYLOADS", cfg.scan_usb_payloads);
         cfg.auto_install_app      = extract_json_bool(json_data, "AUTO_INSTALL_APP", cfg.auto_install_app);
         cfg.multi_sources_enabled = extract_json_bool(json_data, "MULTI_SOURCES_ENABLED", cfg.multi_sources_enabled);
+        cfg.read_hardware_info    = extract_json_bool(json_data, "READ_HARDWARE_INFO", cfg.read_hardware_info); /* [CN-FORK] */
 
         if (config_write(&cfg) == 0) {
             pldmgr_log("[PLDMGR] Saved config to %s\n", PLDMGR_CONFIG_PATH);

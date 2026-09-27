@@ -4,6 +4,61 @@ import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
 import { isPS5 } from '../../utils/helpers'
 
+/* [CN-FORK] 参考与致谢：本 fork 改动所借鉴的开源项目。按用户要求，所有
+ * 引用的开源作者与地址必须标识到与原作者相同的页面，因此本列表紧接在「关于本 Fork」
+ * （itsPLK 署名）正下方同页展示。每条给出：作者→作者主页、项目→仓库地址、
+ * 具体文件位置、以及借鉴内容（走 donate.* 词条，中英双语）。 */
+const REFERENCES = [
+  {
+    author: 'John Törnblom', authorUrl: 'https://github.com/john-tornblom',
+    project: 'ps5-payload-sdk', projectUrl: 'https://github.com/ps5-payload-dev/sdk',
+    where: 'samples/hwinfo/main.c',
+    whereUrl: 'https://github.com/ps5-payload-dev/sdk/tree/master/samples/hwinfo',
+    whatKey: 'donate.sdk_hwinfo',
+    whatDefault: 'Official SDK sample showing that host model and serial number are just two plain libkernel calls.',
+  },
+  {
+    author: 'John Törnblom', authorUrl: 'https://github.com/john-tornblom',
+    project: 'ps5-payload-sdk', projectUrl: 'https://github.com/ps5-payload-dev/sdk',
+    where: 'samples/test_privileges/main.c',
+    whereUrl: 'https://github.com/ps5-payload-dev/sdk/tree/master/samples/test_privileges',
+    whatKey: 'donate.sdk_priv',
+    whatDefault: 'Official privilege pattern and read-only kernel constants (TARGETID, SECURITY_FLAGS, UTOKEN_FLAGS).',
+  },
+  {
+    author: 'John Törnblom', authorUrl: 'https://github.com/john-tornblom',
+    project: 'ps5-payload-sdk', projectUrl: 'https://github.com/ps5-payload-dev/sdk',
+    where: 'sce_stubs/libkernel_sys.c',
+    whereUrl: 'https://github.com/ps5-payload-dev/sdk/blob/master/sce_stubs/libkernel_sys.c',
+    whatKey: 'donate.sdk_stubs',
+    whatDefault: 'Stub library used to verify which hardware APIs are genuine libkernel exports.',
+  },
+  {
+    author: 'manos555555', authorUrl: 'https://github.com/manos555555',
+    project: 'PS5-Upload-Suite', projectUrl: 'https://github.com/manos555555/PS5-Upload-Suite',
+    where: 'payload/main.c',
+    whereUrl: 'https://github.com/manos555555/PS5-Upload-Suite/blob/main/payload/main.c',
+    whatKey: 'donate.uploadsuite',
+    whatDefault: 'On-device proof of the model/serial APIs; warnings about sceKernelIccGet* and non-reentrant sensor APIs.',
+  },
+  {
+    author: 'drakmor', authorUrl: 'https://github.com/drakmor',
+    project: 'ps5-hwinfo', projectUrl: 'https://github.com/drakmor/ps5-hwinfo',
+    where: 'main.c',
+    whereUrl: 'https://github.com/drakmor/ps5-hwinfo',
+    whatKey: 'donate.hwinfo',
+    whatDefault: 'Struct layout returned by sceKernelGetProsperoSystemSwVersion (version[0x1c] + raw).',
+  },
+  {
+    author: 'Pharaoh2k', authorUrl: 'https://github.com/Pharaoh2k',
+    project: 'ps5debug-NG', projectUrl: 'https://github.com/Pharaoh2k/ps5debug-NG',
+    where: 'PROTOCOL.md · debugger/source/meta.c',
+    whereUrl: 'https://github.com/Pharaoh2k/ps5debug-NG',
+    whatKey: 'donate.ps5debugng',
+    whatDefault: 'Independent cross-check of the BCD firmware decoding, plus a vendored SDK stub library for symbol verification.',
+  },
+]
+
 const DonateView = ({ version }) => {
   const { t } = useTranslation()
   const donateUrl = 'https://github.com/itsPLK/ps5-payload-manager/blob/main/DONATE.md';
@@ -65,11 +120,41 @@ const DonateView = ({ version }) => {
           <dt className="text-zinc-500">{t("donate.fork_upstream_version", "Upstream version")}</dt>
           <dd className="text-white font-semibold">v0.5.1</dd>
           <dt className="text-zinc-500">{t("donate.fork_version", "This fork")}</dt>
-          <dd className="text-white font-semibold">v{version || '0.5.1.8'}</dd>
+          <dd className="text-white font-semibold">v{version || '0.5.1.56'}</dd>
         </dl>
         <p className="text-xs text-zinc-500 leading-relaxed">
           {t("donate.fork_donate_note", "Donations through the button above go to the original author (itsPLK), not this fork.")}
         </p>
+      </div>
+
+      {/* [CN-FORK] 参考与致谢：与上方本 fork 署名同页，逐条给作者主页与具体出处 */}
+      <div className="w-full max-w-2xl glass-card p-5 md:p-6 rounded-ps-2xl border border-white/10 space-y-4 text-left">
+        <div className="space-y-2">
+          <p className="label-caps !text-ps-blue !opacity-100">{t("donate.ref_title", "References & Credits")}</p>
+          <p className="text-xs text-zinc-500 leading-relaxed">
+            {t("donate.ref_desc", "Changes in this fork were informed by the open-source projects below, each attributed to its author.")}
+          </p>
+        </div>
+        <ul className="space-y-4">
+          {REFERENCES.map((r) => (
+            <li key={r.whatKey} className="text-sm leading-relaxed">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <a href={r.authorUrl} target="_blank" rel="noopener noreferrer" className="text-white font-semibold hover:underline">
+                  {r.author}
+                </a>
+                <span className="text-zinc-600">·</span>
+                <a href={r.projectUrl} target="_blank" rel="noopener noreferrer" className="text-ps-blue hover:underline break-all">
+                  {r.project}
+                </a>
+                <span className="text-zinc-600">—</span>
+                <a href={r.whereUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:underline break-all font-mono text-xs">
+                  {r.where}
+                </a>
+              </div>
+              <p className="text-zinc-400 mt-1">{t(r.whatKey, r.whatDefault)}</p>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   )

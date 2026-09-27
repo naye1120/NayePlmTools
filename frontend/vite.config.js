@@ -30,6 +30,7 @@ export default defineConfig({
       '/autoload_status': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/get_config': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/set_config': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      '/system_stats': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/loadpayload:': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/manage:': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/abort': { target: 'http://127.0.0.1:8081', changeOrigin: true },
@@ -45,6 +46,10 @@ export default defineConfig({
       '/sources_remove': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/repository_payloads': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/repository_refresh': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      // [CN-FORK] 「PKG安装」视图与设置页管理卡片需要这三个端点，缺了本地 dev 会直接落到 failed 态
+      '/pkgmanager_status': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      '/pkgmanager_launch': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      '/pkgmanager_stop': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/repository_install': { target: 'http://127.0.0.1:8081', changeOrigin: true }
     }
   }

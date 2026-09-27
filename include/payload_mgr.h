@@ -26,4 +26,8 @@ int payload_mgr_usb_move(const char *usb_path, int overwrite, int keep_original,
 /* Internal utility — exposed for use by repository.c and sources.c */
 void payload_mgr_remove_old_files(const char *dir_path, const char *new_filename);
 
+/* [CN-FORK] 启动自检：将已安装的 NayePlmTools 同步到 ps5_autoloader，
+ * 解决旧版本没有 sync 代码导致首次升级到 .20 时 ps5_autoloader 未更新的问题 */
+void payload_mgr_bootstrap_self_sync(void);
+
 #endif
