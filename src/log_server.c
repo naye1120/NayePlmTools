@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/stat.h> /* [CN-FORK] 日志落盘需要 mkdir */
 
 #include "log_server.h"
 #include "utils.h"
@@ -18,6 +19,41 @@ static pthread_cond_t log_cond = PTHREAD_COND_INITIALIZER;
 static int log_updated = 0;
 
 static volatile int server_active_flag = 0;
+
+/* [CN-FORK] 日志落盘：实机死机排查之前完全没有证据可查 —— 日志只进内存环形缓冲 + SSE，
+ * 一断电全没。这里追加写 /data/nayeplmtools/pldmgr.log 并带时间戳，每行 fflush，
+ * 保证死机前最后一条还在。调用方已持 log_mutex，log_fp 的并发由它串行。 */
+#define PLDMGR_LOG_PATH "/data/nayeplmtools/pldmgr.log"
+#define PLDMGR_LOG_MAX_BYTES (512 * 1024)
+static FILE *log_fp = NULL;
+static long  log_bytes = 0;
+static int   log_dir_tried = 0;
+
+static void log_append_file(const char *line) {
+    if (log_fp && log_bytes > PLDMGR_LOG_MAX_BYTES) {
+        fclose(log_fp);
+        log_fp = NULL;
+        log_bytes = 0;
+    }
+    if (!log_fp) {
+        if (!log_dir_tried) {
+            log_dir_tried = 1;
+            mkdir("/data/nayeplmtools", 0777);
+        }
+        log_fp = fopen(PLDMGR_LOG_PATH, log_bytes ? "a" : "w");
+        if (!log_fp) return;
+    }
+
+    char ts[32] = "";
+    time_t now = time(NULL);
+    struct tm tmv;
+    if (localtime_r(&now, &tmv) != NULL)
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tmv);
+
+    int w = fprintf(log_fp, "[%s] %s\n", ts, line);
+    if (w > 0) log_bytes += w;
+    fflush(log_fp);
+}
 
 void log_server_set_active(void) { server_active_flag = 1; }
 int pldmgr_server_is_active(void) { return server_active_flag; }
@@ -52,6 +88,7 @@ void pldmgr_log(const char *fmt, ...) {
     /* Signal SSE clients */
     log_updated++;
     pthread_cond_broadcast(&log_cond);
+    log_append_file(line); /* [CN-FORK] 同一把锁下写盘，保证死机前最后一条已落盘 */
     pthread_mutex_unlock(&log_mutex);
 }
 

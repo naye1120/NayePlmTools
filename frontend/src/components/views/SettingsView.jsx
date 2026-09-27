@@ -414,6 +414,10 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </div>
             <div className="overflow-y-auto p-5 space-y-4 text-sm leading-relaxed">
               <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.62</p>
+                <p className="text-zinc-400">死机排查与传感器安全闸：首页每 2s 一次拉 /system_stats，而后端一直是裸调——CPU 温度、SoC sensor 0/1、风扇占空比、内存/显存页表、DCE 帧计数 ioctl、全进程表 sysctl 全部每请求跑一遍，既没锁也没节流；加上前端 1.8s 就 abort（只断客户端，服务端 handler 线程照旧跑完）与 MHD 的 thread-per-connection，多个线程会并发把传感器请求打进同一条 ICC 通道——这正是本项目「Sensor API 必须串行化 + 限流」规范要防的死机形态。现在整份快照在互斥锁内构建并缓存 5s，并发请求直接命中缓存不再产生内核调用（前端无需改，节流后 abort 重发已无危害）。同时日志落盘到 /data/nayeplmtools/pldmgr.log（带时间戳、每行 fflush、超 512KB 截断），此前日志只在内存环形缓冲里，一断电死机现场就全没；启动时还会把 hw_stats / auto_browser / kill_disc / auto_install / autoload 几个默认开启的开关值记进日志，下次死机可直接看最后几行指认现场</p>
+              </div>
+              <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.61</p>
                 <p className="text-zinc-400">修 autoload.txt 开头多出一个空行：上一版补延时行的逻辑向上找参照行时是「跳过空行继续往上」，于是「!1000」被插到空行下面，空行留在原地——本工具那条正好排在文件第一位，看着就是文件前面多了一行。现在改成以「!延时行 + 文件名行」整条为单位：先折叠这条上方紧邻的连续空行，再判断要不要补延时行；空行只清理本工具块自己上方的，其它程序的条目一律不动，且只清理空行这一项变化也会正常触发回写（旧逻辑没改动就原样跳过）</p>
               </div>

@@ -122,6 +122,14 @@ int main(int argc, char *argv[]) {
     PldmgrConfig cfg;
     config_read(&cfg);
 
+    /* [CN-FORK] 死机排查：v0.5.1.59 自愈后本工具第一次真的开机自启，启动序列里几个
+     * 默认开启的高危动作（硬件轮询/杀光盘播放器/开浏览器/装机）从此都在引导阶段执行。
+     * 把开关值连同落盘日志一起记下来，下次死机后才能从 pldmgr.log 直接指认现场。 */
+    pldmgr_log("[PLDMGR] config: hw_stats=%d auto_browser=%d kill_disc=%d auto_install=%d autoload=%d\n",
+               cfg.read_hardware_info ? 1 : 0, cfg.auto_browser_open ? 1 : 0,
+               cfg.kill_disc_player ? 1 : 0, cfg.auto_install_app ? 1 : 0,
+               cfg.autoload_enabled ? 1 : 0);
+
     /* [CN-FORK] IP 提前获取：供启动日志与最后一条通知复用（通知为排他显示，顺序见下方） */
     char current_ip[64] = "unknown";
     pldmgr_get_local_ip(current_ip, sizeof(current_ip));

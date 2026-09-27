@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <errno.h>
+#include <pthread.h> /* [CN-FORK] 传感器安全闸的串行化互斥锁 */
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -1077,7 +1078,50 @@ int pldmgr_get_game_icon_path(char *out, size_t out_size) {
     return 0;
 }
 
+/* ── [CN-FORK] 传感器安全闸 ────────────────────────────────────────────
+ * 项目规范（PS5 传感器 API 安全调用规范）早就写明：所有 Sensor API 必须加互斥锁
+ * 串行化、限流 ≥1s（最多 5s 一次），否则 Web 轮询会把整机打死。但此前 stats.c
+ * 里既没有锁也没有节流：首页每 2s 拉 /system_stats，前端 1.8s 就 abort（只断客户端，
+ * 服务端 handler 线程照旧跑完），MHD 又是 thread-per-connection，于是
+ * 温度/风扇/页表/DCE ioctl 会被多线程并发打进同一条 ICC 通道。
+ * 现在整份快照在锁内构建并缓存 5s：并发请求直接命中缓存，不再产生任何内核调用。 */
+#define STATS_PROBE_INTERVAL_MS 5000
+static pthread_mutex_t g_stats_mtx = PTHREAD_MUTEX_INITIALIZER;
+static char      g_stats_cache[8192];
+static size_t    g_stats_cache_len = 0;
+static long long g_stats_cache_ms  = 0;
+
+static size_t build_system_stats_json(char *buf, size_t size);
+
 size_t pldmgr_get_system_stats_json(char *buf, size_t size) {
+    if (!buf || size == 0) return 0;
+
+    pthread_mutex_lock(&g_stats_mtx);
+    long long t = now_ms();
+    if (g_stats_cache_len && t >= g_stats_cache_ms &&
+        (t - g_stats_cache_ms) < STATS_PROBE_INTERVAL_MS) {
+        size_t n = g_stats_cache_len;
+        if (n > size - 1) n = size - 1;
+        memcpy(buf, g_stats_cache, n);
+        buf[n] = '\0';
+        pthread_mutex_unlock(&g_stats_mtx);
+        return n;
+    }
+
+    size_t n = build_system_stats_json(buf, size);
+    if (n > 0 && n < sizeof(g_stats_cache) && n < size) {
+        memcpy(g_stats_cache, buf, n);
+        g_stats_cache[n] = '\0';
+        g_stats_cache_len = n;
+        g_stats_cache_ms  = t;
+    } else {
+        g_stats_cache_len = 0; /* 被截断或超长：不缓存，宁可多探一次也不回半截 JSON */
+    }
+    pthread_mutex_unlock(&g_stats_mtx);
+    return n;
+}
+
+static size_t build_system_stats_json(char *buf, size_t size) {
     /* CPU */
     float cpu_usage = get_cpu_usage();
     int cpu_temp = -1;

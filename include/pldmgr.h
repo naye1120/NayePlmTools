@@ -53,7 +53,7 @@
 /* [CN-FORK] 系统信息诊断端点：fw/型号/序列号探测结果 + kenv 全量 dump（纯文本） */
 #define ROUTE_SYSINFO_PROBE "/sysinfo_probe"
 
-#define MENU_VERSION "0.5.1.61" /* [CN-FORK] 本 fork 版本：上游基线 0.5.1 + 构建序号（.61）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.1.62" /* [CN-FORK] 本 fork 版本：上游基线 0.5.1 + 构建序号（.62）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"
