@@ -5,7 +5,7 @@
   "app.nav.group_main": "常用功能",
   "app.nav.group_system": "系统管理",
   "app.nav.pkg": "PKG安装",
-  "app.nav.common_entries": "常用入口",
+  "app.nav.common_entries": "常用配置",
   "pkg.desc": "内置的 PKG Manager 是一个独立守护进程（自带界面，端口 8844），支持从 USB / 光盘 / SMB 共享安装 PKG。点侧栏「PKG安装」菜单会自动拉起并直接进入其界面。",
   "pkg.opening": "启动中…",
   "pkg.open_fail": "PKG Manager 启动失败",
@@ -57,7 +57,7 @@
   "settings.theme_title": "外观",
   "settings.theme_desc": "选择深色或浅色界面；「跟随系统」会随操作系统设置自动切换。",
   "settings.donate_title": "支持作者",
-  "settings.donate_desc": "本程序是 naye 基于原作者 itsPLK 的 Payload Manager 维护的中文分支（当前 v0.5.1.64）。如果喜欢原作，可以请作者喝一杯咖啡。",
+  "settings.donate_desc": "本程序是 naye 基于原作者 itsPLK 的 Payload Manager 维护的中文分支（当前 v0.5.1.65）。如果喜欢原作，可以请作者喝一杯咖啡。",
     "storage_hub.launch": "启动",
   "donate.description": "如果你喜欢本项目，可以支持原作者。非常感谢！",
   "donate.fork_title": "关于本 Fork",
@@ -79,5 +79,12 @@
   "app.offline.title": "NayePlmTools 未运行…",
   "app.fork.by": "由 {{maintainer}} 维护",
   "settings.changelog_title": "更新日志",
-  "settings.changelog_desc": "查看本 Fork 的版本更新历史。"
+  "settings.changelog_desc": "查看本 Fork 的版本更新历史。",
+  "settings.default_repo_title": "默认云端仓库",
+  "settings.default_repo_desc": "内置的官方 payload 目录。关掉后向它发出的请求全部停掉（含开机那一次刷新），你自己的来源照常可用。",
+  "settings.default_repo_off_hint": "已关闭默认仓库且未开启多来源模式：管理页只会列出本地 payload。想继续在线安装，请打开「多来源」并添加自己的源。",
+  "storage_hub.cloud_repo_disabled_tag": "已在设置中关闭",
+  "storage_hub.repo_disabled": "云端仓库已关闭",
+  "storage_hub.repo_disabled_desc": "设置里关掉了「默认云端仓库」，因此不会拉取任何在线 payload 目录。重新打开即可在线浏览与安装。",
+  "manage_sources.disabled_badge": "已关闭"
 }

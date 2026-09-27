@@ -56,10 +56,13 @@ const communityRepository = [
 ];
 
 let lastRepositoryUpdate = Math.floor(Date.now() / 1000);
+/* [CN-FORK] mock 里的「默认云端仓库」，与 include/pldmgr.h 的 REPOSITORY_SOURCE_URL 保持一致 */
+const MOCK_DEFAULT_REPO_URL = 'https://itsplk.github.io/ps5-payloads-mirror/payloads.json';
 /* [CN-FORK] v0.5.1.64 mock 开始真正保存配置：旧实现 /get_config 返回硬编码字面量、/set_config 只打日志
  * 不回存，本地 dev 里设置页每个开关点完都弹回原状，看着就像「开关都不好用」；而缺的四个键
  * （AUTO_BROWSER_OPEN / AUTOLOAD_DELAY / KILL_DISC_PLAYER_ON_STARTUP / SCAN_USB_PAYLOADS）连回显都没有。
- * 默认值与 src/config.c 一致（MULTI_SOURCES_ENABLED / AUTOLOAD_ENABLED 仍留 true：mock 的仓库数据固定是分源格式）。 */
+ * 默认值与 src/config.c 一致（MULTI_SOURCES_ENABLED / AUTOLOAD_ENABLED 仍留 true 只为让本地首屏数据更丰富，
+ * 两个模式的仓库响应格式现在都由下面的 buildRepositoryResponse 真实区分）。 */
 const mockConfig = {
   AUTOLOAD_ENABLED: true,
   AUTOLOAD_LIST: "goldhen_v2.4b17.elf,etaHEN_1.8.elf",
@@ -69,12 +72,14 @@ const mockConfig = {
   KILL_DISC_PLAYER_ON_STARTUP: true,
   SCAN_USB_PAYLOADS: false,
   AUTO_INSTALL_APP: true,
-  MULTI_SOURCES_ENABLED: true
+  MULTI_SOURCES_ENABLED: true,
+  /* [CN-FORK] v0.5.1.65 默认云端仓库总开关（后端 config_read 默认也为 1） */
+  DEFAULT_REPO_ENABLED: true
 };
 /* [CN-FORK] v0.5.1.64 删除 readHardwareEnabled：主页硬件信息功能（/system_stats + stats.c）已整体下线 */
 
 let mockSources = [
-  { id: 'default', name: 'Official Repository', url: 'https://itsplk.github.io/ps5-payloads-mirror/payloads.json', removable: false },
+  { id: 'default', name: 'Official Repository', url: MOCK_DEFAULT_REPO_URL, removable: false },
   { id: 'source_community', name: 'Community Payloads', url: 'https://example.com/community-payloads.json', removable: true }
 ];
 
@@ -119,7 +124,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.1.64'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.1.65'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -214,53 +219,49 @@ app.get('/get_config', (req, res) => {
   res.json(mockConfig);
 });
 
-app.get('/repository_payloads', (req, res) => {
-  // Return source-grouped format (multi-source mode always on in mock)
-  res.json({
-    sources: [
-      {
-        id: 'default',
-        name: 'Official Repository',
-        last_update: lastRepositoryUpdate,
-        error: false,
-        payloads: remoteRepository.map(p => ({ ...p, source_id: 'default', source_name: 'Official Repository' }))
-      },
-      {
-        id: 'source_community',
-        name: 'Community Payloads',
-        last_update: lastRepositoryUpdate,
-        error: false,
-        payloads: communityRepository.map(p => ({ ...p, source_id: 'source_community', source_name: 'Community Payloads' }))
-      }
-    ]
+/* [CN-FORK] v0.5.1.65 跟后端 repository_list_json / sources_multi_repository_list_json 保持同一套开关语义：
+ * 默认云端仓库关掉后，官方源整组不输出；单来源模式下直接回空清单（cache_status=disabled）。 */
+const buildRepositoryResponse = () => {
+  const defaultOn = mockConfig.DEFAULT_REPO_ENABLED !== false;
+  if (!mockConfig.MULTI_SOURCES_ENABLED) {
+    return defaultOn
+      ? { payloads: remoteRepository, last_update: lastRepositoryUpdate, cache_status: 'ok', repo_url: MOCK_DEFAULT_REPO_URL }
+      : { payloads: [], last_update: lastRepositoryUpdate, cache_status: 'disabled' };
+  }
+  const groups = [];
+  if (defaultOn) {
+    groups.push({
+      id: 'default',
+      name: 'Official Repository',
+      last_update: lastRepositoryUpdate,
+      error: false,
+      payloads: remoteRepository.map(p => ({ ...p, source_id: 'default', source_name: 'Official Repository' }))
+    });
+  }
+  groups.push({
+    id: 'source_community',
+    name: 'Community Payloads',
+    last_update: lastRepositoryUpdate,
+    error: false,
+    payloads: communityRepository.map(p => ({ ...p, source_id: 'source_community', source_name: 'Community Payloads' }))
   });
+  return { sources: groups };
+};
+
+app.get('/repository_payloads', (req, res) => {
+  res.json(buildRepositoryResponse());
 });
 
 app.get('/repository_refresh', (req, res) => {
   lastRepositoryUpdate = Math.floor(Date.now() / 1000);
   logs.push(`[PLDMGR] Repository manually refreshed`);
-  res.json({
-    sources: [
-      {
-        id: 'default',
-        name: 'Official Repository',
-        last_update: lastRepositoryUpdate,
-        error: false,
-        payloads: remoteRepository.map(p => ({ ...p, source_id: 'default', source_name: 'Official Repository' }))
-      },
-      {
-        id: 'source_community',
-        name: 'Community Payloads',
-        last_update: lastRepositoryUpdate,
-        error: false,
-        payloads: communityRepository.map(p => ({ ...p, source_id: 'source_community', source_name: 'Community Payloads' }))
-      }
-    ]
-  });
+  res.json(buildRepositoryResponse());
 });
 
 app.get('/sources_list', (req, res) => {
-  res.json({ sources: mockSources });
+  /* [CN-FORK] v0.5.1.65 默认源不从列表里抹掉（下标就是缓存文件名的语义与后端一致），而是带 enabled=false */
+  const defaultOn = mockConfig.DEFAULT_REPO_ENABLED !== false;
+  res.json({ sources: mockSources.map(s => ({ ...s, enabled: s.id === 'default' ? defaultOn : true })) });
 });
 
 app.post('/sources_set', (req, res) => {

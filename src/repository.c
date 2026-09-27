@@ -290,6 +290,12 @@ int repository_ensure_fresh(int force_refresh) {
     RepoPayload *items = NULL;
     size_t count = 0;
 
+    /* [CN-FORK] v0.5.1.65 默认云端仓库总开关：关掉后本函数不再向 REPOSITORY_SOURCE_URL 发任何请求
+     * （开机预取 / 手动刷新 / 安装前补缓存三条路径都走这里）。磁盘上的旧缓存保持不动，
+     * 重新打开可立即复用。 */
+    if (!config_read_bool("DEFAULT_REPO_ENABLED", 1))
+        return 0;
+
     ensure_dir_recursive(BASE_DATA_DIR);
     ensure_dir_recursive(PAYLOADS_STORAGE_DIR);
 
@@ -340,6 +346,16 @@ size_t repository_list_json(char *json_buf, size_t buf_size, int force_refresh) 
     size_t cached_size = 0;
     long last_update = 0;
     size_t pos = 0;
+
+    /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：回空清单（cache_status=disabled），既不联网也不读旧缓存，
+     * 前端据此显示「云端仓库已关闭」而不是「仓库为空 / 连接失败」 */
+    if (!config_read_bool("DEFAULT_REPO_ENABLED", 1)) {
+        config_read_last_update(&last_update);
+        snprintf(json_buf, buf_size,
+                 "{\"payloads\":[],\"last_update\":%ld,\"cache_status\":\"disabled\"}",
+                 last_update);
+        return strlen(json_buf);
+    }
 
     if (force_refresh) {
         if (repository_ensure_fresh(1) != 0) {

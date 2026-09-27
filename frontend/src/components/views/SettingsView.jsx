@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Terminal, ChevronRight, Globe, Languages, Palette, Heart, ScrollText, X, Package } from 'lucide-react'
+import { Terminal, ChevronRight, Globe, Languages, Palette, Heart, ScrollText, X, Package, CloudDownload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../utils/helpers'
 // [CN-FORK] 外观（深/浅色）切换控件
@@ -51,6 +51,8 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
   const autoInstall = config.AUTO_INSTALL_APP !== false
   const autoloadDelay = config.AUTOLOAD_DELAY || 5
   const multiSources = config.MULTI_SOURCES_ENABLED === true
+  /* [CN-FORK] v0.5.1.65 默认云端仓库总开关，后端缺键时按开处理（与 config_read 默认值一致） */
+  const defaultRepo = config.DEFAULT_REPO_ENABLED !== false
   const [followBrowserLanguage, setFollowBrowserLanguage] = useState(isFollowingBrowserLanguage)
 
   const getLanguageDisplayName = (lang) => {
@@ -270,6 +272,33 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </button>
           </SettingRow>
 
+          {/* [CN-FORK] v0.5.1.65 默认云端仓库总开关：内置官方源在国内经常拉不动，
+           * 关掉后开机不再拉 payloads.json，管理页也不出这一组目录 */}
+          <SettingRow
+            title={t("settings.default_repo_title", "Default Cloud Repository")}
+            description={t("settings.default_repo_desc", "The built-in official payload catalog. Turn it off to stop every request to it (including the startup refresh); your own sources keep working.")}
+            icon={CloudDownload}
+          >
+            <button
+              onClick={() => onSaveConfig({ DEFAULT_REPO_ENABLED: !defaultRepo })}
+              className={cn(
+                "w-14 h-7 md:w-20 md:h-10 rounded-full transition-all relative p-1 md:p-1.5",
+                defaultRepo ? "bg-ps-blue" : "bg-white/10"
+              )}
+            >
+              <div className={cn(
+                "w-5 h-5 md:w-7 md:h-7 bg-white rounded-full transition-all",
+                defaultRepo ? "translate-x-7 md:translate-x-10" : "translate-x-0"
+              )} />
+            </button>
+          </SettingRow>
+
+          {!defaultRepo && !multiSources && (
+            <p className="xl:col-span-2 text-xs text-amber-400/80 leading-relaxed px-1">
+              {t("settings.default_repo_off_hint", "Default repository off and multi-source mode disabled: the Manage tab will only list local payloads. Turn on Multiple Payload Sources to use your own repositories.")}
+            </p>
+          )}
+
           {multiSources && (
             <button
               onClick={() => onNavigate('sources')}
@@ -397,6 +426,10 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
               </button>
             </div>
             <div className="overflow-y-auto p-5 space-y-4 text-sm leading-relaxed">
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.65</p>
+                <p className="text-zinc-400">新增「默认云端仓库」总开关（DEFAULT_REPO_ENABLED，默认开，不想要可以直接关掉）。关掉后一刀切干净：开机不再向内置官方源拉 payloads.json（引导期少一次联网，对之前查死机也少一个变量）、手动刷新与安装前补缓存同样不再发请求（三条路径收口到 repository_ensure_fresh 一处判断）；单来源模式下 /repository_payloads 直接回空清单并标 cache_status=disabled，管理页显示「云端仓库已关闭」而不是转圈或「连接失败」；多来源模式下官方源整组不拉取、不进目录。官方源在「管理来源」列表里是灰显加「已关闭」标记，而不是从列表抹掉——因为用户源的数组下标就是它的缓存文件名，抹掉会让所有自建源重新下载一遍；磁盘上的旧缓存也不动，重新打开立即复用。注意单来源模式下只关掉默认仓库时，管理页就只剩本地已上传的 payload，想继续在线安装请开多来源模式并添加自己的源</p>
+              </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.64</p>
                 <p className="text-zinc-400">主页与硬件信息检测整体删除：温度/风扇/内存/显存/存储/FPS/当前游戏 全部仍靠每 2s 一次的 /system_stats 轮询驱动，是不可重入的 Sony 传感器 API、页表统计与显示驱动 ioctl 拼起来的，也是目前唯一能解释「一运行就死机」的功能；既然它只为了首页那几个数字，本版直接抹掉：删 src/stats.c 与 include/stats.h（不再进构建）、/system_stats 与 /game_icon 与 /sysinfo_probe 三个端点下线、READ_HARDWARE_INFO 开关（配置项/设置页/后端 JSON）一并移除；前端删 DashboardView 与侧栏、移动端底部、默认页三处「主页」入口，启动直接进「管理 Payload」页（旧配置里残留的 READ_HARDWARE_INFO= 行会被忽略，不影响加载）。dev 侧同步删 mock 的 /system_stats 与 /game_icon、vite 代理两项。保留 .63 的 safe_mode 哨兵文件（现在只管装 app / 杀光盘 / 开浏览器 / 自启序列四件事），死机取证靠 /data/nayeplmtools/pldmgr.log。另加固设置页开关：后端 /set_config 旧实现要求请求体里必须带 AUTOLOAD_ENABLED 才会保存任何开关，缺这个键就整份静默丢弃（只要 /get_config 有一次没读到值就会踩到，症状是开关点了没反应），现在各开关无条件应用，只有「关掉自启」的 abort 动作仍拿 AUTOLOAD_ENABLED 做判据</p>

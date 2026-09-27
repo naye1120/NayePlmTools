@@ -21,6 +21,9 @@ typedef struct {
     char name[256];
     char url[1024];
     int  removable;
+    /* [CN-FORK] v0.5.1.65 默认云端仓库开关：只有下标 0 的内置源可能为 0（已关闭），
+     * 仍然占住 slot 0 以免用户源的数组下标（决定缓存文件名）发生错乱 */
+    int  enabled;
 } SourceEntry;
 
 /* ── Load / Save sources from SOURCES_CONFIG_PATH ──────────── */
@@ -37,6 +40,8 @@ static int load_sources(SourceEntry *out, int *out_count) {
     strncpy(out[0].name, "Official Repository", sizeof(out[0].name) - 1);
     strncpy(out[0].url,  REPOSITORY_SOURCE_URL, sizeof(out[0].url) - 1);
     out[0].removable = 0;
+    /* [CN-FORK] v0.5.1.65 默认云端仓库可以整体关掉（关掉后不再拉取、不列目录，管理来源页标记为已关闭） */
+    out[0].enabled   = config_read_bool("DEFAULT_REPO_ENABLED", 1);
     count = 1;
 
     if (read_file_text(SOURCES_CONFIG_PATH, &json, &size) != 0 || !json || size == 0) {
@@ -73,6 +78,7 @@ static int load_sources(SourceEntry *out, int *out_count) {
             strncpy(out[count].name, name, sizeof(out[count].name) - 1);
             strncpy(out[count].url,  url,  sizeof(out[count].url) - 1);
             out[count].removable = (strcmp(removable_str, "false") != 0);
+            out[count].enabled   = 1; /* [CN-FORK] v0.5.1.65 用户自建源不受默认仓库开关影响 */
             count++;
         }
         p = end + 1;
@@ -124,9 +130,12 @@ int sources_list_json(char *buf, size_t size) {
         pldmgr_json_escape(sources[i].id,   id_e,   sizeof(id_e));
         pldmgr_json_escape(sources[i].name, name_e, sizeof(name_e));
         pldmgr_json_escape(sources[i].url,  url_e,  sizeof(url_e));
-        if (json_append(&jb, "  {\"id\":\"%s\",\"name\":\"%s\",\"url\":\"%s\",\"removable\":%s}%s\n",
+        /* [CN-FORK] v0.5.1.65 多一个 enabled 字段，让管理来源页把已关闭的默认源灰显而不是隐行，
+         * 下标保持与后端一致，上移/下移/删除的索引语义不变 */
+        if (json_append(&jb, "  {\"id\":\"%s\",\"name\":\"%s\",\"url\":\"%s\",\"removable\":%s,\"enabled\":%s}%s\n",
             id_e, name_e, url_e,
             sources[i].removable ? "true" : "false",
+            sources[i].enabled ? "true" : "false",
             (i < count - 1) ? "," : "") != 0) {
             break;
         }
@@ -151,6 +160,7 @@ int sources_save(const char *json, size_t len) {
     strncpy(sources[0].name, "Official Repository", sizeof(sources[0].name) - 1);
     strncpy(sources[0].url,  REPOSITORY_SOURCE_URL, sizeof(sources[0].url) - 1);
     sources[0].removable = 0;
+    sources[0].enabled   = 1; /* [CN-FORK] v0.5.1.65 落盘不记录开关，启用状态每次由 load_sources 从配置重算 */
     count = 1;
 
     const char *arr_start = strstr(json, "\"sources\"");
@@ -175,6 +185,7 @@ int sources_save(const char *json, size_t len) {
         strncpy(sources[count].name, name, sizeof(sources[count].name) - 1);
         strncpy(sources[count].url,  url,  sizeof(sources[count].url) - 1);
         sources[count].removable = 1;
+        sources[count].enabled   = 1; /* [CN-FORK] v0.5.1.65 同上，仅占位 */
         count++;
         p = end + 1;
     }
@@ -437,6 +448,11 @@ size_t sources_multi_repository_list_json(char *buf, size_t size, int force_refr
 
     for (int si = 0; si < src_count; si++) {
         char cache_path[512];
+
+        /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：整组不输出（不拉取也不列目录），用户自建源不受影响 */
+        if (!sources[si].enabled)
+            continue;
+
         get_source_cache_path(si, cache_path, sizeof(cache_path));
 
         int fetch_ok = (ensure_source_fresh(sources[si].url, cache_path, force_refresh) == 0);
@@ -496,7 +512,13 @@ size_t sources_multi_repository_list_json(char *buf, size_t size, int force_refr
             if (items) free(items);
         }
 
-        if (json_append(&jb, "  ]}%s\n", (si < src_count - 1) ? "," : "") != 0) {
+        /* [CN-FORK] v0.5.1.65 尾部逗号不能再按「是不是最后一个下标」判断：被跳过的默认源
+         * 若排在最后会产出 `...,]}` 这种非法 JSON，必须看后面还有没有启用源 */
+        int more = 0;
+        for (int k = si + 1; k < src_count; k++) {
+            if (sources[k].enabled) { more = 1; break; }
+        }
+        if (json_append(&jb, "  ]}%s\n", more ? "," : "") != 0) {
             break;
         }
     }

@@ -56,7 +56,7 @@
   "settings.theme_title": "Appearance",
   "settings.theme_desc": "Choose dark or light interface; \"Auto\" follows your system preference.",
   "settings.donate_title": "Support the Project",
-  "settings.donate_desc": "This is a fork maintained by naye, based on the original Payload Manager by itsPLK (v0.5.1.64). If you like it, you can buy the original author a coffee.",
+  "settings.donate_desc": "This is a fork maintained by naye, based on the original Payload Manager by itsPLK (v0.5.1.65). If you like it, you can buy the original author a coffee.",
     "storage_hub.launch": "Launch",
   "donate.description": "If you like this project, you can support the original author. Thank you very much!",
   "donate.fork_title": "About This Fork",
@@ -78,5 +78,12 @@
   "app.offline.title": "NayePlmTools is not running...",
   "app.fork.by": "Fork by {{maintainer}}",
   "settings.changelog_title": "Changelog",
-  "settings.changelog_desc": "View version update history for this fork."
+  "settings.changelog_desc": "View version update history for this fork.",
+  "settings.default_repo_title": "Default Cloud Repository",
+  "settings.default_repo_desc": "The built-in official payload catalog. Turning it off stops every request to it, including the startup refresh; your own sources keep working.",
+  "settings.default_repo_off_hint": "Default repository is off and multi-source mode is disabled: the Manage tab only lists local payloads. Turn on Multiple Payload Sources to use your own repositories.",
+  "storage_hub.cloud_repo_disabled_tag": "Disabled in settings",
+  "storage_hub.repo_disabled": "Cloud Repository Disabled",
+  "storage_hub.repo_disabled_desc": "The default cloud repository is turned off in Settings, so no online payload catalog is fetched. Turn it back on to browse and install online payloads.",
+  "manage_sources.disabled_badge": "Disabled"
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { CloudDownload, Upload, Package, Database, RefreshCw, Trash2, Loader2, AlertTriangle, HardDrive, Usb, ChevronDown, Globe, Search, Play } from 'lucide-react'
+import { CloudDownload, CloudOff, Upload, Package, Database, RefreshCw, Trash2, Loader2, AlertTriangle, HardDrive, Usb, ChevronDown, Globe, Search, Play } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { QRCodeSVG } from 'qrcode.react'
 import { cn, isPS5, isIOS, parsePayloadName } from '../../utils/helpers'
@@ -78,6 +78,10 @@ const CategoryGroup = ({ category, payloads, multiSources, isPS5, onInstall, src
 const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, onUpload, onImportFromUsb, config, ip, scrollTarget, onClearScrollTarget }) => {
   const { t, i18n } = useTranslation()
   const multiSources = config?.MULTI_SOURCES_ENABLED === true
+  /* [CN-FORK] v0.5.1.65 默认云端仓库总开关：单来源模式下它就是唯一的在线目录，
+   * 关掉后本页不再请求 /repository_payloads，也不显示搜索/刷新控件 */
+  const defaultRepoOn = config?.DEFAULT_REPO_ENABLED !== false
+  const cloudDisabled = !multiSources && !defaultRepoOn
 
   const [repoData, setRepoData] = useState(null)   // null = not loaded yet
   const [loading, setLoading] = useState(false)
@@ -94,6 +98,13 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
   }
 
   const fetchRemote = async (force = false) => {
+    /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：不发请求，后端也不会给东西 */
+    if (cloudDisabled) {
+      setRepoData(null)
+      setLoading(false)
+      setError(false)
+      return
+    }
     setLoading(true)
     setError(false)
     try {
@@ -125,7 +136,11 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
     }
   }
 
-  useEffect(() => { fetchRemote() }, [])
+  useEffect(() => {
+    /* [CN-FORK] v0.5.1.65 开关变化时重跑：关掉时 fetchRemote 自己会清空目录并直接返回（不发请求），
+     * 重新打开则自动拉一次 */
+    fetchRemote()
+  }, [cloudDisabled])
 
   useEffect(() => {
     if (scrollTarget) {
@@ -308,13 +323,22 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               <CloudDownload className="w-4 h-4 text-ps-blue" />
             </div>
             <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.cloud_repo_title", "Cloud Repository")}</h3>
+          {/* [CN-FORK] v0.5.1.65 默认仓库关闭时在标题位直接说明原因 */}
+          {cloudDisabled && (
+            <span className="text-xs text-zinc-500 normal-case tracking-normal font-medium shrink-0">
+              {t("storage_hub.cloud_repo_disabled_tag", "Disabled in settings")}
+            </span>
+          )}
           </div>
+          {!cloudDisabled && (
           <button onClick={() => fetchRemote(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-zinc-500 hover:text-ps-blue" title={t("storage_hub.retry_btn", "Retry Connection")}>
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
+          )}
         </header>
 
         <div className="p-4 space-y-4">
+        {!cloudDisabled && (
         <div className="flex flex-col md:flex-row gap-3">
           <div className="flex-1 flex items-center bg-black/40 border border-white/10 rounded-lg px-3.5 py-2 focus-within:border-ps-blue/50 transition-colors">
             <Search className="w-4 h-4 text-zinc-500 mr-3" />
@@ -349,8 +373,18 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
             </div>
           </div>
         </div>
+        )}
 
-        {loading && !repoData ? (
+        {cloudDisabled ? (
+          /* [CN-FORK] v0.5.1.65 默认云端仓库关闭态：明确告知是用户自己关的，不是网络问题 */
+          <div className="py-12 rounded-xl border border-white/10 flex flex-col items-center justify-center space-y-4 bg-white/[0.02]">
+            <CloudOff className="w-10 h-10 text-white/15" />
+            <div className="text-center space-y-1">
+              <p className="text-sm font-semibold text-white">{t("storage_hub.repo_disabled", "Cloud Repository Disabled")}</p>
+              <p className="text-zinc-500 text-xs max-w-md leading-relaxed">{t("storage_hub.repo_disabled_desc", "The default cloud repository is turned off in Settings, so no online payload catalog is fetched. Turn it back on to browse and install online payloads.")}</p>
+            </div>
+          </div>
+        ) : loading && !repoData ? (
           <div className="py-16 flex flex-col items-center justify-center space-y-4">
             <Loader2 className="w-8 h-8 text-ps-blue animate-spin" />
             <p className="text-zinc-500 text-sm">{t("storage_hub.syncing", "Syncing with Repository...")}</p>

@@ -23,6 +23,8 @@ void config_read(PldmgrConfig *cfg) {
     cfg->scan_usb_payloads     = 0;
     cfg->auto_install_app      = 1;
     cfg->multi_sources_enabled = 0;
+    /* [CN-FORK] v0.5.1.65 默认云端仓库总开关，默认开（保持旧行为：开机拉一次 payloads.json） */
+    cfg->default_repo_enabled  = 1;
     /* [CN-FORK] v0.5.1.64 删除 read_hardware_info：主页硬件信息功能整体下线（stats.c 已移出构建），
      * 旧配置文件里残留的 READ_HARDWARE_INFO= 行会被下面的解析自然忽略 */
 
@@ -47,6 +49,8 @@ void config_read(PldmgrConfig *cfg) {
             cfg->auto_install_app = atoi(line + 17);
         else if (strncmp(line, "MULTI_SOURCES_ENABLED=", 22) == 0)
             cfg->multi_sources_enabled = atoi(line + 22);
+        else if (strncmp(line, "DEFAULT_REPO_ENABLED=", 21) == 0)
+            cfg->default_repo_enabled = atoi(line + 21);
     }
     fclose(f);
 }
@@ -67,6 +71,7 @@ int config_write(const PldmgrConfig *cfg) {
     fprintf(f, "SCAN_USB_PAYLOADS=%d\n",      cfg->scan_usb_payloads ? 1 : 0);
     fprintf(f, "AUTO_INSTALL_APP=%d\n",       cfg->auto_install_app ? 1 : 0);
     fprintf(f, "MULTI_SOURCES_ENABLED=%d\n",  cfg->multi_sources_enabled ? 1 : 0);
+    fprintf(f, "DEFAULT_REPO_ENABLED=%d\n",   cfg->default_repo_enabled ? 1 : 0);
     fclose(f);
     return 0;
 }
@@ -211,6 +216,8 @@ int config_handle_set_json(const char *json_data) {
     cfg.scan_usb_payloads     = extract_json_bool(json_data, "SCAN_USB_PAYLOADS", cfg.scan_usb_payloads);
     cfg.auto_install_app      = extract_json_bool(json_data, "AUTO_INSTALL_APP", cfg.auto_install_app);
     cfg.multi_sources_enabled = extract_json_bool(json_data, "MULTI_SOURCES_ENABLED", cfg.multi_sources_enabled);
+    /* [CN-FORK] v0.5.1.65 默认云端仓库开关 */
+    cfg.default_repo_enabled  = extract_json_bool(json_data, "DEFAULT_REPO_ENABLED", cfg.default_repo_enabled);
 
     if (config_write(&cfg) == 0) {
         pldmgr_log("[PLDMGR] Saved config to %s\n", PLDMGR_CONFIG_PATH);

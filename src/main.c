@@ -125,11 +125,13 @@ int main(int argc, char *argv[]) {
     /* [CN-FORK] 死机排查：v0.5.1.59 自愈后本工具第一次真的开机自启，启动序列里几个
      * 默认开启的高危动作（杀光盘播放器/开浏览器/装机）从此都在引导阶段执行。
      * 把开关值连同落盘日志一起记下来，下次死机后才能从 pldmgr.log 直接指认现场。
-     * v0.5.1.64：硬件读取开关随主页一起删除，日志不再输出 hw_stats。 */
-    pldmgr_log("[PLDMGR] config: auto_browser=%d kill_disc=%d auto_install=%d autoload=%d\n",
+     * v0.5.1.64：硬件读取开关随主页一起删除，日志不再输出 hw_stats。
+     * v0.5.1.65：新增 default_repo（默认云端仓库总开关，关掉后开机不再拉 payloads.json）。 */
+    pldmgr_log("[PLDMGR] config: auto_browser=%d kill_disc=%d auto_install=%d autoload=%d "
+               "default_repo=%d\n",
                cfg.auto_browser_open ? 1 : 0,
                cfg.kill_disc_player ? 1 : 0, cfg.auto_install_app ? 1 : 0,
-               cfg.autoload_enabled ? 1 : 0);
+               cfg.autoload_enabled ? 1 : 0, cfg.default_repo_enabled ? 1 : 0);
 
     /* [CN-FORK] v0.5.1.63 安全模式：/data/nayeplmtools/safe_mode 存在（内容无所谓）就
      * 跳过引导期全部高危动作 —— 装启动器 app、杀光盘播放器、自动开浏览器、自动加载
@@ -176,7 +178,8 @@ int main(int argc, char *argv[]) {
     pldmgr_log("[PLDMGR] Server is running. Visit /shutdown to exit.\n");
     pldmgr_log("[PLDMGR] Web UI available at http://%s:%d\n", current_ip, port); /* [CN-FORK] 启动 debug 显示 ip 和端口 */
 
-    /* Try cache refresh */
+    /* Try cache refresh
+     * [CN-FORK] v0.5.1.65 默认云端仓库关掉时 repository_ensure_fresh() 内部直接返回，不会发请求 */
     repository_ensure_fresh(0);
 
     /* [CN-FORK] 启动自检：将已安装的 NayePlmTools 同步到 ps5_autoloader，

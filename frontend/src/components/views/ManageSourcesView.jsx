@@ -151,7 +151,9 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
                 'group flex flex-col lg:flex-row lg:items-center gap-4 lg:gap-6 p-4 lg:p-5 glass-card rounded-2xl border transition-all w-full min-w-0 max-w-full overflow-hidden',
                 src.removable
                   ? 'border-white/10 hover:border-ps-blue/30'
-                  : 'border-white/5 bg-white/[0.015]'
+                  : 'border-white/5 bg-white/[0.015]',
+                /* [CN-FORK] v0.5.1.65 默认云端仓库被关掉时整卡灰显（后端 enabled=false），不是从列表里抹掉 */
+                src.enabled === false && 'opacity-60'
               )}
             >
               {/* Header row on mobile / Left group on desktop */}
@@ -213,6 +215,11 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
                       {t("manage_sources.default_badge", "Default")}
                     </span>
                   )}
+                  {src.enabled === false && (
+                    <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest text-zinc-500 border border-white/10 bg-white/5">
+                      {t("manage_sources.disabled_badge", "Disabled")}
+                    </span>
+                  )}
                 </div>
 
                 {/* Desktop-only Name + URL container */}
@@ -264,6 +271,11 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
                 {!src.removable && (
                   <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest text-ps-blue border border-ps-blue/20 bg-ps-blue/5">
                     {t("manage_sources.default_badge", "Default")}
+                  </span>
+                )}
+                {src.enabled === false && (
+                  <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest text-zinc-500 border border-white/10 bg-white/5">
+                    {t("manage_sources.disabled_badge", "Disabled")}
                   </span>
                 )}
               </div>
