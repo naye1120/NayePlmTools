@@ -414,6 +414,22 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </div>
             <div className="overflow-y-auto p-5 space-y-4 text-sm leading-relaxed">
               <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.61</p>
+                <p className="text-zinc-400">修 autoload.txt 开头多出一个空行：上一版补延时行的逻辑向上找参照行时是「跳过空行继续往上」，于是「!1000」被插到空行下面，空行留在原地——本工具那条正好排在文件第一位，看着就是文件前面多了一行。现在改成以「!延时行 + 文件名行」整条为单位：先折叠这条上方紧邻的连续空行，再判断要不要补延时行；空行只清理本工具块自己上方的，其它程序的条目一律不动，且只清理空行这一项变化也会正常触发回写（旧逻辑没改动就原样跳过）</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.60</p>
+                <p className="text-zinc-400">autoload.txt 格式一致性：① 载荷文件名行上面缺「!延时」时自动补「!1000」（旧逻辑只在首次追加时写延时行，换版本号时只替文件名）；追加前先探末尾，上一行没换行符就补一个，避免延时行粘到上一条尾巴上两条一起坏；② 设置页保存 AUTOLOAD_LIST 时整份覆盖只写文件名，等于每勾一次就把手写的延时行全冲掉——现在先读旧文件建「文件名→延时行」映射再写回，查不到历史的用 !1000 兜底，自定义延时不会被抹平；③ 行规整抽成 utils 的 pldmgr_utils_strip_config_line（剥 UTF-8 BOM 与首尾空白），自启同步、启动自检、自身加载序列、改名与删除条目四处统一走它——记事本手改的缩进会让延时行被当成载荷名、带缩进的文件名拼不出路径而报 Payload not found。另确认上一版 0 字节残包的真凶在复制环节（storage 里 4.9MB 完好），加载一次新版即可由同名自愈补回</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.59</p>
+                <p className="text-zinc-400">autoloader 残包自愈：修实机「autoload.txt 指向的 NayePlmTools ELF 是 0 字节、重启后自启什么都不起来」。三处：① 新增 payload_file_sane 判据（体积下限 1KB + .elf 魔数，goldHEN 这类 .bin 原始载荷不误杀），上传/仓库安装提交前先校验，0 字节或被截断的 temp 直接拒收并清掉，不再 rename 进 storage；② copy_file 改成先写 dst.tmp、校验字节数与源一致后 rename 覆盖，旧实现一上来就把目标截断成 0 字节，中途失败就在自启目录留个残包，更严的是源与目标同一个文件时会把好文件清空还返回成功；③ 同版本已登记时旧逻辑直接返回，引导器目录里那份坏文件永远没人修，现在会检测到并重新复制；bootstrap 自检也不再拿 readdir 的随机首个，改取合法里最新的一份</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.58</p>
+                <p className="text-zinc-400">前端：修「常用入口」卡片右上角删除按钮与外链图标叠在一起的问题——两者本来都占右上角（按钮 absolute top-2 right-2，外链图标 ml-auto 顶到行末），实机看起来就是链接和关闭按钮重合；改为给标题行留 pr-8 把那个角让给删除按钮（实测间隙恒 12px，420px 窄卡与超长名称下同样不重叠），并给名称补 min-w-0 让 truncate 在 flex 子里真正生效；本地 dev 补全 /quicklinks*、/pkgmanager_upload、/game_icon 代理（缺 /quicklinks 时该页被 SPA fallback 吞成 index.html，res.json() 抛错又被 catch 静默吃掉，永远卡在转圈且看不出原因）</p>
+              </div>
+              <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.57</p>
                 <p className="text-zinc-400">仓库固化，功能与 .56 完全一致：重建因 IDE 变更面板误点拒绝而丢失的 .55/.56 源码并验收（产物字节数与动态符号表与丢失前一致）；third_party/pkg-manager.elf 内置基线纳入版本库（clone 后可直接 make all）；settings.read_hw_* 词条从翻译子模块迁回 locales-overlay；全部改动按「构建通过即本地提交」固化到 cn-fork 分支。本版构建标题带真实 commit 短哈希，作为上机测试的正式包</p>
               </div>

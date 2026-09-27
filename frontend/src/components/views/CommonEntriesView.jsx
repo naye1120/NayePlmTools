@@ -153,9 +153,12 @@ export default function CommonEntriesView() {
           {list.map((e, i) => (
             <div key={`${e.url}-${i}`} className="relative group bg-white/5 border border-white/10 rounded-2xl hover:border-ps-blue/50 transition">
               <a href={e.url} target="_blank" rel="noreferrer" className="block p-4 space-y-2">
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2.5 pr-8">
+                  {/* pr-8 是给右上角的删除按钮留位：它 absolute top-2 right-2，不预留就会和
+                      本行末尾的外链图标叠在一起（实机反馈：链接与关闭按钮重合）。
+                      name 上的 min-w-0 是 truncate 在 flex 子里真正生效的前提。 */}
                   <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${e.alive ? 'bg-green-400' : 'bg-zinc-600'}`} title={e.alive ? t('entries.alive', '可连通') : t('entries.dead', '当前不可达')} />
-                  <span className="text-[15px] font-bold text-white truncate">{e.name}</span>
+                  <span className="text-[15px] font-bold text-white truncate min-w-0">{e.name}</span>
                   <ExternalLink className="w-3.5 h-3.5 text-zinc-500 shrink-0 ml-auto group-hover:text-ps-blue transition" />
                 </div>
                 <p className="text-[12px] text-zinc-500 break-all leading-relaxed">{e.url}</p>

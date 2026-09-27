@@ -6,6 +6,7 @@
 #include "config.h"
 #include "pldmgr.h"
 #include "json_helpers.h"
+#include "utils.h" /* [CN-FORK] pldmgr_utils_strip_config_line */
 
 /* ── Read / Write full config ──────────────────────────────── */
 
@@ -234,11 +235,47 @@ int config_handle_set_json(const char *json_data) {
                 list_val[list_len] = '\0';
 
                 mkdir(BASE_DATA_DIR, 0777);
+                /* [CN-FORK] 这份 txt 的格式是「!延时 + 文件名」成对。旧实现整份覆盖时
+                 * 只写文件名，等于在设置页每勾一次就把用户手写的 !1000 全冲掉。
+                 * 现在先读旧文件建「文件名 -> 延时行」映射，写回时每条都带延时行，
+                 * 查不到历史的用 !1000 兜底。 */
+                char old_names[100][256];
+                char old_delays[100][16];
+                int  old_cnt = 0;
+                FILE *old = fopen(AUTOLOAD_CONFIG_PATH, "r");
+                if (old) {
+                    char ln[256];
+                    char delay[16] = "";
+                    while (old_cnt < 100 && fgets(ln, sizeof(ln), old)) {
+                        pldmgr_utils_strip_config_line(ln);
+                        if (!ln[0]) continue;
+                        if (ln[0] == '!') {
+                            strncpy(delay, ln, sizeof(delay) - 1);
+                            delay[sizeof(delay) - 1] = '\0';
+                            continue;
+                        }
+                        strncpy(old_names[old_cnt], ln, sizeof(old_names[0]) - 1);
+                        old_names[old_cnt][sizeof(old_names[0]) - 1] = '\0';
+                        strncpy(old_delays[old_cnt], delay[0] ? delay : "!1000", sizeof(old_delays[0]) - 1);
+                        old_delays[old_cnt][sizeof(old_delays[0]) - 1] = '\0';
+                        old_cnt++;
+                        delay[0] = '\0'; /* 一条延时只服务它紧下面那一条 */
+                    }
+                    fclose(old);
+                }
+
                 FILE *f = fopen(AUTOLOAD_CONFIG_PATH, "w");
                 if (f) {
                     char *token = strtok(list_val, ",");
                     while (token) {
-                        fprintf(f, "%s\n", token);
+                        pldmgr_utils_strip_config_line(token);
+                        if (*token) {
+                            const char *d = "!1000";
+                            for (int i = 0; i < old_cnt; i++) {
+                                if (strcmp(old_names[i], token) == 0) { d = old_delays[i]; break; }
+                            }
+                            fprintf(f, "%s\n%s\n", d, token);
+                        }
                         token = strtok(NULL, ",");
                     }
                     fclose(f);

@@ -19,6 +19,7 @@ long long get_current_time_ms() {
 #include "autoload.h"
 #include "payload_mgr.h"
 #include "ps5_launcher.h"
+#include "utils.h" /* [CN-FORK] pldmgr_utils_strip_config_line */
 
 static volatile int abort_flag = 0;
 static volatile int remaining_seconds = -1;
@@ -164,13 +165,16 @@ void* pldmgr_autoload_worker(void* arg) {
     autoload_done_count = 0;
     char count_line[256];
     while (fgets(count_line, sizeof(count_line), f)) {
-        if (count_line[0] != '!' && strlen(count_line) > 1) autoload_total_count++;
+        /* [CN-FORK] 先规整再判：记事本手改的行首缩进会让「!1000」被当成载荷名计入总数 */
+        pldmgr_utils_strip_config_line(count_line);
+        if (count_line[0] && count_line[0] != '!') autoload_total_count++;
     }
     rewind(f);
     
     char line[256];
     while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\r\n")] = 0;
+        pldmgr_utils_strip_config_line(line); /* [CN-FORK] 否则带缩进的名拼不出路径，必报 Payload not found */
         if (strlen(line) == 0) continue;
 
         if (line[0] == '!') {
@@ -248,6 +252,7 @@ void pldmgr_autoload_update_config_entry(const char *old_filename, const char *n
         char clean_line[256];
         strcpy(clean_line, lines[line_count]);
         clean_line[strcspn(clean_line, "\r\n")] = 0;
+        pldmgr_utils_strip_config_line(clean_line); /* [CN-FORK] 手改的缩进/BOM 不能挡住改名 */
         
         if (strcmp(clean_line, old_filename) == 0) {
             modified = 1;

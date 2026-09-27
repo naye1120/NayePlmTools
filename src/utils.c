@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <ctype.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -36,6 +37,18 @@ int pldmgr_get_local_ip(char *ip_buf, size_t buf_size) {
 
     freeifaddrs(ifaddr);
     return -1;
+}
+
+/* [CN-FORK] 见 utils.h：autoload.txt 行规整（BOM + 首尾空白），多个文件共用这一份实现 */
+void pldmgr_utils_strip_config_line(char *s) {
+    if (!s) return;
+    if ((unsigned char)s[0] == 0xEF && (unsigned char)s[1] == 0xBB && (unsigned char)s[2] == 0xBF)
+        memmove(s, s + 3, strlen(s + 3) + 1);
+    char *end = s + strlen(s);
+    while (end > s && isspace((unsigned char)end[-1])) *--end = '\0';
+    char *start = s;
+    while (*start && isspace((unsigned char)*start)) start++;
+    if (start != s) memmove(s, start, strlen(start) + 1);
 }
 
 void pldmgr_utils_get_payload_folder_name(const char *filename, char *out_buf, size_t out_size) {

@@ -50,6 +50,15 @@ export default defineConfig({
       '/pkgmanager_status': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/pkgmanager_launch': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/pkgmanager_stop': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      // [CN-FORK] 上传是 POST 且 mock 已实现，不代理的话设置页「上传更新」在本地必失败
+      '/pkgmanager_upload': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      // [CN-FORK] 「常用入口」页三个端点：缺了会被 SPA fallback 吞成 index.html，
+      //           res.json() 抛错又被 catch 静默吃掉，页面永远卡在转圈（看不出原因）
+      '/quicklinks': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      '/quicklinks_add': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      '/quicklinks_remove': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      // [CN-FORK] 首页「当前游戏」图标是 <img src>，同样走 dev server，不代理就取不到图
+      '/game_icon': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/repository_install': { target: 'http://127.0.0.1:8081', changeOrigin: true }
     }
   }

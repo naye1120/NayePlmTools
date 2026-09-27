@@ -47,26 +47,142 @@ static int is_allowed_usb_path(const char *path) {
 
 /* ── File utilities ────────────────────────────────────────── */
 
+/* [CN-FORK] 判断一个载荷文件是否「真的能用」：0 字节残包一旦被复制进 ps5_autoloader
+ * 并登记到 autoload.txt，越狱引导阶段就会加载一个空文件，表现为 autoloader 静默失效
+ * （实机反馈：autoload.txt 指向 NayePlmTools_0.5.1.53.elf，而该文件 0 字节）。
+ * 只卡体积下限与 .elf 的魔数；.bin（goldHEN 等原始载荷）没有 ELF 头，不能误杀。 */
+static int payload_file_sane(const char *path) {
+    struct stat st;
+    if (!path || stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return 0;
+    if (st.st_size < 1024) return 0;
+    const char *ext = strrchr(path, '.');
+    if (ext && strcasecmp(ext, ".elf") == 0) {
+        FILE *f = fopen(path, "rb");
+        if (!f) return 0;
+        unsigned char magic[4] = {0};
+        size_t got = fread(magic, 1, 4, f);
+        fclose(f);
+        if (got != 4 || magic[0] != 0x7f || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F')
+            return 0;
+    }
+    return 1;
+}
+
+/* [CN-FORK] 取一行的净内容（去 CR/LF/BOM/前后空白）到 dst */
+static void autoload_line_clean(const char *src, char *dst, size_t dstsz) {
+    if (!dst || dstsz == 0) return;
+    if (!src) { dst[0] = '\0'; return; }
+    strncpy(dst, src, dstsz - 1);
+    dst[dstsz - 1] = '\0';
+    dst[strcspn(dst, "\r\n")] = '\0';
+    pldmgr_utils_strip_config_line(dst);
+}
+
+/* [CN-FORK] 一行去掉 CR/LF/BOM/空白 之后是否什么都不剩（即空行） */
+static int autoload_line_blank(const char *s) {
+    char probe[256];
+    autoload_line_clean(s, probe, sizeof(probe));
+    return probe[0] == '\0';
+}
+
+/* [CN-FORK] 规范本工具那一整条（「!延时」行 + 文件名行）的格式，两件事：
+ *   1) 折叠条目块上方那串空行 —— 记事本手改/旧版残留会留一个空行，而本工具那条
+ *      在文件开头时看着就是「txt 前面多了一行」；
+ *   2) 块顶不是 !延时 行时，在文件名行前插一条 !1000。
+ * 只动本工具块自己上方的空行，不碰别的程序的条目（空行不是条目）。
+ * 返回值按位：1=插了延时行，2=删了空行，0=本来就规范（此时不改文件）。 */
+static int ensure_delay_before(char (*lines)[256], int *line_count, int name_idx) {
+    int changed = 0;
+    char probe[256];
+
+    /* 跳过空行往上找第一条非空行：它是 ! 开头，说明延时行已在，块顶就是它 */
+    int d = name_idx - 1;
+    while (d >= 0 && autoload_line_blank(lines[d])) d--;
+    int has_delay = 0;
+    if (d >= 0) {
+        autoload_line_clean(lines[d], probe, sizeof(probe));
+        has_delay = (probe[0] == '!');
+    }
+
+    /* 块顶（有延时行则是延时行，否则是文件名行）再往上那串连续空行：起点 start */
+    int top = has_delay ? d : name_idx;
+    int b = top - 1;
+    while (b >= 0 && autoload_line_blank(lines[b])) b--;
+    int start = b + 1;
+
+    /* 折叠 [start, name_idx) 里的空行（这段只可能是空行 + 自己的延时行） */
+    int w = start;
+    for (int r = start; r < name_idx; r++) {
+        if (autoload_line_blank(lines[r])) continue;
+        if (w != r) memcpy(lines[w], lines[r], sizeof(lines[0]));
+        w++;
+    }
+    int nb = name_idx - w;
+    if (nb > 0) {
+        for (int i = name_idx; i < *line_count; i++)
+            memcpy(lines[i - nb], lines[i], sizeof(lines[0]));
+        *line_count -= nb;
+        name_idx  -= nb;
+        changed  |= 2;
+    }
+
+    if (has_delay) return changed;
+    if (*line_count >= 100) return changed;  /* 行数已满，不越界插 */
+    for (int k = *line_count; k > name_idx; k--)
+        memcpy(lines[k], lines[k - 1], sizeof(lines[0]));
+    snprintf(lines[name_idx], sizeof(lines[0]), "!1000\n");
+    (*line_count)++;
+    return changed | 1;
+}
+
+/* [CN-FORK] 回写整份 txt：行尾缺 \n 的补上，避免上一行没换行时新内容粘到它尾巴上 */
+static void write_autoload_lines(FILE *f, char (*lines)[256], int line_count) {
+    for (int i = 0; i < line_count; i++) {
+        size_t l = strlen(lines[i]);
+        fputs(lines[i], f);
+        if (l == 0 || lines[i][l - 1] != '\n') fputc('\n', f);
+    }
+}
+
+/* [CN-FORK] 原子复制：先写 dst.tmp，校验字节数与源一致后再 rename 覆盖。
+ * 旧实现直接 fopen(dst, "wb") 会先把目标截断成 0 字节，中途失败就留个残包在自启目录；
+ * 更狠的是 src 与 dst 指向同一文件时，截断会把好文件清空、函数还返回成功。 */
 static int copy_file(const char *src, const char *dst) {
+    struct stat sst, dst_st;
+    if (!src || !dst) return -1;
+    if (stat(src, &sst) != 0 || !S_ISREG(sst.st_mode) || sst.st_size == 0) return -1;
+    if (stat(dst, &dst_st) == 0 && dst_st.st_dev == sst.st_dev && dst_st.st_ino == sst.st_ino)
+        return 0; /* 同一个文件：无需也不允许“自我复制” */
+
+    char tmp[600];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", dst);
     FILE *in = fopen(src, "rb");
-    if (!in)
-        return -1;
-    FILE *out = fopen(dst, "wb");
+    if (!in) return -1;
+    FILE *out = fopen(tmp, "wb");
     if (!out) {
         fclose(in);
         return -1;
     }
+
     char buf[8192];
     size_t n;
+    int failed = 0;
     while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
         if (fwrite(buf, 1, n, out) != n) {
-            fclose(in);
-            fclose(out);
-            return -1;
+            failed = 1;
+            break;
         }
     }
+    if (ferror(in)) failed = 1;
     fclose(in);
     fclose(out);
+
+    struct stat tst;
+    if (!failed && (stat(tmp, &tst) != 0 || tst.st_size != sst.st_size)) failed = 1;
+    if (failed || rename(tmp, dst) != 0) {
+        remove(tmp);
+        return -1;
+    }
     return 0;
 }
 
@@ -83,6 +199,8 @@ static void ps5_autoloader_sync(const char *new_filename, const char *new_file_p
     char   lines[100][256];
     int    line_count = 0;
     int    matched    = 0;
+    int    same_name  = 0;
+    int    our_idx    = -1;   /* 本工具条目在 lines[] 里的下标 */
     char   old_filename[256] = "";
 
     while (line_count < 100 && fgets(lines[line_count], (int)sizeof(lines[0]), f)) {
@@ -90,21 +208,54 @@ static void ps5_autoloader_sync(const char *new_filename, const char *new_file_p
         strncpy(clean, lines[line_count], sizeof(clean) - 1);
         clean[sizeof(clean) - 1] = '\0';
         clean[strcspn(clean, "\r\n")] = '\0';
+        pldmgr_utils_strip_config_line(clean); /* [CN-FORK] 容忍记事本手改的 BOM/缩进 */
 
         char folder[128];
         pldmgr_utils_get_payload_folder_name(clean, folder, sizeof(folder));
 
-        if (strcasecmp(folder, new_folder) == 0 && strcmp(clean, new_filename) != 0) {
+        /* 同名条目：这个版本已经登记过；但引导器目录里那份可能已经是 0 字节残包，
+         * 记下来交给下面 !matched 分支做自愈。 */
+        if (strcmp(clean, new_filename) == 0) {
+            same_name = 1;
+            our_idx   = line_count;
+        } else if (strcasecmp(folder, new_folder) == 0) {
             strncpy(old_filename, clean, sizeof(old_filename) - 1);
             old_filename[sizeof(old_filename) - 1] = '\0';
             snprintf(lines[line_count], sizeof(lines[0]), "%s\n", new_filename);
-            matched = 1;
+            matched   = 1;
+            our_idx   = line_count;
         }
         line_count++;
     }
     fclose(f);
 
-    if (!matched) return;
+    /* [CN-FORK] 不管走哪条分支，本工具那一行上面都必须有 !延时行，且中间不留空行。
+     * 旧逻辑只在「首次追加」时写延时行，换版本号时只替文件名，手改删掉就再也没人补。 */
+    int delay_fix = (our_idx >= 0) ? ensure_delay_before(lines, &line_count, our_idx) : 0;
+    if (delay_fix & 1)
+        pldmgr_log("[AutoloaderSync] added missing '!1000' delay line before %s\n", new_filename);
+    if (delay_fix & 2)
+        pldmgr_log("[AutoloaderSync] trimmed blank line(s) above %s\n", new_filename);
+    int need_rewrite = matched || delay_fix;
+
+    if (!matched) {
+        /* [CN-FORK] 旧逻辑到这里直接返回：同版本已登记时永远不动手，于是引导器目录里
+         * 那个 0 字节残包没人修 —— 实机就是卡在这个状态（autoloader 加载空文件）。 */
+        if (same_name) {
+            char cur[512];
+            snprintf(cur, sizeof(cur), "%s/%s", PS5_AUTOLOADER_DIR, new_filename);
+            if (!payload_file_sane(cur) && copy_file(new_file_path, cur) == 0)
+                pldmgr_log("[AutoloaderSync] healed broken copy: %s\n", cur);
+        }
+        if (need_rewrite) {
+            f = fopen(PS5_AUTOLOADER_CONFIG, "w");
+            if (f) {
+                write_autoload_lines(f, lines, line_count);
+                fclose(f);
+            }
+        }
+        return;
+    }
 
     /* 复制新 ELF 到引导器目录 */
     char dest[512];
@@ -124,7 +275,7 @@ static void ps5_autoloader_sync(const char *new_filename, const char *new_file_p
     /* 写回更新后的 autoload.txt */
     f = fopen(PS5_AUTOLOADER_CONFIG, "w");
     if (f) {
-        for (int i = 0; i < line_count; i++) fputs(lines[i], f);
+        write_autoload_lines(f, lines, line_count);
         fclose(f);
     }
 
@@ -154,14 +305,27 @@ void payload_mgr_bootstrap_self_sync(void) {
 
     char installed_filename[256] = "";
     char installed_fullpath[640] = "";
+    time_t newest = 0;
     struct dirent *entry;
+    /* storage 目录正常只留一份（import 时会清旧），但手工 FTP 塞进来的可能有多份，
+     * 其中还可能包括 0 字节残包 —— 取「合法里最新」的，而不是 readdir 的随机首个。 */
     while ((entry = readdir(d)) != NULL) {
         if (entry->d_name[0] == '.') continue;
         size_t len = strlen(entry->d_name);
-        if (len > 4 && strcasecmp(entry->d_name + len - 4, ".elf") == 0) {
+        if (len <= 4 || strcasecmp(entry->d_name + len - 4, ".elf") != 0) continue;
+        char cand[640];
+        snprintf(cand, sizeof(cand), "%s/%s", dir, entry->d_name);
+        if (!payload_file_sane(cand)) {
+            pldmgr_log("[AutoloaderSync] skip invalid payload copy: %s\n", cand);
+            continue;
+        }
+        struct stat fst;
+        if (stat(cand, &fst) != 0) continue;
+        if (!installed_filename[0] || fst.st_mtime >= newest) {
+            newest = fst.st_mtime;
             strncpy(installed_filename, entry->d_name, sizeof(installed_filename) - 1);
-            snprintf(installed_fullpath, sizeof(installed_fullpath), "%s/%s", dir, entry->d_name);
-            break;
+            installed_filename[sizeof(installed_filename) - 1] = '\0';
+            snprintf(installed_fullpath, sizeof(installed_fullpath), "%s", cand);
         }
     }
     closedir(d);
@@ -180,6 +344,7 @@ void payload_mgr_bootstrap_self_sync(void) {
             strncpy(clean, line, sizeof(clean) - 1);
             clean[sizeof(clean) - 1] = '\0';
             clean[strcspn(clean, "\r\n")] = '\0';
+            pldmgr_utils_strip_config_line(clean); /* [CN-FORK] 同上：别因为手改的空白就重复追加 */
             if (strcmp(clean, installed_filename) == 0) { found = 1; break; }
             char lf[128];
             pldmgr_utils_get_payload_folder_name(clean, lf, sizeof(lf));
@@ -198,8 +363,21 @@ void payload_mgr_bootstrap_self_sync(void) {
     }
 
     /* 追加文件名到 autoload.txt（格式参考 nayeplmtools/autoload.txt：!延时 + 文件名） */
+    /* [CN-FORK] 先探一下末尾：上一行没换行符就补一个，否则「!1000」会粘到上一条
+     * 尾巴上（变成 other.bin!1000），两条一起坏。用单独的 rb 探，
+     * 因为 "a" 模式的流上 fseek/fgetc 读不可靠。 */
+    int need_nl = 0;
+    FILE *rd = fopen(PS5_AUTOLOADER_CONFIG, "rb");
+    if (rd) {
+        if (fseek(rd, -1, SEEK_END) == 0) {
+            int c = fgetc(rd);
+            need_nl = (c != EOF && c != '\n');
+        }
+        fclose(rd);
+    }
     f = fopen(PS5_AUTOLOADER_CONFIG, "a");
     if (f) {
+        if (need_nl) fputc('\n', f);
         fprintf(f, "!1000\n%s\n", installed_filename);
         fclose(f);
     }
@@ -465,6 +643,15 @@ int payload_mgr_import_to_storage(const char *filename, const char *temp_path,
                                   char *msg_buf, size_t msg_buf_size) {
     if (!filename || strstr(filename, "/") || strstr(filename, "..")) {
         snprintf(msg_buf, msg_buf_size, "Invalid filename");
+        return -1;
+    }
+
+    /* [CN-FORK] 上传中断/空 body 提交过去就是一个自启残包（旧版本就是这么把
+     * 0 字节的 NayePlmTools_*.elf 弄进 ps5_autoloader 的），这里挡住并清掉 temp。 */
+    if (!payload_file_sane(temp_path)) {
+        snprintf(msg_buf, msg_buf_size, "Refused: file is empty or not a valid ELF/BIN");
+        pldmgr_log("[PLDMGR] !!! import refused, unsane file: %s\n", temp_path ? temp_path : "(null)");
+        if (temp_path) remove(temp_path);
         return -1;
     }
 
