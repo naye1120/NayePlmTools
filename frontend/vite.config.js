@@ -30,7 +30,7 @@ export default defineConfig({
       '/autoload_status': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/get_config': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/set_config': { target: 'http://127.0.0.1:8081', changeOrigin: true },
-      '/system_stats': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      /* [CN-FORK] v0.5.1.64 删 /system_stats 代理：后端该端点随主页硬件信息功能整体下线 */
       '/loadpayload:': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/manage:': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/abort': { target: 'http://127.0.0.1:8081', changeOrigin: true },
@@ -57,8 +57,7 @@ export default defineConfig({
       '/quicklinks': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/quicklinks_add': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/quicklinks_remove': { target: 'http://127.0.0.1:8081', changeOrigin: true },
-      // [CN-FORK] 首页「当前游戏」图标是 <img src>，同样走 dev server，不代理就取不到图
-      '/game_icon': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      /* [CN-FORK] v0.5.1.64 删 /game_icon 代理：「当前游戏」探测随主页一起下线 */
       '/repository_install': { target: 'http://127.0.0.1:8081', changeOrigin: true }
     }
   }

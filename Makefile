@@ -19,11 +19,12 @@ LIBS     := $(TARGET)/lib/libcurl.a \
             -lSceAppInstUtil -lSceHttp2 -lSceSsl -lSceNet -lSceRegMgr
 
 # Source Files
+# [CN-FORK] v0.5.1.64 src/stats.c 已删除（主页硬件信息功能下线）
 SRCS := src/main.c src/http_server.c src/config.c src/log_server.c \
         src/sha256.c src/json_helpers.c src/repository.c src/sources.c \
         src/payload_mgr.c src/process_mgr.c \
         src/ps5_launcher.c src/notification.c src/utils.c src/autoload.c \
-        src/app_installer.c src/history_mgr.c src/stats.c \
+        src/app_installer.c src/history_mgr.c \
         src/pkgmanager.c src/pkgmanager_blob.S src/quicklinks.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf

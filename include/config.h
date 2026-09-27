@@ -13,7 +13,6 @@ typedef struct PldmgrConfig {
     int  scan_usb_payloads;      /* Default: 0  (off) */
     int  auto_install_app;       /* Default: 1  (on) */
     int  multi_sources_enabled;  /* Default: 0  (off) */
-    int  read_hardware_info;     /* [CN-FORK] Default: 1 (on) — 是否读取并展示主机硬件信息 */
 } PldmgrConfig;
 
 /* Read all config values from PLDMGR_CONFIG_PATH.

@@ -23,7 +23,8 @@ void config_read(PldmgrConfig *cfg) {
     cfg->scan_usb_payloads     = 0;
     cfg->auto_install_app      = 1;
     cfg->multi_sources_enabled = 0;
-    cfg->read_hardware_info    = 1; /* [CN-FORK] 默认开启硬件读取 */
+    /* [CN-FORK] v0.5.1.64 删除 read_hardware_info：主页硬件信息功能整体下线（stats.c 已移出构建），
+     * 旧配置文件里残留的 READ_HARDWARE_INFO= 行会被下面的解析自然忽略 */
 
     f = fopen(PLDMGR_CONFIG_PATH, "r");
     if (!f)
@@ -46,8 +47,6 @@ void config_read(PldmgrConfig *cfg) {
             cfg->auto_install_app = atoi(line + 17);
         else if (strncmp(line, "MULTI_SOURCES_ENABLED=", 22) == 0)
             cfg->multi_sources_enabled = atoi(line + 22);
-        else if (strncmp(line, "READ_HARDWARE_INFO=", 19) == 0) /* [CN-FORK] */
-            cfg->read_hardware_info = atoi(line + 19);
     }
     fclose(f);
 }
@@ -68,7 +67,6 @@ int config_write(const PldmgrConfig *cfg) {
     fprintf(f, "SCAN_USB_PAYLOADS=%d\n",      cfg->scan_usb_payloads ? 1 : 0);
     fprintf(f, "AUTO_INSTALL_APP=%d\n",       cfg->auto_install_app ? 1 : 0);
     fprintf(f, "MULTI_SOURCES_ENABLED=%d\n",  cfg->multi_sources_enabled ? 1 : 0);
-    fprintf(f, "READ_HARDWARE_INFO=%d\n",     cfg->read_hardware_info ? 1 : 0); /* [CN-FORK] */
     fclose(f);
     return 0;
 }
@@ -199,24 +197,26 @@ int config_handle_set_json(const char *json_data) {
     PldmgrConfig cfg;
     config_read(&cfg);
 
-    /* Check if AUTOLOAD_ENABLED is present */
+    /* [CN-FORK] v0.5.1.64 加固：旧实现把下面全部开关的保存都挂在「body 里必须带 AUTOLOAD_ENABLED」
+     * 这一个条件上。只要 /get_config 出过一次问题（本版本就因字符串跨行拆分把 key 拆坏过），
+     * 前端合并出来的 body 就缺这个键，于是设置页每个开关都变成静默 no-op（连日志都不打）。
+     * 现在各开关无条件应用（基线是 config_read 的现值，没带的键不会被动），
+     * autoload_abort 仍只在显式关掉自启时触发。 */
     int enabled = extract_json_bool(json_data, "AUTOLOAD_ENABLED", -1);
-    if (enabled != -1) {
-        cfg.autoload_enabled      = enabled;
-        cfg.auto_browser_open     = extract_json_bool(json_data, "AUTO_BROWSER_OPEN", cfg.auto_browser_open);
-        cfg.autoload_delay        = extract_json_int(json_data, "AUTOLOAD_DELAY", cfg.autoload_delay);
-        cfg.kill_disc_player      = extract_json_bool(json_data, "KILL_DISC_PLAYER_ON_STARTUP", cfg.kill_disc_player);
-        cfg.scan_usb_payloads     = extract_json_bool(json_data, "SCAN_USB_PAYLOADS", cfg.scan_usb_payloads);
-        cfg.auto_install_app      = extract_json_bool(json_data, "AUTO_INSTALL_APP", cfg.auto_install_app);
-        cfg.multi_sources_enabled = extract_json_bool(json_data, "MULTI_SOURCES_ENABLED", cfg.multi_sources_enabled);
-        cfg.read_hardware_info    = extract_json_bool(json_data, "READ_HARDWARE_INFO", cfg.read_hardware_info); /* [CN-FORK] */
+    if (enabled != -1)
+        cfg.autoload_enabled = enabled;
+    cfg.auto_browser_open     = extract_json_bool(json_data, "AUTO_BROWSER_OPEN", cfg.auto_browser_open);
+    cfg.autoload_delay        = extract_json_int(json_data, "AUTOLOAD_DELAY", cfg.autoload_delay);
+    cfg.kill_disc_player      = extract_json_bool(json_data, "KILL_DISC_PLAYER_ON_STARTUP", cfg.kill_disc_player);
+    cfg.scan_usb_payloads     = extract_json_bool(json_data, "SCAN_USB_PAYLOADS", cfg.scan_usb_payloads);
+    cfg.auto_install_app      = extract_json_bool(json_data, "AUTO_INSTALL_APP", cfg.auto_install_app);
+    cfg.multi_sources_enabled = extract_json_bool(json_data, "MULTI_SOURCES_ENABLED", cfg.multi_sources_enabled);
 
-        if (config_write(&cfg) == 0) {
-            pldmgr_log("[PLDMGR] Saved config to %s\n", PLDMGR_CONFIG_PATH);
-        }
-        if (enabled == 0)
-            pldmgr_autoload_abort();
+    if (config_write(&cfg) == 0) {
+        pldmgr_log("[PLDMGR] Saved config to %s\n", PLDMGR_CONFIG_PATH);
     }
+    if (enabled == 0)
+        pldmgr_autoload_abort();
 
     /* Handle AUTOLOAD_LIST if present */
     char *list_start = strstr(json_data, "\"AUTOLOAD_LIST\"");

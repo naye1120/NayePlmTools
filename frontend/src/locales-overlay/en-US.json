@@ -53,15 +53,10 @@
     "entries.empty": "No entries yet. Click \"Add Entry\" to get started.",
     "entries.alive": "Reachable",
     "entries.dead": "Currently unreachable",
-  "app.dashboard.subtitle": "Pick a payload below to launch it on your PS5.",
-  "app.dashboard.stat_installed": "Installed",
-  "app.dashboard.stat_favorites": "Favorites",
-  "app.dashboard.stat_launched": "Launched",
-  "app.dashboard.stat_usb": "USB",
   "settings.theme_title": "Appearance",
   "settings.theme_desc": "Choose dark or light interface; \"Auto\" follows your system preference.",
   "settings.donate_title": "Support the Project",
-  "settings.donate_desc": "This is a fork maintained by naye, based on the original Payload Manager by itsPLK (v0.5.1.63). If you like it, you can buy the original author a coffee.",
+  "settings.donate_desc": "This is a fork maintained by naye, based on the original Payload Manager by itsPLK (v0.5.1.64). If you like it, you can buy the original author a coffee.",
     "storage_hub.launch": "Launch",
   "donate.description": "If you like this project, you can support the original author. Thank you very much!",
   "donate.fork_title": "About This Fork",
@@ -83,7 +78,5 @@
   "app.offline.title": "NayePlmTools is not running...",
   "app.fork.by": "Fork by {{maintainer}}",
   "settings.changelog_title": "Changelog",
-  "settings.changelog_desc": "View version update history for this fork.",
-  "settings.read_hw_title": "Read Hardware Info",
-  "settings.read_hw_desc": "Read and show PS5 hardware info (temperature, fan, memory, VRAM, storage) on the dashboard. When off, those cards show a dash."
+  "settings.changelog_desc": "View version update history for this fork."
 }

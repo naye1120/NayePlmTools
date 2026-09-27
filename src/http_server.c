@@ -25,7 +25,8 @@
 #include "history_mgr.h"
 #include "process_mgr.h"
 #include "ps5_launcher.h"
-#include "stats.h" /* [CN-FORK] 硬件信息读取 */
+/* [CN-FORK] v0.5.1.64 主页硬件信息功能整体删除：stats.c / stats.h 已从构建中移除，
+ * 温度/风扇/内存/显存/存储/FPS/当前游戏 这些内核探测不再存在（整机死机的首选收敛） */
 #include "pkgmanager.h" /* [CN-FORK] PKG Manager 内置集成 */
 #include "quicklinks.h" /* [CN-FORK] 「常用入口」自定义快捷访问 */
 
@@ -130,7 +131,7 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_REPO_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
-    if (strcmp(url, ROUTE_SYSTEM_STATS) == 0) return 1; /* [CN-FORK] 仪表盘轮询，降噪 */
+    /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
     if (strcmp(url, ROUTE_PKG_STATUS) == 0) return 1; /* [CN-FORK] PKG安装页轮询，降噪 */
     if (strcmp(url, "/events") == 0) return 1;
     return 0;
@@ -1017,57 +1018,6 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                                (void *)resp_buf,
                                                MHD_RESPMEM_MUST_COPY);
         MHD_add_response_header(resp, "Content-Type", "application/json");
-    } else if (strcmp(url, ROUTE_SYSTEM_STATS) == 0) {
-        /* [CN-FORK] 硬件信息端点：受 READ_HARDWARE_INFO 开关控制，关闭时仅返回 {"enabled":false} */
-        char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp) {
-            enum MHD_Result r = MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-            MHD_destroy_response(oom_resp);
-            return r;
-        }
-        PldmgrConfig cfg;
-        config_read(&cfg);
-        size_t len;
-        if (cfg.read_hardware_info) {
-            len = pldmgr_get_system_stats_json(resp_buf, RESPONSE_BUFFER_SIZE);
-        } else {
-            len = snprintf(resp_buf, RESPONSE_BUFFER_SIZE, "{\"enabled\":false}");
-        }
-        resp = MHD_create_response_from_buffer(len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
-        /* [CN-FORK] 仪表盘每 2s 轮询，禁用浏览器缓存，否则轮询命中缓存导致数值不更新 */
-        MHD_add_response_header(resp, "Cache-Control", "no-store, no-cache, must-revalidate");
-        MHD_add_response_header(resp, "Pragma", "no-cache");
-    } else if (strcmp(url, ROUTE_GAME_ICON) == 0) {
-        /* [CN-FORK] 当前游戏图标：只服务服务端自己探测的固定候选路径（tid 已验字母数字，无路径穿越），
-           与 /system_stats 同一 READ_HARDWARE_INFO 开关门控；前端 URL 带 ?tid= 作缓存 key */
-        PldmgrConfig cfg;
-        config_read(&cfg);
-        char icon_path[256];
-        struct stat icon_st;
-        int icon_fd = -1;
-        if (cfg.read_hardware_info && pldmgr_get_game_icon_path(icon_path, sizeof(icon_path))) {
-            icon_fd = open(icon_path, O_RDONLY);
-            if (icon_fd >= 0 && (fstat(icon_fd, &icon_st) != 0 || !S_ISREG(icon_st.st_mode)
-                                 || icon_st.st_size <= 0 || icon_st.st_size > 4 * 1024 * 1024)) {
-                close(icon_fd);
-                icon_fd = -1;
-            }
-        }
-        if (icon_fd >= 0) {
-            /* MHD_create_response_from_fd 接管 fd，响应销毁时自动关闭 */
-            resp = MHD_create_response_from_fd((size_t)icon_st.st_size, icon_fd);
-            MHD_add_response_header(resp, "Content-Type", "image/png");
-            MHD_add_response_header(resp, "Cache-Control", "public, max-age=3600");
-        } else {
-            static const char no_icon[] = "{\"error\":\"no game icon\"}";
-            resp = MHD_create_response_from_buffer(sizeof(no_icon) - 1, (void *)no_icon,
-                                                   MHD_RESPMEM_PERSISTENT);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            MHD_add_response_header(resp, "Cache-Control", "no-store");
-            http_status = MHD_HTTP_NOT_FOUND;
-        }
     } else if (strcmp(url, ROUTE_PKG_STATUS) == 0) {
         /* [CN-FORK] PKG Manager 状态：探活 8844 + 内置/当前版本 */
         char pkg_json[512];
@@ -1102,27 +1052,6 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
         http_status = src == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR;
-    } else if (strcmp(url, ROUTE_SYSINFO_PROBE) == 0) {
-        /* [CN-FORK] 诊断：fw/型号/序列号探测结果 + kenv 全量 dump（纯文本，受硬件信息开关门控） */
-        PldmgrConfig probe_cfg;
-        config_read(&probe_cfg);
-        if (!probe_cfg.read_hardware_info) {
-            static const char off_msg[] = "READ_HARDWARE_INFO disabled";
-            resp = MHD_create_response_from_buffer(sizeof(off_msg) - 1, (void *)off_msg,
-                                                   MHD_RESPMEM_PERSISTENT);
-            MHD_add_response_header(resp, "Content-Type", "text/plain; charset=utf-8");
-            http_status = MHD_HTTP_FORBIDDEN;
-        } else {
-            char *resp_buf;
-            struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-            if (oom_resp)
-                return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-            int plen = stats_sysinfo_probe(resp_buf, RESPONSE_BUFFER_SIZE);
-            resp = MHD_create_response_from_buffer(plen > 0 ? (size_t)plen : 0, (void *)resp_buf,
-                                                   MHD_RESPMEM_MUST_FREE);
-            MHD_add_response_header(resp, "Content-Type", "text/plain; charset=utf-8");
-            MHD_add_response_header(resp, "Cache-Control", "no-store");
-        }
     } else if (strcmp(url, ROUTE_QUICKLINKS) == 0) {
         /* [CN-FORK] 常用入口：清单 + 逐条 TCP 探活（同步串行，进页面拉一次不轮询） */
         char *resp_buf;
@@ -1192,15 +1121,14 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             snprintf(resp_buf, RESPONSE_BUFFER_SIZE,
                      "{\"AUTOLOAD_ENABLED\":%s,\"AUTOLOAD_LIST\":\"%s\",\"LAST_"
                      "REPOSITORY_UPDATE\":%ld,"
-                     "\"AUTO_BROWSER_OPEN\":%s,\"AUTOLOAD_DELAY\":%d,\"KILL_DISC_"
-                     "PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s,\"AUTO_INSTALL_APP\":%s,"
-                     "\"MULTI_SOURCES_ENABLED\":%s,\"READ_HARDWARE_INFO\":%s}",
+                     "\"AUTO_BROWSER_OPEN\":%s,\"AUTOLOAD_DELAY\":%d,"
+                     "\"KILL_DISC_PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s,"
+                     "\"AUTO_INSTALL_APP\":%s,\"MULTI_SOURCES_ENABLED\":%s}",
                      cfg.autoload_enabled ? "true" : "false", list_escaped, cfg.last_repository_update,
                      cfg.auto_browser_open ? "true" : "false", cfg.autoload_delay,
                      cfg.kill_disc_player ? "true" : "false", cfg.scan_usb_payloads ? "true" : "false",
                      cfg.auto_install_app ? "true" : "false",
-                     cfg.multi_sources_enabled ? "true" : "false",
-                     cfg.read_hardware_info ? "true" : "false");
+                     cfg.multi_sources_enabled ? "true" : "false");
             resp = MHD_create_response_from_buffer(strlen(resp_buf),
                                                    (void *)resp_buf,
                                                    MHD_RESPMEM_MUST_FREE);

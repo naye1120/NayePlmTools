@@ -53,16 +53,11 @@
     "entries.empty": "还没有入口，点右上角「添加入口」开始",
     "entries.alive": "可连通",
     "entries.dead": "当前不可达",
-  "app.dashboard.subtitle": "在下方选择一个 payload 即可在 PS5 上启动。",
-  "app.dashboard.stat_installed": "已安装",
-  "app.dashboard.stat_favorites": "收藏",
-  "app.dashboard.stat_launched": "最近启动",
-  "app.dashboard.stat_usb": "USB",
   "app.nav.donate": "支持作者",
   "settings.theme_title": "外观",
   "settings.theme_desc": "选择深色或浅色界面；「跟随系统」会随操作系统设置自动切换。",
   "settings.donate_title": "支持作者",
-  "settings.donate_desc": "本程序是 naye 基于原作者 itsPLK 的 Payload Manager 维护的中文分支（当前 v0.5.1.63）。如果喜欢原作，可以请作者喝一杯咖啡。",
+  "settings.donate_desc": "本程序是 naye 基于原作者 itsPLK 的 Payload Manager 维护的中文分支（当前 v0.5.1.64）。如果喜欢原作，可以请作者喝一杯咖啡。",
     "storage_hub.launch": "启动",
   "donate.description": "如果你喜欢本项目，可以支持原作者。非常感谢！",
   "donate.fork_title": "关于本 Fork",
@@ -84,7 +79,5 @@
   "app.offline.title": "NayePlmTools 未运行…",
   "app.fork.by": "由 {{maintainer}} 维护",
   "settings.changelog_title": "更新日志",
-  "settings.changelog_desc": "查看本 Fork 的版本更新历史。",
-  "settings.read_hw_title": "读取硬件信息",
-  "settings.read_hw_desc": "读取并在首页展示 PS5 的温度、风扇、内存、显存与存储等硬件信息；关闭时这些卡片显示为 —。"
+  "settings.changelog_desc": "查看本 Fork 的版本更新历史。"
 }

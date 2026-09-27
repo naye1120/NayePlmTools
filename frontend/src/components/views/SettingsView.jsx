@@ -211,24 +211,8 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </button>
           </SettingRow>
 
-          {/* [CN-FORK] 读取硬件信息开关：控制首页仪表盘是否展示温度/风扇/内存/存储，同时控制后端 /system_stats */}
-          <SettingRow
-            title={t("settings.read_hw_title", "读取硬件信息")}
-            description={t("settings.read_hw_desc", "读取并在首页展示 PS5 的温度、风扇、内存、显存与存储等硬件信息。")}
-          >
-            <button
-              onClick={() => onSaveConfig({ READ_HARDWARE_INFO: !(config.READ_HARDWARE_INFO !== false) })}
-              className={cn(
-                "w-14 h-7 md:w-20 md:h-10 rounded-full transition-all relative p-1 md:p-1.5",
-                config.READ_HARDWARE_INFO !== false ? "bg-ps-blue" : "bg-white/10"
-              )}
-            >
-              <div className={cn(
-                "w-5 h-5 md:w-7 md:h-7 bg-white rounded-full transition-all",
-                config.READ_HARDWARE_INFO !== false ? "translate-x-7 md:translate-x-10" : "translate-x-0"
-              )} />
-            </button>
-          </SettingRow>
+          {/* [CN-FORK] v0.5.1.64 「读取硬件信息」开关连同主页仪表盘、后端 stats.c 一并删除：
+              温度/风扇/内存/显存/存储/FPS/当前游戏 不再探测，设置项也就没有存在意义 */}
 
           <div className="flex flex-col justify-between p-5 bg-white/[0.03] rounded-2xl border border-white/10 space-y-4 h-full">
             <div className="flex justify-between items-center">
@@ -413,6 +397,10 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
               </button>
             </div>
             <div className="overflow-y-auto p-5 space-y-4 text-sm leading-relaxed">
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.64</p>
+                <p className="text-zinc-400">主页与硬件信息检测整体删除：温度/风扇/内存/显存/存储/FPS/当前游戏 全部仍靠每 2s 一次的 /system_stats 轮询驱动，是不可重入的 Sony 传感器 API、页表统计与显示驱动 ioctl 拼起来的，也是目前唯一能解释「一运行就死机」的功能；既然它只为了首页那几个数字，本版直接抹掉：删 src/stats.c 与 include/stats.h（不再进构建）、/system_stats 与 /game_icon 与 /sysinfo_probe 三个端点下线、READ_HARDWARE_INFO 开关（配置项/设置页/后端 JSON）一并移除；前端删 DashboardView 与侧栏、移动端底部、默认页三处「主页」入口，启动直接进「管理 Payload」页（旧配置里残留的 READ_HARDWARE_INFO= 行会被忽略，不影响加载）。dev 侧同步删 mock 的 /system_stats 与 /game_icon、vite 代理两项。保留 .63 的 safe_mode 哨兵文件（现在只管装 app / 杀光盘 / 开浏览器 / 自启序列四件事），死机取证靠 /data/nayeplmtools/pldmgr.log。另加固设置页开关：后端 /set_config 旧实现要求请求体里必须带 AUTOLOAD_ENABLED 才会保存任何开关，缺这个键就整份静默丢弃（只要 /get_config 有一次没读到值就会踩到，症状是开关点了没反应），现在各开关无条件应用，只有「关掉自启」的 abort 动作仍拿 AUTOLOAD_ENABLED 做判据</p>
+              </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.63</p>
                 <p className="text-zinc-400">死机止血两步：① FPS 的「/dev/dce 显示控制器换帧计数器」默认停用——那是全程序唯一直接对显示/GPU 驱动发 ioctl 的地方（拿一个伪造的 selector/mask 让内核往我们的缓冲区里写硬件计数器），却跟着首页轮询一直跑，换来的只是一个 FPS 数字，性价比太差；OnionHEN 写在 /system_tmp/fps_sample 的 seqlock 文件源保留，想重新实验那个 ioctl 就编译时加 -DPLDMGR_ENABLE_DCE_FPS=1；② 新增安全模式哨兵文件 /data/nayeplmtools/safe_mode：用 FTP 建这个空文件（内容无所谓），下次启动就跳过引导期全部高危动作——不装启动器 app、不杀光盘播放器、不自动开浏览器、不跑自动加载序列，同时 /system_stats 一个内核调用也不发（首页硬件卡片全显 —）。不用重编译、不用进界面就能把机器带回可用状态；日志页与 /data/nayeplmtools/pldmgr.log 会记一条 SAFE MODE on 作为确认</p>

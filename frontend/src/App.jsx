@@ -3,7 +3,6 @@ import {
   Settings,
   CloudDownload,
   Cpu,
-  LayoutDashboard,
   Database,
   RefreshCw,
   Package,
@@ -40,15 +39,15 @@ import ActiveProcessesView from './components/views/ActiveProcessesView'
 // [CN-FORK] 常用入口页；PKG安装：内嵌 PKG Manager 自带界面（:8844）到右侧内容区
 import CommonEntriesView from './components/views/CommonEntriesView'
 import PkgManagerFrame from './components/views/PkgManagerFrame'
-// [CN-FORK] 主页仪表盘
-import DashboardView from './components/views/DashboardView'
+// [CN-FORK] v0.5.1.64 主页（DashboardView）已删除：硬件信息探测下线后它只剩空壳，
+// 启动直接落在「管理 Payload」（view='storage'）
 
 // [CN-FORK] 中文排版开关（语言同步）；外观切换控件仅保留在设置页，不常驻侧栏
 import { syncHtmlLang } from './theme/useTheme'
 
 function App() {
   const { t, i18n } = useTranslation();
-  const [view, setView] = useState('dashboard')
+  const [view, setView] = useState('storage') /* [CN-FORK] v0.5.1.64 默认页改 payload 管理页，主页已删除 */
   const [isFavoriteEditMode, setIsFavoriteEditMode] = useState(false)
   const mainRef = useRef(null)
 
@@ -504,7 +503,7 @@ function App() {
             {sidebarExpanded && (
               <p className="label-caps px-4 pb-2 !text-zinc-500">{t("app.nav.group_main", "Main")}</p>
             )}
-            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={LayoutDashboard} label={t("app.nav.dashboard", "Dashboard")} />
+            {/* [CN-FORK] v0.5.1.64 删侧栏「主页」入口（DashboardView 已下线），首项即「管理 Payload」 */}
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} />
             {/* [CN-FORK] 常用功能组：PKG安装（内嵌 :8844 界面）/ 常用入口 */}
@@ -536,8 +535,8 @@ function App() {
         "fixed bottom-0 inset-x-0 z-[100] bg-black/80 border-t border-white/5 h-[calc(5rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] flex items-center overflow-x-auto hide-scrollbar",
         isPS5 ? "hidden" : "md:hidden"
       )}>
-        <NavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={LayoutDashboard} label={t("app.nav.dashboard", "Dashboard")} mobileLabel={t("app.nav.home_mobile", "Home")} />
-        <NavButton showSeparator active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} mobileLabel={t("app.nav.manage_mobile", "Manage")} />
+        {/* [CN-FORK] v0.5.1.64 删移动端「主页」标签，「管理 Payload」上为首项故不再需要分隔线 */}
+        <NavButton active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} mobileLabel={t("app.nav.manage_mobile", "Manage")} />
         <NavButton showSeparator active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} mobileLabel={t("app.nav.auto_mobile", "Auto")} />
         <NavButton showSeparator active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} mobileLabel={t("app.nav.processes_mobile", "Processes")} />
         <NavButton showSeparator active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} mobileLabel={t("app.nav.settings", "Settings")} />
@@ -564,10 +563,7 @@ function App() {
             : cn("max-w-[1800px] mx-auto",
                 isPS5 ? "pt-16 px-16 pb-12 flex-1 overflow-y-auto" : "pt-6 px-6 pb-36 md:pt-16 md:px-16 md:pb-12 md:flex-1 md:overflow-y-auto")
         )}>
-          {/* [CN-FORK] 主页内容已清空（原 payload 启动网格/收藏编辑 UI 已移除，启动入口在「已安装」列表），预留后续开发 */}
-          {view === 'dashboard' && (
-            <DashboardView config={config} />
-          )}
+          {/* [CN-FORK] v0.5.1.64 主页视图整体删除（硬件信息探测下线 + 不再保留空壳页） */}
 
           {view === 'storage' && (
             <StorageHub

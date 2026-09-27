@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import { fileURLToPath } from 'url';
 
 const app = express();
 app.use(cors());
@@ -57,7 +56,22 @@ const communityRepository = [
 ];
 
 let lastRepositoryUpdate = Math.floor(Date.now() / 1000);
-let readHardwareEnabled = true; // [CN-FORK] 模拟 READ_HARDWARE_INFO 开关持久化
+/* [CN-FORK] v0.5.1.64 mock 开始真正保存配置：旧实现 /get_config 返回硬编码字面量、/set_config 只打日志
+ * 不回存，本地 dev 里设置页每个开关点完都弹回原状，看着就像「开关都不好用」；而缺的四个键
+ * （AUTO_BROWSER_OPEN / AUTOLOAD_DELAY / KILL_DISC_PLAYER_ON_STARTUP / SCAN_USB_PAYLOADS）连回显都没有。
+ * 默认值与 src/config.c 一致（MULTI_SOURCES_ENABLED / AUTOLOAD_ENABLED 仍留 true：mock 的仓库数据固定是分源格式）。 */
+const mockConfig = {
+  AUTOLOAD_ENABLED: true,
+  AUTOLOAD_LIST: "goldhen_v2.4b17.elf,etaHEN_1.8.elf",
+  LAST_REPOSITORY_UPDATE: lastRepositoryUpdate,
+  AUTO_BROWSER_OPEN: true,
+  AUTOLOAD_DELAY: 5,
+  KILL_DISC_PLAYER_ON_STARTUP: true,
+  SCAN_USB_PAYLOADS: false,
+  AUTO_INSTALL_APP: true,
+  MULTI_SOURCES_ENABLED: true
+};
+/* [CN-FORK] v0.5.1.64 删除 readHardwareEnabled：主页硬件信息功能（/system_stats + stats.c）已整体下线 */
 
 let mockSources = [
   { id: 'default', name: 'Official Repository', url: 'https://itsplk.github.io/ps5-payloads-mirror/payloads.json', removable: false },
@@ -105,16 +119,10 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.1.63'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.1.64'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
-// [CN-FORK] 当前游戏图标 mock：返回构建产物 icon.png（实机由 payload 读游戏 sce_sys/icon0.png）
-app.get('/game_icon', (req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=3600');
-  res.sendFile(fileURLToPath(new URL('./dist/icon.png', import.meta.url)), (err) => {
-    if (err) res.status(404).json({ error: 'no game icon' });
-  });
-});
+/* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
 
 // [CN-FORK] PKG Manager 内置集成 mock：状态/启动/上传（实机由 pkgmanager.c 探活 8844 + elfldr 拉起）
 let pkgRunning = false;
@@ -202,39 +210,8 @@ app.get('/autoload_status', (req, res) => {
 });
 
 app.get('/get_config', (req, res) => {
-  res.json({
-    AUTOLOAD_ENABLED: true,
-    AUTOLOAD_LIST: "goldhen_v2.4b17.elf,etaHEN_1.8.elf",
-    LAST_REPOSITORY_UPDATE: lastRepositoryUpdate,
-    AUTO_INSTALL_APP: true,
-    MULTI_SOURCES_ENABLED: true,
-    READ_HARDWARE_INFO: readHardwareEnabled
-  });
-});
-
-// [CN-FORK] 硬件信息端点，模拟 stats.c 的 JSON 结构（内存/显存/存储单位 MB）
-// 关闭 READ_HARDWARE_INFO 时返回 {enabled:false}，与后端行为一致
-app.get('/system_stats', (req, res) => {
-  if (!readHardwareEnabled) return res.json({ enabled: false });
-  const jitter = (base, range) => Math.round(base + Math.sin(Date.now() / 2000) * range);
-  res.json({
-    cpu: { usage: jitter(24, 8), temp: jitter(52, 4) },
-    gpu: { temp: jitter(48, 4) },
-    ssd: { temp: jitter(44, 3) },
-    fan: { duty: jitter(42, 8), max: 100 },
-    ram: { total: 16384, used: jitter(8400, 600) },
-    vram: { total: 12288, used: jitter(6250, 500) },
-    fps: 58 + Math.round(Math.sin(Date.now() / 1500) * 4),
-    game: { name: '血源诅咒 The Old Hunters', tid: 'PPSA00991' },
-    uptime: `2h 34m ${Math.floor(Date.now() / 1000) % 60}s`,
-    model: 'CFI-1209A 01', // [CN-FORK] 实机官方主机信息页同源（inst0.dat offset 0x14）
-    serial: 'F32B018RF11266783', // [CN-FORK] inst0.dat offset 0x40，实机验证值
-    firmware: '12.20', // [CN-FORK] api_version 0x12200005：(0x12 BCD=12).(0x20 BCD=20)，低 16 位不上界面
-    storage: [
-      { label: 'Internal storage', total: 825000, used: 420000, path: '/user' },
-      { label: 'NVME SSD', total: 1000000, used: 128500, path: '/mnt/ext0' }
-    ]
-  });
+  mockConfig.LAST_REPOSITORY_UPDATE = lastRepositoryUpdate;
+  res.json(mockConfig);
 });
 
 app.get('/repository_payloads', (req, res) => {
@@ -328,8 +305,12 @@ app.get('/repository_install', (req, res) => {
 app.post('/set_config', (req, res) => {
   console.log('Received Config:', req.body);
   logs.push(`[PLDMGR] Config updated: ${JSON.stringify(req.body)}`);
-  if (req.body && typeof req.body.READ_HARDWARE_INFO === 'boolean') {
-    readHardwareEnabled = req.body.READ_HARDWARE_INFO; // [CN-FORK]
+  /* [CN-FORK] v0.5.1.64 存回内存，下一次 /get_config 就是新值（LAST_REPOSITORY_UPDATE 由服务端自己算，不接受前端回写） */
+  if (req.body && typeof req.body === 'object') {
+    for (const [key, value] of Object.entries(req.body)) {
+      if (key === 'LAST_REPOSITORY_UPDATE' || value === undefined) continue;
+      mockConfig[key] = value;
+    }
   }
   res.send('OK');
 });

@@ -37,10 +37,8 @@
 #define ROUTE_PROCESSES_LIST "/processes_list"
 #define ROUTE_PROCESS_KILL "/process_kill"
 #define ROUTE_HISTORY_LIST "/history_list"
-/* [CN-FORK] 硬件信息读取端点（温度/风扇/内存/显存/存储），受 READ_HARDWARE_INFO 开关控制 */
-#define ROUTE_SYSTEM_STATS "/system_stats"
-/* [CN-FORK] 当前游戏图标端点（与 /system_stats 同一开关门控，只读服务端探测到的 tid）*/
-#define ROUTE_GAME_ICON "/game_icon"
+/* [CN-FORK] v0.5.1.64 删除 /system_stats 与 /game_icon：主页硬件信息（温度/风扇/内存/显存/
+ * 存储/FPS/当前游戏）连同 stats.c 一并下线，不再对内核/显示驱动接口做轮询探测 */
 /* [CN-FORK] PKG Manager 内置集成：状态探测 / 启动 / 关闭 / 手动上传更新 */
 #define ROUTE_PKG_STATUS "/pkgmanager_status"
 #define ROUTE_PKG_LAUNCH "/pkgmanager_launch"
@@ -50,15 +48,13 @@
 #define ROUTE_QUICKLINKS "/quicklinks"
 #define ROUTE_QUICKLINKS_ADD "/quicklinks_add"
 #define ROUTE_QUICKLINKS_REMOVE "/quicklinks_remove"
-/* [CN-FORK] 系统信息诊断端点：fw/型号/序列号探测结果 + kenv 全量 dump（纯文本） */
-#define ROUTE_SYSINFO_PROBE "/sysinfo_probe"
 
-#define MENU_VERSION "0.5.1.63" /* [CN-FORK] 本 fork 版本：上游基线 0.5.1 + 构建序号（.63）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.1.64" /* [CN-FORK] 本 fork 版本：上游基线 0.5.1 + 构建序号（.64）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"
-/* [CN-FORK] 安全模式哨兵文件：存在（内容无所谓）即在下次启动跳过全部引导期高危动作，
- * 并停掉 /system_stats 的内核探测。实机死机又打不开页面时，FTP 建个空文件就能止血。 */
+/* [CN-FORK] 安全模式哨兵文件：存在（内容无所谓）即在下次启动跳过全部引导期高危动作。
+ * v0.5.1.64 起硬件探测已整体删除，本哨兵只负责跳过装机/杀光盘/开浏览器/自启序列。 */
 #define PLDMGR_SAFE_MODE_FLAG "/data/nayeplmtools/safe_mode"
 #define PAYLOADS_STORAGE_DIR "/data/nayeplmtools/payloads"
 /* [CN-FORK] 越狱引导器的自动加载目录，安装 payload 后若同名工具在此则同步更新 */
