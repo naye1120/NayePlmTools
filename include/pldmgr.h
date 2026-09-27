@@ -53,10 +53,13 @@
 /* [CN-FORK] 系统信息诊断端点：fw/型号/序列号探测结果 + kenv 全量 dump（纯文本） */
 #define ROUTE_SYSINFO_PROBE "/sysinfo_probe"
 
-#define MENU_VERSION "0.5.1.62" /* [CN-FORK] 本 fork 版本：上游基线 0.5.1 + 构建序号（.62）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.1.63" /* [CN-FORK] 本 fork 版本：上游基线 0.5.1 + 构建序号（.63）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"
+/* [CN-FORK] 安全模式哨兵文件：存在（内容无所谓）即在下次启动跳过全部引导期高危动作，
+ * 并停掉 /system_stats 的内核探测。实机死机又打不开页面时，FTP 建个空文件就能止血。 */
+#define PLDMGR_SAFE_MODE_FLAG "/data/nayeplmtools/safe_mode"
 #define PAYLOADS_STORAGE_DIR "/data/nayeplmtools/payloads"
 /* [CN-FORK] 越狱引导器的自动加载目录，安装 payload 后若同名工具在此则同步更新 */
 #define PS5_AUTOLOADER_DIR    "/data/ps5_autoloader"

@@ -414,6 +414,10 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </div>
             <div className="overflow-y-auto p-5 space-y-4 text-sm leading-relaxed">
               <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.63</p>
+                <p className="text-zinc-400">死机止血两步：① FPS 的「/dev/dce 显示控制器换帧计数器」默认停用——那是全程序唯一直接对显示/GPU 驱动发 ioctl 的地方（拿一个伪造的 selector/mask 让内核往我们的缓冲区里写硬件计数器），却跟着首页轮询一直跑，换来的只是一个 FPS 数字，性价比太差；OnionHEN 写在 /system_tmp/fps_sample 的 seqlock 文件源保留，想重新实验那个 ioctl 就编译时加 -DPLDMGR_ENABLE_DCE_FPS=1；② 新增安全模式哨兵文件 /data/nayeplmtools/safe_mode：用 FTP 建这个空文件（内容无所谓），下次启动就跳过引导期全部高危动作——不装启动器 app、不杀光盘播放器、不自动开浏览器、不跑自动加载序列，同时 /system_stats 一个内核调用也不发（首页硬件卡片全显 —）。不用重编译、不用进界面就能把机器带回可用状态；日志页与 /data/nayeplmtools/pldmgr.log 会记一条 SAFE MODE on 作为确认</p>
+              </div>
+              <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.62</p>
                 <p className="text-zinc-400">死机排查与传感器安全闸：首页每 2s 一次拉 /system_stats，而后端一直是裸调——CPU 温度、SoC sensor 0/1、风扇占空比、内存/显存页表、DCE 帧计数 ioctl、全进程表 sysctl 全部每请求跑一遍，既没锁也没节流；加上前端 1.8s 就 abort（只断客户端，服务端 handler 线程照旧跑完）与 MHD 的 thread-per-connection，多个线程会并发把传感器请求打进同一条 ICC 通道——这正是本项目「Sensor API 必须串行化 + 限流」规范要防的死机形态。现在整份快照在互斥锁内构建并缓存 5s，并发请求直接命中缓存不再产生内核调用（前端无需改，节流后 abort 重发已无危害）。同时日志落盘到 /data/nayeplmtools/pldmgr.log（带时间戳、每行 fflush、超 512KB 截断），此前日志只在内存环形缓冲里，一断电死机现场就全没；启动时还会把 hw_stats / auto_browser / kill_disc / auto_install / autoload 几个默认开启的开关值记进日志，下次死机可直接看最后几行指认现场</p>
               </div>

@@ -1,12 +1,14 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
+#include <sys/stat.h> /* [CN-FORK] 安全模式哨兵文件需要 stat */
 #include <sys/socket.h>
 #include <netdb.h>
 #include <ifaddrs.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include "utils.h"
+#include "pldmgr.h" /* [CN-FORK] PLDMGR_SAFE_MODE_FLAG */
 
 int pldmgr_get_local_ip(char *ip_buf, size_t buf_size) {
     struct ifaddrs *ifaddr, *ifa;
@@ -104,4 +106,11 @@ void pldmgr_json_escape(const char *src, char *dst, size_t dst_size) {
     }
 
     dst[pos] = '\0';
+}
+
+/* [CN-FORK] 安全模式哨兵检测：只看文件在不在，内容无所谓（FTP 建个空文件即可）。
+ * 不缓存 —— 用户随时可以用 FTP 增删该文件，下一次请求/启动就要生效。 */
+int pldmgr_utils_safe_mode(void) {
+    struct stat st;
+    return stat(PLDMGR_SAFE_MODE_FLAG, &st) == 0 ? 1 : 0;
 }

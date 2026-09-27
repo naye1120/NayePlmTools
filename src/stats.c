@@ -598,12 +598,24 @@ static void stats_escape_utf8(const char *src, char *dst, size_t dst_size) {
 }
 
 /* ---- FPS（ps5-new-overlay / ps5mon 同款两级降级）---- */
+static float    s_fps = -1.0f;   /* -1 = 不可用 */
+
+/* [CN-FORK] v0.5.1.63 死机排查：源2「/dev/dce 换帧计数器」是对显示控制器驱动的
+ * 直接 ioctl——拿一个伪造的 selector/mask 让内核往调用方缓冲区里写硬件计数器，
+ * 是全程序唯一碰 GPU/显示路径的地方，却跟着首页每 2s 的轮询一直跑，换来的只是一
+ * 个 FPS 数字。在整机死机面前这笔交易不划算，默认关掉；源1（OnionHEN 写在
+ * /system_tmp/fps_sample 的 seqlock，纯文件读）保留。要重新实验：编译加
+ * -DPLDMGR_ENABLE_DCE_FPS=1。 */
+#ifndef PLDMGR_ENABLE_DCE_FPS
+#define PLDMGR_ENABLE_DCE_FPS 0
+#endif
+#if PLDMGR_ENABLE_DCE_FPS
 typedef struct { uint64_t selector, mask, output, reserved[3]; } dce_arg_t;
 #define DCE_IOC_GET 0x80308217UL
 static int      s_dce_fd = -1;
 static uint64_t s_flip_prev;
 static struct timespec s_flip_t0;
-static float    s_fps = -1.0f;   /* -1 = 不可用 */
+#endif
 
 static void sample_fps(void) {
     /* 源1：OnionHEN seqlock 共享文件，magic 'OFPS'（两种字节序都比对） */
@@ -622,6 +634,7 @@ static void sample_fps(void) {
             }
         }
     }
+#if PLDMGR_ENABLE_DCE_FPS
     /* 源2：/dev/dce 显示控制器换帧(flip)硬件计数器差分 */
     if (s_dce_fd < 0) s_dce_fd = open("/dev/dce", O_RDWR);
     if (s_dce_fd >= 0) {
@@ -653,6 +666,7 @@ static void sample_fps(void) {
             }
         }
     }
+#endif /* PLDMGR_ENABLE_DCE_FPS */
 }
 
 /* ---- param.sfo 解析（游戏名兜底）---- */
@@ -1095,6 +1109,12 @@ static size_t build_system_stats_json(char *buf, size_t size);
 
 size_t pldmgr_get_system_stats_json(char *buf, size_t size) {
     if (!buf || size == 0) return 0;
+
+    /* [CN-FORK] v0.5.1.63 安全模式：哨兵文件存在就一个内核调用都不发，直接回
+     * enabled:false（前端见到该字段即显占位破折号）。死机时 FTP 建个
+     * /data/nayeplmtools/safe_mode 空文件就能止血，不用重编译。 */
+    if (pldmgr_utils_safe_mode())
+        return snprintf(buf, size, "{\"enabled\":false}");
 
     pthread_mutex_lock(&g_stats_mtx);
     long long t = now_ms();

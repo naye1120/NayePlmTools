@@ -130,6 +130,18 @@ int main(int argc, char *argv[]) {
                cfg.kill_disc_player ? 1 : 0, cfg.auto_install_app ? 1 : 0,
                cfg.autoload_enabled ? 1 : 0);
 
+    /* [CN-FORK] v0.5.1.63 安全模式：/data/nayeplmtools/safe_mode 存在（内容无所谓）就
+     * 跳过引导期全部高危动作 —— 装启动器 app、杀光盘播放器、自动开浏览器、自动加载
+     * 序列全不做，stats.c 那边也不再碰传感器/页表。死机后用 FTP 建这个空文件即可止血。 */
+    if (pldmgr_utils_safe_mode()) {
+        cfg.auto_install_app  = 0;
+        cfg.kill_disc_player  = 0;
+        cfg.auto_browser_open = 0;
+        cfg.autoload_enabled  = 0;
+        pldmgr_log("[PLDMGR] !!! SAFE MODE on (%s): skip install-app / kill-disc / "
+                   "auto-browser / autoload\n", PLDMGR_SAFE_MODE_FLAG);
+    }
+
     /* [CN-FORK] IP 提前获取：供启动日志与最后一条通知复用（通知为排他显示，顺序见下方） */
     char current_ip[64] = "unknown";
     pldmgr_get_local_ip(current_ip, sizeof(current_ip));

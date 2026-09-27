@@ -105,7 +105,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.1.62'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.1.63'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 // [CN-FORK] 当前游戏图标 mock：返回构建产物 icon.png（实机由 payload 读游戏 sce_sys/icon0.png）
