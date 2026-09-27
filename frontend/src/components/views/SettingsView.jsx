@@ -414,6 +414,10 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </div>
             <div className="overflow-y-auto p-5 space-y-4 text-sm leading-relaxed">
               <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.57</p>
+                <p className="text-zinc-400">仓库固化，功能与 .56 完全一致：重建因 IDE 变更面板误点拒绝而丢失的 .55/.56 源码并验收（产物字节数与动态符号表与丢失前一致）；third_party/pkg-manager.elf 内置基线纳入版本库（clone 后可直接 make all）；settings.read_hw_* 词条从翻译子模块迁回 locales-overlay；全部改动按「构建通过即本地提交」固化到 cn-fork 分支。本版构建标题带真实 commit 短哈希，作为上机测试的正式包</p>
+              </div>
+              <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.56</p>
                 <p className="text-zinc-400">前端：「PKG安装」视图铺满整个模块页（四边内边距清零、解除 1800px 居中宽度上限、由 iframe 自己接管滚动；手机端不再塌成 150px 高）；设置页 PKG Manager 卡片新增「关闭」按钮，后端新增 /pkgmanager_stop 按进程名 SIGKILL pkg-manager.elf（只影响它自己；端口在响但找不到进程时报错而不误杀）；本地 dev 补全 pkgmanager_* 代理</p>
               </div>
