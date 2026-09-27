@@ -84,5 +84,7 @@
   "app.offline.title": "NayePlmTools 未运行…",
   "app.fork.by": "由 {{maintainer}} 维护",
   "settings.changelog_title": "更新日志",
-  "settings.changelog_desc": "查看本 Fork 的版本更新历史。"
+  "settings.changelog_desc": "查看本 Fork 的版本更新历史。",
+  "settings.read_hw_title": "读取硬件信息",
+  "settings.read_hw_desc": "读取并在首页展示 PS5 的温度、风扇、内存、显存与存储等硬件信息；关闭时这些卡片显示为 —。"
 }

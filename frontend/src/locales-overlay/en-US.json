@@ -83,5 +83,7 @@
   "app.offline.title": "NayePlmTools is not running...",
   "app.fork.by": "Fork by {{maintainer}}",
   "settings.changelog_title": "Changelog",
-  "settings.changelog_desc": "View version update history for this fork."
+  "settings.changelog_desc": "View version update history for this fork.",
+  "settings.read_hw_title": "Read Hardware Info",
+  "settings.read_hw_desc": "Read and show PS5 hardware info (temperature, fan, memory, VRAM, storage) on the dashboard. When off, those cards show a dash."
 }
