@@ -1,3 +1,16 @@
+## v0.5.2.75 (CN-FORK)
+
+### 🚀 Features
+* **游戏磁贴新增 `LZ4` 格式档（ampr 实时解压变体）**：
+  * 识别一类特殊的「文件夹」游戏：目录里带 `ampr_*.index` / `ampr_*.pak` 与被改名的 `eboot.bin.orig`（ampr 实时解压，底层资源 LZ4 压缩）。
+  * 后端 `game_enum_dump` 新增 `gm_dir_is_lz4()`：当游戏判为裸目录（folder）时再扫一下目录，发现 `ampr_` 前缀条目则把 fmt 从 `folder` 改标 `lz4`。只多一次 opendir，不轮询。
+  * 前端 `FMT_LABEL` 加 `LZ4` 徒标（靖蓝底）；mock 加一款 lz4 演示。
+
+### 🐛 Fixes
+* **重写 ShadowMount 格式探测（直读人家源码定位根因，不再靠猜）**：
+  * 根因：上一版在挂载表里 `strstr("ffpkg")` 永远命中不了——ShadowMountPlus 的 `build_image_mount_point_for_fs` 会 `strip_extension`，挂载点叫 `/mnt/shadowmnt/<镜像名去后缀>_<8位hash>`，扩展名根本没保留；而 `f_mntfromname` 是 `/dev/lvdN`/`/dev/mdN` 块设备。所以格式表永远为空→全回退 PKG。
+  * 正解（照 `detect_image_fs_type`/`image_fs_name`/`get_game_info`）：只扫 `/mnt/shadowmnt/` 下的挂载，用 `f_fstypename` 判格式（ufs→ffpkg、exfat/msdos→exfat、含 pfs→ffpfs、`/mnt/shadowmnt/pfsc/` →ffpfsc）；游戏关联优先读挂载点根目录的 `sce_sys/param.json` 拿 titleId（与人家一致），读不到再回退挂载点名的 9 位前缀。首次快照将每个 shadowmnt 挂载的 `to/fstype/fmt` dump 到日志供实机校准。
+
 ## v0.5.2.74 (CN-FORK)
 
 ### 🐛 Fixes

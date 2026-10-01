@@ -19,7 +19,7 @@ function gamePlatform(tid) {
   return ''
 }
 /* 格式标签：与 ShadowMountPlus 一致的真实格式集。后端 /game_list 的 fmt 取值：
- * pkg（内置安装）/ ffPKG / exFAT / ffpfs / ffpfsc（镜像挂载）/ folder（裸目录）；缺字段时按 src 回退。
+ * pkg（内置安装）/ ffPKG / exFAT / ffpfs / ffpfsc（镜像挂载）/ folder（裸目录）/ lz4（ampr 实时解压目录）；缺字段时按 src 回退。
  * c=彩色底色（内联 style 用，避开 Tailwind JIT 漏生成任意色类 + 浅色主题洗白字）。 */
 const FMT_LABEL = {
   pkg: { k: 'game.fmt_pkg', d: 'PKG', c: '#059669' },
@@ -28,6 +28,7 @@ const FMT_LABEL = {
   ffpfs: { k: 'game.fmt_ffpfs', d: 'ffpfs', c: '#7c3aed' },
   ffpfsc: { k: 'game.fmt_ffpfsc', d: 'ffpfsc', c: '#db2777' },
   folder: { k: 'game.fmt_folder', d: '文件夹', c: '#475569' },
+  lz4: { k: 'game.fmt_lz4', d: 'LZ4', c: '#4f46e5' },
 }
 /* 平台徒标颜色：PS5 蓝、PS4 紫。 */
 const PLAT_COLOR = { PS5: '#2563eb', PS4: '#7c3aed' }

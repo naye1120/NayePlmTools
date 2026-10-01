@@ -263,35 +263,77 @@ static char g_mnt_tid[GM_MAX_MNT][12];
 static char g_mnt_fmt[GM_MAX_MNT][8];
 static int  g_mnt_cnt = 0;
 
-/* 从镜像挂载点 basename 里认格式扩展名（先判长的 .ffpfsc 再判 .ffpfs，避免前缀误命中）。 */
-static const char *gm_fmt_from_name(const char *name) {
-    if (strstr(name, ".ffpfsc")) return "ffpfsc";
-    if (strstr(name, ".ffpfs"))  return "ffpfs";
-    if (strstr(name, ".ffpkg"))  return "ffpkg";
-    if (strstr(name, ".exfat"))  return "exfat";
+/* 从 ShadowMount 挂载的文件系统类型判格式（照 ShadowMountPlus 的 image_fs_type 语义）：
+ * .ffpkg 镜像挂成 ufs、.exfat 挂成 exfat、.ffpfs 挂成 pfs/devpfs；PFSC 容器挂在 /mnt/shadowmnt/pfsc 下。
+ * 挂载点名字里扩展名被 strip 掉了、来源又是 /dev/lvdN 块设备，所以只能靠 f_fstypename 区分。认不出返回 NULL。 */
+static const char *gm_fmt_from_fstype(const char *to, const char *fstype) {
+    if (strstr(to, "/mnt/shadowmnt/pfsc/")) return "ffpfsc";
+    if (!strcmp(fstype, "ufs"))   return "ffpkg";
+    if (!strcmp(fstype, "exfat") || !strcmp(fstype, "msdos") || !strcmp(fstype, "exfatfs")) return "exfat";
+    if (strstr(fstype, "pfs"))    return "ffpfs";   /* pfs / devpfs / transaction_pfs / ppr_pfs */
     return NULL;
 }
 
+/* 从 <dir>/sce_sys/param.json 抠 titleId（照 ShadowMountPlus get_game_info 的做法，挂载点根即游戏根）。 */
+static int gm_param_json_tid(const char *dir, char out[12]) {
+    char p[768];
+    snprintf(p, sizeof(p), "%s/sce_sys/param.json", dir);
+    FILE *f = fopen(p, "rb");
+    if (!f) return 0;
+    char buf[4096];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    if (n == 0) return 0;
+    buf[n] = 0;
+    const char *key = strstr(buf, "\"titleId\"");
+    if (!key) key = strstr(buf, "\"title_id\"");
+    if (!key) return 0;
+    const char *c = strchr(key, ':');
+    if (!c) return 0;
+    do { if (!*++c) return 0; } while (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r');
+    if (*c != '"') return 0;
+    c++;
+    int i = 0;
+    while (i < 11 && c[i] && c[i] != '"') { out[i] = c[i]; i++; }
+    out[i] = 0;
+    return i >= 9 ? 1 : 0;
+}
+
+/* 从路径里任意位置抠出 9 位 TITLE_ID（镜像文件名/挂载点常以 TITLE_ID 开头，作 param.json 读不到时的回退）。 */
+static const char *const GM_TID_PREFIX[] = { "PPSA", "CUSA", "PPJB", "EMUA", "PAUS", "PPHD", NULL };
+static int gm_extract_tid(const char *s, char out[10]) {
+    for (const char *p = s; *p; p++) {
+        for (int i = 0; GM_TID_PREFIX[i]; i++) {
+            size_t pl = strlen(GM_TID_PREFIX[i]);
+            if (strncmp(p, GM_TID_PREFIX[i], pl) != 0) continue;
+            int k = 0;
+            while (k < 9 && p[k] && isalnum((unsigned char)p[k])) k++;
+            if (k >= 9) { memcpy(out, p, 9); out[9] = 0; return 1; }
+        }
+    }
+    return 0;
+}
+
 static void gm_build_mount_map(void) {
+    static int dumped = 0;   /* ShadowMount 挂载明细只在首次快照 dump 一次，供实机校准 fstype */
     g_mnt_cnt = 0;
     struct statfs *mnts = NULL;
     int mn = getmntinfo(&mnts, MNT_NOWAIT);
     for (int i = 0; mn > 0 && i < mn; i++) {
         const char *to = mnts[i].f_mntonname;
         if (strncmp(to, "/mnt/shadowmnt/", 15) != 0) continue;   /* 只看 ShadowMount 镜像挂载 */
-        const char *base = strrchr(to, '/'); base = base ? base + 1 : to;  /* <镜像名>_<hash> */
-        const char *fmt = gm_fmt_from_name(base);
+        const char *fstype = mnts[i].f_fstypename;
+        const char *fmt = gm_fmt_from_fstype(to, fstype);
+        if (!dumped) pldmgr_log("[PLDMGR] shadowmnt to=%s fstype=%s fmt=%s\n", to, fstype, fmt ? fmt : "?");
         if (!fmt) continue;
-        char tid[10] = { 0 };
-        int k = 0;
-        for (; k < 9 && base[k] && isalnum((unsigned char)base[k]); k++) tid[k] = base[k];
-        if (k < 9) continue;                    /* 镜像名不以 9 位 TITLE_ID 开头，无法关联，跳过 */
+        char tid[12];
+        if (!gm_param_json_tid(to, tid) && !gm_extract_tid(to, tid)) continue;  /* 先读 param.json，回退挂载点前缀 */
         if (g_mnt_cnt >= GM_MAX_MNT) break;
         snprintf(g_mnt_tid[g_mnt_cnt], sizeof(g_mnt_tid[0]), "%s", tid);
         snprintf(g_mnt_fmt[g_mnt_cnt], sizeof(g_mnt_fmt[0]), "%s", fmt);
-        pldmgr_log("[PLDMGR] game_fmt: mount %s -> tid=%s fmt=%s\n", to, tid, fmt);
         g_mnt_cnt++;
     }
+    dumped = 1;
 }
 
 /* 游戏格式：优先 ShadowMount 镜像格式（ffpkg/exfat/ffpfs/ffpfsc）；否则内置安装=pkg、裸目录=folder。 */
@@ -301,23 +343,40 @@ static const char *gm_fmt(const char *tid, const char *src) {
     return strcmp(src, "installed") == 0 ? "pkg" : "folder";
 }
 
+/* [CN-FORK] LZ4 变体（ampr 实时解压）：裸目录里带 ampr_*.index / ampr_*.pak 与 eboot.bin.orig，
+ * 与普通「文件夹」转储不同，单列一档。扫目录里是否有 ampr_ 前缀条目即可判定。 */
+static int gm_dir_is_lz4(const char *root) {
+    DIR *dp = opendir(root);
+    if (!dp) return 0;
+    int hit = 0;
+    struct dirent *ent;
+    while ((ent = readdir(dp))) {
+        if (!strncmp(ent->d_name, "ampr_", 5)) { hit = 1; break; }
+    }
+    closedir(dp);
+    return hit;
+}
+
 static void game_enum_dump(enum_arg_t *a) {
     const unsigned n = sizeof(GM_SCAN_PATHS) / sizeof(GM_SCAN_PATHS[0]);
     for (unsigned s = 0; s < n && !a->overflow; s++) {
         DIR *dp = opendir(GM_SCAN_PATHS[s]);
         if (!dp) continue;
         struct dirent *ent;
-        char sfo[768];
+        char sfo[768], root[768];
         while ((ent = readdir(dp))) {
             if (ent->d_name[0] == '.') continue;
             if (!gm_tid_is_game(ent->d_name)) continue;
-            snprintf(sfo, sizeof(sfo), "%s/%s/sce_sys/param.sfo", GM_SCAN_PATHS[s], ent->d_name);
+            snprintf(root, sizeof(root), "%s/%s", GM_SCAN_PATHS[s], ent->d_name);
+            snprintf(sfo, sizeof(sfo), "%s/sce_sys/param.sfo", root);
             if (access(sfo, F_OK) != 0) continue;
             char name[128];
             name[0] = 0;
             sfo_file_name(sfo, name, sizeof(name));
             if (!name[0]) snprintf(name, sizeof(name), "%s", ent->d_name);
-            gm_append_item(a, ent->d_name, name, "dump", gm_fmt(ent->d_name, "dump"));
+            const char *fmt = gm_fmt(ent->d_name, "dump");
+            if (!strcmp(fmt, "folder") && gm_dir_is_lz4(root)) fmt = "lz4";
+            gm_append_item(a, ent->d_name, name, "dump", fmt);
         }
         closedir(dp);
     }
