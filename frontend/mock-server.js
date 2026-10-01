@@ -126,7 +126,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.76'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.77'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -202,14 +202,14 @@ app.get('/thermal_stats', (req, res) => {
 
 // [CN-FORK] 游戏列表 mock（预览用；实机由 game_mgr.c 解析 app.db + 扫描 dump）
 const mockGames = [
-  { tid: 'PPSA01234', name: '战神 诸神黄昏', src: 'installed', fmt: 'ffpkg' },
-  { tid: 'PPSA00802', name: '漫威蜘蛛侠 2', src: 'installed', fmt: 'ffpkg' },
-  { tid: 'CUSA01111', name: '血源诅咒（PS4 兼容）', src: 'dump', fmt: 'folder' },
-  { tid: 'PPSA02000', name: 'LZ4 实时解压游戏', src: 'dump', fmt: 'lz4' },
-  { tid: 'PPJB01010', name: '演示合集', src: 'installed', fmt: 'pkg' },
-  { tid: 'EMUA90001', name: '无图标的游戏（验证回退）', src: 'dump', fmt: 'exfat' },
-  { tid: 'PAUS00100', name: 'Pulse Demo（无图标）', src: 'installed', fmt: 'pkg' },
-  { tid: 'PPSA01500', name: '容器镜像游戏', src: 'dump', fmt: 'ffpfsc' },
+  { tid: 'PPSA01234', name: '战神 诸神黄昏', src: 'installed', fmt: 'ffpkg', size: 68500000000 },
+  { tid: 'PPSA00802', name: '漫威蜘蛛侠 2', src: 'installed', fmt: 'ffpkg', size: 94000000000 },
+  { tid: 'CUSA01111', name: '血源诅咒（PS4 兼容）', src: 'dump', fmt: 'folder', size: 41000000000 },
+  { tid: 'PPSA02000', name: 'LZ4 实时解压游戏', src: 'dump', fmt: 'lz4', size: 71000000000 },
+  { tid: 'PPJB01010', name: '演示合集（内置 pkg 无体积）', src: 'installed', fmt: 'pkg', size: 0 },
+  { tid: 'EMUA90001', name: '无图标的游戏（验证回退）', src: 'dump', fmt: 'exfat', size: 120000000000 },
+  { tid: 'PAUS00100', name: 'Pulse Demo（无图标）', src: 'installed', fmt: 'pkg', size: 0 },
+  { tid: 'PPSA01500', name: '容器镜像游戏', src: 'dump', fmt: 'ffpfsc', size: 145465737216 },
 ];
 app.get('/game_list', (req, res) => {
   res.json({ games: mockGames, count: mockGames.length });

@@ -18,6 +18,21 @@ function gamePlatform(tid) {
   if (p === 'CUSA' || p === 'PPJB') return 'PS4'
   return ''
 }
+/* [CN-FORK] 游戏体积：后端 /game_list 的 size 为字节（镜像=文件 st_size、裸目录=du 累加）；
+ * 0/缺失则不显示。按 1024 递进，≥100 或 B/KB 取整、其余保留小数。 */
+function formatSize(bytes) {
+  const n = Number(bytes) || 0
+  if (n <= 0) return ''
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i += 1
+  }
+  const digits = v >= 100 || i <= 1 ? 0 : v >= 10 ? 1 : 2
+  return `${v.toFixed(digits)} ${units[i]}`
+}
 /* 格式标签：与 ShadowMountPlus 一致的真实格式集。后端 /game_list 的 fmt 取值：
  * pkg（内置安装）/ ffPKG / exFAT / ffpfs / ffpfsc（镜像挂载）/ folder（裸目录）/ lz4（ampr 实时解压目录）；缺字段时按 src 回退。
  * c=彩色底色（内联 style 用，避开 Tailwind JIT 漏生成任意色类 + 浅色主题洗白字）。 */
@@ -44,6 +59,7 @@ function GameCard({ g, iconFailed, onIconError }) {
   const platform = gamePlatform(g.tid)
   const fmtInfo = FMT_LABEL[g.fmt] || FMT_LABEL[installed ? 'pkg' : 'folder']
   const fmtLabel = t(fmtInfo.k, fmtInfo.d)
+  const sizeLabel = formatSize(g.size)
   const platColor = PLAT_COLOR[platform] || '#475569'
   const actions = [
     { Icon: Download, key: 'game.act_export_save' },
@@ -112,10 +128,20 @@ function GameCard({ g, iconFailed, onIconError }) {
           ))}
         </div>
       </div>
-      {/* 名称 + TID */}
+      {/* 名称 + TID（行末右侧标游戏体积） */}
       <div className="space-y-0.5 min-w-0">
         <p className="text-[14px] font-bold text-white truncate" title={g.name}>{g.name}</p>
-        <span className="block text-[11px] text-zinc-500 font-mono tracking-wider truncate">{g.tid}</span>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-[11px] text-zinc-500 font-mono tracking-wider truncate">{g.tid}</span>
+          {sizeLabel && (
+            <span
+              className="shrink-0 text-[11px] font-semibold text-zinc-400 tabular-nums"
+              title={`${t('game.size', '体积')}: ${sizeLabel}`}
+            >
+              {sizeLabel}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )

@@ -187,7 +187,7 @@ typedef struct {
     int overflow;
 } enum_arg_t;
 
-static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, const char *src, const char *fmt) {
+static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, const char *src, const char *fmt, unsigned long long size) {
     if (a->count >= MAX_GAMES) { a->overflow = 1; return; }
     for (int i = 0; i < a->count; i++)
         if (!strcmp(a->tids[i], tid)) return;   /* 去重：已安装优先（先入者胜） */
@@ -195,14 +195,14 @@ static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, con
     char esc[512];
     pldmgr_json_escape(name, esc, sizeof(esc));
     a->pos += snprintf(a->buf + a->pos, a->size - a->pos,
-                       "%s{\"tid\":\"%s\",\"name\":\"%s\",\"src\":\"%s\",\"fmt\":\"%s\"}",
-                       a->count ? "," : "", tid, esc, src, fmt);
+                       "%s{\"tid\":\"%s\",\"name\":\"%s\",\"src\":\"%s\",\"fmt\":\"%s\",\"size\":%llu}",
+                       a->count ? "," : "", tid, esc, src, fmt, size);
     snprintf(a->tids[a->count], sizeof(a->tids[0]), "%s", tid);
     a->count++;
 }
 
-/* [CN-FORK] 前向声明：游戏格式解析（定义见下方 ShadowMount mount.lnk 块），供 app.db 枚举回调使用。 */
-static const char *gm_fmt(const char *tid, const char *src);
+/* [CN-FORK] 前向声明：游戏格式与体积解析（定义见下方 ShadowMount mount.lnk 块），供 app.db 枚举回调使用。 */
+static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out);
 
 /* tbl_contentinfo 每行：col0=titleId, col2=titleName。总返回 0 以便遍历全部行。 */
 static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
@@ -221,7 +221,9 @@ static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
         name[tl] = 0;
     }
     if (!name[0]) snprintf(name, sizeof(name), "%s", tid);
-    gm_append_item(a, tid, name, "installed", gm_fmt(tid, "installed"));
+    unsigned long long gsize;
+    const char *fmt = gm_fmt_size(tid, "installed", &gsize);
+    gm_append_item(a, tid, name, "installed", fmt, gsize);
     return 0;
 }
 
@@ -302,26 +304,65 @@ static int gm_lnk_root(const char *tid, char *root, size_t rsz) {
     return 1;
 }
 
-/* 游戏格式：mount_img.lnk 命中 → 镜像（扩展名定档）；仅 mount.lnk → 裸目录(folder，含 ampr_ 则 lz4)；都无 → 内置 pkg。 */
-static const char *gm_fmt(const char *tid, const char *src) {
+/* 镜像游戏体积 = 源镜像文件 st_size（正是 ShadowMountPlus 挂载时读的那个 file_size，秒出精确）。 */
+static unsigned long long gm_file_size(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) return (unsigned long long)st.st_size;
+    return 0;
+}
+
+/* 裸目录游戏体积 = 有上限的递归 du（累加普通文件 st_size）。设备目录条目很少（几十到几百），成本极低；
+ * 仍设硬上限防符号链接环/极端目录失控：限深度 + 限访问条目数，超限即停（返回已累加值）。 */
+#define GM_DU_MAX_ENTRIES 200000u
+#define GM_DU_MAX_DEPTH 16
+static unsigned long long gm_du(const char *dir, int depth, unsigned *budget) {
+    unsigned long long total = 0;
+    if (depth > GM_DU_MAX_DEPTH || *budget == 0) return 0;
+    DIR *dp = opendir(dir);
+    if (!dp) return 0;
+    struct dirent *ent;
+    while ((ent = readdir(dp))) {
+        if (*budget == 0) break;
+        if (ent->d_name[0] == '.') continue;
+        (*budget)--;
+        char child[1024];
+        int n = snprintf(child, sizeof(child), "%s/%s", dir, ent->d_name);
+        if (n < 0 || (size_t)n >= sizeof(child)) continue;
+        struct stat st;
+        if (lstat(child, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) total += gm_du(child, depth + 1, budget);
+        else if (S_ISREG(st.st_mode)) total += (unsigned long long)st.st_size;
+    }
+    closedir(dp);
+    return total;
+}
+static unsigned long long gm_dir_size(const char *root) {
+    unsigned budget = GM_DU_MAX_ENTRIES;
+    return gm_du(root, 0, &budget);
+}
+
+/* 游戏格式+体积：mount_img.lnk 命中 → 镜像（扩展名定档，体积=镜像文件 st_size）；
+ * 仅 mount.lnk → 裸目录(folder，含 ampr_ 则 lz4，体积=有上限递归 du)；都无 → 内置 pkg（体积 0=未知）。 */
+static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out) {
+    *size_out = 0;
     char f[256], line[512];
     snprintf(f, sizeof(f), "/user/app/%s/mount_img.lnk", tid);
     if (gm_read_lnk(f, line, sizeof(line))) {
         const char *fmt = gm_img_fmt(line);
-        if (fmt) return fmt;
+        if (fmt) { *size_out = gm_file_size(line); return fmt; }
     }
     char root[512];
     if (gm_lnk_root(tid, root, sizeof(root))) {
+        *size_out = gm_dir_size(root);
         DIR *dp = opendir(root);
+        int lz4 = 0;
         if (dp) {
-            int lz4 = 0;
             struct dirent *ent;
             while ((ent = readdir(dp)))
                 if (!strncmp(ent->d_name, "ampr_", 5)) { lz4 = 1; break; }
             closedir(dp);
-            return lz4 ? "lz4" : "folder";
         }
-        return "folder";
+        return lz4 ? "lz4" : "folder";
     }
     /* 无 ShadowMount 链接文件：已注册(app.db)即内置安装 pkg；扫描到的裸目录即 folder。 */
     return strcmp(src, "installed") == 0 ? "pkg" : "folder";
@@ -357,9 +398,11 @@ static void game_enum_dump(enum_arg_t *a) {
             name[0] = 0;
             sfo_file_name(sfo, name, sizeof(name));
             if (!name[0]) snprintf(name, sizeof(name), "%s", ent->d_name);
-            const char *fmt = gm_fmt(ent->d_name, "dump");
+            unsigned long long sz;
+            const char *fmt = gm_fmt_size(ent->d_name, "dump", &sz);
             if (!strcmp(fmt, "folder") && gm_dir_is_lz4(root)) fmt = "lz4";
-            gm_append_item(a, ent->d_name, name, "dump", fmt);
+            if (!sz) sz = gm_dir_size(root);   /* dump 目录不在 /user/app 时按扫描根 du */
+            gm_append_item(a, ent->d_name, name, "dump", fmt, sz);
         }
         closedir(dp);
     }
