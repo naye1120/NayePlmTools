@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>  /* [CN-FORK] strcasecmp/strcasestr：dump 格式归类用 */
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -201,6 +200,9 @@ static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, con
     a->count++;
 }
 
+/* [CN-FORK] 前向声明：游戏格式解析（定义见下方 ShadowMountPlus 挂载表块），供 app.db 枚举回调使用。 */
+static const char *gm_fmt(const char *tid, const char *src);
+
 /* tbl_contentinfo 每行：col0=titleId, col2=titleName。总返回 0 以便遍历全部行。 */
 static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     enum_arg_t *a = (enum_arg_t *)arg;
@@ -218,7 +220,7 @@ static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
         name[tl] = 0;
     }
     if (!name[0]) snprintf(name, sizeof(name), "%s", tid);
-    gm_append_item(a, tid, name, "installed", "pkg");
+    gm_append_item(a, tid, name, "installed", gm_fmt(tid, "installed"));
     return 0;
 }
 
@@ -251,13 +253,24 @@ static const char *const GM_SCAN_PATHS[] = {
     "/mnt/usb4", "/mnt/usb5", "/mnt/usb6", "/mnt/usb7",
 };
 
-/* ── [CN-FORK] ShadowMount 格式探测：缓存 <TID> -> 挂载来源(f_mntfromname)，供 dump 判真实格式。
- * 设备实证：dump 游戏由 ShadowMount 挂在 /mnt/sandbox/<TID>_xxx/app0；来源为 .iso/.img 即镜像格式，
- * 含 pfsc 目录即 pfsc 格式，否则按扫描到的路径归类外置盘/内置转储。getmntinfo 仅调一次、不轮询。 */
+/* ── [CN-FORK] ShadowMountPlus 格式探测：照它的真实格式集显示，不自己发明。
+ * 镜像挂载点命名约定 /mnt/shadowmnt/<镜像名>_<hash>（PFSC 容器在 /mnt/shadowmnt/pfsc/...），
+ * 镜像名通常以 9 位 TITLE_ID 开头、以格式扩展名结尾：.ffpkg(UFS,推荐) / .exfat / .ffpfs / .ffpfsc。
+ * 扫挂载表解析成 <TID> -> 格式；认不出镜像的：app.db 内置安装记为 pkg、扫描到的裸目录记为 folder。
+ * getmntinfo 仅在 60s 快照重建时调一次，不轮询。 */
 #define GM_MAX_MNT 160
 static char g_mnt_tid[GM_MAX_MNT][12];
-static char g_mnt_from[GM_MAX_MNT][160];
+static char g_mnt_fmt[GM_MAX_MNT][8];
 static int  g_mnt_cnt = 0;
+
+/* 从镜像挂载点 basename 里认格式扩展名（先判长的 .ffpfsc 再判 .ffpfs，避免前缀误命中）。 */
+static const char *gm_fmt_from_name(const char *name) {
+    if (strstr(name, ".ffpfsc")) return "ffpfsc";
+    if (strstr(name, ".ffpfs"))  return "ffpfs";
+    if (strstr(name, ".ffpkg"))  return "ffpkg";
+    if (strstr(name, ".exfat"))  return "exfat";
+    return NULL;
+}
 
 static void gm_build_mount_map(void) {
     g_mnt_cnt = 0;
@@ -265,37 +278,27 @@ static void gm_build_mount_map(void) {
     int mn = getmntinfo(&mnts, MNT_NOWAIT);
     for (int i = 0; mn > 0 && i < mn; i++) {
         const char *to = mnts[i].f_mntonname;
-        if (strncmp(to, "/mnt/sandbox/", 13) != 0) continue;
-        const char *sl = strchr(to + 13, '/');
-        if (!sl || strncmp(sl + 1, "app0", 4) != 0 || (sl[5] && sl[5] != '/')) continue;
+        if (strncmp(to, "/mnt/shadowmnt/", 15) != 0) continue;   /* 只看 ShadowMount 镜像挂载 */
+        const char *base = strrchr(to, '/'); base = base ? base + 1 : to;  /* <镜像名>_<hash> */
+        const char *fmt = gm_fmt_from_name(base);
+        if (!fmt) continue;
+        char tid[10] = { 0 };
+        int k = 0;
+        for (; k < 9 && base[k] && isalnum((unsigned char)base[k]); k++) tid[k] = base[k];
+        if (k < 9) continue;                    /* 镜像名不以 9 位 TITLE_ID 开头，无法关联，跳过 */
         if (g_mnt_cnt >= GM_MAX_MNT) break;
-        snprintf(g_mnt_tid[g_mnt_cnt], sizeof(g_mnt_tid[0]), "%s", to + 13); /* <TID>_xxx */
-        snprintf(g_mnt_from[g_mnt_cnt], sizeof(g_mnt_from[0]), "%s", mnts[i].f_mntfromname);
-        pldmgr_log("[PLDMGR] game_fmt: mount tid=%s from=%s\n", g_mnt_tid[g_mnt_cnt], g_mnt_from[g_mnt_cnt]);
+        snprintf(g_mnt_tid[g_mnt_cnt], sizeof(g_mnt_tid[0]), "%s", tid);
+        snprintf(g_mnt_fmt[g_mnt_cnt], sizeof(g_mnt_fmt[0]), "%s", fmt);
+        pldmgr_log("[PLDMGR] game_fmt: mount %s -> tid=%s fmt=%s\n", to, tid, fmt);
         g_mnt_cnt++;
     }
 }
 
-static const char *gm_mount_from(const char *tid) {
+/* 游戏格式：优先 ShadowMount 镜像格式（ffpkg/exfat/ffpfs/ffpfsc）；否则内置安装=pkg、裸目录=folder。 */
+static const char *gm_fmt(const char *tid, const char *src) {
     for (int i = 0; i < g_mnt_cnt; i++)
-        if (!strncmp(g_mnt_tid[i], tid, 9)) return g_mnt_from[i];
-    return NULL;
-}
-
-static int gm_is_img_ext(const char *s) {
-    if (!s) return 0;
-    size_t n = strlen(s);
-    return n >= 4 && (!strcasecmp(s + n - 4, ".iso") || !strcasecmp(s + n - 4, ".img"));
-}
-
-/* dump 项的格式归类：优先看 ShadowMount 挂载来源，回退看扫描到的路径。 */
-static const char *gm_dump_fmt(const char *tid, const char *path) {
-    const char *from = gm_mount_from(tid);
-    if (gm_is_img_ext(from)) return "iso";
-    if ((from && strcasestr(from, "pfsc")) || strcasestr(path, "pfsc")) return "pfsc";
-    if (!strncmp(path, "/mnt/ext", 8) || !strncmp(path, "/mnt/usb", 8)) return "external";
-    if (!strncmp(path, "/mnt/shadowmnt", 14)) return "mounted";
-    return "dump";
+        if (!strncmp(g_mnt_tid[i], tid, 9)) return g_mnt_fmt[i];
+    return strcmp(src, "installed") == 0 ? "pkg" : "folder";
 }
 
 static void game_enum_dump(enum_arg_t *a) {
@@ -314,7 +317,7 @@ static void game_enum_dump(enum_arg_t *a) {
             name[0] = 0;
             sfo_file_name(sfo, name, sizeof(name));
             if (!name[0]) snprintf(name, sizeof(name), "%s", ent->d_name);
-            gm_append_item(a, ent->d_name, name, "dump", gm_dump_fmt(ent->d_name, GM_SCAN_PATHS[s]));
+            gm_append_item(a, ent->d_name, name, "dump", gm_fmt(ent->d_name, "dump"));
         }
         closedir(dp);
     }

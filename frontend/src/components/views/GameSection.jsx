@@ -18,15 +18,16 @@ function gamePlatform(tid) {
   if (p === 'CUSA' || p === 'PPJB') return 'PS4'
   return ''
 }
-/* 格式标签：后端 /game_list 现提供 fmt（pkg/iso/pfsc/external/mounted/dump）；缺字段时按 src 回退。
+/* 格式标签：与 ShadowMountPlus 一致的真实格式集。后端 /game_list 的 fmt 取值：
+ * pkg（内置安装）/ ffPKG / exFAT / ffpfs / ffpfsc（镜像挂载）/ folder（裸目录）；缺字段时按 src 回退。
  * c=彩色底色（内联 style 用，避开 Tailwind JIT 漏生成任意色类 + 浅色主题洗白字）。 */
 const FMT_LABEL = {
   pkg: { k: 'game.fmt_pkg', d: 'PKG', c: '#059669' },
-  iso: { k: 'game.fmt_iso', d: 'ISO', c: '#d97706' },
-  pfsc: { k: 'game.fmt_pfsc', d: 'pfsc', c: '#0891b2' },
-  external: { k: 'game.fmt_external', d: '外置', c: '#ea580c' },
-  mounted: { k: 'game.fmt_mounted', d: '挂载', c: '#475569' },
-  dump: { k: 'game.fmt_dump', d: '转储', c: '#475569' },
+  ffPKG: { k: 'game.fmt_ffpkg', d: 'ffPKG', c: '#0891b2' },
+  exfat: { k: 'game.fmt_exfat', d: 'exFAT', c: '#d97706' },
+  ffpfs: { k: 'game.fmt_ffpfs', d: 'ffpfs', c: '#7c3aed' },
+  ffpfsc: { k: 'game.fmt_ffpfsc', d: 'ffpfsc', c: '#db2777' },
+  folder: { k: 'game.fmt_folder', d: '文件夹', c: '#475569' },
 }
 /* 平台徒标颜色：PS5 蓝、PS4 紫。 */
 const PLAT_COLOR = { PS5: '#2563eb', PS4: '#7c3aed' }
@@ -40,7 +41,7 @@ function GameCard({ g, iconFailed, onIconError }) {
   const { t } = useTranslation()
   const installed = g.src === 'installed'
   const platform = gamePlatform(g.tid)
-  const fmtInfo = FMT_LABEL[g.fmt] || FMT_LABEL[installed ? 'pkg' : 'dump']
+  const fmtInfo = FMT_LABEL[g.fmt] || FMT_LABEL[installed ? 'pkg' : 'folder']
   const fmtLabel = t(fmtInfo.k, fmtInfo.d)
   const platColor = PLAT_COLOR[platform] || '#475569'
   const actions = [

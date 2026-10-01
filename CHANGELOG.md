@@ -1,3 +1,11 @@
+## v0.5.2.74 (CN-FORK)
+
+### 🐛 Fixes
+* **修正游戏磁贴「格式」识别（照搬 ShadowMountPlus 的真实格式集，不再自发明）**：
+  * 上一版把格式错发明为 `iso/pfsc/external/mounted/dump`，且只查 `/mnt/sandbox/<TID>*/app0` 挂载、对 app.db 命中的游戏一律写死 `pkg`——招致实机上所有游戏都显示 PKG。
+  * 现改为与 ShadowMountPlus 一致的取值：`ffPKG / exFAT / ffpfs / ffpfsc`（镜像）+ `PKG`（内置安装）/ `文件夹`（裸目录）。
+  * 后端 `gm_build_mount_map` 改扫 `/mnt/shadowmnt/<镜像名>_<hash>` 镜像挂载，从镜像名后缀认格式、用镜像名前 9 位 TITLE_ID 关联游戏；`gm_fmt()` 对所有游戏（含 app.db 命中的）统一优先取镜像格式，查不到才回退 pkg/folder。仍只在建 60s 快照时调一次 `getmntinfo`，不轮询；保留 `game_fmt:` 日志供实机校准。
+
 ## v0.5.2.73 (CN-FORK)
 
 ### 🚀 Features
