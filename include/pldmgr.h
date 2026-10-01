@@ -48,8 +48,13 @@
 #define ROUTE_QUICKLINKS "/quicklinks"
 #define ROUTE_QUICKLINKS_ADD "/quicklinks_add"
 #define ROUTE_QUICKLINKS_REMOVE "/quicklinks_remove"
+/* [CN-FORK] 温控管理板块：只读 CPU/GPU/SSD 温度 + 风扇占空比快照（替代历史 /system_stats 的温控子集） */
+#define ROUTE_THERMAL "/thermal_stats"
+/* [CN-FORK] 游戏管理板块：游戏列表(app.db+扫描dump) + 单游戏图标(icon0.png) */
+#define ROUTE_GAME_LIST "/game_list"
+#define ROUTE_GAME_ICON "/game_icon"
 
-#define MENU_VERSION "0.5.2.68" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.68，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.69" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.69，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"

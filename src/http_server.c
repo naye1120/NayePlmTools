@@ -29,6 +29,8 @@
  * 温度/风扇/内存/显存/存储/FPS/当前游戏 这些内核探测不再存在（整机死机的首选收敛） */
 #include "pkgmanager.h" /* [CN-FORK] PKG Manager 内置集成 */
 #include "quicklinks.h" /* [CN-FORK] 「常用入口」自定义快捷访问 */
+#include "thermal.h"    /* [CN-FORK] 温控只读端点 /thermal_stats */
+#include "game_mgr.h"   /* [CN-FORK] 游戏列表 /game_list + 图标 /game_icon */
 
 #include "assets_index_html.h"
 #include "assets_cache_appcache.h"
@@ -129,6 +131,9 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_LIST_PAYLOADS) == 0) return 1;
     if (strcmp(url, ROUTE_GET_CONFIG) == 0) return 1;
     if (strcmp(url, ROUTE_REPO_LIST) == 0) return 1;
+    if (strcmp(url, ROUTE_THERMAL) == 0) return 1;
+    if (strcmp(url, ROUTE_GAME_LIST) == 0) return 1; /* [CN-FORK] 游戏板块拉取，降噪 */
+    if (strcmp(url, ROUTE_GAME_ICON) == 0) return 1;
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
     /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
@@ -1090,6 +1095,56 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
         if (qrc != 0) http_status = MHD_HTTP_BAD_REQUEST;
+    } else if (strcmp(url, ROUTE_THERMAL) == 0) {
+        /* [CN-FORK] 温控只读：CPU/GPU/SSD 温度 + 风扇占空比（safe_mode 短路 + 5s 快照，避免轮询打死内核） */
+        char *resp_buf;
+        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+        if (oom_resp)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        thermal_stats_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_LIST) == 0) {
+        /* [CN-FORK] 游戏列表：app.db 已安装 + 扫描 dump，mutex+60s 缓存，进页面一次拉取不轮询 */
+        char *resp_buf;
+        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+        if (oom_resp)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        int glen = game_mgr_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        if (glen < 0) glen = 0;
+        resp = MHD_create_response_from_buffer((size_t)glen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_ICON) == 0) {
+        /* [CN-FORK] 游戏图标：按 tid 读 icon0.png 二进制；找不到回 404。前端 <img src="/game_icon?tid=..."> */
+        const char *gtid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        char gpath[768];
+        gpath[0] = 0;
+        unsigned char *gdata = NULL;
+        size_t gsz = 0;
+        if (gtid && game_mgr_icon_path(gtid, gpath, sizeof(gpath))) {
+            int gfd = open(gpath, O_RDONLY);
+            if (gfd >= 0) {
+                struct stat gst;
+                if (fstat(gfd, &gst) == 0 && S_ISREG(gst.st_mode) && gst.st_size > 0 && gst.st_size <= 4 * 1024 * 1024) {
+                    gsz = (size_t)gst.st_size;
+                    gdata = (unsigned char *)malloc(gsz);
+                    if (gdata && read(gfd, gdata, gsz) != (ssize_t)gsz) { free(gdata); gdata = NULL; }
+                }
+                close(gfd);
+            }
+        }
+        if (gdata) {
+            resp = MHD_create_response_from_buffer(gsz, (void *)gdata, MHD_RESPMEM_MUST_FREE);
+            MHD_add_response_header(resp, "Content-Type", "image/png");
+            MHD_add_response_header(resp, "Cache-Control", "public, max-age=3600");
+        } else {
+            const char *g404 = "404 Not Found\n";
+            resp = MHD_create_response_from_buffer(strlen(g404), (void *)g404, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(resp, "Content-Type", "text/plain");
+            http_status = MHD_HTTP_NOT_FOUND;
+        }
     } else if (strcmp(url, ROUTE_GET_CONFIG) == 0) {
         PldmgrConfig cfg;
         config_read(&cfg);

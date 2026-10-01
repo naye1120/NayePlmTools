@@ -25,7 +25,7 @@ SRCS := src/main.c src/http_server.c src/config.c src/log_server.c \
         src/payload_mgr.c src/process_mgr.c \
         src/ps5_launcher.c src/notification.c src/utils.c src/autoload.c \
         src/app_installer.c src/history_mgr.c \
-        src/pkgmanager.c src/pkgmanager_blob.S src/quicklinks.c
+        src/pkgmanager.c src/pkgmanager_blob.S src/quicklinks.c src/thermal.c src/game_mgr.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf
 VERSION := $(shell grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"')

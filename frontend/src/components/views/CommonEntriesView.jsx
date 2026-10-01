@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, X, RefreshCw, ExternalLink, Check } from 'lucide-react'
+import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
+import GameSection from './GameSection' /* [CN-FORK] 游戏管理板块 */
 
 /* [CN-FORK] 「常用入口」页：手动维护的快捷访问清单（IP:port 类服务导航）。
  * 数据存 payload 侧 /data/nayeplmtools/quicklinks.json（非浏览器 localStorage），
@@ -77,7 +79,9 @@ export default function CommonEntriesView() {
   const list = entries || []
 
   return (
-    <div className="max-w-5xl mx-auto space-y-10 pb-12">
+    <div className="max-w-5xl mx-auto space-y-8 pb-12">
+      {/* [CN-FORK] 右侧三段式布局：板块一 常用入口（沿用原 quicklinks 全部功能） */}
+      <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-4">
           <h2 className="text-2xl font-bold text-white tracking-tight">
@@ -197,6 +201,13 @@ export default function CommonEntriesView() {
           {msg.text}
         </p>
       )}
+      </section>
+
+      {/* [CN-FORK] 板块二 温控管理：读 /thermal_stats 展示 CPU/GPU/SSD 温度 + 风扇 */}
+      <ThermalSection />
+
+      {/* [CN-FORK] 板块三 游戏管理：读 /game_list 展示已安装 + 已存在的游戏（图标/名称/TID/来源） */}
+      <GameSection />
     </div>
   )
 }
