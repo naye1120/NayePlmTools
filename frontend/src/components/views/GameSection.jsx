@@ -23,7 +23,7 @@ function gamePlatform(tid) {
  * c=彩色底色（内联 style 用，避开 Tailwind JIT 漏生成任意色类 + 浅色主题洗白字）。 */
 const FMT_LABEL = {
   pkg: { k: 'game.fmt_pkg', d: 'PKG', c: '#059669' },
-  ffPKG: { k: 'game.fmt_ffpkg', d: 'ffPKG', c: '#0891b2' },
+  ffpkg: { k: 'game.fmt_ffpkg', d: 'ffPKG', c: '#0891b2' },
   exfat: { k: 'game.fmt_exfat', d: 'exFAT', c: '#d97706' },
   ffpfs: { k: 'game.fmt_ffpfs', d: 'ffpfs', c: '#7c3aed' },
   ffpfsc: { k: 'game.fmt_ffpfsc', d: 'ffpfsc', c: '#db2777' },

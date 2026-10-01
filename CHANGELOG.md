@@ -1,4 +1,4 @@
-## v0.5.2.75 (CN-FORK)
+## v0.5.2.76 (CN-FORK)
 
 ### 🚀 Features
 * **游戏磁贴新增 `LZ4` 格式档（ampr 实时解压变体）**：
@@ -7,9 +7,14 @@
   * 前端 `FMT_LABEL` 加 `LZ4` 徒标（靖蓝底）；mock 加一款 lz4 演示。
 
 ### 🐛 Fixes
-* **重写 ShadowMount 格式探测（直读人家源码定位根因，不再靠猜）**：
-  * 根因：上一版在挂载表里 `strstr("ffpkg")` 永远命中不了——ShadowMountPlus 的 `build_image_mount_point_for_fs` 会 `strip_extension`，挂载点叫 `/mnt/shadowmnt/<镜像名去后缀>_<8位hash>`，扩展名根本没保留；而 `f_mntfromname` 是 `/dev/lvdN`/`/dev/mdN` 块设备。所以格式表永远为空→全回退 PKG。
-  * 正解（照 `detect_image_fs_type`/`image_fs_name`/`get_game_info`）：只扫 `/mnt/shadowmnt/` 下的挂载，用 `f_fstypename` 判格式（ufs→ffpkg、exfat/msdos→exfat、含 pfs→ffpfs、`/mnt/shadowmnt/pfsc/` →ffpfsc）；游戏关联优先读挂载点根目录的 `sce_sys/param.json` 拿 titleId（与人家一致），读不到再回退挂载点名的 9 位前缀。首次快照将每个 shadowmnt 挂载的 `to/fstype/fmt` dump 到日志供实机校准。
+* **重写 ShadowMount 格式探测（直连设备 FTP 校准，不再靠猜挂载表）**：
+  * 根因：前几版都在挂载表（`getmntinfo` 扫 `/mnt/shadowmnt/`）里找格式，但设备 `persistent_image_mounts=0`——镜像只在游戏运行的那一刻才挂到 `/mnt/shadowmnt`，列表工具查询时镜像根本没挂载，格式表恒空 → 所有游戏一律回退 PKG。
+  * 正解（经 `ftp://设备` 实地核对 `/user/app/<TID>/` 落盘文件）：
+    * `mount_img.lnk`（镜像游戏独有）首行即源镜像真实路径，按其扩展名 `.ffpkg/.exfat/.ffpfs/.ffpfsc` 定档（照 `detect_image_fs_type`）；
+    * 仅 `mount.lnk`（裸目录游戏）→ 指向 `/mnt/extN/<TID>-名称` 目录，记 `folder`，目录里带 `ampr_` 前缀则记 `lz4`；
+    * 两者都没有 → 系统内置安装的 `pkg`。
+  * 后端 `game_mgr.c` 删掉 `gm_build_mount_map/gm_fmt_from_fstype/gm_param_json_tid/gm_extract_tid` 整套挂载表逻辑，改为 `gm_fmt()` 直读 `/user/app/<TID>/mount_img.lnk`→`mount.lnk`；不再调 `getmntinfo`（图标解析仍按需查沙盒挂载，互不影响）。实机 10 款游戏全部命中：4×ffpfsc、5×folder、1×lz4。
+  * 前端 `FMT_LABEL` 键名对齐后端小写取值（`ffpkg/exfat/ffpfs/ffpfsc/pkg/folder/lz4`），修掉上一版键 `ffPKG` 大小写不匹配导致的回退。
 
 ## v0.5.2.74 (CN-FORK)
 
