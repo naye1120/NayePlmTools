@@ -1,3 +1,10 @@
+## v0.5.2.73 (CN-FORK)
+
+### 🚀 Features
+* **游戏磁贴新增主机平台与格式标注**：卡片左上角改为竖排两枚统一尺寸的彩色徽标——上＝平台（`PS4`/`PS5`，由 TITLE_ID 前缀判定：`PPSA/EMUA/PAUS`→PS5、`CUSA/PPJB`→PS4），下＝游戏格式。
+* **后端 `/game_list` 新增 `fmt` 字段**：已安装→`pkg`；dump 借助 ShadowMount 挂载表（`getmntinfo` 读 `/mnt/sandbox/<TID>_*/app0` 的挂载来源 `f_mntfromname`）归类 `iso`（.iso/.img）/ `pfsc` / `external`（外置盘）/ `mounted` / `dump`，并输出 `game_fmt` 日志供实机进一步校准分类。`getmntinfo` 仅在 60s 快照重建时调一次，不轮询。
+* **徽标颜色用内联 style**：彩色底 + 白字均由内联 style 给定，不挂 `text-white` 类，从而不受 `light-theme.css` 浅色主题全局重映射影响（避免上次“黑底黑字看不清”），也不依赖 Tailwind JIT 是否生成任意色类。
+
 ## v0.5.2.72 (CN-FORK)
 
 ### 🚀 Features & UX Improvements

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>  /* [CN-FORK] strcasecmp/strcasestr：dump 格式归类用 */
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -186,16 +187,16 @@ typedef struct {
     int overflow;
 } enum_arg_t;
 
-static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, const char *src) {
+static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, const char *src, const char *fmt) {
     if (a->count >= MAX_GAMES) { a->overflow = 1; return; }
     for (int i = 0; i < a->count; i++)
         if (!strcmp(a->tids[i], tid)) return;   /* 去重：已安装优先（先入者胜） */
-    if (a->pos + 600 >= a->size) { a->overflow = 1; return; }
+    if (a->pos + 640 >= a->size) { a->overflow = 1; return; }
     char esc[512];
     pldmgr_json_escape(name, esc, sizeof(esc));
     a->pos += snprintf(a->buf + a->pos, a->size - a->pos,
-                       "%s{\"tid\":\"%s\",\"name\":\"%s\",\"src\":\"%s\"}",
-                       a->count ? "," : "", tid, esc, src);
+                       "%s{\"tid\":\"%s\",\"name\":\"%s\",\"src\":\"%s\",\"fmt\":\"%s\"}",
+                       a->count ? "," : "", tid, esc, src, fmt);
     snprintf(a->tids[a->count], sizeof(a->tids[0]), "%s", tid);
     a->count++;
 }
@@ -217,7 +218,7 @@ static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
         name[tl] = 0;
     }
     if (!name[0]) snprintf(name, sizeof(name), "%s", tid);
-    gm_append_item(a, tid, name, "installed");
+    gm_append_item(a, tid, name, "installed", "pkg");
     return 0;
 }
 
@@ -250,6 +251,53 @@ static const char *const GM_SCAN_PATHS[] = {
     "/mnt/usb4", "/mnt/usb5", "/mnt/usb6", "/mnt/usb7",
 };
 
+/* ── [CN-FORK] ShadowMount 格式探测：缓存 <TID> -> 挂载来源(f_mntfromname)，供 dump 判真实格式。
+ * 设备实证：dump 游戏由 ShadowMount 挂在 /mnt/sandbox/<TID>_xxx/app0；来源为 .iso/.img 即镜像格式，
+ * 含 pfsc 目录即 pfsc 格式，否则按扫描到的路径归类外置盘/内置转储。getmntinfo 仅调一次、不轮询。 */
+#define GM_MAX_MNT 160
+static char g_mnt_tid[GM_MAX_MNT][12];
+static char g_mnt_from[GM_MAX_MNT][160];
+static int  g_mnt_cnt = 0;
+
+static void gm_build_mount_map(void) {
+    g_mnt_cnt = 0;
+    struct statfs *mnts = NULL;
+    int mn = getmntinfo(&mnts, MNT_NOWAIT);
+    for (int i = 0; mn > 0 && i < mn; i++) {
+        const char *to = mnts[i].f_mntonname;
+        if (strncmp(to, "/mnt/sandbox/", 13) != 0) continue;
+        const char *sl = strchr(to + 13, '/');
+        if (!sl || strncmp(sl + 1, "app0", 4) != 0 || (sl[5] && sl[5] != '/')) continue;
+        if (g_mnt_cnt >= GM_MAX_MNT) break;
+        snprintf(g_mnt_tid[g_mnt_cnt], sizeof(g_mnt_tid[0]), "%s", to + 13); /* <TID>_xxx */
+        snprintf(g_mnt_from[g_mnt_cnt], sizeof(g_mnt_from[0]), "%s", mnts[i].f_mntfromname);
+        pldmgr_log("[PLDMGR] game_fmt: mount tid=%s from=%s\n", g_mnt_tid[g_mnt_cnt], g_mnt_from[g_mnt_cnt]);
+        g_mnt_cnt++;
+    }
+}
+
+static const char *gm_mount_from(const char *tid) {
+    for (int i = 0; i < g_mnt_cnt; i++)
+        if (!strncmp(g_mnt_tid[i], tid, 9)) return g_mnt_from[i];
+    return NULL;
+}
+
+static int gm_is_img_ext(const char *s) {
+    if (!s) return 0;
+    size_t n = strlen(s);
+    return n >= 4 && (!strcasecmp(s + n - 4, ".iso") || !strcasecmp(s + n - 4, ".img"));
+}
+
+/* dump 项的格式归类：优先看 ShadowMount 挂载来源，回退看扫描到的路径。 */
+static const char *gm_dump_fmt(const char *tid, const char *path) {
+    const char *from = gm_mount_from(tid);
+    if (gm_is_img_ext(from)) return "iso";
+    if ((from && strcasestr(from, "pfsc")) || strcasestr(path, "pfsc")) return "pfsc";
+    if (!strncmp(path, "/mnt/ext", 8) || !strncmp(path, "/mnt/usb", 8)) return "external";
+    if (!strncmp(path, "/mnt/shadowmnt", 14)) return "mounted";
+    return "dump";
+}
+
 static void game_enum_dump(enum_arg_t *a) {
     const unsigned n = sizeof(GM_SCAN_PATHS) / sizeof(GM_SCAN_PATHS[0]);
     for (unsigned s = 0; s < n && !a->overflow; s++) {
@@ -266,7 +314,7 @@ static void game_enum_dump(enum_arg_t *a) {
             name[0] = 0;
             sfo_file_name(sfo, name, sizeof(name));
             if (!name[0]) snprintf(name, sizeof(name), "%s", ent->d_name);
-            gm_append_item(a, ent->d_name, name, "dump");
+            gm_append_item(a, ent->d_name, name, "dump", gm_dump_fmt(ent->d_name, GM_SCAN_PATHS[s]));
         }
         closedir(dp);
     }
@@ -322,6 +370,7 @@ static size_t build_game_json(char *buf, size_t size) {
     if (pos >= size) return size - 1;
     enum_arg_t a;
     a.buf = buf; a.size = size; a.pos = pos; a.count = 0; a.overflow = 0;
+    gm_build_mount_map();  /* [CN-FORK] 刷新 ShadowMount 挂载表，供 dump 判格式 */
     game_enum_appdb(&a);   /* 已安装优先 */
     game_enum_dump(&a);    /* 再补扫描到的 dump，tid 去重 */
     pos = a.pos;

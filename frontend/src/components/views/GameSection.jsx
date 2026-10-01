@@ -11,11 +11,38 @@ import { Gamepad2, RefreshCw, Download, Camera, Pencil, Tag } from 'lucide-react
 const BTN_GHOST =
   'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[13px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
 
+/* [CN-FORK] 由 TITLE_ID 前缀判断主机平台（后端 gm_tid_is_game 白名单即这几类前缀）。 */
+function gamePlatform(tid) {
+  const p = String(tid || '').slice(0, 4).toUpperCase()
+  if (p === 'PPSA' || p === 'EMUA' || p === 'PAUS') return 'PS5'
+  if (p === 'CUSA' || p === 'PPJB') return 'PS4'
+  return ''
+}
+/* 格式标签：后端 /game_list 现提供 fmt（pkg/iso/pfsc/external/mounted/dump）；缺字段时按 src 回退。
+ * c=彩色底色（内联 style 用，避开 Tailwind JIT 漏生成任意色类 + 浅色主题洗白字）。 */
+const FMT_LABEL = {
+  pkg: { k: 'game.fmt_pkg', d: 'PKG', c: '#059669' },
+  iso: { k: 'game.fmt_iso', d: 'ISO', c: '#d97706' },
+  pfsc: { k: 'game.fmt_pfsc', d: 'pfsc', c: '#0891b2' },
+  external: { k: 'game.fmt_external', d: '外置', c: '#ea580c' },
+  mounted: { k: 'game.fmt_mounted', d: '挂载', c: '#475569' },
+  dump: { k: 'game.fmt_dump', d: '转储', c: '#475569' },
+}
+/* 平台徒标颜色：PS5 蓝、PS4 紫。 */
+const PLAT_COLOR = { PS5: '#2563eb', PS4: '#7c3aed' }
+/* 统一尺寸的徒标样式（固定宽高 + 居中）；不用 text-white 类，颜色由内联 style 给定。 */
+const BADGE =
+  'inline-flex items-center justify-center w-[3.25rem] h-[18px] rounded text-[10px] font-bold leading-none shadow'
+
 /* 单个游戏磁贴（宫格）：大图标铺满 1:1 + 名称/TID，来源徽标叠在图标角上，
  * 操作按钮排在图标下排。导出存档/截图、改名、标签为后续功能，本版禁用占位。 */
 function GameCard({ g, iconFailed, onIconError }) {
   const { t } = useTranslation()
   const installed = g.src === 'installed'
+  const platform = gamePlatform(g.tid)
+  const fmtInfo = FMT_LABEL[g.fmt] || FMT_LABEL[installed ? 'pkg' : 'dump']
+  const fmtLabel = t(fmtInfo.k, fmtInfo.d)
+  const platColor = PLAT_COLOR[platform] || '#475569'
   const actions = [
     { Icon: Download, key: 'game.act_export_save' },
     { Icon: Camera, key: 'game.act_export_shot' },
@@ -37,6 +64,27 @@ function GameCard({ g, iconFailed, onIconError }) {
             onError={onIconError}
           />
         )}
+        {/* [CN-FORK] 左上角竖排徒标：上=平台(PS4/PS5)、下=格式。两枚统一尺寸（固定宽高、居中），
+         * 用内联 style 上彩色底 + 白字：既绕开 Tailwind JIT 可能没生成任意色类，也避开浅色主题
+         * 把 .text-white 洗成近黑的问题（这里根本不用 text-white 类）。 */}
+        <div className="absolute top-1.5 left-1.5 flex flex-col items-start gap-1">
+          {platform && (
+            <span
+              className={BADGE}
+              style={{ backgroundColor: platColor, color: '#ffffff' }}
+              title={platform === 'PS4' ? t('game.plat_ps4', 'PS4 游戏') : t('game.plat_ps5', 'PS5 游戏')}
+            >
+              {platform}
+            </span>
+          )}
+          <span
+            className={BADGE}
+            style={{ backgroundColor: fmtInfo.c, color: '#ffffff' }}
+            title={`${t('game.fmt', '格式')}: ${fmtLabel}`}
+          >
+            {fmtLabel}
+          </span>
+        </div>
         <span
           className={`absolute top-1.5 right-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${
             installed ? 'bg-ps-blue/85 text-white' : 'bg-amber-500/90 text-black'
@@ -65,7 +113,7 @@ function GameCard({ g, iconFailed, onIconError }) {
       {/* 名称 + TID */}
       <div className="space-y-0.5 min-w-0">
         <p className="text-[14px] font-bold text-white truncate" title={g.name}>{g.name}</p>
-        <span className="block text-[11px] text-zinc-500 font-mono tracking-wider">{g.tid}</span>
+        <span className="block text-[11px] text-zinc-500 font-mono tracking-wider truncate">{g.tid}</span>
       </div>
     </div>
   )
