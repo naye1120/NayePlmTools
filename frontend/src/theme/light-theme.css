@@ -157,6 +157,14 @@
   color: #ffffff !important;
 }
 
+/* [CN-FORK] 游戏磁贴操作按钮与角标：刻意用半透深色芯片 bg-black/55、半透蓝底角标 bg-ps-blue/85 叠在封面上，
+ * 两种主题下底都是深色，白字/白图标必须保持白，不能被上面 .text-white→#17181a 洗成近黑（否则黑底黑图标看不清）。 */
+[data-theme="light"] .bg-black\/55.text-white,
+[data-theme="light"] .bg-black\/55 .text-white,
+[data-theme="light"] .bg-ps-blue\/85.text-white {
+  color: #ffffff !important;
+}
+
 /* 模态遮罩保持暗色压底（中文规范：遮罩不随主题反色）*/
 [data-theme="light"] .fixed.inset-0 .absolute.inset-0.bg-black\/80 {
   background-color: rgba(15, 23, 42, 0.45) !important;

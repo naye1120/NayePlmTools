@@ -126,7 +126,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.71'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.72'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -195,7 +195,9 @@ app.get('/quicklinks_remove', (req, res) => {
 
 // [CN-FORK] 温控只读 mock（预览用；实机由 thermal.c 读 sceKernel* 传感器）
 app.get('/thermal_stats', (req, res) => {
-  res.json({ enabled: true, cpu: { temp: 52 }, gpu: { temp: 57 }, ssd: { temp: 46 }, fan: { duty: 38, max: 100 } });
+  // [CN-FORK] 预览用带抖动回值，便于肉眼确认「自动刷新」在跑（实机由 thermal.c 的 5s 快照提供）
+  const j = (base, span) => base + Math.floor(Math.random() * span);
+  res.json({ enabled: true, cpu: { temp: j(50, 8) }, gpu: { temp: j(55, 8) }, ssd: { temp: j(44, 6) }, fan: { duty: j(35, 10), max: 100 } });
 });
 
 // [CN-FORK] 游戏列表 mock（预览用；实机由 game_mgr.c 解析 app.db + 扫描 dump）

@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw, Thermometer, Fan, Power } from 'lucide-react'
 
 /* [CN-FORK] 温控管理板块：读 /thermal_stats 展示 CPU / GPU / SSD 温度与风扇占空比，
  * 并提供风扇温控（按温度设定调速目标，见 FanControlCard）。
- * 温度/风扇读取进页面拉一次 + 手动刷新，不轮询——传感器 API 不可重入，后端已用
- * safe_mode 短路 + mutex + 5s 快照兜底。
- * 注意：真正写 /dev/icc_fan 的调速后端尚未落地（高风险硬件写，待单独确认）；
- * FanControlCard 在 /fan_control 返回 supported:false 或请求失败时优雅显示「未接入」，不谎报成功。 */
+ * 温度读取：进页面拉一次 + 每 5s 只读自动刷新（可用开关关闭）。轮询周期对齐后端
+ * thermal.c 的 5s 快照缓存——5s 内重复请求直接命中缓存、不产生任何内核调用，与「传感器
+ * API 不可重入、限流≤５s」的安全规范一致（后端另有 safe_mode 短路 + mutex 兑底）。
+ * 注意：真正写 /dev/icc_fan 的调速已由 fan_control.c 常驻守护落地；FanControlCard 在
+ * /fan_control 返回 supported:false 或请求失败时优雅显示「未接入」，不谎报成功。 */
 
 const BTN_GHOST =
   'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[13px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
@@ -99,7 +100,7 @@ function FanControlCard() {
   const status = !supported
     ? { text: t('thermal.fan_st_none', '未接入'), cls: 'text-zinc-400' }
     : effective
-      ? { text: t('thermal.fan_st_running', '运行中'), cls: 'text-green-400' }
+      ? { text: t('thermal.fan_st_running_temp', '运行中-当前配置温度{{temp}}℃', { temp: cfg?.target ?? target }), cls: 'text-green-400' }
       : { text: t('thermal.fan_st_inactive', '未生效'), cls: 'text-red-400' }
 
   return (
@@ -176,14 +177,22 @@ function FanControlCard() {
   )
 }
 
+/* [CN-FORK] 自动刷新周期：对齐后端 thermal.c 的 5s 快照缓存（更快也无意义，返回的都是缓存）。 */
+const AUTO_REFRESH_MS = 5000
+
 export default function ThermalSection() {
   const { t } = useTranslation()
   const [d, setD] = useState(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const [auto, setAuto] = useState(true)
+  const inflightRef = useRef(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  // silent=true 时为自动刷新：不驱动手动按钮的 loading 图标，避免每 5s 狂转
+  const load = useCallback(async (silent) => {
+    if (inflightRef.current) return // 上一次未回来，跳过本次，不叠加请求
+    inflightRef.current = true
+    if (!silent) setLoading(true)
     setErr('')
     try {
       const res = await fetch(`/thermal_stats?_=${Date.now()}`, { cache: 'no-store' })
@@ -193,10 +202,24 @@ export default function ThermalSection() {
     } catch {
       setErr(t('thermal.read_fail', '读取失败'))
     }
-    setLoading(false)
+    if (!silent) setLoading(false)
+    inflightRef.current = false
   }, [t])
 
   useEffect(() => { load() }, [load])
+
+  // 只读自动刷新：页面隐藏时暂停，回到前台立即补一次
+  useEffect(() => {
+    if (!auto) return
+    const onTick = () => {
+      if (document.visibilityState !== 'visible') return
+      load(true)
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') load(true) }
+    const id = setInterval(onTick, AUTO_REFRESH_MS)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
+  }, [auto, load])
 
   const temp = (v) => (typeof v === 'number' && v >= 0 ? String(v) : '—')
   const disabled = d && d.enabled === false
@@ -214,10 +237,22 @@ export default function ThermalSection() {
             {t('thermal.desc', 'CPU / GPU / SSD 实时温度与风扇转速，并可设定按温度调速的目标阈值。')}
           </p>
         </div>
-        <button onClick={load} disabled={loading} className={BTN_GHOST}>
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          {t('common.refresh', '刷新')}
-        </button>
+        <div className="flex items-center gap-4">
+          <label className="inline-flex items-center gap-2 text-[13px] text-zinc-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="accent-ps-blue w-4 h-4"
+              checked={auto}
+              onChange={(e) => setAuto(e.target.checked)}
+            />
+            {t('thermal.auto_refresh', '自动刷新')}
+            <span className="text-zinc-600 tabular-nums">·{AUTO_REFRESH_MS / 1000}s</span>
+          </label>
+          <button onClick={() => load(false)} disabled={loading} className={BTN_GHOST}>
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            {t('common.refresh', '刷新')}
+          </button>
+        </div>
       </div>
 
       {disabled && (

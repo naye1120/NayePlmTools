@@ -538,6 +538,9 @@ function App() {
         {/* [CN-FORK] v0.5.1.64 删移动端「主页」标签，「管理 Payload」上为首项故不再需要分隔线 */}
         <NavButton active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} mobileLabel={t("app.nav.manage_mobile", "Manage")} />
         <NavButton showSeparator active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} mobileLabel={t("app.nav.auto_mobile", "Auto")} />
+        {/* [CN-FORK] 手机端任务栏加长：与桌面侧栏对齐，补入「PKG安装」与「常用配置」两项 */}
+        <NavButton showSeparator active={view === 'pkg'} onClick={() => setView('pkg')} icon={Package} label={t("app.nav.pkg", "PKG Manager")} mobileLabel={t("app.nav.pkg_mobile", "PKG")} />
+        <NavButton showSeparator active={view === 'common_entries'} onClick={() => setView('common_entries')} icon={Link2} label={t("app.nav.common_entries", "Quick Links")} mobileLabel={t("app.nav.common_entries_mobile", "Links")} />
         <NavButton showSeparator active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} mobileLabel={t("app.nav.processes_mobile", "Processes")} />
         <NavButton showSeparator active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} mobileLabel={t("app.nav.settings", "Settings")} />
         {/* [CN-FORK] 捐赠不再占据移动端底部标签位，改由设置页「支持作者」入口进入 */}

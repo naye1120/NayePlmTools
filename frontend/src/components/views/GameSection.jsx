@@ -45,14 +45,17 @@ function GameCard({ g, iconFailed, onIconError }) {
         >
           {installed ? t('game.badge_installed', '已安装') : t('game.badge_dump', '转储')}
         </span>
-        {/* 操作按钮：按要求移到图标内部的底部（叠在图标上）；半透底衬保证压在图标上仍可辨 */}
+        {/* [CN-FORK] 占位按钮：压在封面上的常规半透明深色小图标按钮（细线白图标 + 轻底衷），克制不突兀；
+         * 用 aria-disabled 而非 disabled（避免浏览器对禁用控件默认降透）；白字在浅色主题下的可见性由 light-theme.css 豁免保证。 */}
         <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-4 gap-1.5">
           {actions.map(({ Icon, key }) => (
             <button
               key={key}
-              disabled
+              type="button"
+              aria-disabled="true"
+              tabIndex={-1}
               title={t('game.soon', '后续开放')}
-              className="flex items-center justify-center py-1.5 rounded-md text-white bg-black/80 border border-white/45 backdrop-blur-sm shadow-sm cursor-not-allowed"
+              className="flex items-center justify-center py-1.5 rounded-md text-white bg-black/55 border border-white/15 backdrop-blur-sm cursor-not-allowed"
             >
               <Icon className="w-4 h-4" />
             </button>
