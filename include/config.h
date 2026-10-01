@@ -16,8 +16,10 @@ typedef struct PldmgrConfig {
     /* [CN-FORK] v0.5.1.65 内置默认云端仓库（Official Repository / REPOSITORY_SOURCE_URL）总开关 */
     int  default_repo_enabled;   /* Default: 1  (on)  */
     /* [CN-FORK] 风扇温控（模型 A）：是否启用自定义目标温度 + 目标温度(°C，安全区间 60~85) */
-    int  fan_enabled;            /* Default: 0  (off) */
-    int  fan_target;             /* Default: 72 (°C)  */
+    int  fan_enabled;            /* Default: 0  (off)  开关：只要不手动关就一直启用 */
+    int  fan_target;             /* Default: 72 (°C)   上次「应用」下发的目标温度 */
+    int  fan_applied;            /* Default: 0  (off)  是否已点「应用」真正生效（开启后默认失效） */
+    int  fan_interval;           /* Default: 7  (秒)   守护重发周期（夹 5~3600） */
 } PldmgrConfig;
 
 /* Read all config values from PLDMGR_CONFIG_PATH.

@@ -52,7 +52,7 @@ function GameCard({ g, iconFailed, onIconError }) {
               key={key}
               disabled
               title={t('game.soon', '后续开放')}
-              className="flex items-center justify-center py-1.5 rounded-md text-zinc-300 bg-black/55 border border-white/15 cursor-not-allowed"
+              className="flex items-center justify-center py-1.5 rounded-md text-white bg-black/80 border border-white/45 backdrop-blur-sm shadow-sm cursor-not-allowed"
             >
               <Icon className="w-4 h-4" />
             </button>

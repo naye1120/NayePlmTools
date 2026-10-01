@@ -30,6 +30,8 @@ void config_read(PldmgrConfig *cfg) {
     /* [CN-FORK] 风扇温控（模型 A）默认关；目标温度默认 72°C（安全区间 60~85） */
     cfg->fan_enabled           = 0;
     cfg->fan_target            = 72;
+    cfg->fan_applied           = 0;
+    cfg->fan_interval          = 7;
     /* [CN-FORK] v0.5.1.64 删除 read_hardware_info：主页硬件信息功能整体下线（stats.c 已移出构建），
      * 旧配置文件里残留的 READ_HARDWARE_INFO= 行会被下面的解析自然忽略 */
 
@@ -60,6 +62,10 @@ void config_read(PldmgrConfig *cfg) {
             cfg->fan_enabled = atoi(line + 20);
         else if (strncmp(line, "FAN_TARGET=", 11) == 0)
             cfg->fan_target = atoi(line + 11);
+        else if (strncmp(line, "FAN_APPLIED=", 12) == 0)
+            cfg->fan_applied = atoi(line + 12);
+        else if (strncmp(line, "FAN_INTERVAL=", 13) == 0)
+            cfg->fan_interval = atoi(line + 13);
     }
     fclose(f);
 }
@@ -83,6 +89,8 @@ int config_write(const PldmgrConfig *cfg) {
     fprintf(f, "DEFAULT_REPO_ENABLED=%d\n",   cfg->default_repo_enabled ? 1 : 0);
     fprintf(f, "FAN_CONTROL_ENABLED=%d\n",    cfg->fan_enabled ? 1 : 0);
     fprintf(f, "FAN_TARGET=%d\n",             cfg->fan_target);
+    fprintf(f, "FAN_APPLIED=%d\n",            cfg->fan_applied ? 1 : 0);
+    fprintf(f, "FAN_INTERVAL=%d\n",           cfg->fan_interval);
     fclose(f);
     return 0;
 }

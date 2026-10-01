@@ -1,3 +1,17 @@
+## v0.5.2.71 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **风扇温控改为「启用/应用」两步 + 常驻重发守护**（参考 drakmor/fan_target、owendswang/ps5-fan-control、ShadowMountPlusFan）：
+  * **开启后默认失效**：点「启用」只持久化启用位、**不写硬件**；必须设定好目标温度再点「应用」才真正下发、生效（新增 `fan_applied` 标志区分“启用”与“生效”）。
+  * **常驻重发守护**：`main.c` 启动时拉起一个只碰 `/dev/icc_fan`（open/ioctl/close）、**不调任何传感器 API** 的后台线程；仅当已启用且已生效时，每 `FAN_INTERVAL` 秒（默认 7s，夹 5~3600）检测硬件目标漂移并自动拉回——对抗进游戏/退游戏/回主界面/待机导致的固件复位。
+  * **跨重启/升级保持**：`FAN_CONTROL_ENABLED / FAN_TARGET / FAN_APPLIED / FAN_INTERVAL` 均入 `PldmgrConfig` 持久化；只要不手动关闭，开机即从 config 恢复并自动续上守护。运行态以内存为准、变更即整份 read-modify-write 落盘，避免与 HTTP 写文件竞争。
+  * **状态端点改为只读**：打开/刷新温控页不再隐性写硬件，重发完全交给守护。
+* **风扇卡 UI 细节**：标题后新增彩色状态徽标（绿「运行中」/ 红「未生效」/ 灰「未接入」）；未启用时滑块/档位/应用置灰不可调；提示按启用/生效三态切换。
+* **游戏磁贴操作按钮对比度提升**：图标改纯白 + 底衬加深 + 边框提亮 + 轻微毛玻璃，压在深色封面上更清晰。
+
+### 🔧 Note
+* 守护只写 `/dev/icc_fan`，与当初因 2s 轮询传感器 API 导致死机是不同路径；但仍属硬件写，上机首测建议备好 `safe_mode` 哨兵（FTP 建 `/data/nayeplmtools/safe_mode` 即可止血）。
+
 ## v0.5.2.70 (CN-FORK)
 
 ### 🚀 Features & UX Improvements

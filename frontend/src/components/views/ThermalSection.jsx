@@ -34,8 +34,9 @@ function FanControlCard() {
   const { t } = useTranslation()
   const MIN = 60
   const MAX = 85
-  const [cfg, setCfg] = useState(null) // {supported, enabled, target}
+  const [cfg, setCfg] = useState(null) // {supported, enabled, applied, target}
   const [enabled, setEnabled] = useState(false)
+  const [applied, setApplied] = useState(false)
   const [target, setTarget] = useState(72)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null) // {ok, text}
@@ -47,6 +48,7 @@ function FanControlCard() {
       if (data && typeof data === 'object') {
         setCfg(data)
         setEnabled(!!data.enabled)
+        setApplied(!!data.applied)
         if (typeof data.target === 'number') setTarget(data.target)
       } else {
         setCfg({ supported: false })
@@ -62,12 +64,26 @@ function FanControlCard() {
     setBusy(true)
     setMsg(null)
     try {
-      const res = await fetch(`/fan_control?enabled=${enabled ? 1 : 0}&target=${target}&_=${Date.now()}`, { cache: 'no-store' })
+      const res = await fetch(`/fan_control?apply=1&target=${target}&_=${Date.now()}`, { cache: 'no-store' })
       const data = await res.json().catch(() => null)
       if (data?.ok) setMsg({ ok: true, text: data.message || t('thermal.fan_applied', '已应用') })
       else setMsg({ ok: false, text: (data && data.message) || t('thermal.fan_apply_fail', '应用失败（后端未接入）') })
     } catch {
       setMsg({ ok: false, text: t('thermal.fan_apply_fail', '应用失败（后端未接入）') })
+    }
+    setBusy(false)
+    loadCfg()
+  }
+
+  // 开关：只持久化启用位（后端会清 applied），不写硬件——开启后默认失效
+  const toggleEnabled = async () => {
+    const next = !enabled
+    setBusy(true)
+    setMsg(null)
+    try {
+      await fetch(`/fan_control?set_enabled=${next ? 1 : 0}&_=${Date.now()}`, { cache: 'no-store' })
+    } catch {
+      /* 忽略：loadCfg 会反映真实状态 */
     }
     setBusy(false)
     loadCfg()
@@ -79,6 +95,12 @@ function FanControlCard() {
     { label: t('thermal.fan_preset_perf', '性能'), v: 66 },
   ]
   const supported = cfg && cfg.supported !== false
+  const effective = enabled && applied
+  const status = !supported
+    ? { text: t('thermal.fan_st_none', '未接入'), cls: 'text-zinc-400' }
+    : effective
+      ? { text: t('thermal.fan_st_running', '运行中'), cls: 'text-green-400' }
+      : { text: t('thermal.fan_st_inactive', '未生效'), cls: 'text-red-400' }
 
   return (
     <div className="bg-black/20 border border-white/10 rounded-xl p-4 space-y-3">
@@ -86,11 +108,12 @@ function FanControlCard() {
         <span className="text-[14px] font-bold text-white inline-flex items-center gap-2">
           <Fan className="w-4 h-4 text-ps-blue" />
           {t('thermal.fan_ctrl_title', '风扇温控')}
+          <span className={`text-[12px] font-bold ${status.cls}`}>（{status.text}）</span>
         </span>
         <button
           type="button"
-          disabled={!supported}
-          onClick={() => setEnabled((v) => !v)}
+          disabled={!supported || busy}
+          onClick={toggleEnabled}
           className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-bold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
             enabled ? 'bg-ps-blue/20 border-ps-blue/50 text-ps-blue' : 'bg-white/5 border-white/10 text-zinc-400'
           }`}
@@ -113,8 +136,9 @@ function FanControlCard() {
               min={MIN}
               max={MAX}
               value={target}
+              disabled={!enabled}
               onChange={(e) => setTarget(Number(e.target.value))}
-              className="flex-1 accent-ps-blue"
+              className={`flex-1 accent-ps-blue disabled:opacity-40 ${enabled ? '' : 'cursor-not-allowed'}`}
             />
             <span className="text-[14px] font-bold text-white w-12 text-right tabular-nums">{target}°C</span>
           </div>
@@ -124,21 +148,26 @@ function FanControlCard() {
               <button
                 key={p.v}
                 type="button"
+                disabled={!enabled}
                 onClick={() => setTarget(p.v)}
-                className={`px-2.5 py-1 rounded-md text-[12px] font-bold border transition ${
+                className={`px-2.5 py-1 rounded-md text-[12px] font-bold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
                   target === p.v ? 'bg-ps-blue/20 border-ps-blue/50 text-ps-blue' : 'bg-white/5 border-white/10 text-zinc-300 hover:bg-white/10'
                 }`}
               >
                 {p.label}
               </button>
             ))}
-            <button type="button" onClick={apply} disabled={busy} className={`${BTN_PRIMARY} ml-auto`}>
+            <button type="button" onClick={apply} disabled={busy || !enabled} className={`${BTN_PRIMARY} ml-auto`}>
               <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} />
               {t('thermal.fan_apply', '应用')}
             </button>
           </div>
           <p className="text-[12px] text-zinc-500">
-            {t('thermal.fan_hint', '目标温度越低风扇越积极（更凉、更吵）；越高越安静（更热）。')}
+            {!enabled
+              ? t('thermal.fan_hint_off', '未启用：打开右上角开关后方可调节目标温度。')
+              : applied
+                ? t('thermal.fan_hint', '目标温度越低风扇越积极（更凉、更吵）；越高越安静（更热）。')
+                : t('thermal.fan_hint_notapplied', '已启用但尚未生效：设定目标温度后点「应用」。')}
           </p>
           {msg && <p className={`text-[13px] font-bold ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>{msg.text}</p>}
         </div>

@@ -1108,19 +1108,21 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_FAN_CONTROL) == 0) {
-        /* [CN-FORK] 风扇温控（模型 A）：带 enabled/target 参数=应用；无参=读状态。
-         * 只改 /dev/icc_fan autoservo 目标温度，固件自己闭环；safe_mode/设备缺失时 supported:false。 */
+        /* [CN-FORK] 风扇温控（模型 A + 守护）：?apply=1&target=NN=应用生效（写硬件）；
+         * ?set_enabled=0/1=只切开关（不写硬件）；无参=读状态（只读）。safe_mode/设备缺失时 supported:false。 */
         char *resp_buf;
         struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
         if (oom_resp)
             return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-        const char *fe = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "enabled");
-        const char *ft = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "target");
+        const char *fapply = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "apply");
+        const char *fset   = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "set_enabled");
+        const char *ft     = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "target");
         int flen;
-        if (fe || ft) {
-            int fena = fe ? atoi(fe) : 0;
+        if (fapply) {
             int ftgt = ft ? atoi(ft) : 0;
-            flen = fan_control_apply_json(resp_buf, RESPONSE_BUFFER_SIZE, fena, ftgt);
+            flen = fan_control_apply_json(resp_buf, RESPONSE_BUFFER_SIZE, ftgt);
+        } else if (fset) {
+            flen = fan_control_set_enabled_json(resp_buf, RESPONSE_BUFFER_SIZE, atoi(fset));
         } else {
             flen = fan_control_status_json(resp_buf, RESPONSE_BUFFER_SIZE);
         }

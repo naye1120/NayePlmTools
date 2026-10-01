@@ -26,6 +26,7 @@
 #include "ps5_launcher.h"
 #include "app_installer.h"
 #include "utils.h" /* [CN-FORK] pldmgr_get_local_ip 提前取 IP */
+#include "fan_control.h" /* [CN-FORK] 风扇温控常驻重发守护 */
 
 #define DEFAULT_PORT MENU_PORT
 
@@ -188,6 +189,10 @@ int main(int argc, char *argv[]) {
 
     /* Start Autoload Sequence (if config exists) */
     pldmgr_autoload_start();
+
+    /* [CN-FORK] 风扇温控守护：从 config 恢复启用/生效态并常驻重发（只碰 /dev/icc_fan，
+     * safe_mode 下自动跳过写入）；主进程常驻，待机唤醒不会重复起线程。 */
+    fan_control_start_daemon();
 
     if (cfg.auto_browser_open) {
         char browser_url[128];

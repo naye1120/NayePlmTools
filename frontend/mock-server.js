@@ -11,7 +11,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const PORT = 8081;
+const PORT = Number(process.env.PORT) || 8081; // [CN-FORK] 允许用 PORT 环境变量换端口，避开被占用的 8081
 
 let logs = [
   "[PLDMGR] Mock Server initialized",
@@ -126,7 +126,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.70'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.71'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -224,16 +224,24 @@ app.get('/game_icon', (req, res) => {
   res.type('image/svg+xml').send(svg);
 });
 
-// [CN-FORK] 风扇温控 mock（预览用；实机 /dev/icc_fan 硬件写后端待单独确认后落地）
-const fanCfg = { supported: true, enabled: false, target: 72 };
+// [CN-FORK] 风扇温控 mock（预览用）：开关只置 enabled+清 applied；apply 才置生效。
+const fanCfg = { supported: true, enabled: false, applied: false, target: 72, hw_target: 91, min: 60, max: 85, interval: 7 };
 app.get('/fan_control', (req, res) => {
-  if (req.query.target !== undefined || req.query.enabled !== undefined) {
-    if (req.query.enabled !== undefined) fanCfg.enabled = req.query.enabled === '1' || req.query.enabled === 'true';
-    const tv = parseInt(req.query.target, 10);
-    if (!Number.isNaN(tv)) fanCfg.target = Math.min(85, Math.max(60, tv));
-    return res.json({ ok: true, message: '已应用（mock）', ...fanCfg });
+  if (req.query.set_enabled !== undefined) {
+    fanCfg.enabled = req.query.set_enabled === '1' || req.query.set_enabled === 'true';
+    fanCfg.applied = false; // 开启后默认失效
+    return res.json({ ok: true, message: 'switch_set', ...fanCfg });
   }
-  res.json(fanCfg);
+  if (req.query.apply !== undefined) {
+    const tv = parseInt(req.query.target, 10);
+    if (!Number.isNaN(tv)) fanCfg.target = Math.min(fanCfg.max, Math.max(fanCfg.min, tv));
+    fanCfg.enabled = true;
+    fanCfg.applied = true;
+    fanCfg.hw_target = fanCfg.target; // 模拟下发成功
+    return res.json({ ok: true, message: 'applied', ...fanCfg });
+  }
+  const { supported, enabled, applied, target, hw_target, min, max, interval } = fanCfg;
+  res.json({ supported, enabled, applied, target, hw_target, min, max, interval });
 });
 
 app.get('/list_payloads', (req, res) => {
