@@ -292,8 +292,8 @@ int repository_ensure_fresh(int force_refresh) {
 
     /* [CN-FORK] v0.5.1.65 默认云端仓库总开关：关掉后本函数不再向 REPOSITORY_SOURCE_URL 发任何请求
      * （开机预取 / 手动刷新 / 安装前补缓存三条路径都走这里）。磁盘上的旧缓存保持不动，
-     * 重新打开可立即复用。 */
-    if (!config_read_bool("DEFAULT_REPO_ENABLED", 1))
+     * 重新打开可立即复用。v0.5.2.67 缺键时默认按“关”处理（与 config_read 默认值一致）。 */
+    if (!config_read_bool("DEFAULT_REPO_ENABLED", 0))
         return 0;
 
     ensure_dir_recursive(BASE_DATA_DIR);
@@ -301,9 +301,15 @@ int repository_ensure_fresh(int force_refresh) {
 
     config_read_last_update(&last_update);
 
+    /* [CN-FORK] 启动预取（force_refresh=0）TTL 判断修正（二次）：
+     * 实测：开机时 PS5 时钟常未同步/回退，now < last_update 使 delta < 0。
+     * 上一版把 delta < 0 当成「保守复用缓存、不联网」，结果每次开机都不自动刷新、必须手动点。
+     * 现纠正为：只有「时间可信且确实在 60 秒内刚刷新过」（0 <= delta < 60）才复用磁盘缓存；
+     * 其余情况——delta < 0（时钟异常）、delta >= 60（真正超期）、缓存文件缺失——启动一律联网刷新。
+     * 手动刷新（/repository_payloads?refresh=1 → force_refresh=1）不进这里，仍无条件重下。 */
     if (!force_refresh && access(REPOSITORY_CACHE_PATH, F_OK) == 0) {
         long delta = (long)now - last_update;
-        if (delta >= 0 && delta < REPOSITORY_REFRESH_INTERVAL_SEC) {
+        if (delta >= 0 && delta < 60) {
             return 0;
         }
     }
@@ -348,8 +354,8 @@ size_t repository_list_json(char *json_buf, size_t buf_size, int force_refresh) 
     size_t pos = 0;
 
     /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：回空清单（cache_status=disabled），既不联网也不读旧缓存，
-     * 前端据此显示「云端仓库已关闭」而不是「仓库为空 / 连接失败」 */
-    if (!config_read_bool("DEFAULT_REPO_ENABLED", 1)) {
+     * 前端据此显示「云端仓库已关闭」而不是「仓库为空 / 连接失败」。v0.5.2.67 缺键时默认按“关”处理。 */
+    if (!config_read_bool("DEFAULT_REPO_ENABLED", 0)) {
         config_read_last_update(&last_update);
         snprintf(json_buf, buf_size,
                  "{\"payloads\":[],\"last_update\":%ld,\"cache_status\":\"disabled\"}",

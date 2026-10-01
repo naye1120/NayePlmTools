@@ -1,3 +1,8 @@
+## v0.5.2.68 (CN-FORK)
+
+### 🛠️ Backend & Bug Fixes
+* **云端仓库启动预取 (`repository_ensure_fresh`)**: 修正 TTL 判断。开机时 PS5 系统时钟常未同步/回退，导致 `now < last_update`（`delta < 0`）；旧写法把 `delta < 0` 当成可复用缓存，造成「启动不自动刷新、必须手动点」。现改为仅当「时间可信且距上次刷新 < 60 秒」才复用磁盘缓存，其余（时钟回退 `delta < 0`、真正超期 `delta >= 60`、缓存文件缺失）启动一律联网刷新。手动刷新 `/repository_payloads?refresh=1`（`force_refresh=1`）行为不变。
+
 ## v0.5.2
 - Rebuilt with latest SDK
 
@@ -6,20 +11,20 @@
 ### 🚀 Features & UX Improvements
 * **Translations**: Updated localization files across supported languages.
 * **New Languages**:
-  * **Arabic** (thanks to mohamad.z.k28, abdoulacadat, DumDum143, HoussamLovy, c0ncerta, sgs2ofameer)
-  * **Thai** (thanks to Modmycon, hpokemon776)
+  * **Arabic** (mohamad.z.k28, abdoulacadat, DumDum143, HoussamLovy, c0ncerta, sgs2ofameer)
+  * **Thai** (Modmycon, hpokemon776)
 
 **Full Changelog**: [v0.5.0...v0.5.1](https://github.com/itsPLK/ps5-payload-manager/compare/v0.5.0...v0.5.1)
 
 ## v0.5.0
 
 ### 🚀 Features & UX Improvements
-* **Payload Favorites / Pinning**: Added support for pinning favorite payloads to the top of the dashboard with a dedicated edit mode ([#65](https://github.com/itsPLK/ps5-payload-manager/pull/65), thanks to @techsociology).
+* **Payload Favorites / Pinning**: Added support for pinning favorite payloads to the top of the dashboard with a dedicated edit mode ([#65](https://github.com/itsPLK/ps5-payload-manager/pull/65), @techsociology).
 * **Payload Launch Indicator**: Introduced a visual checkmark indicator for payloads launched during the active session ([#44](https://github.com/itsPLK/ps5-payload-manager/issues/44)).
 * **New Languages**:
-  * **French** (thanks to Oblik20, Chronoss)
-  * **Japanese** (thanks to Jane101KR)
-  * **Korean** (thanks to Jane101KR)
+  * **French** (Oblik20, Chronoss)
+  * **Japanese** (Jane101KR)
+  * **Korean** (Jane101KR)
 * **Translations**: Updated localization files across supported languages.
 
 ### 🛠️ Backend & API Updates
@@ -32,14 +37,14 @@
 ### 🚀 Features & UX Improvements
 * **System Language Support**: Added a "System Default" option in Settings to dynamically follow the OS/browser language ([#69](https://github.com/itsPLK/ps5-payload-manager/pull/69)).
 * **New Languages**:
-  * **German** (thanks to xEasy4Breezy)
-  * **Persian** (thanks to Epinor)
-  * **Spanish** (thanks to Slayver95, kXmpX)
-  * **Turkish** (thanks to Sezar61)
-  * **Ukrainian** (thanks to Mikeeee)
+  * **German** (xEasy4Breezy)
+  * **Persian** (Epinor)
+  * **Spanish** (Slayver95, kXmpX)
+  * **Turkish** (Sezar61)
+  * **Ukrainian** (Mikeeee)
 
 ### 🛠️ Backend & Bug Fixes
-* **Build Script**: Fixed an issue where translation files could sometimes be missing when compiling releases from source (thanks to @owendswang).
+* **Build Script**: Fixed an issue where translation files could sometimes be missing when compiling releases from source (@owendswang).
 
 **Full Changelog**: [v0.4.1...v0.4.2](https://github.com/itsPLK/ps5-payload-manager/compare/v0.4.1...v0.4.2)
 
@@ -47,9 +52,9 @@
 ### 🚀 Features & UX Improvements
 * **Translations**: Updated existing translations and added new languages.
 * **New Languages**:
-  * **Italian** (thanks to Leon90)
-  * **Portuguese (Brazilian)** (thanks to matmarson, slipttees, marcusvrb)
-  * **Russian** (thanks to Akela-1979)
+  * **Italian** (Leon90)
+  * **Portuguese (Brazilian)** (matmarson, slipttees, marcusvrb)
+  * **Russian** (Akela-1979)
 
 **Full Changelog**: [v0.4.0...v0.4.1](https://github.com/itsPLK/ps5-payload-manager/compare/v0.4.0...v0.4.1)
 
@@ -58,11 +63,11 @@
 ### 🚀 Features & UX Improvements
 * **Translations**: Added localization support (i18n) for the web dashboard.
 * **New Languages**: 
-  * **Chinese Simplified** (thanks to @owendswang)
+  * **Chinese Simplified** (@owendswang)
   * **Polish**
 
 ### 🛠️ Backend & Bug Fixes
-* **Static Linking**: Statically link third-party dependencies in the build script to prevent dynamic linking issues (thanks to @owendswang in [#66](https://github.com/itsPLK/ps5-payload-manager/pull/66)).
+* **Static Linking**: Statically link third-party dependencies in the build script to prevent dynamic linking issues (@owendswang in [#66](https://github.com/itsPLK/ps5-payload-manager/pull/66)).
 
 **Full Changelog**: [v0.3.3...v0.4.0](https://github.com/itsPLK/ps5-payload-manager/compare/v0.3.3...v0.4.0)
 
@@ -71,9 +76,9 @@
 ### 🚀 Features & UX Improvements
 * **Cloud Repository Search & Sort**: Added search functionality and sorting options (Category, Update Time, Name) to the Cloud Repository view. Sort preferences are persisted across sessions.
 * **Custom Payload Categories**: Added support for custom payload categories in third-party repositories and increased source limits.
-* **Media App Category**: Moved the Payload Manager launcher icon to the "Media" tab on the PS5 home screen to keep the Games tab clean (thanks to @lucaszhongsj).  
+* **Media App Category**: Moved the Payload Manager launcher icon to the "Media" tab on the PS5 home screen to keep the Games tab clean (@lucaszhongsj).  
   *Note: You may need to remove your existing Payload Manager shortcut from the home screen first for the new one to correctly appear in the Media tab.*
-* **Repository Version Display**: When a custom repository explicitly defines a version, the frontend now displays it instead of trying to guess it from the filename (thanks to @lucaszhongsj).
+* **Repository Version Display**: When a custom repository explicitly defines a version, the frontend now displays it instead of trying to guess it from the filename (@lucaszhongsj).
 
 ### 🛠️ Backend & Bug Fixes
 * **Standby Recovery**: Fixed an issue where the HTTP server would become unresponsive after waking the console from Rest Mode or dropping the network connection. The daemon now cleanly restarts the socket to recover the connection (fixes [#61](https://github.com/itsPLK/ps5-payload-manager/issues/61)).

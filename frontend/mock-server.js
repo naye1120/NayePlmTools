@@ -72,15 +72,17 @@ const mockConfig = {
   KILL_DISC_PLAYER_ON_STARTUP: true,
   SCAN_USB_PAYLOADS: false,
   AUTO_INSTALL_APP: true,
+  /* [CN-FORK] v0.5.2.67 默认开多来源，才能列出预置的 repo.630810.xyz（内置官方源已默认关） */
   MULTI_SOURCES_ENABLED: true,
-  /* [CN-FORK] v0.5.1.65 默认云端仓库总开关（后端 config_read 默认也为 1） */
-  DEFAULT_REPO_ENABLED: true
+  /* [CN-FORK] v0.5.2.67 默认云端仓库总开关改为默认关（与 src/config.c config_read 默认值一致） */
+  DEFAULT_REPO_ENABLED: false
 };
 /* [CN-FORK] v0.5.1.64 删除 readHardwareEnabled：主页硬件信息功能（/system_stats + stats.c）已整体下线 */
 
 let mockSources = [
   { id: 'default', name: 'Official Repository', url: MOCK_DEFAULT_REPO_URL, removable: false },
-  { id: 'source_community', name: 'Community Payloads', url: 'https://example.com/community-payloads.json', removable: true }
+  /* [CN-FORK] v0.5.2.67 预置的国内镜像仓库（与后端 sources_seed_defaults 保持一致） */
+  { id: 'source_cn', name: 'repo.630810.xyz', url: 'https://repo.630810.xyz/payloads.json', removable: true }
 ];
 
 let autoloadStatus = {
@@ -124,7 +126,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.1.65'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.68'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -222,7 +224,8 @@ app.get('/get_config', (req, res) => {
 /* [CN-FORK] v0.5.1.65 跟后端 repository_list_json / sources_multi_repository_list_json 保持同一套开关语义：
  * 默认云端仓库关掉后，官方源整组不输出；单来源模式下直接回空清单（cache_status=disabled）。 */
 const buildRepositoryResponse = () => {
-  const defaultOn = mockConfig.DEFAULT_REPO_ENABLED !== false;
+  /* [CN-FORK] v0.5.2.67 DEFAULT_REPO_ENABLED 默认关，回退语义与后端一致：仅显式为 true 才输出官方源 */
+  const defaultOn = mockConfig.DEFAULT_REPO_ENABLED === true;
   if (!mockConfig.MULTI_SOURCES_ENABLED) {
     return defaultOn
       ? { payloads: remoteRepository, last_update: lastRepositoryUpdate, cache_status: 'ok', repo_url: MOCK_DEFAULT_REPO_URL }
@@ -238,12 +241,13 @@ const buildRepositoryResponse = () => {
       payloads: remoteRepository.map(p => ({ ...p, source_id: 'default', source_name: 'Official Repository' }))
     });
   }
+  /* [CN-FORK] v0.5.2.67 预置国内镜像仓库组，与后端 sources_seed_defaults / mockSources 保持一致 */
   groups.push({
-    id: 'source_community',
-    name: 'Community Payloads',
+    id: 'source_cn',
+    name: 'repo.630810.xyz',
     last_update: lastRepositoryUpdate,
     error: false,
-    payloads: communityRepository.map(p => ({ ...p, source_id: 'source_community', source_name: 'Community Payloads' }))
+    payloads: communityRepository.map(p => ({ ...p, source_id: 'source_cn', source_name: 'repo.630810.xyz' }))
   });
   return { sources: groups };
 };
@@ -260,7 +264,7 @@ app.get('/repository_refresh', (req, res) => {
 
 app.get('/sources_list', (req, res) => {
   /* [CN-FORK] v0.5.1.65 默认源不从列表里抹掉（下标就是缓存文件名的语义与后端一致），而是带 enabled=false */
-  const defaultOn = mockConfig.DEFAULT_REPO_ENABLED !== false;
+  const defaultOn = mockConfig.DEFAULT_REPO_ENABLED === true;
   res.json({ sources: mockSources.map(s => ({ ...s, enabled: s.id === 'default' ? defaultOn : true })) });
 });
 
