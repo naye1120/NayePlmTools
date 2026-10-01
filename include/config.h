@@ -15,6 +15,9 @@ typedef struct PldmgrConfig {
     int  multi_sources_enabled;  /* Default: 0  (off) */
     /* [CN-FORK] v0.5.1.65 内置默认云端仓库（Official Repository / REPOSITORY_SOURCE_URL）总开关 */
     int  default_repo_enabled;   /* Default: 1  (on)  */
+    /* [CN-FORK] 风扇温控（模型 A）：是否启用自定义目标温度 + 目标温度(°C，安全区间 60~85) */
+    int  fan_enabled;            /* Default: 0  (off) */
+    int  fan_target;             /* Default: 72 (°C)  */
 } PldmgrConfig;
 
 /* Read all config values from PLDMGR_CONFIG_PATH.

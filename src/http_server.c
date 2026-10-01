@@ -31,6 +31,7 @@
 #include "quicklinks.h" /* [CN-FORK] 「常用入口」自定义快捷访问 */
 #include "thermal.h"    /* [CN-FORK] 温控只读端点 /thermal_stats */
 #include "game_mgr.h"   /* [CN-FORK] 游戏列表 /game_list + 图标 /game_icon */
+#include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
 
 #include "assets_index_html.h"
 #include "assets_cache_appcache.h"
@@ -134,6 +135,7 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_THERMAL) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_LIST) == 0) return 1; /* [CN-FORK] 游戏板块拉取，降噪 */
     if (strcmp(url, ROUTE_GAME_ICON) == 0) return 1;
+    if (strcmp(url, ROUTE_FAN_CONTROL) == 0) return 1; /* [CN-FORK] 风扇温控页加载/应用，降噪 */
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
     /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
@@ -1103,6 +1105,27 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
         thermal_stats_json(resp_buf, RESPONSE_BUFFER_SIZE);
         resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_FAN_CONTROL) == 0) {
+        /* [CN-FORK] 风扇温控（模型 A）：带 enabled/target 参数=应用；无参=读状态。
+         * 只改 /dev/icc_fan autoservo 目标温度，固件自己闭环；safe_mode/设备缺失时 supported:false。 */
+        char *resp_buf;
+        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+        if (oom_resp)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        const char *fe = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "enabled");
+        const char *ft = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "target");
+        int flen;
+        if (fe || ft) {
+            int fena = fe ? atoi(fe) : 0;
+            int ftgt = ft ? atoi(ft) : 0;
+            flen = fan_control_apply_json(resp_buf, RESPONSE_BUFFER_SIZE, fena, ftgt);
+        } else {
+            flen = fan_control_status_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        }
+        if (flen < 0) flen = 0;
+        resp = MHD_create_response_from_buffer((size_t)flen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_GAME_LIST) == 0) {

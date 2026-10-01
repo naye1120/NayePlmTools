@@ -57,6 +57,11 @@ export default defineConfig({
       '/quicklinks': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/quicklinks_add': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       '/quicklinks_remove': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      // [CN-FORK] 温控/游戏板块三个端点：缺了会被 SPA fallback 吞成 index.html，预览里永远读失败
+      '/thermal_stats': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      '/game_list': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      '/game_icon': { target: 'http://127.0.0.1:8081', changeOrigin: true },
+      '/fan_control': { target: 'http://127.0.0.1:8081', changeOrigin: true },
       /* [CN-FORK] v0.5.1.64 删 /game_icon 代理：「当前游戏」探测随主页一起下线 */
       '/repository_install': { target: 'http://127.0.0.1:8081', changeOrigin: true }
     }

@@ -126,7 +126,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.69'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.70'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -191,6 +191,49 @@ app.get('/quicklinks_remove', (req, res) => {
   }
   quicklinks.splice(idx, 1);
   res.json({ ok: true, message: 'OK' });
+});
+
+// [CN-FORK] 温控只读 mock（预览用；实机由 thermal.c 读 sceKernel* 传感器）
+app.get('/thermal_stats', (req, res) => {
+  res.json({ enabled: true, cpu: { temp: 52 }, gpu: { temp: 57 }, ssd: { temp: 46 }, fan: { duty: 38, max: 100 } });
+});
+
+// [CN-FORK] 游戏列表 mock（预览用；实机由 game_mgr.c 解析 app.db + 扫描 dump）
+const mockGames = [
+  { tid: 'PPSA01234', name: '战神 诸神黄昏', src: 'installed' },
+  { tid: 'PPSA00802', name: '漫威蜘蛛侠 2', src: 'installed' },
+  { tid: 'CUSA01111', name: '血源诅咒（PS4 兼容）', src: 'dump' },
+  { tid: 'PPJB01010', name: '演示合集', src: 'installed' },
+  { tid: 'EMUA90001', name: '无图标的游戏（验证回退）', src: 'dump' },
+  { tid: 'PAUS00100', name: 'Pulse Demo（无图标）', src: 'installed' },
+];
+app.get('/game_list', (req, res) => {
+  res.json({ games: mockGames, count: mockGames.length });
+});
+
+// [CN-FORK] 游戏图标 mock：返回带 TID 的占位 SVG；两个 tid 故意 404，验证前端 onError 回退 Gamepad2
+app.get('/game_icon', (req, res) => {
+  const raw = String(req.query.tid || '');
+  const tid = /^[A-Za-z0-9]{0,16}$/.test(raw) ? raw : '';
+  if (!tid || tid === 'EMUA90001' || tid === 'PAUS00100') {
+    return res.status(404).type('text/plain').send('not found');
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">`
+    + `<rect width="256" height="256" fill="#1e293b"/><circle cx="128" cy="100" r="46" fill="#2563eb"/>`
+    + `<text x="128" y="200" font-family="monospace" font-size="24" fill="#e2e8f0" text-anchor="middle">${tid}</text></svg>`;
+  res.type('image/svg+xml').send(svg);
+});
+
+// [CN-FORK] 风扇温控 mock（预览用；实机 /dev/icc_fan 硬件写后端待单独确认后落地）
+const fanCfg = { supported: true, enabled: false, target: 72 };
+app.get('/fan_control', (req, res) => {
+  if (req.query.target !== undefined || req.query.enabled !== undefined) {
+    if (req.query.enabled !== undefined) fanCfg.enabled = req.query.enabled === '1' || req.query.enabled === 'true';
+    const tv = parseInt(req.query.target, 10);
+    if (!Number.isNaN(tv)) fanCfg.target = Math.min(85, Math.max(60, tv));
+    return res.json({ ok: true, message: '已应用（mock）', ...fanCfg });
+  }
+  res.json(fanCfg);
 });
 
 app.get('/list_payloads', (req, res) => {

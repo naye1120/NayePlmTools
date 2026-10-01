@@ -11,15 +11,23 @@ import { Gamepad2, RefreshCw, Download, Camera, Pencil, Tag } from 'lucide-react
 const BTN_GHOST =
   'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[13px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
 
-/* 单个游戏卡片：图标 + 名称 + TID + 来源徽标；底部一排「后续开放」的禁用操作按钮。 */
+/* 单个游戏磁贴（宫格）：大图标铺满 1:1 + 名称/TID，来源徽标叠在图标角上，
+ * 操作按钮排在图标下排。导出存档/截图、改名、标签为后续功能，本版禁用占位。 */
 function GameCard({ g, iconFailed, onIconError }) {
   const { t } = useTranslation()
   const installed = g.src === 'installed'
+  const actions = [
+    { Icon: Download, key: 'game.act_export_save' },
+    { Icon: Camera, key: 'game.act_export_shot' },
+    { Icon: Pencil, key: 'game.act_rename' },
+    { Icon: Tag, key: 'game.act_tags' },
+  ]
   return (
-    <div className="bg-black/20 border border-white/10 rounded-xl p-3 flex gap-3 items-start">
-      <div className="w-14 h-14 shrink-0 rounded-lg overflow-hidden bg-white/5 border border-white/10 flex items-center justify-center">
+    <div className="bg-black/20 border border-white/10 rounded-xl p-1.5 flex flex-col gap-1.5">
+      {/* 大图标：宽铺满、1:1 正方形，徽标绝对定位叠右上角 */}
+      <div className="relative w-full aspect-square rounded-lg overflow-hidden bg-white/5 border border-white/10 flex items-center justify-center">
         {iconFailed ? (
-          <Gamepad2 className="w-6 h-6 text-zinc-600" />
+          <Gamepad2 className="w-12 h-12 text-zinc-600" />
         ) : (
           <img
             src={`/game_icon?tid=${encodeURIComponent(g.tid)}`}
@@ -29,38 +37,32 @@ function GameCard({ g, iconFailed, onIconError }) {
             onError={onIconError}
           />
         )}
-      </div>
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="text-[14px] font-bold text-white truncate min-w-0" title={g.name}>{g.name}</span>
-          <span
-            className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded ${
-              installed ? 'bg-ps-blue/20 text-ps-blue' : 'bg-amber-400/15 text-amber-300'
-            }`}
-            title={installed ? t('game.src_installed', '已安装') : t('game.src_dump', '转储/外挂')}
-          >
-            {installed ? t('game.badge_installed', '已安装') : t('game.badge_dump', '转储')}
-          </span>
-        </div>
-        <span className="text-[11px] text-zinc-500 font-mono tracking-wider">{g.tid}</span>
-        {/* 后续功能占位：导出存档 / 导出截图 / 改名 / 标签，本版全部禁用 */}
-        <div className="flex items-center gap-1 pt-1">
-          {[
-            { Icon: Download, key: 'game.act_export_save', cn: '导出存档' },
-            { Icon: Camera, key: 'game.act_export_shot', cn: '导出截图' },
-            { Icon: Pencil, key: 'game.act_rename', cn: '改名' },
-            { Icon: Tag, key: 'game.act_tags', cn: '标签' },
-          ].map(({ Icon, key }) => (
+        <span
+          className={`absolute top-1.5 right-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${
+            installed ? 'bg-ps-blue/85 text-white' : 'bg-amber-500/90 text-black'
+          }`}
+          title={installed ? t('game.src_installed', '已安装') : t('game.src_dump', '转储/外挂')}
+        >
+          {installed ? t('game.badge_installed', '已安装') : t('game.badge_dump', '转储')}
+        </span>
+        {/* 操作按钮：按要求移到图标内部的底部（叠在图标上）；半透底衬保证压在图标上仍可辨 */}
+        <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-4 gap-1.5">
+          {actions.map(({ Icon, key }) => (
             <button
               key={key}
               disabled
               title={t('game.soon', '后续开放')}
-              className="p-1.5 rounded-md text-zinc-600 bg-white/5 border border-white/10 cursor-not-allowed"
+              className="flex items-center justify-center py-1.5 rounded-md text-zinc-300 bg-black/55 border border-white/15 cursor-not-allowed"
             >
-              <Icon className="w-3.5 h-3.5" />
+              <Icon className="w-4 h-4" />
             </button>
           ))}
         </div>
+      </div>
+      {/* 名称 + TID */}
+      <div className="space-y-0.5 min-w-0">
+        <p className="text-[14px] font-bold text-white truncate" title={g.name}>{g.name}</p>
+        <span className="block text-[11px] text-zinc-500 font-mono tracking-wider">{g.tid}</span>
       </div>
     </div>
   )
@@ -137,7 +139,7 @@ export default function GameSection() {
               <span className="text-[12px] text-amber-400">{t('game.truncated', '列表过大，已截断显示')}</span>
             )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {list.map((g) => (
               <GameCard
                 key={g.tid}

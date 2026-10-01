@@ -22,9 +22,14 @@ void config_read(PldmgrConfig *cfg) {
     cfg->kill_disc_player      = 1;
     cfg->scan_usb_payloads     = 0;
     cfg->auto_install_app      = 1;
-    cfg->multi_sources_enabled = 0;
-    /* [CN-FORK] v0.5.1.65 默认云端仓库总开关，默认开（保持旧行为：开机拉一次 payloads.json） */
-    cfg->default_repo_enabled  = 1;
+    /* [CN-FORK] v0.5.2.67 默认开启多来源：内置官方源默认关掉后，靠多来源模式才能显示预置的 repo.630810.xyz */
+    cfg->multi_sources_enabled = 1;
+    /* [CN-FORK] v0.5.2.67 默认云端仓库总开关：内置官方源（itsPLK GitHub 镜像）在国内经常拉不动，
+     * 本版默认关掉，开机不再拉 payloads.json；改用预置的 repo.630810.xyz 作为默认来源 */
+    cfg->default_repo_enabled  = 0;
+    /* [CN-FORK] 风扇温控（模型 A）默认关；目标温度默认 72°C（安全区间 60~85） */
+    cfg->fan_enabled           = 0;
+    cfg->fan_target            = 72;
     /* [CN-FORK] v0.5.1.64 删除 read_hardware_info：主页硬件信息功能整体下线（stats.c 已移出构建），
      * 旧配置文件里残留的 READ_HARDWARE_INFO= 行会被下面的解析自然忽略 */
 
@@ -51,6 +56,10 @@ void config_read(PldmgrConfig *cfg) {
             cfg->multi_sources_enabled = atoi(line + 22);
         else if (strncmp(line, "DEFAULT_REPO_ENABLED=", 21) == 0)
             cfg->default_repo_enabled = atoi(line + 21);
+        else if (strncmp(line, "FAN_CONTROL_ENABLED=", 20) == 0)
+            cfg->fan_enabled = atoi(line + 20);
+        else if (strncmp(line, "FAN_TARGET=", 11) == 0)
+            cfg->fan_target = atoi(line + 11);
     }
     fclose(f);
 }
@@ -72,6 +81,8 @@ int config_write(const PldmgrConfig *cfg) {
     fprintf(f, "AUTO_INSTALL_APP=%d\n",       cfg->auto_install_app ? 1 : 0);
     fprintf(f, "MULTI_SOURCES_ENABLED=%d\n",  cfg->multi_sources_enabled ? 1 : 0);
     fprintf(f, "DEFAULT_REPO_ENABLED=%d\n",   cfg->default_repo_enabled ? 1 : 0);
+    fprintf(f, "FAN_CONTROL_ENABLED=%d\n",    cfg->fan_enabled ? 1 : 0);
+    fprintf(f, "FAN_TARGET=%d\n",             cfg->fan_target);
     fclose(f);
     return 0;
 }
