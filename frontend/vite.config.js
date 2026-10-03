@@ -1,3 +1,5 @@
+/* global process */
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { viteSingleFile } from 'vite-plugin-singlefile'
@@ -8,9 +10,28 @@ import { browserslistToTargets } from 'lightningcss'
 // 便于在 8081 被遗留进程占用时另起一份干净 mock 做预览。
 const API_TARGET = `http://127.0.0.1:${Number(process.env.MOCK_PORT) || 8081}`
 
+// [CN-FORK] 构建时烧入后端的 MENU_VERSION（供 src/main.jsx 与 /version 比对做版本握手）。
+// 直接读 pldmgr.h 兜底：本机打包流程为「Windows 宿主 npm run build + WSL make all」，
+// 不经 Makefile 的 frontend-build，只靠环境变量会静默退化成 'dev'（握手关闭）。
+const readMenuVersion = () => {
+  try {
+    const src = readFileSync(new URL('../include/pldmgr.h', import.meta.url), 'utf8')
+    const m = src.match(/#define\s+MENU_VERSION\s+"([^"]+)"/)
+    return m ? m[1] : 'dev'
+  } catch {
+    return 'dev'
+  }
+}
+
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react(), viteSingleFile()],
+  define: {
+    // dev server 恒为 'dev'（跳过握手，避免本地联调时误刷新）；构建时 env 优先、否则读 pldmgr.h
+    __APP_VERSION__: JSON.stringify(
+      command === 'serve' ? 'dev' : process.env.APP_VERSION || readMenuVersion()
+    ),
+  },
   build: {
     target: ['es2015', 'safari12'],
     minify: 'terser',
@@ -70,4 +91,4 @@ export default defineConfig({
       '/repository_install': { target: API_TARGET, changeOrigin: true }
     }
   }
-})
+}))

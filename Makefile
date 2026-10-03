@@ -57,7 +57,9 @@ all: $(ELF)
 frontend-build:
 	@echo "Building frontend..."
 	git submodule update --init --recursive
-	cd frontend && npm install && npm run build
+	@VERSION=$$(grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"'); \
+	echo "Building frontend with APP_VERSION=$$VERSION (burned in for runtime version handshake)"; \
+	cd frontend && npm install && APP_VERSION=$$VERSION npm run build
 	@VERSION=$$(grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"'); \
 	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo "unknown"); \
 	git diff --quiet || COMMIT="DEV"; \
