@@ -1,3 +1,5 @@
+> ⚠️ **接手必读**：功能定稿后，本仓库**唯一事实来源**是同目录的 [`HANDOVER.md`](./HANDOVER.md) —— 任何改动前先读它。
+
 <p align="center">
  <img src="./assets/icon0.png" width="128" />
 </p>
