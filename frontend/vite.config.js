@@ -57,6 +57,9 @@ export default defineConfig(({ command }) => ({
       '/set_config': { target: API_TARGET, changeOrigin: true },
       /* [CN-FORK] v0.5.1.64 删 /system_stats 代理：后端该端点随主页硬件信息功能整体下线 */
       '/loadpayload:': { target: API_TARGET, changeOrigin: true },
+      /* [CN-FORK] v0.5.2.83 「常用入口」通用拉起前查进程表（同名已在跑就不重复拉起），
+       * 缺这条代理会被 SPA fallback 吞成 index.html，判定永远读不到进程 → 静默重复拉起 */
+      '/processes_list': { target: API_TARGET, changeOrigin: true },
       '/manage:': { target: API_TARGET, changeOrigin: true },
       '/abort': { target: API_TARGET, changeOrigin: true },
       '/autoload_clear': { target: API_TARGET, changeOrigin: true },

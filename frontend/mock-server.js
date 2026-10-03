@@ -128,7 +128,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.82'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.83'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -202,6 +202,47 @@ app.post('/pkgmanager_upload', (req, res) => {
 // [CN-FORK] 常用入口 mock：内存清单 + 新增/删除（实机由 quicklinks.c 读写 /data 下 json 并 TCP 探活）
 /* [CN-FORK] program 字段：本机程序类入口（实机由 quicklinks.c 按「本机 host + 8844 端口」识别），
  * 前端点击时以「8844 端口存活」为准：存活直接打开、不存活试着拉起；本条目 alive 同样来自真实探活 */
+/* [CN-FORK] v0.5.2.83 通用「不活即拉起」预览：本机 payload 端口同样用真实 TCP 探活表示存活，
+ * /loadpayload: 命中已知程序时延迟几秒起一个监听桩，模拟「进程起来 → 端口转活」。 */
+const tcpAlive = (host, port) => new Promise((resolve) => {
+  const sock = net.connect({ host, port });
+  const done = (ok) => { sock.destroy(); resolve(ok); };
+  sock.setTimeout(400, () => done(false));
+  sock.once('connect', () => done(true));
+  sock.once('error', () => done(false));
+});
+
+/* 归一化：只留字母（丢掉版本号/变体/中文/符号），与前端 CommonEntriesView 同一套匹配语义 */
+const norm = (s) => String(s || '').toLowerCase().replace(/\.elf$/, '').replace(/[^a-z]/g, '');
+const progHit = (a, b) => {
+  const x = norm(a), y = norm(b);
+  return !!x && !!y && Math.min(x.length, y.length) >= 3 && (x.startsWith(y) || y.startsWith(x));
+};
+
+/* 桩程序表：目录/文件名可识别名 → 监听端口（新 payload 要预览就在加一行） */
+const MOCK_PROGS = { shadowmountplus: { port: 10101 } };
+const progStubs = new Map(); // 端口 → http.Server
+
+const progStubStart = (port) => new Promise((resolve, reject) => {
+  if (progStubs.has(port)) return resolve();
+  const srv = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><title>Payload stub :${port} (mock)</title><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#101014;color:#e4e4e7;font:600 16px/1.6 system-ui,sans-serif">本机 payload 桩服务 · 端口 ${port}</body>`);
+  });
+  srv.once('error', reject);
+  srv.listen(port, '127.0.0.1', () => { srv.removeListener('error', reject); progStubs.set(port, srv); resolve(); });
+});
+
+/* /loadpayload: 的路径 → 桩程序端口；匹配不到返回 null（前端会按普通链接直接打开） */
+const stubPortForPath = (path) => {
+  const seg = String(path).split('/');
+  const dir = seg[seg.length - 2] || '';
+  const file = seg[seg.length - 1] || '';
+  for (const [name, cfg] of Object.entries(MOCK_PROGS))
+    if (progHit(dir, name) || progHit(file, name)) return cfg.port;
+  return null;
+};
+
 const quicklinks = [
   /* 用 127.0.0.1:8844 对齐本机桩服务，预览时点卡片可直接打开桩页面（实机 quicklinks.c 会把回环
    * 地址改写为 PS5 当前 LAN IP；本机主机名/回环/LAN IP 三种形式都算程序类入口） */
@@ -210,15 +251,24 @@ const quicklinks = [
   /* [CN-FORK] 模拟 app.db 磁贴链接自动收录条目（实机由 quicklinks.c 同步 pprDeeplinkUri，
    * 且会把 127.0.0.1 回环地址改写为本机当前 LAN IP，故这里直接用示例 IP） */
   { name: 'NayePlmTools 磁贴', url: 'http://192.168.1.214:8911/', src: 'auto' },
+  /* [CN-FORK] v0.5.2.83 灰点条目：未拉起时 10101 无监听 → 探活不通，点卡片走通用拉起流程 */
+  { name: 'Shadow Mount+ 自动', url: 'http://127.0.0.1:10101/', src: 'auto' },
 ];
 app.get('/quicklinks', async (req, res) => {
   const pkgAlive = await pkgPortAlive();
-  res.json({
-    entries: quicklinks.map((e) => ({
-      ...e,
-      alive: e.program === 'pkgmanager' ? pkgAlive : e.src === 'auto',
-    })),
-  });
+  const entries = [];
+  for (const e of quicklinks) {
+    let alive;
+    if (e.program === 'pkgmanager') {
+      alive = pkgAlive;
+    } else {
+      /* 与实机同源语义：直接探 URL 的 host:port（NAS 面板等外网地址在本机必然连不通 = 灰点） */
+      const u = new URL(e.url);
+      alive = await tcpAlive(u.hostname, Number(u.port) || (u.protocol === 'https:' ? 443 : 80));
+    }
+    entries.push({ ...e, alive });
+  }
+  res.json({ entries });
 });
 app.get('/quicklinks_add', (req, res) => {
   const { name, url } = req.query;
@@ -295,23 +345,35 @@ app.get('/fan_control', (req, res) => {
   res.json({ supported, enabled, applied, target, hw_target, min, max, interval });
 });
 
+/* [CN-FORK] v0.5.2.83 改用实机 payload_mgr.c 的真实布局：payloads/<目录>/<文件>.elf，
+ * meta 以文件名为键并带 display_name——前端按名称匹配拉起目标时读的就是这两处。 */
 app.get('/list_payloads', (req, res) => {
   res.json({
     payloads: [
-      "/data/nayeplmtools/goldhen_v2.4b17.elf",
-      "/data/nayeplmtools/etaHEN_1.8.elf",
-      "/data/nayeplmtools/kstuff.elf",
-      "/mnt/usb0/nayeplmtools/linux_loader.elf"
+      "/data/nayeplmtools/payloads/GoldHEN_v2.4b17/goldhen_v2.4b17.elf",
+      "/data/nayeplmtools/payloads/etaHEN_1.8/etaHEN_1.8.elf",
+      "/data/nayeplmtools/payloads/kstuff/kstuff.elf",
+      "/data/nayeplmtools/payloads/ShadowMountPlus/shadowmountplus.elf",
+      "/mnt/usb0/payloads/linux_loader/linux_loader.elf"
     ],
     meta: {
       // payloads with no entry here = local/direct upload (no badge shown)
       "kstuff.elf": {
+        display_name: "kstuff",
         source_name: "Community Payloads",
         install_source: "repository",
         install_source_detail: "https://example.com/community-payloads.json"
-      }
+      },
+      "shadowmountplus.elf": { display_name: "Shadow Mount+" }
     }
   });
+});
+
+/* [CN-FORK] v0.5.2.83 进程列表 mock（实机 process_mgr.c）：通用拉起前先查同名进程，
+ * 避免对「已在跑但只监听 127.0.0.1」的程序重复拉起叠出第二个实例。未拉起的 ShadowMountPlus 不在表内。 */
+const mockProcs = ['elfldr.elf', 'NayePlmTools.elf', 'pkgmgr.elf', 'dbst.elf', 'kstuff.elf'];
+app.get('/processes_list', (req, res) => {
+  res.json({ processes: mockProcs.map((name, i) => ({ pid: 89 + i, name })) });
 });
 
 app.get('/autoload_status', (req, res) => {
@@ -425,6 +487,16 @@ app.post('/set_config', (req, res) => {
 app.get(/^\/loadpayload:(.*)/, (req, res) => {
   const path = req.params[0];
   logs.push(`[PLDMGR] Executing payload: ${path}`);
+  /* [CN-FORK] v0.5.2.83 模拟拉起：已知桩程序延迟 1.5s 起监听端口 + 登记进程名，
+   * 让前端「拉起 → 轮询探活转绿 → 打开」的完整链路可端到端看到 */
+  const port = stubPortForPath(decodeURIComponent(path));
+  if (port) {
+    setTimeout(() => {
+      progStubStart(port).catch((err) => console.log(`[Mock] stub listen ${port} failed: ${err.code || err.message}`));
+      const pname = String(path).split('/').pop();
+      if (pname && !mockProcs.includes(pname)) mockProcs.push(pname);
+    }, 1500);
+  }
   res.send('OK');
 });
 

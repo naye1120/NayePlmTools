@@ -6,12 +6,96 @@ import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
 /* [CN-FORK] 「常用入口」页：手动维护的快捷访问清单（IP:port 类服务导航）。
  * 数据存 payload 侧 /data/nayeplmtools/quicklinks.json（非浏览器 localStorage），
  * 手机/电脑/PS5 打开本 UI 看到的是同一份。列表接口顺带对每条 URL 的 host:port
- * 做 TCP 探活：绿点=可连通、灰点=不可达，点卡片新标签打开。
+ * 做 TCP 探活：绿点=可连通、灰点=不可达。绿点卡片点卡片新标签打开；灰点卡片点击由
+ * openProgram 接管——试着拉起对应 payload，起来后同标签打开。
  * 本机已知服务自动探测表暂未实现，后续在 /quicklinks 里合并生成即可，前端无感。 */
 
 const BTN_PRIMARY = 'inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-ps-blue text-white text-[14px] font-bold hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition'
 const BTN_GHOST = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[13px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
 const INPUT_CLS = 'w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-[14px] text-white placeholder-zinc-500 focus:outline-none focus:border-ps-blue'
+
+/* [CN-FORK] v0.5.2.83 通用「不活即拉起」：入口标题 → 已安装 payload 的 ELF 路径匹配。
+ * 不写死任何程序名，以后新增 payload 无需改这里。匹配用「只留字母」的归一化名（丢掉
+ * 版本号/变体/中文/符号），再做双向前缀判断；唯一候选才认，避免歧义拉起错的程序。 */
+const normName = (s) => String(s || '').toLowerCase().replace(/\.elf$/, '').replace(/[^a-z]/g, '')
+const prefixHit = (a, b, min) => {
+  const x = normName(a), y = normName(b)
+  return !!x && !!y && Math.min(x.length, y.length) >= min && (x.startsWith(y) || y.startsWith(x))
+}
+
+/* /list_payloads 的 payloads 是 "…/<目录>/<文件>.elf"，按目录聚合一个候选；
+ * 本面板自身（nayeplmtools*）永远排除，否则点任何条目都可能重起自己。 */
+const buildLaunchIndex = (data) => {
+  const byDir = new Map()
+  for (const p of (data && data.payloads) || []) {
+    const seg = String(p).split('/')
+    const dir = seg[seg.length - 2] || ''
+    if (!dir || byDir.has(dir)) continue
+    const meta = ((data && data.meta) || {})[seg[seg.length - 1]] || {}
+    byDir.set(dir, { dir, path: p, names: [dir, meta.display_name].filter(Boolean) })
+  }
+  return [...byDir.values()]
+}
+
+const findLaunchTarget = (index, name) => {
+  const hits = index.filter((c) => !normName(c.dir).startsWith('nayeplmtools') &&
+    c.names.some((n) => prefixHit(n, name, 3)))
+  return hits.length === 1 ? hits[0].path : ''
+}
+
+/* 这些请求辅助函数一律放模块作用域：组件体内定义的取数闭包会被 react-hooks/purity
+ * 判成「渲染期调用不纯函数」（Date.now / fetch），逻辑本身没在渲染路径上。 */
+const getJson = (url) => fetch(url, { cache: 'no-store' }).then((r) => r.json()).catch(() => null)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/* 已在运行的程序不再重复拉起（elfldr 起新进程不会杀旧的，会叠出多个实例）。
+ * 前缀阈值取 8：进程名与目录名同源，短词（dbst 等）不误伤。 */
+const isAlreadyRunning = async (path) => {
+  const data = await getJson(`/processes_list?_=${Date.now()}`)
+  const procs = ((data && data.processes) || []).map((p) => p.name)
+  const seg = String(path).split('/')
+  return procs.some((pn) => [seg[seg.length - 2], seg[seg.length - 1]]
+    .some((c) => c && prefixHit(c, pn, 8)))
+}
+
+/* 存活判定只有一条路：PKG Manager 问专有的 /pkgmanager_status（本机 8844 探活），
+ * 其余条目重读 /quicklinks 里自己那条的 alive——alive 的算法留在主机侧，前端不另起一套。 */
+const probeEntry = async (entry) => {
+  if (entry.program === 'pkgmanager') {
+    const s = await getJson(`/pkgmanager_status?_=${Date.now()}`)
+    return !!(s && s.running)
+  }
+  const data = await getJson(`/quicklinks?_=${Date.now()}`)
+  const hit = ((data && data.entries) || []).find((x) => x.url === entry.url)
+  return !!(hit && hit.alive)
+}
+
+const waitAlive = async (entry, gap, times) => {
+  for (let k = 0; k < times; k++) {
+    await sleep(gap)
+    if (await probeEntry(entry)) return true
+  }
+  return false
+}
+
+const launchPkgManager = () => getJson(`/pkgmanager_launch?_=${Date.now()}`)
+
+/* 候选表缓存在模块作用域：点击手势里要同步判断「这条有没有对应程序」，异步取完再
+ * preventDefault 就来不及了（默认的新标签已经打开）。null=还没取到，此时宁可接管，
+ * 也不能因为索引缺失而丢掉拉起能力。 */
+let launchIndexCache = null
+const refreshLaunchIndex = async () => {
+  const data = await getJson(`/list_payloads?_=${Date.now()}`)
+  if (data && Array.isArray(data.payloads)) launchIndexCache = buildLaunchIndex(data)
+}
+
+/* 灰点条目是否值得接管：本机有同名程序（或 PKG Manager 这类专有入口）才接管拉起；
+ * 纯外网链接（NAS/路由器后台等）维持默认新标签打开。 */
+const shouldTakeOver = (entry) => {
+  if (entry.program === 'pkgmanager') return true
+  if (!launchIndexCache) return true
+  return !!findLaunchTarget(launchIndexCache, entry.name)
+}
 
 export default function CommonEntriesView() {
   const { t } = useTranslation()
@@ -29,6 +113,8 @@ export default function CommonEntriesView() {
       const data = await res.json().catch(() => null)
       if (data && Array.isArray(data.entries)) setEntries(data.entries)
     } catch { /* 服务未响应时保留上次清单 */ }
+    /* [CN-FORK] 每次刷清单顺带刷新拉起候选表（不 await：慢一点的 payload 列表不该拖住卡片渲染） */
+    refreshLaunchIndex()
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -76,53 +162,51 @@ export default function CommonEntriesView() {
     load()
   }
 
-  /* [CN-FORK] 程序类入口（program=pkgmanager，如 PKG Manager :8844）点击时以「端口存活」为准：
-   * 端口存活（服务已就绪）→ 直接打开；不存活 → 试着调 /pkgmanager_launch 拉起（elfldr），再轮询
-   * 端口直至存活后打开。空白标签页必须在点击手势里同步 window.open（异步后再开会被弹窗拦截），
-   * 先写「正在启动」占位文档避免白屏。 */
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
+  /* [CN-FORK] v0.5.2.83 灰点条目点击接管：先探一次存活，不活就按名称匹配已安装 payload
+   * 拉起（PKG Manager 仍走专有的 /pkgmanager_launch，那条路还兼管内嵌版本的安装）。
+   * 起来后同标签跳转——弹窗拦截下 window.open 在 PS5 WebKit 上可能完全看不见，
+   * 体感就是「点了没反应」。 */
   const openProgram = async (entry, index) => {
     if (startingIdx !== -1) return
-    const tip = t('entries.starting_prog', '正在启动 {{name}}…', { name: entry.name })
-    const w = window.open('', '_blank')
-    if (w) {
-      try {
-        w.document.write(`<!doctype html><title>${tip}</title><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#101014;color:#a1a1aa;font:600 15px/1.6 system-ui,sans-serif">${tip}</body>`)
-        w.document.close()
-      } catch { /* 占位文档写失败不影响启动流程 */ }
-    }
     setStartingIdx(index)
     setMsg(null)
+    let go = false
     try {
-      /* [CN-FORK] running 即主机对 127.0.0.1:8844 的 TCP 探活结果；端口活=服务已就绪可直接打开 */
-      const portAlive = () =>
-        fetch('/pkgmanager_status', { cache: 'no-store' })
-          .then((r) => r.json()).then((s) => !!(s && s.running)).catch(() => false)
-      let alive = await portAlive()
-      if (!alive) {
-        /* 端口不存活：试着拉起。launch 应答失败也不短路，给端口一小段缓冲再定论 */
-        const lr = await fetch('/pkgmanager_launch', { cache: 'no-store' })
-          .then((r) => r.json()).catch(() => null)
-        const maxWait = lr && !lr.ok ? 4 : 40 // 明确失败 2s 缓冲；否则 20s 等待启动
-        for (let k = 0; k < maxWait && !alive; k++) {
-          await sleep(500)
-          alive = await portAlive()
-        }
-        if (!alive) throw new Error((lr && !lr.ok && lr.message) || t('entries.start_fail', '启动失败'))
-      }
-      if (w) {
-        if (!w.closed) w.location.href = entry.url
+      if (await probeEntry(entry)) {
+        go = true
+      } else if (entry.program === 'pkgmanager') {
+        /* launch 应答失败也不短路，给端口一小段缓冲再定论 */
+        const lr = await launchPkgManager()
+        if (lr && !lr.ok) throw new Error(lr.message || t('entries.start_fail', '启动失败'))
+        if (!(await waitAlive(entry, 500, 40)))
+          throw new Error(t('entries.start_timeout', '已发起拉起，但端口迟迟没有就绪'))
+        go = true
       } else {
-        const w2 = window.open(entry.url, '_blank')
-        if (!w2) window.location.replace(entry.url)
+        if (!launchIndexCache) await refreshLaunchIndex() /* 索引还没到手（首屏就点）：现取一次 */
+        const path = findLaunchTarget(launchIndexCache || [], entry.name)
+        if (!path) {
+          go = true /* 索引失效等边缘情况：不猜程序，直接按普通链接打开 */
+        } else if (await isAlreadyRunning(path)) {
+          setMsg({
+            ok: false,
+            text: t('entries.already_running',
+              '该程序看起来已经在运行，但这个地址从本机连不通（可能只监听了 127.0.0.1）'),
+          })
+        } else {
+          const res = await fetch(`/loadpayload:${encodeURI(path)}`).catch(() => null)
+          if (!res || !res.ok) throw new Error(t('entries.start_fail', '启动失败'))
+          if (!(await waitAlive(entry, 700, 45)))
+            throw new Error(t('entries.start_timeout', '已发起拉起，但端口迟迟没有就绪'))
+          go = true
+        }
       }
     } catch (err) {
-      if (w) { try { w.close() } catch { /* 忽略 */ } }
       setMsg({ ok: false, text: (err && err.message) || t('entries.start_fail', '启动失败') })
     }
     setStartingIdx(-1)
-    load()
+    /* assign 而非写 location.href：后者会被 react-hooks 编译规则判成「渲染内修改不可变值」 */
+    if (go) window.location.assign(entry.url)
+    else load()
   }
 
   const list = entries || []
@@ -213,8 +297,10 @@ export default function CommonEntriesView() {
                 rel="noreferrer"
                 className="block p-4 space-y-2"
                 onClick={(ev) => {
-                  /* [CN-FORK] 程序类入口接管点击（起停由本服务代理）；其余条目保持默认新标签打开 */
-                  if (e.program === 'pkgmanager') {
+                  /* [CN-FORK] 灰点（探活不通）且本机有对应程序的条目才接管点击去拉起；绿点、以及
+                     本机没有对应程序的外网链接一律保持默认新标签打开。拉起对象按名称匹配，不写死
+                     程序名单，以后新增 payload 自动生效。 */
+                  if (!e.alive && shouldTakeOver(e)) {
                     ev.preventDefault()
                     openProgram(e, i)
                   }
