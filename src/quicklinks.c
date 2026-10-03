@@ -15,6 +15,7 @@
 #include "quicklinks.h"
 #include "game_mgr.h"
 #include "json_helpers.h"
+#include "pkgmanager.h" /* [CN-FORK] PKGMGR_UI_PORT：本机程序类入口识别 */
 #include "pldmgr.h"
 #include "utils.h" /* [CN-FORK] pldmgr_get_local_ip：磁贴链接本机回环地址 → LAN IP 改写 */
 
@@ -355,6 +356,12 @@ int quicklinks_list_json(char *buf, size_t size) {
     }
     pthread_mutex_unlock(&g_ql_mtx);
 
+    /* [CN-FORK] 本机程序识别：host 为本机（127.0.0.1 / localhost / 本机 LAN IP）且端口为
+     * PKG Manager UI 端口（8844）的条目输出 program=pkgmanager；前端点击这类卡片时未运行
+     * 就自动拉起（elfldr）、已在运行则直接打开。self_ip 只取一次，逐条仅做字符串比较。 */
+    char self_ip[64] = "";
+    pldmgr_get_local_ip(self_ip, sizeof(self_ip));
+
     JsonListBuilder jb = { buf, size, 0, 1 };
     buf[0] = '\0';
 
@@ -363,9 +370,20 @@ int quicklinks_list_json(char *buf, size_t size) {
         char name_e[512], url_e[1024];
         pldmgr_json_escape(s->entries[i].name, name_e, sizeof(name_e));
         pldmgr_json_escape(s->entries[i].url,  url_e,  sizeof(url_e));
-        if (json_append(&jb, "  {\"name\":\"%s\",\"url\":\"%s\",\"src\":\"%s\",\"alive\":%s}%s\n",
+
+        const char *program = "";
+        char host[256];
+        int port = 0;
+        if (parse_url_hostport(s->entries[i].url, host, sizeof(host), &port) == 0 &&
+            port == PKGMGR_UI_PORT &&
+            (strcmp(host, "127.0.0.1") == 0 || strcmp(host, "localhost") == 0 ||
+             (self_ip[0] && strcmp(host, self_ip) == 0))) {
+            program = "pkgmanager";
+        }
+
+        if (json_append(&jb, "  {\"name\":\"%s\",\"url\":\"%s\",\"src\":\"%s\",\"alive\":%s,\"program\":\"%s\"}%s\n",
             name_e, url_e, s->entries[i].src,
-            probe_url(s->entries[i].url) ? "true" : "false",
+            probe_url(s->entries[i].url) ? "true" : "false", program,
             (i < s->count - 1) ? "," : "") != 0) {
             break;
         }

@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import http from 'node:http'; // [CN-FORK] PKG Manager 桩服务：真实监听 8844 供本地端到端验证
+import net from 'node:net';   // [CN-FORK] 真实 TCP 探活（与实机 pkgmanager.c 探活语义一致）
 
 const app = express();
 app.use(cors());
@@ -126,34 +128,66 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.80'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.81'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
 
-// [CN-FORK] PKG Manager 内置集成 mock：状态/启动/上传（实机由 pkgmanager.c 探活 8844 + elfldr 拉起）
-let pkgRunning = false;
+/* [CN-FORK] PKG Manager 内置集成 mock：状态/启动/上传（实机由 pkgmanager.c 探活 127.0.0.1:8844 + elfldr 拉起）。
+ * 这里用「真实端口」模拟：launch 拉起一个监听 8844 的桩 HTTP 服务、stop 关掉；running/alive 全部来自
+ * 真实 TCP 探活——与实机语义一致（端口活 = 服务已就绪），前端「端口存活即直接打开」逻辑可端到端验证 */
+let pkgStub = null;
 let pkgInstalled = '-';
-app.get('/pkgmanager_status', (req, res) => {
+
+const pkgPortAlive = () => new Promise((resolve) => {
+  const sock = net.connect({ host: '127.0.0.1', port: 8844 });
+  const done = (ok) => { sock.destroy(); resolve(ok); };
+  sock.setTimeout(400, () => done(false));
+  sock.once('connect', () => done(true));
+  sock.once('error', () => done(false));
+});
+
+const pkgStubStart = () => new Promise((resolve, reject) => {
+  if (pkgStub) return resolve();
+  const srv = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><title>PKG Manager (mock stub)</title><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#101014;color:#e4e4e7;font:600 16px/1.6 system-ui,sans-serif">PKG Manager mock stub · port 8844</body>');
+  });
+  srv.once('error', (err) => { pkgStub = null; reject(err); });
+  srv.listen(8844, '127.0.0.1', () => { pkgStub = srv; resolve(); });
+});
+
+app.get('/pkgmanager_status', async (req, res) => {
   res.json({
-    running: pkgRunning,
+    running: await pkgPortAlive(),
     port: 8844,
     embedded_version: '1.4.0-CN',
     installed_version: pkgInstalled,
     file: pkgInstalled !== '-',
   });
 });
-app.get('/pkgmanager_launch', (req, res) => {
-  pkgRunning = true;
+app.get('/pkgmanager_launch', async (req, res) => {
+  try {
+    await pkgStubStart();
+  } catch (err) {
+    /* 8844 被其它进程占用：对前端而言「端口活=服务可达」，不算失败 */
+    if (!(await pkgPortAlive())) {
+      return res.json({ ok: false, message: `mock 拉起失败: ${err.code || err.message}` });
+    }
+  }
   if (pkgInstalled === '-') pkgInstalled = '1.4.0-CN';
   res.json({ ok: true, message: 'OK' });
 });
 // [CN-FORK] 关闭 PKG Manager mock（实机由 pkgmanager.c 按进程名 SIGKILL）
-app.get('/pkgmanager_stop', (req, res) => {
-  if (!pkgRunning) {
+app.get('/pkgmanager_stop', async (req, res) => {
+  const was = await pkgPortAlive();
+  if (pkgStub) {
+    await new Promise((resolve) => pkgStub.close(resolve));
+    pkgStub = null;
+  }
+  if (!was) {
     return res.json({ ok: true, message: 'PKG Manager was not running' });
   }
-  pkgRunning = false;
   res.json({ ok: true, message: 'SIGKILL sent to 1 process(es)' });
 });
 app.post('/pkgmanager_upload', (req, res) => {
@@ -166,15 +200,25 @@ app.post('/pkgmanager_upload', (req, res) => {
 });
 
 // [CN-FORK] 常用入口 mock：内存清单 + 新增/删除（实机由 quicklinks.c 读写 /data 下 json 并 TCP 探活）
+/* [CN-FORK] program 字段：本机程序类入口（实机由 quicklinks.c 按「本机 host + 8844 端口」识别），
+ * 前端点击时以「8844 端口存活」为准：存活直接打开、不存活试着拉起；本条目 alive 同样来自真实探活 */
 const quicklinks = [
-  { name: 'PKG Manager', url: 'http://192.168.1.214:8844', src: 'manual' },
+  /* 用 127.0.0.1:8844 对齐本机桩服务，预览时点卡片可直接打开桩页面（实机 quicklinks.c 会把回环
+   * 地址改写为 PS5 当前 LAN IP；本机主机名/回环/LAN IP 三种形式都算程序类入口） */
+  { name: 'PKG Manager', url: 'http://127.0.0.1:8844', src: 'manual', program: 'pkgmanager' },
   { name: 'NAS 面板', url: 'http://192.168.1.10:5000', src: 'manual' },
   /* [CN-FORK] 模拟 app.db 磁贴链接自动收录条目（实机由 quicklinks.c 同步 pprDeeplinkUri，
    * 且会把 127.0.0.1 回环地址改写为本机当前 LAN IP，故这里直接用示例 IP） */
   { name: 'NayePlmTools 磁贴', url: 'http://192.168.1.214:8911/', src: 'auto' },
 ];
-app.get('/quicklinks', (req, res) => {
-  res.json({ entries: quicklinks.map((e, i) => ({ ...e, alive: i === 0 || e.src === 'auto' })) });
+app.get('/quicklinks', async (req, res) => {
+  const pkgAlive = await pkgPortAlive();
+  res.json({
+    entries: quicklinks.map((e) => ({
+      ...e,
+      alive: e.program === 'pkgmanager' ? pkgAlive : e.src === 'auto',
+    })),
+  });
 });
 app.get('/quicklinks_add', (req, res) => {
   const { name, url } = req.query;

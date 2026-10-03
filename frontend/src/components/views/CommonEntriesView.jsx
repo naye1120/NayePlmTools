@@ -21,6 +21,7 @@ export default function CommonEntriesView() {
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ name: '', url: '' })
   const [confirmIdx, setConfirmIdx] = useState(-1)
+  const [startingIdx, setStartingIdx] = useState(-1) // [CN-FORK] 程序类入口正在启动的卡片下标
 
   const load = useCallback(async () => {
     try {
@@ -72,6 +73,55 @@ export default function CommonEntriesView() {
       setMsg({ ok: false, text: t('entries.delete_fail', '删除失败') })
     }
     setBusy(false)
+    load()
+  }
+
+  /* [CN-FORK] 程序类入口（program=pkgmanager，如 PKG Manager :8844）点击时以「端口存活」为准：
+   * 端口存活（服务已就绪）→ 直接打开；不存活 → 试着调 /pkgmanager_launch 拉起（elfldr），再轮询
+   * 端口直至存活后打开。空白标签页必须在点击手势里同步 window.open（异步后再开会被弹窗拦截），
+   * 先写「正在启动」占位文档避免白屏。 */
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+  const openProgram = async (entry, index) => {
+    if (startingIdx !== -1) return
+    const tip = t('entries.starting_prog', '正在启动 {{name}}…', { name: entry.name })
+    const w = window.open('', '_blank')
+    if (w) {
+      try {
+        w.document.write(`<!doctype html><title>${tip}</title><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#101014;color:#a1a1aa;font:600 15px/1.6 system-ui,sans-serif">${tip}</body>`)
+        w.document.close()
+      } catch { /* 占位文档写失败不影响启动流程 */ }
+    }
+    setStartingIdx(index)
+    setMsg(null)
+    try {
+      /* [CN-FORK] running 即主机对 127.0.0.1:8844 的 TCP 探活结果；端口活=服务已就绪可直接打开 */
+      const portAlive = () =>
+        fetch('/pkgmanager_status', { cache: 'no-store' })
+          .then((r) => r.json()).then((s) => !!(s && s.running)).catch(() => false)
+      let alive = await portAlive()
+      if (!alive) {
+        /* 端口不存活：试着拉起。launch 应答失败也不短路，给端口一小段缓冲再定论 */
+        const lr = await fetch('/pkgmanager_launch', { cache: 'no-store' })
+          .then((r) => r.json()).catch(() => null)
+        const maxWait = lr && !lr.ok ? 4 : 40 // 明确失败 2s 缓冲；否则 20s 等待启动
+        for (let k = 0; k < maxWait && !alive; k++) {
+          await sleep(500)
+          alive = await portAlive()
+        }
+        if (!alive) throw new Error((lr && !lr.ok && lr.message) || t('entries.start_fail', '启动失败'))
+      }
+      if (w) {
+        if (!w.closed) w.location.href = entry.url
+      } else {
+        const w2 = window.open(entry.url, '_blank')
+        if (!w2) window.location.replace(entry.url)
+      }
+    } catch (err) {
+      if (w) { try { w.close() } catch { /* 忽略 */ } }
+      setMsg({ ok: false, text: (err && err.message) || t('entries.start_fail', '启动失败') })
+    }
+    setStartingIdx(-1)
     load()
   }
 
@@ -157,7 +207,19 @@ export default function CommonEntriesView() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {list.map((e, i) => (
             <div key={`${e.url}-${i}`} className="relative group bg-white/5 border border-white/10 rounded-2xl hover:border-ps-blue/50 transition">
-              <a href={e.url} target="_blank" rel="noreferrer" className="block p-4 space-y-2">
+              <a
+                href={e.url}
+                target="_blank"
+                rel="noreferrer"
+                className="block p-4 space-y-2"
+                onClick={(ev) => {
+                  /* [CN-FORK] 程序类入口接管点击（起停由本服务代理）；其余条目保持默认新标签打开 */
+                  if (e.program === 'pkgmanager') {
+                    ev.preventDefault()
+                    openProgram(e, i)
+                  }
+                }}
+              >
                 <div className="flex items-center gap-2.5 pr-8">
                   {/* pr-8 是给右上角的删除按钮留位：它 absolute top-2 right-2，不预留就会和
                       本行末尾的外链图标叠在一起（实机反馈：链接与关闭按钮重合）。
@@ -173,7 +235,14 @@ export default function CommonEntriesView() {
                 </div>
                 <p className="text-[12px] text-zinc-500 break-all leading-relaxed">{e.url}</p>
               </a>
-              {confirmIdx === i ? (
+              {startingIdx === i ? (
+                <div className="absolute inset-0 bg-black/80 rounded-2xl flex flex-col items-center justify-center gap-2.5 px-4">
+                  <RefreshCw className="w-5 h-5 text-ps-blue animate-spin" />
+                  <p className="text-[13px] text-white text-center">
+                    {t('entries.starting_prog', '正在启动 {{name}}…', { name: e.name })}
+                  </p>
+                </div>
+              ) : confirmIdx === i ? (
                 <div className="absolute inset-0 bg-black/80 rounded-2xl flex flex-col items-center justify-center gap-3 px-4">
                   <p className="text-[13px] text-white text-center">
                     {t('entries.confirm_delete', '删除「{{name}}」？', { name: e.name })}

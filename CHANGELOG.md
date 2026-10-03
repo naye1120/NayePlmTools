@@ -1,3 +1,11 @@
+## v0.5.2.81 (CN-FORK)
+
+### 🚀 Features
+* **「常用入口」本机程序类入口点击自动拉起后打开（PKG Manager）**：
+  * 后端：`GET /quicklinks` 对 host 为本机（`127.0.0.1` / `localhost` / 本机当前 LAN IP）且端口为 PKG Manager UI 端口（8844）的条目输出 `program=pkgmanager` 字段；本机 IP 每次请求只取一次，逐条仅做字符串比较。
+  * 前端：这类卡片点击由前端接管，以**端口存活**为准——先探 `/pkgmanager_status`（即主机对 `127.0.0.1:8844` 的真实 TCP 探活）：端口存活 → 直接打开；不存活 → 调 `/pkgmanager_launch` 试着拉起（elfldr）并轮询端口，就绪后打开（最多 20s；launch 明确失败时 2s 缓冲后报错）。启动期间卡片盖「正在启动」遮罩；新标签页在点击手势内同步 `window.open`（规避弹窗拦截），先写占位文档避免白屏。其余条目保持默认新标签页打开。
+  * mock 同步为真实端口语义：launch 起一个监听 `8844` 的桩服务、stop 关闭，`running`/`alive` 均来自真实 TCP 探活，dev 预览可端到端验证。
+
 ## v0.5.2.80 (CN-FORK)
 
 ### 🐛 Fixes
