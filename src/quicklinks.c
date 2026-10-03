@@ -5,82 +5,225 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <pthread.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <time.h>
 
 #include "quicklinks.h"
+#include "game_mgr.h"
 #include "json_helpers.h"
 #include "pldmgr.h"
 
-/* ── Entry type & file I/O（照 sources.c 的骨架，无默认条目、按下标管理） ── */
+/* ── Entry type & file I/O（照 sources.c 的骨架，无默认条目、按下标管理） ──
+ * src: "manual"=用户手添 / "auto"=app.db 磁贴链接自动收录；
+ * hidden[]: 用户删过的 URL 抑制名单（同存 quicklinks.json），同步时跳过。 */
 
 typedef struct {
     char name[128];
     char url[512];
+    char src[8];
 } QuickLink;
 
-static int load_quicklinks(QuickLink *out, int *out_count) {
-    char *json = NULL;
-    size_t size = 0;
-    int count = 0;
+#define MAX_QUICKLINKS_HIDDEN 64
 
-    memset(out, 0, sizeof(QuickLink) * MAX_QUICKLINKS);
-    *out_count = 0;
+typedef struct {
+    QuickLink entries[MAX_QUICKLINKS];
+    int count;
+    char hidden[MAX_QUICKLINKS_HIDDEN][512];
+    int hidden_count;
+} QuicklinksStore;
 
-    if (read_file_text(QUICKLINKS_CONFIG_PATH, &json, &size) != 0 || !json || size == 0) {
-        if (json) free(json);
-        return 0; /* 没有文件 = 空清单，不是错误 */
-    }
-
-    const char *arr_start = strstr(json, "\"entries\"");
-    if (!arr_start) { free(json); return 0; }
-    arr_start = strchr(arr_start, '[');
-    if (!arr_start) { free(json); return 0; }
-
-    const char *p = arr_start + 1;
-    while (count < MAX_QUICKLINKS && (p = strchr(p, '{')) != NULL) {
-        const char *end = strchr(p, '}');
-        if (!end) break;
-
-        char name[128] = "", url[512] = "";
-        json_extract_string(p, end, "name", name, sizeof(name));
-        json_extract_string(p, end, "url",  url,  sizeof(url));
-        if (name[0] && url[0]) {
-            strncpy(out[count].name, name, sizeof(out[count].name) - 1);
-            strncpy(out[count].url,  url,  sizeof(out[count].url) - 1);
-            count++;
-        }
-        p = end + 1;
-    }
-
-    free(json);
-    *out_count = count;
+static int ql_hidden_add(QuicklinksStore *s, const char *url) {
+    for (int i = 0; i < s->hidden_count; i++)
+        if (strcmp(s->hidden[i], url) == 0) return 0;
+    if (s->hidden_count >= MAX_QUICKLINKS_HIDDEN) return -1;
+    strncpy(s->hidden[s->hidden_count], url, sizeof(s->hidden[0]) - 1);
+    s->hidden_count++;
     return 0;
 }
 
-static int save_quicklinks(QuickLink *links, int count) {
-    char buf[16384];
-    JsonListBuilder jb = { buf, sizeof(buf), 0, 1 };
+static void ql_hidden_del(QuicklinksStore *s, const char *url) {
+    for (int i = 0; i < s->hidden_count; i++) {
+        if (strcmp(s->hidden[i], url) == 0) {
+            for (int j = i; j < s->hidden_count - 1; j++)
+                memcpy(s->hidden[j], s->hidden[j + 1], sizeof(s->hidden[0]));
+            s->hidden_count--;
+            return;
+        }
+    }
+}
+
+static void load_quicklinks(QuicklinksStore *s) {
+    char *json = NULL;
+    size_t size = 0;
+
+    memset(s, 0, sizeof(*s));
+
+    if (read_file_text(QUICKLINKS_CONFIG_PATH, &json, &size) != 0 || !json || size == 0) {
+        if (json) free(json);
+        return; /* 没有文件 = 空清单，不是错误 */
+    }
+
+    const char *arr_start = strstr(json, "\"entries\"");
+    if (arr_start) arr_start = strchr(arr_start, '[');
+    if (arr_start) {
+        const char *p = arr_start + 1;
+        while (s->count < MAX_QUICKLINKS && (p = strchr(p, '{')) != NULL) {
+            const char *end = strchr(p, '}');
+            if (!end) break;
+
+            char name[128] = "", url[512] = "", src[16] = "";
+            json_extract_string(p, end, "name", name, sizeof(name));
+            json_extract_string(p, end, "url",  url,  sizeof(url));
+            json_extract_string(p, end, "src",  src,  sizeof(src));
+            if (name[0] && url[0]) {
+                strncpy(s->entries[s->count].name, name, sizeof(s->entries[0].name) - 1);
+                strncpy(s->entries[s->count].url,  url,  sizeof(s->entries[0].url) - 1);
+                snprintf(s->entries[s->count].src, sizeof(s->entries[0].src), "%s",
+                         strcmp(src, "auto") == 0 ? "auto" : "manual");
+                s->count++;
+            }
+            p = end + 1;
+        }
+    }
+
+    /* hidden 抑制名单（URL 数组，均为转义后的普通字符串） */
+    const char *hp = strstr(json, "\"hidden\"");
+    if (hp) hp = strchr(hp, '[');
+    const char *he = hp ? strchr(hp, ']') : NULL;
+    if (hp && he) {
+        const char *p = hp + 1;
+        while (s->hidden_count < MAX_QUICKLINKS_HIDDEN && (p = strchr(p, '"')) != NULL && p < he) {
+            const char *q = strchr(p + 1, '"');
+            if (!q || q > he) break;
+            size_t l = (size_t)(q - p - 1);
+            if (l > 0 && l < sizeof(s->hidden[0])) {
+                memcpy(s->hidden[s->hidden_count], p + 1, l);
+                s->hidden[s->hidden_count][l] = 0;
+                s->hidden_count++;
+            }
+            p = q + 1;
+        }
+    }
+
+    free(json);
+}
+
+static int save_quicklinks(const QuicklinksStore *s) {
+    /* 条目名/URL + 抑制名单全量序列化，最坏几 KB×几十条；堆上给足余量（原先 16KB 栈缓冲偏小） */
+    size_t cap = 131072;
+    char *buf = malloc(cap);
+    if (!buf) return -1;
+    JsonListBuilder jb = { buf, cap, 0, 1 };
 
     ensure_dir_recursive(BASE_DATA_DIR);
 
     json_append(&jb, "{\"entries\":[\n");
-    for (int i = 0; i < count; i++) {
-        char name_e[256], url_e[1024];
-        pldmgr_json_escape(links[i].name, name_e, sizeof(name_e));
-        pldmgr_json_escape(links[i].url,  url_e,  sizeof(url_e));
-        if (json_append(&jb, "  {\"name\":\"%s\",\"url\":\"%s\"}%s\n",
-            name_e, url_e, (i < count - 1) ? "," : "") != 0) {
+    for (int i = 0; i < s->count; i++) {
+        char name_e[512], url_e[1024];
+        pldmgr_json_escape(s->entries[i].name, name_e, sizeof(name_e));
+        pldmgr_json_escape(s->entries[i].url,  url_e,  sizeof(url_e));
+        if (json_append(&jb, "  {\"name\":\"%s\",\"url\":\"%s\",\"src\":\"%s\"}%s\n",
+            name_e, url_e, s->entries[i].src, (i < s->count - 1) ? "," : "") != 0) {
             break;
         }
     }
-    json_append(&jb, "]}\n");
+    json_append(&jb, "]");
+    if (s->hidden_count) {
+        json_append(&jb, ",\n\"hidden\":[");
+        for (int i = 0; i < s->hidden_count; i++) {
+            char url_e[1024];
+            pldmgr_json_escape(s->hidden[i], url_e, sizeof(url_e));
+            if (json_append(&jb, "%s\"%s\"", i ? "," : "", url_e) != 0) break;
+        }
+        json_append(&jb, "]");
+    }
+    json_append(&jb, "}\n");
 
-    return write_file_text(QUICKLINKS_CONFIG_PATH, buf, jb.pos);
+    int rc = write_file_text(QUICKLINKS_CONFIG_PATH, buf, jb.pos);
+    free(buf);
+    return rc;
+}
+
+/* ── [CN-FORK] app.db 磁贴链接自动收录（按需取 + mtime 闸门）──────────────
+ * 语义：打开「常用入口」页触发一次同步；app.db 的 mtime+size 与上次完全一致才跳过。
+ * 用「不等」而不是「更新」判断——PS5 时钟回退时 mtime 可能变小，变化就必须触发。 */
+
+#define MAX_SYNC_DEEPLINKS 64
+
+typedef struct {
+    char uris[MAX_SYNC_DEEPLINKS][512];
+    char names[MAX_SYNC_DEEPLINKS][128];
+    int count;
+} deeplink_hits_t;
+
+static int ql_collect_cb(const char *tid, const char *name, const char *uri, void *user) {
+    (void)tid;
+    deeplink_hits_t *h = (deeplink_hits_t *)user;
+    for (int i = 0; i < h->count; i++)
+        if (strcmp(h->uris[i], uri) == 0) return 0;  /* 多个 titleId 共用同一 URL 时只收一条 */
+    if (h->count >= MAX_SYNC_DEEPLINKS) return 1;
+    strncpy(h->uris[h->count], uri, sizeof(h->uris[0]) - 1);
+    strncpy(h->names[h->count], name, sizeof(h->names[0]) - 1);
+    h->count++;
+    return 0;
+}
+
+static time_t g_appdb_mtime = 0;
+static off_t  g_appdb_size  = -1;
+static int    g_appdb_seen  = 0;
+
+/* 合并语义：① 磁贴已消失（卸载/删除）→ 移除对应 auto 条目；② 新磁贴 → 追加为 auto；
+ * ③ 已存在 URL 与上次删除的抑制名单都跳过；④ 满 MAX_QUICKLINKS 截断。*dirty=1 表示需落盘。 */
+static void quicklinks_sync_appdb(QuicklinksStore *s, int *dirty) {
+    struct stat st;
+    if (stat(GAME_MGR_APPDB_PATH, &st) != 0) return;      /* 没有 app.db：静默跳过 */
+    if (g_appdb_seen && st.st_mtime == g_appdb_mtime && st.st_size == g_appdb_size) return;
+
+    deeplink_hits_t *h = calloc(1, sizeof(deeplink_hits_t));
+    if (!h) return;
+    int hits = game_mgr_enum_deeplinks(ql_collect_cb, h);
+    if (hits < 0) { free(h); return; }                    /* 解析失败：不设闸门，下次请求重试 */
+    g_appdb_mtime = st.st_mtime;
+    g_appdb_size  = st.st_size;
+    g_appdb_seen  = 1;
+
+    int w = 0;
+    for (int i = 0; i < s->count; i++) {
+        if (strcmp(s->entries[i].src, "auto") != 0) { s->entries[w++] = s->entries[i]; continue; }
+        int found = 0;
+        for (int j = 0; j < h->count; j++)
+            if (strcmp(h->uris[j], s->entries[i].url) == 0) { found = 1; break; }
+        if (found) s->entries[w++] = s->entries[i];
+        else *dirty = 1;
+    }
+    s->count = w;
+
+    for (int j = 0; j < h->count; j++) {
+        int exists = 0;
+        for (int i = 0; i < s->count; i++)
+            if (strcmp(s->entries[i].url, h->uris[j]) == 0) { exists = 1; break; }
+        if (exists) continue;
+        int suppressed = 0;
+        for (int k = 0; k < s->hidden_count; k++)
+            if (strcmp(s->hidden[k], h->uris[j]) == 0) { suppressed = 1; break; }
+        if (suppressed) continue;
+        if (s->count >= MAX_QUICKLINKS) break;
+        strncpy(s->entries[s->count].name, h->names[j], sizeof(s->entries[0].name) - 1);
+        strncpy(s->entries[s->count].url,  h->uris[j],  sizeof(s->entries[0].url) - 1);
+        snprintf(s->entries[s->count].src, sizeof(s->entries[0].src), "auto");
+        s->count++;
+        *dirty = 1;
+    }
+    free(h);
 }
 
 /* ── TCP 探活：解析 URL 的 host:port，非阻塞 connect + select 限时 ────────── */
+
+static pthread_mutex_t g_ql_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /* 从 http(s)://host[:port]/... 提取 host 与 port；失败返回 -1。
  * host 支持 IP 字面量与域名（getaddrinfo）。 */
@@ -168,30 +311,42 @@ static int probe_url(const char *url) {
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
 int quicklinks_list_json(char *buf, size_t size) {
-    QuickLink *links = calloc(MAX_QUICKLINKS, sizeof(QuickLink));
-    if (!links) {
+    QuicklinksStore *s = calloc(1, sizeof(QuicklinksStore));
+    if (!s) {
         snprintf(buf, size, "{\"entries\":[]}");
         return -1;
     }
-    int count = 0;
-    load_quicklinks(links, &count);
+
+    /* 锁内：加载 + app.db 同步（含落盘）；锁外再做 TCP 探活，别让慢探活占着写锁 */
+    pthread_mutex_lock(&g_ql_mtx);
+    load_quicklinks(s);
+    int dirty = 0;
+    quicklinks_sync_appdb(s, &dirty);
+    if (dirty) {
+        if (save_quicklinks(s) == 0)
+            pldmgr_log("[PLDMGR] quicklinks: synced app.db deeplinks, %d entries\n", s->count);
+        else
+            pldmgr_log("[PLDMGR] quicklinks: sync save failed\n");
+    }
+    pthread_mutex_unlock(&g_ql_mtx);
 
     JsonListBuilder jb = { buf, size, 0, 1 };
     buf[0] = '\0';
 
     json_append(&jb, "{\"entries\":[\n");
-    for (int i = 0; i < count; i++) {
-        char name_e[256], url_e[1024];
-        pldmgr_json_escape(links[i].name, name_e, sizeof(name_e));
-        pldmgr_json_escape(links[i].url,  url_e,  sizeof(url_e));
-        if (json_append(&jb, "  {\"name\":\"%s\",\"url\":\"%s\",\"alive\":%s}%s\n",
-            name_e, url_e, probe_url(links[i].url) ? "true" : "false",
-            (i < count - 1) ? "," : "") != 0) {
+    for (int i = 0; i < s->count; i++) {
+        char name_e[512], url_e[1024];
+        pldmgr_json_escape(s->entries[i].name, name_e, sizeof(name_e));
+        pldmgr_json_escape(s->entries[i].url,  url_e,  sizeof(url_e));
+        if (json_append(&jb, "  {\"name\":\"%s\",\"url\":\"%s\",\"src\":\"%s\",\"alive\":%s}%s\n",
+            name_e, url_e, s->entries[i].src,
+            probe_url(s->entries[i].url) ? "true" : "false",
+            (i < s->count - 1) ? "," : "") != 0) {
             break;
         }
     }
     json_append(&jb, "]}\n");
-    free(links);
+    free(s);
     return 0;
 }
 
@@ -213,67 +368,80 @@ int quicklinks_add(const char *name, const char *url, char *msg, size_t msz) {
         return -1;
     }
 
-    QuickLink *links = calloc(MAX_QUICKLINKS, sizeof(QuickLink));
-    if (!links) {
+    QuicklinksStore *s = calloc(1, sizeof(QuicklinksStore));
+    if (!s) {
         snprintf(msg, msz, "内存分配失败");
         return -1;
     }
-    int count = 0;
-    load_quicklinks(links, &count);
 
-    if (count >= MAX_QUICKLINKS) {
-        free(links);
+    pthread_mutex_lock(&g_ql_mtx);
+    load_quicklinks(s);
+
+    if (s->count >= MAX_QUICKLINKS) {
+        pthread_mutex_unlock(&g_ql_mtx);
+        free(s);
         snprintf(msg, msz, "条目已达上限 %d", MAX_QUICKLINKS);
         return -1;
     }
-    for (int i = 0; i < count; i++) {
-        if (strcmp(links[i].url, url) == 0) {
-            free(links);
+    for (int i = 0; i < s->count; i++) {
+        if (strcmp(s->entries[i].url, url) == 0) {
+            pthread_mutex_unlock(&g_ql_mtx);
+            free(s);
             snprintf(msg, msz, "该 URL 已存在");
             return -1;
         }
     }
 
-    strncpy(links[count].name, name, sizeof(links[count].name) - 1);
-    strncpy(links[count].url,  url,  sizeof(links[count].url) - 1);
-    count++;
+    strncpy(s->entries[s->count].name, name, sizeof(s->entries[0].name) - 1);
+    strncpy(s->entries[s->count].url,  url,  sizeof(s->entries[0].url) - 1);
+    snprintf(s->entries[s->count].src, sizeof(s->entries[0].src), "manual");
+    s->count++;
+    ql_hidden_del(s, url); /* 手动重新添加 = 撤销此前的删除抑制 */
 
-    if (save_quicklinks(links, count) != 0) {
-        free(links);
+    int rc = save_quicklinks(s);
+    pthread_mutex_unlock(&g_ql_mtx);
+    free(s);
+    if (rc != 0) {
         snprintf(msg, msz, "保存失败");
         return -1;
     }
-    free(links);
     pldmgr_log("[PLDMGR] quicklink added: %s -> %s\n", name, url);
     snprintf(msg, msz, "OK");
     return 0;
 }
 
 int quicklinks_remove(int index, char *msg, size_t msz) {
-    QuickLink *links = calloc(MAX_QUICKLINKS, sizeof(QuickLink));
-    if (!links) {
+    QuicklinksStore *s = calloc(1, sizeof(QuicklinksStore));
+    if (!s) {
         snprintf(msg, msz, "内存分配失败");
         return -1;
     }
-    int count = 0;
-    load_quicklinks(links, &count);
 
-    if (index < 0 || index >= count) {
-        free(links);
+    pthread_mutex_lock(&g_ql_mtx);
+    load_quicklinks(s);
+
+    if (index < 0 || index >= s->count) {
+        pthread_mutex_unlock(&g_ql_mtx);
+        free(s);
         snprintf(msg, msz, "无效的条目序号");
         return -1;
     }
 
-    for (int i = index; i < count - 1; i++)
-        links[i] = links[i + 1];
-    count--;
+    /* 删除即抑制：不论 auto/manual，URL 记入 hidden，避免下一次同步又把 auto 条目加回来 */
+    if (ql_hidden_add(s, s->entries[index].url) != 0)
+        pldmgr_log("[PLDMGR] quicklinks: hidden list full, %s may reappear\n", s->entries[index].url);
 
-    if (save_quicklinks(links, count) != 0) {
-        free(links);
+    for (int i = index; i < s->count - 1; i++)
+        s->entries[i] = s->entries[i + 1];
+    s->count--;
+
+    int rc = save_quicklinks(s);
+    pthread_mutex_unlock(&g_ql_mtx);
+    free(s);
+    if (rc != 0) {
         snprintf(msg, msz, "保存失败");
         return -1;
     }
-    free(links);
     snprintf(msg, msz, "OK");
     return 0;
 }

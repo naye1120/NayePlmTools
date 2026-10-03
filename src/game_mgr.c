@@ -22,7 +22,6 @@
 #include "game_mgr.h"
 #include "pldmgr.h" /* pldmgr_log / pldmgr_json_escape（经 utils.h） */
 
-#define APPDB_PATH  "/system_data/priv/mms/app.db"
 #define MAX_GAMES   512
 
 /* ── 游戏 titleId：9 位 alnum 且命中已知游戏前缀（PPSA/CUSA/PPJB/EMUA/PAUS）──
@@ -164,8 +163,34 @@ static int st_bwalk(const uint8_t *d, size_t sz, uint32_t pg, uint32_t pgsz, int
     return 0;
 }
 
-/* 在 sqlite_master 里定位 tbl_contentinfo 的根页 */
-typedef struct { uint32_t root; } st_master_arg;
+/* [CN-FORK] 从建表 SQL 里定位列序号：数第一个 '(' 到列名之间「顶层逗号」个数。
+ * 固件间 tbl_contentinfo 列序可能不同，pprDeeplinkUri 这类唯一列名不写死序号；
+ * 简化处理未跳过引号内逗号（该表无带逗号的字符串默认值，够用）。 */
+static int st_sql_col_index(const char *sql, size_t sl, const char *col) {
+    char tmp[4096];
+    size_t n = sl < sizeof(tmp) - 1 ? sl : sizeof(tmp) - 1;
+    memcpy(tmp, sql, n);
+    tmp[n] = 0;
+    const char *lp = strchr(tmp, '(');
+    if (!lp) return -1;
+    const char *cp = lp + 1;
+    for (;;) {
+        cp = strstr(cp, col);
+        if (!cp) return -1;
+        if (!isalnum((unsigned char)cp[-1]) && cp[-1] != '_') break; /* 防命中更长列名里的子串 */
+        cp++;
+    }
+    int depth = 0, idx = 0;
+    for (const char *p = lp + 1; p < cp; p++) {
+        if (*p == '(') depth++;
+        else if (*p == ')') { if (--depth < 0) return -1; }
+        else if (*p == ',' && depth == 0) idx++;
+    }
+    return depth == 0 ? idx : -1;
+}
+
+/* 在 sqlite_master 里定位 tbl_contentinfo 的根页 + pprDeeplinkUri 列序号（col4=建表 SQL） */
+typedef struct { uint32_t root; int deeplink_col; } st_master_arg;
 static int st_cb_master(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     st_master_arg *m = (st_master_arg *)arg;
     const uint8_t *tp;
@@ -174,6 +199,8 @@ static int st_cb_master(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     if (st_rec_col(d, sz, rec, 1, &tp, &tl, NULL) != 2 || tl != 15 || memcmp(tp, "tbl_contentinfo", 15) != 0) return 0;
     if (st_rec_col(d, sz, rec, 3, NULL, NULL, &num) != 3 || !num) return 0;
     m->root = (uint32_t)num;
+    if (st_rec_col(d, sz, rec, 4, &tp, &tl, NULL) == 2 && tl)
+        m->deeplink_col = st_sql_col_index((const char *)tp, tl, "pprDeeplinkUri");
     return 1;
 }
 
@@ -228,7 +255,7 @@ static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
 }
 
 static void game_enum_appdb(enum_arg_t *a) {
-    int fd = open(APPDB_PATH, O_RDONLY);
+    int fd = open(GAME_MGR_APPDB_PATH, O_RDONLY);
     if (fd < 0) { pldmgr_log("[PLDMGR] game_list: app.db open failed errno=%d\n", errno); return; }
     off_t fsz = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
@@ -241,10 +268,77 @@ static void game_enum_appdb(enum_arg_t *a) {
     uint32_t pgsz = st_be16(d + 16);
     if (pgsz == 1) pgsz = 65536;
     if (pgsz < 512 || pgsz > 65536) { free(d); return; }
-    st_master_arg m = { 0 };
+    st_master_arg m = { 0, -1 };
     st_bwalk(d, (size_t)rd, 1, pgsz, 0, st_cb_master, &m);
     if (m.root) st_bwalk(d, (size_t)rd, m.root, pgsz, 0, st_cb_enum, a);
     free(d);
+}
+
+/* ── [CN-FORK] deeplink 枚举：供「常用入口」同步 app.db 磁贴链接（pprDeeplinkUri）。
+ * 与游戏列表差异：不做游戏前缀过滤（用户自制磁贴 titleId 可能非游戏前缀），
+ * col0 只要求非空；uri 必须 http(s):// 开头才回调。 */
+typedef struct {
+    game_mgr_deeplink_cb cb;
+    void *user;
+    int col;
+    int hits;
+} deeplink_arg_t;
+
+static int st_cb_deeplink(const uint8_t *d, size_t sz, size_t rec, void *arg) {
+    deeplink_arg_t *a = (deeplink_arg_t *)arg;
+    const uint8_t *tp;
+    size_t tl;
+    char tid[16] = "";
+    if (st_rec_col(d, sz, rec, 0, &tp, &tl, NULL) == 2 && tl && tl < sizeof(tid)) {
+        memcpy(tid, tp, tl);
+        tid[tl] = 0;
+    }
+    if (!tid[0]) return 0;
+    char name[128];
+    name[0] = 0;
+    if (st_rec_col(d, sz, rec, 2, &tp, &tl, NULL) == 2 && tl && tl < sizeof(name)) {
+        memcpy(name, tp, tl);
+        name[tl] = 0;
+    }
+    if (!name[0]) snprintf(name, sizeof(name), "%s", tid);
+    char uri[512];
+    uri[0] = 0;
+    if (st_rec_col(d, sz, rec, a->col, &tp, &tl, NULL) == 2 && tl && tl < sizeof(uri)) {
+        memcpy(uri, tp, tl);
+        uri[tl] = 0;
+    }
+    if (strncmp(uri, "http://", 7) != 0 && strncmp(uri, "https://", 8) != 0) return 0;
+    a->hits++;
+    return a->cb(tid, name, uri, a->user);
+}
+
+int game_mgr_enum_deeplinks(game_mgr_deeplink_cb cb, void *user) {
+    if (!cb) return -1;
+    int fd = open(GAME_MGR_APPDB_PATH, O_RDONLY);
+    if (fd < 0) return -1;
+    off_t fsz = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+    if (fsz < 100 || fsz > (64 << 20)) { close(fd); return -1; }
+    uint8_t *d = (uint8_t *)malloc((size_t)fsz);
+    if (!d) { close(fd); return -1; }
+    ssize_t rd = read(fd, d, (size_t)fsz);
+    close(fd);
+    if (rd < 200 || memcmp(d, "SQLite format 3", 16) != 0) { free(d); return -1; }
+    uint32_t pgsz = st_be16(d + 16);
+    if (pgsz == 1) pgsz = 65536;
+    if (pgsz < 512 || pgsz > 65536) { free(d); return -1; }
+    st_master_arg m = { 0, -1 };
+    st_bwalk(d, (size_t)rd, 1, pgsz, 0, st_cb_master, &m);
+    if (!m.root) { free(d); return -1; }              /* 连表都没有：异常库，交给调用方下次重试 */
+    if (m.deeplink_col < 0) { free(d); return 0; }     /* 库正常但无该列：视为「无磁贴链接」 */
+    deeplink_arg_t a;
+    a.cb = cb;
+    a.user = user;
+    a.col = m.deeplink_col;
+    a.hits = 0;
+    st_bwalk(d, (size_t)rd, m.root, pgsz, 0, st_cb_deeplink, &a);
+    free(d);
+    return a.hits;
 }
 
 /* ── 扫描 ShadowMount 式 scan paths，发现「已存在但未安装」的 dump 目录 ──

@@ -10,7 +10,8 @@ import {
   Terminal,
   X,
   Star,
-  Link2
+  Link2,
+  Gamepad2
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -36,8 +37,9 @@ import MoveFromUsbView from './components/views/MoveFromUsbView'
 import LogViewer from './components/views/LogViewer'
 import ManageSourcesView from './components/views/ManageSourcesView'
 import ActiveProcessesView from './components/views/ActiveProcessesView'
-// [CN-FORK] 常用入口页；PKG安装：内嵌 PKG Manager 自带界面（:8844）到右侧内容区
+// [CN-FORK] 常用入口页 + 游戏管理页（自常用入口抽出）；PKG安装：内嵌 PKG Manager 自带界面（:8844）到右侧内容区
 import CommonEntriesView from './components/views/CommonEntriesView'
+import GameManageView from './components/views/GameManageView'
 import PkgManagerFrame from './components/views/PkgManagerFrame'
 // [CN-FORK] v0.5.1.64 主页（DashboardView）已删除：硬件信息探测下线后它只剩空壳，
 // 启动直接落在「管理 Payload」（view='storage'）
@@ -506,9 +508,10 @@ function App() {
             {/* [CN-FORK] v0.5.1.64 删侧栏「主页」入口（DashboardView 已下线），首项即「管理 Payload」 */}
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} />
-            {/* [CN-FORK] 常用功能组：PKG安装（内嵌 :8844 界面）/ 常用入口 */}
+            {/* [CN-FORK] 常用功能组：PKG安装（内嵌 :8844 界面）/ 常用入口 / 游戏管理 */}
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'pkg'} onClick={() => setView('pkg')} icon={Package} label={t("app.nav.pkg", "PKG Manager")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'common_entries'} onClick={() => setView('common_entries')} icon={Link2} label={t("app.nav.common_entries", "Quick Links")} />
+            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'game_manage'} onClick={() => setView('game_manage')} icon={Gamepad2} label={t("app.nav.game_manage", "Game Manager")} />
             {sidebarExpanded && (
               <p className="label-caps px-4 pt-5 pb-2 !text-zinc-500">{t("app.nav.group_system", "System")}</p>
             )}
@@ -538,9 +541,10 @@ function App() {
         {/* [CN-FORK] v0.5.1.64 删移动端「主页」标签，「管理 Payload」上为首项故不再需要分隔线 */}
         <NavButton active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} mobileLabel={t("app.nav.manage_mobile", "Manage")} />
         <NavButton showSeparator active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} mobileLabel={t("app.nav.auto_mobile", "Auto")} />
-        {/* [CN-FORK] 手机端任务栏加长：与桌面侧栏对齐，补入「PKG安装」与「常用配置」两项 */}
+        {/* [CN-FORK] 手机端任务栏加长：与桌面侧栏对齐，补入「PKG安装」「常用配置」「游戏管理」 */}
         <NavButton showSeparator active={view === 'pkg'} onClick={() => setView('pkg')} icon={Package} label={t("app.nav.pkg", "PKG Manager")} mobileLabel={t("app.nav.pkg_mobile", "PKG")} />
         <NavButton showSeparator active={view === 'common_entries'} onClick={() => setView('common_entries')} icon={Link2} label={t("app.nav.common_entries", "Quick Links")} mobileLabel={t("app.nav.common_entries_mobile", "Links")} />
+        <NavButton showSeparator active={view === 'game_manage'} onClick={() => setView('game_manage')} icon={Gamepad2} label={t("app.nav.game_manage", "Game Manager")} mobileLabel={t("app.nav.game_manage_mobile", "Games")} />
         <NavButton showSeparator active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} mobileLabel={t("app.nav.processes_mobile", "Processes")} />
         <NavButton showSeparator active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} mobileLabel={t("app.nav.settings", "Settings")} />
         {/* [CN-FORK] 捐赠不再占据移动端底部标签位，改由设置页「支持作者」入口进入 */}
@@ -642,8 +646,9 @@ function App() {
 
           {view === 'donate' && <DonateView version={version} />}
 
-          {/* [CN-FORK] 常用入口 / PKG安装（内嵌 PKG Manager 界面） */}
+          {/* [CN-FORK] 常用入口 / 游戏管理 / PKG安装（内嵌 PKG Manager 界面） */}
           {view === 'common_entries' && <CommonEntriesView />}
+          {view === 'game_manage' && <GameManageView />}
           {view === 'pkg' && <PkgManagerFrame />}
         </main>
       </div>

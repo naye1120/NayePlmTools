@@ -1,3 +1,17 @@
+## v0.5.2.79 (CN-FORK)
+
+### 🚀 Features
+* **「游戏管理」独立成页**：游戏磁贴板块从「常用入口」页整体抽出为 `GameManageView` 独立视图，侧栏「常用功能」组在「常用配置」下方新增「游戏管理」入口（手机端短标「游戏」）；「常用入口」页只保留 常用入口 + 温控管理 两板块。
+* **「常用入口」自动收录已安装应用的 http 磁贴链接**：
+  * 数据源：`app.db` 的 `tbl_contentinfo.pprDeeplinkUri`——列序号按建表 SQL 实时定位（不硬编码，跨固件稳）；凡 `http(s)://` 开头的磁贴链接全部收录，名称取 `titleName`、取不到回落 TITLE_ID。
+  * 触发时机：不做定时扫描；`GET /quicklinks` 请求内顺带同步，以 `stat` 的 mtime+size 做闸门（严格 `==` 判无变化，PS5 开机时钟回退不误判），仅变化后的首个请求重建；解析失败不落闸门，下次请求自然重试。
+  * 条目管理：新增 `src`（`auto`/`manual`）与 `hidden` 抑制表（≤64）——自动条目在界面标「自动」徽标；手动删除后进抑制表不再复活，手动重新添加即解除。总量仍上限 32 条，超出跳过。
+  * 并发加固：`quicklinks.c` 读取/同步/增删加 `pthread_mutex` 串行，TCP 探活保持锁外；保存缓冲扩至 128KB。
+  * 词条：`entries.auto_tag` 与自动收录说明进 `locales-overlay`（zh/en）；mock 增加自动条目演示。
+
+### 🐛 Fixes
+* **修复 JSON 响应中文被静默清空**：`pldmgr_json_escape()` 原实现只放行 ASCII 可打印字符（0x20–0x7E），非 ASCII 内容（游戏 `titleName`、仓库描述等）会被整段清掉；现对 ≥0x80 字节按 UTF-8 原样透传（JSON 字符串本允许直接内嵌 UTF-8）。
+
 ## v0.5.2.78 (CN-FORK)
 
 ### 🚀 Features

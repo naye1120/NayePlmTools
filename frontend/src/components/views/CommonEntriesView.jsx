@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, X, RefreshCw, ExternalLink, Check } from 'lucide-react'
 import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
-import GameSection from './GameSection' /* [CN-FORK] 游戏管理板块 */
 
 /* [CN-FORK] 「常用入口」页：手动维护的快捷访问清单（IP:port 类服务导航）。
  * 数据存 payload 侧 /data/nayeplmtools/quicklinks.json（非浏览器 localStorage），
@@ -80,7 +79,8 @@ export default function CommonEntriesView() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 pb-12">
-      {/* [CN-FORK] 右侧三段式布局：板块一 常用入口（沿用原 quicklinks 全部功能） */}
+      {/* [CN-FORK] 布局：板块一 常用入口（沿用原 quicklinks 全部功能）；板块二 温控管理。
+          游戏管理板块已抽出为独立页（侧栏「游戏管理」），不再挂在本页。 */}
       <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-4">
@@ -164,6 +164,11 @@ export default function CommonEntriesView() {
                       name 上的 min-w-0 是 truncate 在 flex 子里真正生效的前提。 */}
                   <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${e.alive ? 'bg-green-400' : 'bg-zinc-600'}`} title={e.alive ? t('entries.alive', '可连通') : t('entries.dead', '当前不可达')} />
                   <span className="text-[15px] font-bold text-white truncate min-w-0">{e.name}</span>
+                  {e.src === 'auto' && (
+                    <span className="shrink-0 px-1.5 py-0.5 rounded bg-ps-blue/15 text-ps-blue text-[11px] font-bold leading-none">
+                      {t('entries.auto_tag', '自动')}
+                    </span>
+                  )}
                   <ExternalLink className="w-3.5 h-3.5 text-zinc-500 shrink-0 ml-auto group-hover:text-ps-blue transition" />
                 </div>
                 <p className="text-[12px] text-zinc-500 break-all leading-relaxed">{e.url}</p>
@@ -206,9 +211,6 @@ export default function CommonEntriesView() {
 
       {/* [CN-FORK] 板块二 温控管理：读 /thermal_stats 展示 CPU/GPU/SSD 温度 + 风扇 */}
       <ThermalSection />
-
-      {/* [CN-FORK] 板块三 游戏管理：读 /game_list 展示已安装 + 已存在的游戏（图标/名称/TID/来源） */}
-      <GameSection />
     </div>
   )
 }

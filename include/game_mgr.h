@@ -22,4 +22,16 @@ int game_mgr_list_json(char *buf, size_t size);
  * /system_data/priv/appmeta/<TID>。供 /game_icon?tid= 端点读取。tid 必须是 9 位 alnum。 */
 int game_mgr_icon_path(const char *tid, char *out, size_t osz);
 
+/* [CN-FORK] app.db 路径统一出口：游戏列表枚举与「常用入口」磁贴链接同步共用。 */
+#define GAME_MGR_APPDB_PATH "/system_data/priv/mms/app.db"
+
+/* [CN-FORK] deeplink 枚举回调：tid/titleId 原样（不做游戏前缀过滤，自制磁贴也可能收录）、
+ * name 取不到时回落 tid、uri 保证以 http:// 或 https:// 开头才回调。返回非 0 提前停止遍历。 */
+typedef int (*game_mgr_deeplink_cb)(const char *tid, const char *name, const char *uri, void *user);
+
+/* [CN-FORK] 遍历 app.db tbl_contentinfo 的 pprDeeplinkUri 列（列序号从建表 SQL 实时定位，
+ * 不写死）。返回命中条数；app.db 打不开/损坏返回 -1（调用方可重试），
+ * 页面正常但没有该列视为 0 条（非错误，别每次请求都重试全库解析）。 */
+int game_mgr_enum_deeplinks(game_mgr_deeplink_cb cb, void *user);
+
 #endif

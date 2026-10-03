@@ -102,6 +102,10 @@ void pldmgr_json_escape(const char *src, char *dst, size_t dst_size) {
             dst[pos++] = (char)c;
         } else if (c >= 0x20 && c <= 0x7E) {
             dst[pos++] = (char)c;
+        } else if (c >= 0x80) {
+            /* [CN-FORK] 原实现只放行 ASCII，中文名/描述会被整段清空（游戏 titleName、
+             * 磁贴链接名等）。JSON 字符串本就允许直接内嵌 UTF-8 字节，原样透传即可。 */
+            dst[pos++] = (char)c;
         }
     }
 

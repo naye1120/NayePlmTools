@@ -126,7 +126,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.78'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.79'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -167,11 +167,13 @@ app.post('/pkgmanager_upload', (req, res) => {
 
 // [CN-FORK] 常用入口 mock：内存清单 + 新增/删除（实机由 quicklinks.c 读写 /data 下 json 并 TCP 探活）
 const quicklinks = [
-  { name: 'PKG Manager', url: 'http://192.168.1.214:8844' },
-  { name: 'NAS 面板', url: 'http://192.168.1.10:5000' },
+  { name: 'PKG Manager', url: 'http://192.168.1.214:8844', src: 'manual' },
+  { name: 'NAS 面板', url: 'http://192.168.1.10:5000', src: 'manual' },
+  /* [CN-FORK] 模拟 app.db 磁贴链接自动收录条目（实机由 quicklinks.c 同步 pprDeeplinkUri） */
+  { name: 'NayePlmTools 磁贴', url: 'http://127.0.0.1:8911/', src: 'auto' },
 ];
 app.get('/quicklinks', (req, res) => {
-  res.json({ entries: quicklinks.map((e, i) => ({ ...e, alive: i === 0 })) });
+  res.json({ entries: quicklinks.map((e, i) => ({ ...e, alive: i === 0 || e.src === 'auto' })) });
 });
 app.get('/quicklinks_add', (req, res) => {
   const { name, url } = req.query;
@@ -181,7 +183,7 @@ app.get('/quicklinks_add', (req, res) => {
   if (quicklinks.some((e) => e.url === url)) {
     return res.status(400).json({ ok: false, message: '该 URL 已存在' });
   }
-  quicklinks.push({ name, url });
+  quicklinks.push({ name, url, src: 'manual' });
   res.json({ ok: true, message: 'OK' });
 });
 app.get('/quicklinks_remove', (req, res) => {
