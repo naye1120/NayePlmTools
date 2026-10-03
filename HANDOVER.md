@@ -5,9 +5,9 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-- 版本：`MENU_VERSION = 0.5.2.77`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+- 版本：`MENU_VERSION = 0.5.2.78`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 - 工作树：干净（v0.5.2.67 磁贴/来源补交批次 `92e808a` 已入库）。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
-- 近期定型（.64 → .77）：
+- 近期定型（.64 → .78）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
   - `.65` 「默认云端仓库」总开关 `DEFAULT_REPO_ENABLED`（现默认关，可彻底停用内置官方源）
   - `.66` 界面文案精简（更新日志压缩为一行摘要）
@@ -16,6 +16,7 @@
   - `.69` 常用配置页三段式布局（温控只读 + 游戏管理）
   - `.70`/`.71` 风扇温控（模型 A）+「启用/应用」两步式 + 常驻重发守护
   - `.72`–`.77` 游戏磁贴系列：宫格化、平台/格式双徽标、照搬 ShadowMountPlus 格式集、直读 `mount.lnk` 探测、编号行标注体积
+  - `.78` 常用入口页大标题独立于侧栏文案（侧栏保持「常用配置」，词条 `entries.title`）
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |

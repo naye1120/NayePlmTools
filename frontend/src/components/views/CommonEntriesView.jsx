@@ -84,8 +84,9 @@ export default function CommonEntriesView() {
       <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-4">
+          {/* [CN-FORK] 大标题文案独立于侧栏：侧栏保持「常用配置」，本页标题用「常用入口」 */}
           <h2 className="text-2xl font-bold text-white tracking-tight">
-            {t('app.nav.common_entries', '常用入口')}
+            {t('entries.title', '常用入口')}
           </h2>
           <p className="text-[14px] text-zinc-400 max-w-2xl">
             {t('entries.desc', '常用插件与局域网服务的快捷访问清单（如 http://192.168.1.214:8844）。条目保存在主机上，手机、电脑、PS5 打开本页看到的都是同一份；绿点表示当前可连通。')}

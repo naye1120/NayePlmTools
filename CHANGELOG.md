@@ -1,3 +1,10 @@
+## v0.5.2.78 (CN-FORK)
+
+### 🚀 Features
+* **「常用入口」页大标题与侧栏文案解耦**：
+  * 大标题改用独立词条 `entries.title`（zh-CN「常用入口」/ en-US「Quick Links」），侧栏菜单保持「常用配置」不变，不再共用同一词条联动。
+  * 词条仅进 `locales-overlay`，不改 `locales` 子模块。
+
 ## v0.5.2.77 (CN-FORK)
 
 ### 🚀 Features
