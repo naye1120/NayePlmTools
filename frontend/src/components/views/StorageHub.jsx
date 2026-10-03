@@ -77,10 +77,10 @@ const CategoryGroup = ({ category, payloads, multiSources, isPS5, onInstall, src
 
 const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, onUpload, onImportFromUsb, config, ip, scrollTarget, onClearScrollTarget }) => {
   const { t, i18n } = useTranslation()
-  const multiSources = config?.MULTI_SOURCES_ENABLED === true
-  /* [CN-FORK] v0.5.1.65 默认云端仓库总开关：单来源模式下它就是唯一的在线目录，
-   * 关掉后本页不再请求 /repository_payloads，也不显示搜索/刷新控件 */
-  const defaultRepoOn = config?.DEFAULT_REPO_ENABLED !== false
+  const multiSources = config?.MULTI_SOURCES_ENABLED !== false
+  /* [CN-FORK] v0.5.2.67 默认云端仓库总开关：本版默认关（后端缺键时按关处理）；
+   * 关掉后预置的 repo.630810.xyz 靠多来源模式仍会列出，所以不再受单来源限制 */
+  const defaultRepoOn = config?.DEFAULT_REPO_ENABLED === true
   const cloudDisabled = !multiSources && !defaultRepoOn
 
   const [repoData, setRepoData] = useState(null)   // null = not loaded yet

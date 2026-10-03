@@ -43,8 +43,11 @@ ICON_PNG_HEADER := include/assets_icon_png.h
 
 
 
+# [CN-FORK] 磁贴变体开关：留空 = 媒体栏（NAYE00001）；-DTILE_VARIANT_GAME = 游戏栏（NAYE00004）
+VARIANT_CFLAGS ?=
+
 # Compiler Flags
-CFLAGS := -Os -Wall -ffunction-sections -fdata-sections $(INCLUDES)
+CFLAGS := -Os -Wall -ffunction-sections -fdata-sections $(INCLUDES) $(VARIANT_CFLAGS)
 LDFLAGS := -Wl,--gc-sections
 
 all: $(ELF)

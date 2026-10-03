@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 
+/* [CN-FORK] v0.5.2.67 首次运行时预置默认来源（内置官方源默认关 + 启用 repo.630810.xyz）。
+ * 仅当 sources.json 不存在时写一次，由 main.c 在开机序列早期调用。 */
+void sources_seed_defaults(void);
+
 /* List all configured sources as JSON. */
 int sources_list_json(char *buf, size_t size);
 

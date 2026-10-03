@@ -22,6 +22,7 @@
 #include "config.h"
 #include "http_server.h"
 #include "repository.h"
+#include "sources.h"     /* [CN-FORK] v0.5.2.67 预置默认来源 sources_seed_defaults */
 #include "payload_mgr.h"  /* [CN-FORK] bootstrap_self_sync */
 #include "ps5_launcher.h"
 #include "app_installer.h"
@@ -145,6 +146,10 @@ int main(int argc, char *argv[]) {
         pldmgr_log("[PLDMGR] !!! SAFE MODE on (%s): skip install-app / kill-disc / "
                    "auto-browser / autoload\n", PLDMGR_SAFE_MODE_FLAG);
     }
+
+    /* [CN-FORK] v0.5.2.67 首次开机预置默认来源：内置官方源默认关，改成启用 repo.630810.xyz。
+     * 仅当 /data/nayeplmtools/sources.json 不存在时写一次，safe_mode 下也无妨（只是个文件创建）。 */
+    sources_seed_defaults();
 
     /* [CN-FORK] IP 提前获取：供启动日志与最后一条通知复用（通知为排他显示，顺序见下方） */
     char current_ip[64] = "unknown";

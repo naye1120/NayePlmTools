@@ -40,8 +40,9 @@ static int load_sources(SourceEntry *out, int *out_count) {
     strncpy(out[0].name, "Official Repository", sizeof(out[0].name) - 1);
     strncpy(out[0].url,  REPOSITORY_SOURCE_URL, sizeof(out[0].url) - 1);
     out[0].removable = 0;
-    /* [CN-FORK] v0.5.1.65 默认云端仓库可以整体关掉（关掉后不再拉取、不列目录，管理来源页标记为已关闭） */
-    out[0].enabled   = config_read_bool("DEFAULT_REPO_ENABLED", 1);
+    /* [CN-FORK] v0.5.1.65 默认云端仓库可以整体关掉（关掉后不再拉取、不列目录，管理来源页标记为已关闭）
+     * v0.5.2.67 缺键时默认按“关”处理（与 config_read 默认值一致） */
+    out[0].enabled   = config_read_bool("DEFAULT_REPO_ENABLED", 0);
     count = 1;
 
     if (read_file_text(SOURCES_CONFIG_PATH, &json, &size) != 0 || !json || size == 0) {
@@ -359,6 +360,35 @@ int sources_remove(int index, char *msg_buf, size_t msg_size) {
 }
 
 /* ── Multi-source repository ───────────────────────────────── */
+
+/* [CN-FORK] v0.5.2.67 首次运行预置来源清单：内置官方源默认关掉，改成预置国内可达的
+ * repo.630810.xyz 并启用。仅当 sources.json 尚不存在时写一次，之后完全交给用户在「管理来源」里增删。 */
+void sources_seed_defaults(void) {
+    if (access(SOURCES_CONFIG_PATH, F_OK) == 0)
+        return; /* 已经初始化过（用户可能已在管理页增删/排序），不再覆盖 */
+
+    SourceEntry *sources = calloc(MAX_SOURCES, sizeof(SourceEntry));
+    if (!sources)
+        return;
+
+    /* slot 0：内置官方源（由 DEFAULT_REPO_ENABLED 控制，本版默认关） */
+    strncpy(sources[0].id,   "default",             sizeof(sources[0].id) - 1);
+    strncpy(sources[0].name, "Official Repository", sizeof(sources[0].name) - 1);
+    strncpy(sources[0].url,  REPOSITORY_SOURCE_URL, sizeof(sources[0].url) - 1);
+    sources[0].removable = 0;
+    sources[0].enabled   = 1; /* 落盘不记开关，启用状态每次由 load_sources 从配置重算 */
+
+    /* slot 1：预置的国内镜像仓库，添加并启用，用户可删除 */
+    strncpy(sources[1].id,   "source_cn", sizeof(sources[1].id) - 1);
+    strncpy(sources[1].name, "repo.630810.xyz", sizeof(sources[1].name) - 1);
+    strncpy(sources[1].url,  "https://repo.630810.xyz/payloads.json", sizeof(sources[1].url) - 1);
+    sources[1].removable = 1;
+    sources[1].enabled   = 1;
+
+    if (save_sources(sources, 2) == 0)
+        pldmgr_log("[PLDMGR] Seeded default sources: repo.630810.xyz added & enabled\n");
+    free(sources);
+}
 
 static void get_source_cache_path(int index, char *out, size_t out_size) {
     if (index == 0) {

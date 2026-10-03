@@ -50,9 +50,10 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
   const autoOpen = config.AUTO_BROWSER_OPEN !== false
   const autoInstall = config.AUTO_INSTALL_APP !== false
   const autoloadDelay = config.AUTOLOAD_DELAY || 5
-  const multiSources = config.MULTI_SOURCES_ENABLED === true
-  /* [CN-FORK] v0.5.1.65 默认云端仓库总开关，后端缺键时按开处理（与 config_read 默认值一致） */
-  const defaultRepo = config.DEFAULT_REPO_ENABLED !== false
+  /* [CN-FORK] v0.5.2.67 默认开启多来源（后端缺键时按开处理，与 config_read 默认值一致） */
+  const multiSources = config.MULTI_SOURCES_ENABLED !== false
+  /* [CN-FORK] v0.5.2.67 默认云端仓库总开关：本版默认关（后端缺键时按关处理，与 config_read 默认值一致） */
+  const defaultRepo = config.DEFAULT_REPO_ENABLED === true
   const [followBrowserLanguage, setFollowBrowserLanguage] = useState(isFollowingBrowserLanguage)
 
   const getLanguageDisplayName = (lang) => {
@@ -427,52 +428,60 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
             </div>
             <div className="overflow-y-auto p-5 space-y-4 text-sm leading-relaxed">
               <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.2.67</p>
+                <p className="text-zinc-400">合并上游 v0.5.2；修复主屏启动器图标不出现（icon0.png 重生成为 1024×1024 RGBA）；默认开启「多个来源」、默认关闭内置官方云端仓库，并首次开机预置启用 repo.630810.xyz。</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-ps-blue">v0.5.1.66</p>
+                <p className="text-zinc-400">精简界面文案：「更新日志」各条压缩为一行摘要，「参考与致谢」去掉每条借鉴说明、只保留作者名与地址。</p>
+              </div>
+              <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.65</p>
-                <p className="text-zinc-400">新增「默认云端仓库」总开关（DEFAULT_REPO_ENABLED，默认开，不想要可以直接关掉）。关掉后一刀切干净：开机不再向内置官方源拉 payloads.json（引导期少一次联网，对之前查死机也少一个变量）、手动刷新与安装前补缓存同样不再发请求（三条路径收口到 repository_ensure_fresh 一处判断）；单来源模式下 /repository_payloads 直接回空清单并标 cache_status=disabled，管理页显示「云端仓库已关闭」而不是转圈或「连接失败」；多来源模式下官方源整组不拉取、不进目录。官方源在「管理来源」列表里是灰显加「已关闭」标记，而不是从列表抹掉——因为用户源的数组下标就是它的缓存文件名，抹掉会让所有自建源重新下载一遍；磁盘上的旧缓存也不动，重新打开立即复用。注意单来源模式下只关掉默认仓库时，管理页就只剩本地已上传的 payload，想继续在线安装请开多来源模式并添加自己的源</p>
+                <p className="text-zinc-400">新增「默认云端仓库」总开关（DEFAULT_REPO_ENABLED，默认开）；关闭后开机、手动刷新、安装前补缓存三条路径都不再拉官方源，管理页显示「云端仓库已关闭」。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.64</p>
-                <p className="text-zinc-400">主页与硬件信息检测整体删除：温度/风扇/内存/显存/存储/FPS/当前游戏 全部仍靠每 2s 一次的 /system_stats 轮询驱动，是不可重入的 Sony 传感器 API、页表统计与显示驱动 ioctl 拼起来的，也是目前唯一能解释「一运行就死机」的功能；既然它只为了首页那几个数字，本版直接抹掉：删 src/stats.c 与 include/stats.h（不再进构建）、/system_stats 与 /game_icon 与 /sysinfo_probe 三个端点下线、READ_HARDWARE_INFO 开关（配置项/设置页/后端 JSON）一并移除；前端删 DashboardView 与侧栏、移动端底部、默认页三处「主页」入口，启动直接进「管理 Payload」页（旧配置里残留的 READ_HARDWARE_INFO= 行会被忽略，不影响加载）。dev 侧同步删 mock 的 /system_stats 与 /game_icon、vite 代理两项。保留 .63 的 safe_mode 哨兵文件（现在只管装 app / 杀光盘 / 开浏览器 / 自启序列四件事），死机取证靠 /data/nayeplmtools/pldmgr.log。另加固设置页开关：后端 /set_config 旧实现要求请求体里必须带 AUTOLOAD_ENABLED 才会保存任何开关，缺这个键就整份静默丢弃（只要 /get_config 有一次没读到值就会踩到，症状是开关点了没反应），现在各开关无条件应用，只有「关掉自启」的 abort 动作仍拿 AUTOLOAD_ENABLED 做判据</p>
+                <p className="text-zinc-400">整体删除主页与硬件信息检测（温度/风扇/内存/显存/存储/FPS/当前游戏），下线 /system_stats、/game_icon、/sysinfo_probe 与 READ_HARDWARE_INFO 开关，启动直接进「管理 Payload」页；顺带修好设置页开关必须带 AUTOLOAD_ENABLED 才保存的问题。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.63</p>
-                <p className="text-zinc-400">死机止血两步：① FPS 的「/dev/dce 显示控制器换帧计数器」默认停用——那是全程序唯一直接对显示/GPU 驱动发 ioctl 的地方（拿一个伪造的 selector/mask 让内核往我们的缓冲区里写硬件计数器），却跟着首页轮询一直跑，换来的只是一个 FPS 数字，性价比太差；OnionHEN 写在 /system_tmp/fps_sample 的 seqlock 文件源保留，想重新实验那个 ioctl 就编译时加 -DPLDMGR_ENABLE_DCE_FPS=1；② 新增安全模式哨兵文件 /data/nayeplmtools/safe_mode：用 FTP 建这个空文件（内容无所谓），下次启动就跳过引导期全部高危动作——不装启动器 app、不杀光盘播放器、不自动开浏览器、不跑自动加载序列，同时 /system_stats 一个内核调用也不发（首页硬件卡片全显 —）。不用重编译、不用进界面就能把机器带回可用状态；日志页与 /data/nayeplmtools/pldmgr.log 会记一条 SAFE MODE on 作为确认</p>
+                <p className="text-zinc-400">死机止血两步：默认停用 DCE 换帧计数 ioctl；新增安全模式哨兵文件 /data/nayeplmtools/safe_mode，建此空文件后启动跳过全部高危动作。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.62</p>
-                <p className="text-zinc-400">死机排查与传感器安全闸：首页每 2s 一次拉 /system_stats，而后端一直是裸调——CPU 温度、SoC sensor 0/1、风扇占空比、内存/显存页表、DCE 帧计数 ioctl、全进程表 sysctl 全部每请求跑一遍，既没锁也没节流；加上前端 1.8s 就 abort（只断客户端，服务端 handler 线程照旧跑完）与 MHD 的 thread-per-connection，多个线程会并发把传感器请求打进同一条 ICC 通道——这正是本项目「Sensor API 必须串行化 + 限流」规范要防的死机形态。现在整份快照在互斥锁内构建并缓存 5s，并发请求直接命中缓存不再产生内核调用（前端无需改，节流后 abort 重发已无危害）。同时日志落盘到 /data/nayeplmtools/pldmgr.log（带时间戳、每行 fflush、超 512KB 截断），此前日志只在内存环形缓冲里，一断电死机现场就全没；启动时还会把 hw_stats / auto_browser / kill_disc / auto_install / autoload 几个默认开启的开关值记进日志，下次死机可直接看最后几行指认现场</p>
+                <p className="text-zinc-400">/system_stats 快照改在互斥锁内构建并缓存 5s，杜绝传感器并发死机；日志落盘到 /data/nayeplmtools/pldmgr.log 并记录启动开关值。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.61</p>
-                <p className="text-zinc-400">修 autoload.txt 开头多出一个空行：上一版补延时行的逻辑向上找参照行时是「跳过空行继续往上」，于是「!1000」被插到空行下面，空行留在原地——本工具那条正好排在文件第一位，看着就是文件前面多了一行。现在改成以「!延时行 + 文件名行」整条为单位：先折叠这条上方紧邻的连续空行，再判断要不要补延时行；空行只清理本工具块自己上方的，其它程序的条目一律不动，且只清理空行这一项变化也会正常触发回写（旧逻辑没改动就原样跳过）</p>
+                <p className="text-zinc-400">修 autoload.txt 开头多出一个空行：改以「延时行 + 文件名行」整条为单位规整。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.60</p>
-                <p className="text-zinc-400">autoload.txt 格式一致性：① 载荷文件名行上面缺「!延时」时自动补「!1000」（旧逻辑只在首次追加时写延时行，换版本号时只替文件名）；追加前先探末尾，上一行没换行符就补一个，避免延时行粘到上一条尾巴上两条一起坏；② 设置页保存 AUTOLOAD_LIST 时整份覆盖只写文件名，等于每勾一次就把手写的延时行全冲掉——现在先读旧文件建「文件名→延时行」映射再写回，查不到历史的用 !1000 兜底，自定义延时不会被抹平；③ 行规整抽成 utils 的 pldmgr_utils_strip_config_line（剥 UTF-8 BOM 与首尾空白），自启同步、启动自检、自身加载序列、改名与删除条目四处统一走它——记事本手改的缩进会让延时行被当成载荷名、带缩进的文件名拼不出路径而报 Payload not found。另确认上一版 0 字节残包的真凶在复制环节（storage 里 4.9MB 完好），加载一次新版即可由同名自愈补回</p>
+                <p className="text-zinc-400">autoload.txt 格式一致性：缺延时行自动补 !1000、保存时保留自定义延时、行规整统一走 strip_config_line。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.59</p>
-                <p className="text-zinc-400">autoloader 残包自愈：修实机「autoload.txt 指向的 NayePlmTools ELF 是 0 字节、重启后自启什么都不起来」。三处：① 新增 payload_file_sane 判据（体积下限 1KB + .elf 魔数，goldHEN 这类 .bin 原始载荷不误杀），上传/仓库安装提交前先校验，0 字节或被截断的 temp 直接拒收并清掉，不再 rename 进 storage；② copy_file 改成先写 dst.tmp、校验字节数与源一致后 rename 覆盖，旧实现一上来就把目标截断成 0 字节，中途失败就在自启目录留个残包，更严的是源与目标同一个文件时会把好文件清空还返回成功；③ 同版本已登记时旧逻辑直接返回，引导器目录里那份坏文件永远没人修，现在会检测到并重新复制；bootstrap 自检也不再拿 readdir 的随机首个，改取合法里最新的一份</p>
+                <p className="text-zinc-400">autoloader 残包自愈：新增 payload_file_sane 体积/魔数校验、copy_file 改为写临时文件校验后 rename、同版本坏文件重新复制。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.58</p>
-                <p className="text-zinc-400">前端：修「常用入口」卡片右上角删除按钮与外链图标叠在一起的问题——两者本来都占右上角（按钮 absolute top-2 right-2，外链图标 ml-auto 顶到行末），实机看起来就是链接和关闭按钮重合；改为给标题行留 pr-8 把那个角让给删除按钮（实测间隙恒 12px，420px 窄卡与超长名称下同样不重叠），并给名称补 min-w-0 让 truncate 在 flex 子里真正生效；本地 dev 补全 /quicklinks*、/pkgmanager_upload、/game_icon 代理（缺 /quicklinks 时该页被 SPA fallback 吞成 index.html，res.json() 抛错又被 catch 静默吃掉，永远卡在转圈且看不出原因）</p>
+                <p className="text-zinc-400">修「常用入口」卡片删除按钮与外链图标重叠；dev 补全 /quicklinks* 等代理。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.57</p>
-                <p className="text-zinc-400">仓库固化，功能与 .56 完全一致：重建因 IDE 变更面板误点拒绝而丢失的 .55/.56 源码并验收（产物字节数与动态符号表与丢失前一致）；third_party/pkg-manager.elf 内置基线纳入版本库（clone 后可直接 make all）；settings.read_hw_* 词条从翻译子模块迁回 locales-overlay；全部改动按「构建通过即本地提交」固化到 cn-fork 分支。本版构建标题带真实 commit 短哈希，作为上机测试的正式包</p>
+                <p className="text-zinc-400">仓库固化，功能同 .56：重建丢失的 .55/.56 源码、内置 pkg-manager.elf 入库、settings 词条迁回 locales-overlay。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.56</p>
-                <p className="text-zinc-400">前端：「PKG安装」视图铺满整个模块页（四边内边距清零、解除 1800px 居中宽度上限、由 iframe 自己接管滚动；手机端不再塌成 150px 高）；设置页 PKG Manager 卡片新增「关闭」按钮，后端新增 /pkgmanager_stop 按进程名 SIGKILL pkg-manager.elf（只影响它自己；端口在响但找不到进程时报错而不误杀）；本地 dev 补全 pkgmanager_* 代理</p>
+                <p className="text-zinc-400">「PKG安装」视图铺满整页；设置页 PKG Manager 卡片新增「关闭」按钮，后端新增 /pkgmanager_stop。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.55</p>
-                <p className="text-zinc-400">硬件信息改走官方 libkernel API（出处 ps5-payload-sdk samples/hwinfo，作者 John Törnblom）：型号 sceKernelGetHwModelName()、序列号 sceKernelGetHwSerialNumber()、系统版本字符串 sceKernelGetGenuineProsperoSystemSwVersion() 插到探测链最前，均声明为 weak + 运行时判空；inst0.dat / kenv / sysctl / RegMgr 降为兜底；官方值走新的宽松校验（避免误杀 "PlayStation 5"），会塞垃圾的源仍走严格白名单；/sysinfo_probe 逐项输出 sym/rc/val 与 SoC ID，一次实机就能定位；「支持作者」页新增「参考与致谢」，README Credits 同步补 4 组出处</p>
+                <p className="text-zinc-400">硬件信息改走官方 libkernel API（型号/序列号/系统版本），inst0.dat 等降为兜底；「支持作者」页新增「参考与致谢」。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.54</p>
-                <p className="text-zinc-400">⚠ 回滚 .53 的进程内提权：实机验证该方案（SDK sysdebug RPC 族 kernel_set_ucred_*/rootvnode）在 12.20 HEN 上会导致整机死机，已默认永久禁用（代码存档、零内核调用）；.52 的系统版本修复（→12.20）保留，型号/序列号继续显 —</p>
+                <p className="text-zinc-400">⚠ 回滚 .53 的进程内提权（12.20 HEN 上导致整机死机），默认永久禁用；保留 .52 的系统版本修复，型号/序列号继续显 —。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.53</p>
@@ -480,7 +489,7 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.52</p>
-                <p className="text-zinc-400">实机 probe 定位后修正：系统版本最终确定编码为 (major BCD&lt;&lt;24)|(minor BCD&lt;&lt;16)|build（0x12200005→12.20，与官方页一致，低 16 位含义未定不上界面）；型号白名单取消对 hw.model 内部标识（100-xxxxxxx）的放行，宁显 — 不显示错误型号；/root/data/inst0.dat 实机无读权限，新增 4 条候选路径探测，/sysinfo_probe 逐路径输出 open/errno 定位可读位置</p>
+                <p className="text-zinc-400">实机 probe 定位后修正：系统版本按 BCD 移位组合解码为 12.20；型号白名单收紧宁显 —；inst0.dat 新增 4 条候选路径探测。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.51</p>
@@ -488,47 +497,47 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.50（已撤销）</p>
-                <p className="text-zinc-400">仪表盘新增“当前用户”：直连头像服务（端口 7788）/api/avatar/whoami 显示登录用户名（30s 轮询，CORS 全开可跨域），头像服务未启动时静默显示 —；头部信息区改为五格</p>
+                <p className="text-zinc-400">仪表盘新增“当前用户”（直连头像服务 :7788 whoami，30s 轮询），头部信息区改为五格。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.49（版本解码仍有误，见 .52）</p>
-                <p className="text-zinc-400">系统信息与官方“主机信息”页对齐：型号/序列号改从 /root/data/inst0.dat 读取（官方页同源，offset 0x14/0x40，读不到时回退旧探测）；系统版本修正解码——0x12200005 按 BCD 字节解为 12.20（与官方页一致，.46 的 34.00/.48 的 1.34 都是解错），build 非零时追加第三段；/sysinfo_probe 增加 inst0.dat 可读性与字段裸内容输出</p>
+                <p className="text-zinc-400">型号/序列号改从 inst0.dat 读取，系统版本按 BCD 解为 12.20；/sysinfo_probe 增加 inst0.dat 可读性输出。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.48（版本解码已被 .49 修正）</p>
-                <p className="text-zinc-400">根据实机 /sysinfo_probe 输出修正系统信息探测：型号接上真数据（PS5 的 hw.model 实际返回空格补齐的 "100-xxxxxxx" 形态，旧白名单误杀）；系统版本改用真实编码 (major&lt;&lt;24)|(minor&lt;&lt;16)|build（0x12200005→1.34，与 websrv 的 api_version 常量吻合），不再按 SDK 文档的 BCD 格式误解；序列号确认 userland 无数据源（相关 sysctl 全部不存在），继续显示 —</p>
+                <p className="text-zinc-400">型号接真数据（hw.model 补空格形态）、系统版本改用真实编码、序列号确认 userland 无源继续显 —。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.47</p>
-                <p className="text-zinc-400">修正 .46 系统信息三项全部错乱的问题：kenv/sysctl 对不存在的变量会返回垃圾值，现在所有探测结果必须过严格格式白名单（型号=CUH/CFI 格式、序列号=12~17 位大写字母数字、版本=合理区间）才上界面；kernel_get_fw_version 读死的 dynlib handle 在我们进程里不对应 libc_internal，可疑值一律丢弃并回退 kern.osrelease；/sysinfo_probe 增加各数据源裸值输出便于定位</p>
+                <p className="text-zinc-400">修 .46 系统信息三项错乱：探测结果须过严格白名单才上界面，可疑值回退 kern.osrelease。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.46（已被 .47 修正）</p>
-                <p className="text-zinc-400">系统信息补齐：仪表盘新增系统版本（改用 SDK 的 kernel_get_fw_version，纯 userland 读 libc_internal，不受版本仿冒影响）；主机型号改为 kenv→sysctl→RegMgr 三路探测；新增 /sysinfo_probe 诊断端点（dump 内核环境变量表，用于实机定位型号/序列号数据源）；序列号仍无可靠 userland 来源，探测命中前仍显示 —</p>
+                <p className="text-zinc-400">系统信息补齐：新增系统版本（kernel_get_fw_version）、型号三路探测、/sysinfo_probe 诊断端点。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.45</p>
-                <p className="text-zinc-400">「PKG安装」内嵌界面铺满右侧：去掉内容区左右/底部留白，iframe 占满整个右侧区域；顶部 URL 栏取消，「新标签页打开」缩为右下角悬浮小按钮</p>
+                <p className="text-zinc-400">「PKG安装」内嵌界面铺满右侧：去留白、取消顶部 URL 栏，「新标签页打开」缩为悬浮小按钮。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.44</p>
-                <p className="text-zinc-400">「PKG安装」改为内嵌运行：点击菜单不再跳转离开，而是在右侧内容区内嵌 PKG Manager 自带界面（iframe 指向 :8844，侧栏保留），未运行时自动拉起并等待就绪后加载；右上角提供「新标签页打开」作全屏备选</p>
+                <p className="text-zinc-400">「PKG安装」改为内嵌运行：点菜单在右侧内嵌 PKG Manager 界面（iframe :8844），未运行自动拉起。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.43</p>
-                <p className="text-zinc-400">「PKG安装」菜单改为一步直达：点击后若 PKG Manager 未运行则自动拉起并等待就绪，随后直接跳转到它自带的界面（:8844），不再经过中间管理页；原页面上的上传更新/启动重启/版本状态迁移到设置页新增的「PKG Manager」管理卡片</p>
+                <p className="text-zinc-400">「PKG安装」菜单一步直达：未运行自动拉起后直接跳转其自带界面，上传/启停/版本迁到设置页新卡片。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.42</p>
-                <p className="text-zinc-400">「常用入口」页上线：可手动添加常用插件/局域网服务的快捷访问卡片（名称+URL，存主机端 quicklinks.json，多设备共享同一份），逐条 TCP 探活显示在线状态，点卡片新标签打开；启动通知加上了版本号</p>
+                <p className="text-zinc-400">「常用入口」页上线：手动添加插件/局域网服务快捷卡片，逐条 TCP 探活，点卡片新标签打开；启动通知加版本号。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.41</p>
-                <p className="text-zinc-400">内置 PKG Manager 基线升级到 v1.4.0-CN；上传校验策略修正：发现 PKGManager 发布的 ELF 里 PKGMGR_VER 签名串被其自身 --gc-sections 链接回收、实际不存在，改为 ELF 头 + 体积 + 二进制含 "PKG Manager" 字符串判身份，版本号按签名→上传文件名→unknown 顺序提取</p>
+                <p className="text-zinc-400">内置 PKG Manager 基线升级到 v1.4.0-CN；上传校验改用 ELF 头 + 体积 + "PKG Manager" 字符串判身份。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.40</p>
-                <p className="text-zinc-400">PKG Manager 内置上线：「PKG安装」页不再是占位页，可直接启动内置的 PKG Manager（独立守护进程，UI 端口 8844）并跳转其自带界面；支持手动上传新版 ELF 更新（ELF 头 + PKGMGR_VER 签名校验、原子覆盖），内置基线仅作离线保底</p>
+                <p className="text-zinc-400">PKG Manager 内置上线：「PKG安装」页可直接启动内置 PKG Manager（端口 8844）并支持上传新版 ELF 更新。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.39</p>
@@ -536,11 +545,11 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.38</p>
-                <p className="text-zinc-400">游戏图标候选扩充：新增 app.db iconPath 列（系统真正显示的图标路径，含 PS4 兼容游戏）与 appmeta 缓存目录两级候选；全部落空时每个 tid 在日志页记一行 miss 诊断便于定位</p>
+                <p className="text-zinc-400">游戏图标候选扩充：新增 app.db iconPath 与 appmeta 缓存两级候选，全落空时按 tid 记 miss 诊断。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.37</p>
-                <p className="text-zinc-400">首页「当前游戏」图标上线：新增 /game_icon 端点，按 /user/app/「TID」/sce_sys/icon0.png → 沙盒 app0/sce_sys/icon0.png 顺序读取（psdevwiki 确认只有 PNG、无 gif），受同一硬件信息开关门控，读不到时回退占位图</p>
+                <p className="text-zinc-400">首页「当前游戏」图标上线：新增 /game_icon 端点按 sce_sys/icon0.png 顺序读取，读不到回退占位图。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.36</p>
@@ -548,7 +557,7 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.35</p>
-                <p className="text-zinc-400">修复首页数据卡住不自动刷新：轮询改用 setInterval（旧链式 setTimeout 只要一次请求挂起就永久死链），加 1.8s 超时中断、防堆积、回到前台立即补拉；开机时间改为带秒（如 8h 39m 12s）</p>
+                <p className="text-zinc-400">修首页数据卡住不刷新：轮询改 setInterval + 1.8s 超时中断；开机时间带秒。</p>
               </div>
               <div className="space-y-1">
                 <p className="font-bold text-ps-blue">v0.5.1.34</p>
