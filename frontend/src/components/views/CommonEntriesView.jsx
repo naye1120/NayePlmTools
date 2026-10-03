@@ -7,7 +7,7 @@ import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
  * 数据存 payload 侧 /data/nayeplmtools/quicklinks.json（非浏览器 localStorage），
  * 手机/电脑/PS5 打开本 UI 看到的是同一份。列表接口顺带对每条 URL 的 host:port
  * 做 TCP 探活：绿点=可连通、灰点=不可达。绿点卡片点卡片新标签打开；灰点卡片点击由
- * openProgram 接管——试着拉起对应 payload，起来后同标签打开。
+ * openProgram 接管——试着拉起对应 payload，起来后同样开新标签，不覆盖本页。
  * 本机已知服务自动探测表暂未实现，后续在 /quicklinks 里合并生成即可，前端无感。 */
 
 const BTN_PRIMARY = 'inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-ps-blue text-white text-[14px] font-bold hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition'
@@ -164,10 +164,15 @@ export default function CommonEntriesView() {
 
   /* [CN-FORK] v0.5.2.83 灰点条目点击接管：先探一次存活，不活就按名称匹配已安装 payload
    * 拉起（PKG Manager 仍走专有的 /pkgmanager_launch，那条路还兼管内嵌版本的安装）。
-   * 起来后同标签跳转——弹窗拦截下 window.open 在 PS5 WebKit 上可能完全看不见，
-   * 体感就是「点了没反应」。 */
-  const openProgram = async (entry, index) => {
-    if (startingIdx !== -1) return
+   * v0.5.2.84 改为新标签打开：tab 由点击手势同步开好（about:blank），拉起成功后才把它
+   * 指向目标地址；失败就关掉它，不给用户留一堆空白标签。异步里再 window.open 会被
+   * 弹窗拦截，所以必须手势内先占位。tab 为 null（被拦）时不硬塞当前页，程序其实已经
+   * 起来了，条目会变成绿点，再点一次即走原生新标签。 */
+  const openProgram = async (entry, index, tab) => {
+    if (startingIdx !== -1) {
+      if (tab) tab.close() /* 上一条还在拉起中：把手势里抢到的空白标签收回，不留孤儿 */
+      return
+    }
     setStartingIdx(index)
     setMsg(null)
     let go = false
@@ -204,9 +209,18 @@ export default function CommonEntriesView() {
       setMsg({ ok: false, text: (err && err.message) || t('entries.start_fail', '启动失败') })
     }
     setStartingIdx(-1)
-    /* assign 而非写 location.href：后者会被 react-hooks 编译规则判成「渲染内修改不可变值」 */
-    if (go) window.location.assign(entry.url)
-    else load()
+    if (go) {
+      if (tab) {
+        /* assign 而非写 location.href：后者会被 react-hooks 编译规则判成「渲染内修改不可变值」 */
+        tab.location.assign(entry.url)
+      } else {
+        setMsg({ ok: false, text: t('entries.tab_blocked',
+          '程序已经起来了，但浏览器拦住了新标签，请再点一次该条目打开') })
+      }
+    } else if (tab) {
+      tab.close()
+    }
+    if (!go) load()
   }
 
   const list = entries || []
@@ -299,10 +313,12 @@ export default function CommonEntriesView() {
                 onClick={(ev) => {
                   /* [CN-FORK] 灰点（探活不通）且本机有对应程序的条目才接管点击去拉起；绿点、以及
                      本机没有对应程序的外网链接一律保持默认新标签打开。拉起对象按名称匹配，不写死
-                     程序名单，以后新增 payload 自动生效。 */
+                     程序名单，以后新增 payload 自动生效。
+                     v0.5.2.84：接管时先在手势里抢一个空白标签（拦下默认跳转，因为此刻直接跳过去
+                     必然连不通），程序起来后再把它指向目标地址——本页面不被覆盖。 */
                   if (!e.alive && shouldTakeOver(e)) {
                     ev.preventDefault()
-                    openProgram(e, i)
+                    openProgram(e, i, window.open('about:blank', '_blank'))
                   }
                 }}
               >
