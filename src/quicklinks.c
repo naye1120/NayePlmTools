@@ -16,6 +16,7 @@
 #include "game_mgr.h"
 #include "json_helpers.h"
 #include "pldmgr.h"
+#include "utils.h" /* [CN-FORK] pldmgr_get_local_ip：磁贴链接本机回环地址 → LAN IP 改写 */
 
 /* ── Entry type & file I/O（照 sources.c 的骨架，无默认条目、按下标管理） ──
  * src: "manual"=用户手添 / "auto"=app.db 磁贴链接自动收录；
@@ -149,8 +150,9 @@ static int save_quicklinks(const QuicklinksStore *s) {
 }
 
 /* ── [CN-FORK] app.db 磁贴链接自动收录（按需取 + mtime 闸门）──────────────
- * 语义：打开「常用入口」页触发一次同步；app.db 的 mtime+size 与上次完全一致才跳过。
- * 用「不等」而不是「更新」判断——PS5 时钟回退时 mtime 可能变小，变化就必须触发。 */
+ * 语义：打开「常用入口」页触发一次同步；app.db 的 mtime+size 与本机 IP 与上次
+ * 完全一致才跳过。用「不等」而不是「更新」判断——PS5 时钟回退时 mtime 可能变小，
+ * 变化就必须触发；IP 变化同理（换网后旧 IP 的收录条目要重写）。 */
 
 #define MAX_SYNC_DEEPLINKS 64
 
@@ -175,13 +177,21 @@ static int ql_collect_cb(const char *tid, const char *name, const char *uri, voi
 static time_t g_appdb_mtime = 0;
 static off_t  g_appdb_size  = -1;
 static int    g_appdb_seen  = 0;
+static char   g_appdb_ip[64] = ""; /* [CN-FORK] 上次收录时的本机 IP，变化要强制重同步 */
 
 /* 合并语义：① 磁贴已消失（卸载/删除）→ 移除对应 auto 条目；② 新磁贴 → 追加为 auto；
  * ③ 已存在 URL 与上次删除的抑制名单都跳过；④ 满 MAX_QUICKLINKS 截断。*dirty=1 表示需落盘。 */
 static void quicklinks_sync_appdb(QuicklinksStore *s, int *dirty) {
     struct stat st;
     if (stat(GAME_MGR_APPDB_PATH, &st) != 0) return;      /* 没有 app.db：静默跳过 */
-    if (g_appdb_seen && st.st_mtime == g_appdb_mtime && st.st_size == g_appdb_size) return;
+
+    /* [CN-FORK] 本机 IP 参与闸门：换网/IP 变化时 auto 条目要跟着重写，
+     * 否则陈旧 IP 一直留着。取不到 IP 时按原样跳过即可（没有可改写的东西）。 */
+    char self_ip[64];
+    int have_ip = (pldmgr_get_local_ip(self_ip, sizeof(self_ip)) == 0 && self_ip[0] != '\0');
+
+    if (g_appdb_seen && st.st_mtime == g_appdb_mtime && st.st_size == g_appdb_size &&
+        (!have_ip || strcmp(self_ip, g_appdb_ip) == 0)) return;
 
     deeplink_hits_t *h = calloc(1, sizeof(deeplink_hits_t));
     if (!h) return;
@@ -190,6 +200,21 @@ static void quicklinks_sync_appdb(QuicklinksStore *s, int *dirty) {
     g_appdb_mtime = st.st_mtime;
     g_appdb_size  = st.st_size;
     g_appdb_seen  = 1;
+    if (have_ip) snprintf(g_appdb_ip, sizeof(g_appdb_ip), "%s", self_ip);
+
+    /* [CN-FORK] 磁贴 deeplink 多为 http://127.0.0.1:8911/（本机回环），收录条目是给
+     * PC/手机用的，必须换成本机当前 LAN IP；前缀整体匹配，防止误伤 127.0.0.10 之类。 */
+    if (have_ip) {
+        for (int j = 0; j < h->count; j++) {
+            if (strncmp(h->uris[j], "http://127.0.0.1", 16) != 0) continue;
+            char c = h->uris[j][16];
+            if (c != ':' && c != '/' && c != '\0') continue;
+            char rewritten[512];
+            snprintf(rewritten, sizeof(rewritten), "http://%s%s", self_ip, h->uris[j] + 16);
+            strncpy(h->uris[j], rewritten, sizeof(h->uris[j]) - 1);
+            h->uris[j][sizeof(h->uris[j]) - 1] = '\0';
+        }
+    }
 
     int w = 0;
     for (int i = 0; i < s->count; i++) {

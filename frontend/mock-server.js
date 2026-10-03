@@ -126,7 +126,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.79'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.80'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -169,8 +169,9 @@ app.post('/pkgmanager_upload', (req, res) => {
 const quicklinks = [
   { name: 'PKG Manager', url: 'http://192.168.1.214:8844', src: 'manual' },
   { name: 'NAS 面板', url: 'http://192.168.1.10:5000', src: 'manual' },
-  /* [CN-FORK] 模拟 app.db 磁贴链接自动收录条目（实机由 quicklinks.c 同步 pprDeeplinkUri） */
-  { name: 'NayePlmTools 磁贴', url: 'http://127.0.0.1:8911/', src: 'auto' },
+  /* [CN-FORK] 模拟 app.db 磁贴链接自动收录条目（实机由 quicklinks.c 同步 pprDeeplinkUri，
+   * 且会把 127.0.0.1 回环地址改写为本机当前 LAN IP，故这里直接用示例 IP） */
+  { name: 'NayePlmTools 磁贴', url: 'http://192.168.1.214:8911/', src: 'auto' },
 ];
 app.get('/quicklinks', (req, res) => {
   res.json({ entries: quicklinks.map((e, i) => ({ ...e, alive: i === 0 || e.src === 'auto' })) });
