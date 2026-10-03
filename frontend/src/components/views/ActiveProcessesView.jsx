@@ -82,11 +82,12 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* [CN-FORK] v0.5.2.85 页头接入骨架层 .page-head，与「管理 Payload」同一套布局语义 */}
+      <div className="page-head">
         <h2 className="text-2xl font-bold text-white tracking-tight">
           {t("active_processes.title_active", "Active")} <span className="text-ps-blue">{t("active_processes.title_processes", "Processes")}</span>
         </h2>
-        <div className="flex items-center space-x-4">
+        <div className="page-actions">
           <label className="flex items-center space-x-3 cursor-pointer group">
             <div className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-ps-blue focus:ring-offset-2 focus:ring-offset-black bg-white/10 group-hover:bg-white/20">
               <input

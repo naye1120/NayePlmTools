@@ -7,8 +7,9 @@ import { Play, Power, Upload, RefreshCw } from 'lucide-react'
  * 手动上传更新、启动或重启（上传新版后点一下即可切到新版本，其自身单实例互杀旧进程）、
  * 以及关闭（后端按进程名 SIGKILL，不跑就不占内存，也不会在 iframe 里误看到旧会话）。 */
 
-const BTN_GHOST = 'inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[14px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
-const BTN_DANGER = 'inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/25 text-red-300 text-[14px] font-bold hover:bg-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition'
+/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层（描边档 + 危险语义配色） */
+const BTN_GHOST = 'btn btn-outline'
+const BTN_DANGER = 'btn btn-danger'
 
 export default function PkgManagerCard() {
   const { t } = useTranslation()

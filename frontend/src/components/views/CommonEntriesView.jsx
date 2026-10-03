@@ -10,9 +10,11 @@ import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
  * openProgram 接管——试着拉起对应 payload，起来后同样开新标签，不覆盖本页。
  * 本机已知服务自动探测表暂未实现，后续在 /quicklinks 里合并生成即可，前端无感。 */
 
-const BTN_PRIMARY = 'inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-ps-blue text-white text-[14px] font-bold hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition'
-const BTN_GHOST = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[13px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
-const INPUT_CLS = 'w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-[14px] text-white placeholder-zinc-500 focus:outline-none focus:border-ps-blue'
+/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 的骨架层三档形态（实心 / 描边 / 幽灵），
+ * 各视图不再各自复制一串 Tailwind 类；配色全走 CSS 变量，浅色主题自动跟随。 */
+const BTN_PRIMARY = 'btn btn-primary'
+const BTN_GHOST = 'btn btn-outline'
+const INPUT_CLS = 'field'
 
 /* [CN-FORK] v0.5.2.83 通用「不活即拉起」：入口标题 → 已安装 payload 的 ELF 路径匹配。
  * 不写死任何程序名，以后新增 payload 无需改这里。匹配用「只留字母」的归一化名（丢掉
@@ -230,17 +232,17 @@ export default function CommonEntriesView() {
       {/* [CN-FORK] 布局：板块一 常用入口（沿用原 quicklinks 全部功能）；板块二 温控管理。
           游戏管理板块已抽出为独立页（侧栏「游戏管理」），不再挂在本页。 */}
       <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="space-y-4">
+      <div className="page-head">
+        <div>
           {/* [CN-FORK] 大标题文案独立于侧栏：侧栏保持「常用配置」，本页标题用「常用入口」 */}
           <h2 className="text-2xl font-bold text-white tracking-tight">
             {t('entries.title', '常用入口')}
           </h2>
-          <p className="text-[14px] text-zinc-400 max-w-2xl">
+          <p className="page-desc max-w-2xl">
             {t('entries.desc', '常用插件与局域网服务的快捷访问清单（如 http://192.168.1.214:8844）。条目保存在主机上，手机、电脑、PS5 打开本页看到的都是同一份；绿点表示当前可连通。')}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="page-actions">
           {!adding && (
             <button onClick={() => { setAdding(true); setMsg(null) }} className={BTN_PRIMARY}>
               <Plus className="w-4 h-4" />

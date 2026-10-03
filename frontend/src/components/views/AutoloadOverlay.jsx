@@ -51,7 +51,7 @@ const AutoloadOverlay = ({ status, onCancel, onFinish, isPS5 }) => {
   }, [status.done]);
 
   return (
-    <div className="fixed inset-0 bg-[#08080a] z-[9999] flex flex-col items-center justify-center p-6 md:p-12 overflow-y-auto custom-scrollbar">
+    <div className="fixed inset-0 bg-ps-black z-[9999] flex flex-col items-center justify-center p-6 md:p-12 overflow-y-auto custom-scrollbar">
       <div className={cn(
         "relative w-full max-w-[1400px] flex flex-col items-center",
         isPS5 ? "flex-row items-center justify-center space-x-24 space-y-0" : "md:flex-row md:items-start md:justify-center md:space-x-24 md:space-y-0 space-y-12"
@@ -135,7 +135,7 @@ const AutoloadOverlay = ({ status, onCancel, onFinish, isPS5 }) => {
             {isDone ? (
               <button
                 onClick={onFinish}
-                className="w-full py-8 bg-ps-blue text-white text-3xl font-extrabold rounded-3xl hover:bg-[#007acc] transition-all transform active:scale-95 shadow-[0_0_30px_rgba(0,149,255,0.2)]"
+                className="w-full py-8 bg-ps-blue text-white text-3xl font-extrabold rounded-3xl hover:bg-primary-400 transition-all transform active:scale-95 shadow-[0_10px_30px_-12px_rgba(255,102,0,0.55)]"
               >
                 {t("autoload_overlay.return_btn", "Return to Dashboard")}
               </button>

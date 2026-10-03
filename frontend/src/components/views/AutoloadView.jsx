@@ -163,8 +163,9 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
 
   const renderSequence = () => (
     <div className="space-y-8 flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between shrink-0">
-        <div className="flex flex-col">
+      {/* [CN-FORK] v0.5.2.85 页头接入骨架层 .page-head；「停用自启」归到 .btn.btn-danger（淡红芯片，悬停浮红底） */}
+      <div className="page-head shrink-0">
+        <div>
           <h2 className="text-2xl font-bold text-white tracking-tight">
             {t("autoload.sequence_title_1", "Autoload")} <span className="text-ps-blue">{t("autoload.sequence_title_2", "Sequence")}</span>
           </h2>
@@ -184,7 +185,7 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
         </div>
         <button
           onClick={() => handleToggle(false)}
-          className="px-4 py-2 rounded-xl font-black uppercase italic tracking-tighter bg-red-600/10 text-red-500 border border-red-500/30 hover:bg-red-600 hover:text-white transition-all shadow-lg text-xs"
+          className="btn btn-danger"
         >
           {t("autoload.disable_btn", "Disable Autoload")}
         </button>

@@ -1,6 +1,9 @@
 import React from 'react'
 import { cn, isPS5 } from '../../utils/helpers'
 
+/* [CN-FORK] v0.5.2.85 侧栏选中态改「藏蓝底 + 左侧动作色竖条」：底色与文字走 index.css 的
+ * .nav-item / .is-active（CSS 变量驱动，浅色主题在 light-theme.css 翻变量即可整组跟随），
+ * 不再用整块实心主色——主色亮橙只留给竖条和页面上的主操作按钮。 */
 const NavButton = ({ active, onClick, icon: Icon, label, mobileLabel, className, sidebar, sidebarExpanded, showSeparator, isDonate }) => {
   return (
     <div className="flex items-center flex-1 md:flex-none min-w-max">
@@ -10,13 +13,13 @@ const NavButton = ({ active, onClick, icon: Icon, label, mobileLabel, className,
         className={cn(
           "flex items-center transition-all border group relative outline-none",
           sidebar
-            ? cn("w-full p-4 mb-2 rounded-2xl border-none", sidebarExpanded ? "justify-start space-x-4" : "justify-center")
+            ? cn("nav-item w-full p-4 mb-2 rounded-2xl border-none", active && !isDonate && "is-active", sidebarExpanded ? "justify-start space-x-4" : "justify-center")
             : (isPS5 ? "flex-row space-x-3 px-6 py-3 rounded-2xl" : "flex-col md:flex-row md:space-x-3 px-4 md:px-6 py-2 md:py-3 rounded-2xl border-none flex-1 md:flex-none"),
           active
             ? (sidebar
-              ? (isDonate ? "bg-red-600 text-white shadow-[0_0_20px_rgba(220,38,38,0.3)]" : "bg-ps-blue text-white shadow-[0_0_20px_rgba(0,112,209,0.3)]")
+              ? (isDonate ? "bg-red-600 text-white" : "")
               : (isDonate ? "text-red-500" : "text-ps-blue font-black"))
-            : (isDonate ? "text-red-500/60" : "bg-transparent text-zinc-400 hover:text-white"),
+            : (isDonate ? "text-red-500/60" : (sidebar ? "" : "bg-transparent text-zinc-400 hover:text-white")),
           className
         )}
       >

@@ -118,11 +118,11 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
                   onChange={handleLanguageChange}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                 >
-                  <option value={FOLLOW_BROWSER_LANGUAGE} className="bg-[#121214]">
+                  <option value={FOLLOW_BROWSER_LANGUAGE} className="bg-ps-surface">
                     {t("settings.language_system_default", "System Default")}
                   </option>
                   {Object.keys(i18n.store.data).map(lang => (
-                    <option key={lang} value={lang} className="bg-[#121214]">{getLanguageDisplayName(lang)}</option>
+                    <option key={lang} value={lang} className="bg-ps-surface">{getLanguageDisplayName(lang)}</option>
                   ))}
                 </select>
               </div>

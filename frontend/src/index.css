@@ -15,10 +15,11 @@
 .justify-center { justify-content: center !important; }
 .ps5-bg { background-color: var(--color-ps-black) !important; }
 .text-white { color: #ffffff !important; }
-.text-zinc-100 { color: #f4f4f5 !important; }
-.text-zinc-300 { color: #d4d4d8 !important; }
-.text-zinc-400 { color: #a1a1aa !important; }
-.text-ps-blue { color: #0095ff !important; }
+/* [CN-FORK] v0.5.2.85 色板转「藏蓝结构 + 亮橙动作」（类名不变、值变）：中性文字改藏蓝灰阶，主色改亮橙 */
+.text-zinc-100 { color: #e8ecff !important; }
+.text-zinc-300 { color: #b6bed6 !important; }
+.text-zinc-400 { color: #949db5 !important; }
+.text-ps-blue { color: #ff7722 !important; }
 @media (min-width: 768px) {
   .md\:hidden { display: none !important; }
   .md\:flex { display: flex !important; }
@@ -67,14 +68,32 @@
 }
 
 :root {
-  --color-ps-blue: #0095ff;
-  --color-ps-blue-glow: rgba(0, 149, 255, 0.4);
-  --color-ps-black: #08080a;
-  --color-ps-surface: #101014;
-  --color-ps-card: rgba(24, 24, 28, 0.8);
-  --color-ps-border: rgba(255, 255, 255, 0.08);
+  /* [CN-FORK] v0.5.2.85 「藏蓝结构 + 亮橙动作」：深夜底为藏蓝黑，卡片藏蓝实底，主色亮橙，文字冷白偏蓝 */
+  --color-ps-blue: #ff6600;
+  --color-ps-blue-glow: rgba(255, 102, 0, 0.4);
+  --color-ps-black: #0c0f1a;
+  --color-ps-surface: #11162a;
+  --color-ps-card: #1b2033;
+  --color-ps-border: #2c3350;
+  /* [CN-FORK] 结构墨色（藏蓝）：侧栏选中底/页头等结构性用色；深色档按用户要求压深到 #33477f */
+  --color-ink: #33477f;
+  --color-ink-soft: #1d2644;
+  --color-ink-on: #ff7722;
   /* [CN-FORK] 语义文字色：浅色主题由 light-theme.css 变量层翻转，不经类名重映射，老内核浏览器也生效 */
-  --color-ps-text: #f4f4f5;
+  --color-ps-text: #e8ecff;
+  --color-ps-text-sub: #949db5;
+  /* [CN-FORK] 骨架层（侧栏选中/按钮）用到的派生变量，浅色主题在 light-theme.css 翻转 */
+  --color-nav-hover: rgba(255, 255, 255, 0.05);
+  --color-nav-active-bg: #1d2644;
+  --color-nav-active-fg: #e8ecff;
+  /* [CN-FORK] 实心按钮底色与 tailwind 的 bg-ps-blue 字面值保持一致（两主题同色），
+     避免浅底出现「骨架层按钮深橙、其余按钮亮橙」两种橙；悬停方向按主题走（深底提亮、浅底压深） */
+  --color-btn-solid: #ff6600;
+  --color-btn-solid-hover: #ff802b;
+  --color-danger-line: rgba(255, 85, 85, 0.28);
+  --color-danger-text: #ff8080;
+  --color-danger-soft: rgba(255, 85, 85, 0.14);
+  --color-field-bg: #131a2e;
   
   --font-inter: "Inter", system-ui, sans-serif;
   
@@ -98,7 +117,7 @@ body {
   margin: 0;
   padding: 0;
   background-color: var(--color-ps-black);
-  color: #f4f4f5;
+  color: var(--color-ps-text);
   font-family: var(--font-inter);
   font-size: 16px; /* Default for mobile/web */
   -webkit-font-smoothing: antialiased;
@@ -132,7 +151,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #444;
+  background: #3a4368;
   border-radius: 10px;
 }
 
@@ -155,7 +174,7 @@ body {
 }
 
 .glass-card:hover, .glass-card:focus {
-  background: rgba(40, 40, 45, 0.95);
+  background: #232a44;
   border-color: var(--color-ps-blue);
   transform: translateY(-2px);
 /* box-shadow: 0 0 30px var(--color-ps-blue-glow); */
@@ -170,7 +189,7 @@ body {
   overflow: hidden;
   transition: border-color 0.2s ease;
 }
-.panel-card:hover { border-color: rgba(0, 149, 255, 0.25); }
+.panel-card:hover { border-color: rgba(255, 102, 0, 0.32); }
 .panel-head {
   display: flex;
   align-items: center;
@@ -205,7 +224,7 @@ h1, h2, h3, h4 {
   font-weight: 700;
   letter-spacing: 0.1em;
   font-size: 0.85rem;
-  color: #a1a1aa; /* Increased contrast from #71717a */
+  color: var(--color-ps-text-sub); /* [CN-FORK] v0.5.2.85 走变量随主题翻转，不再硬写色值 */
 }
 
 /* Animations */
@@ -260,4 +279,145 @@ h1, h2, h3, h4 {
 
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ============================================================================
+ * [CN-FORK] v0.5.2.85 骨架层：侧栏分组头 + 选中动作色竖条、统一页头、三档按钮
+ *
+ * 手法：这一层的颜色**全部走 CSS 变量**（深色默认值在本文件 :root，浅色在
+ * light-theme.css 的 :root[data-theme="light"] 翻转）。因此不需要写 !important
+ * 类名重映射，PS5 老内核 WebKit 上也能整组跟随主题；上游组件不引用这些类名，
+ * 零冲突、零侵入。样式一律纯色，无渐变（遵循「禁用渐变」规范）。
+ * ==========================================================================*/
+
+/* ── 侧栏：分组头（原「主功能 / 设备 / 系统」这类小标题）── */
+.nav-group-title {
+  display: block;
+  margin: 1rem 0 0.3rem;
+  padding: 0 0.5rem; /* 与 .nav-item 的左内边距（p-4=0.5rem）对齐，标题正好压在图标列上 */
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-ps-text-sub);
+}
+.nav-group-title:first-child { margin-top: 0; }
+
+/* ── 侧栏：菜单项 + 选中态左侧动作色竖条 ──
+ * 只负责「定位上下文 + 配色语义」，盒模型（p-4 / rounded-2xl / space-x-4）仍由组件上的
+ * Tailwind 类决定：本文件在 @tailwind utilities 之后，.nav-item 若也写 padding/gap 会盖掉工具类。 */
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  color: var(--color-ps-text-sub);
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+.nav-item:hover { background-color: var(--color-nav-hover); color: var(--color-ps-text); }
+.nav-item.is-active {
+  background-color: var(--color-nav-active-bg);
+  color: var(--color-nav-active-fg);
+  font-weight: 700;
+}
+.nav-item.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 22%;
+  width: 3px;
+  height: 56%;
+  border-radius: 0 3px 3px 0;
+  background-color: var(--color-ps-blue);
+}
+
+/* ── 统一页头：窄屏上下堆叠，≥768px 标题在左、操作在右 ──
+ * 标题字号仍由组件上的 Tailwind 类（text-2xl font-bold）决定，这里只给布局与颜色语义，
+ * 避免和「UI 统一尺度规范」里既有的字号层级打架。
+ * 间隙用 * + * 外边距而不是 flex gap：PS5 老内核 WebKit 不支持 flex 盒的 gap。 */
+.page-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.page-head > * + * { margin-top: 0.6rem; }
+.page-head .page-desc {
+  margin-top: 0.2rem;
+  font-size: 0.9rem;
+  line-height: 1.25rem;
+  color: var(--color-ps-text-sub);
+}
+.page-head .page-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.page-head .page-actions > * + * { margin-left: 0.45rem; }
+@media (min-width: 768px) {
+  .page-head {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .page-head > * + * { margin-top: 0; margin-left: 1rem; }
+}
+
+/* ── 按钮：三档形态（实心 / 描边 / 幽灵）+ 危险语义配色，同一套尺寸与圆角 ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn > * + * { margin-left: 0.3rem; }
+
+/* 实心：页面唯一的「亮点」，一个视图里最多一个主操作 */
+.btn-primary { background-color: var(--color-btn-solid); color: #ffffff; }
+.btn-primary:hover:not(:disabled) { background-color: var(--color-btn-solid-hover); }
+
+/* 描边：次要操作 */
+.btn-outline {
+  background-color: var(--color-ps-card);
+  border-color: var(--color-ps-border);
+  color: var(--color-ps-text);
+}
+.btn-outline:hover:not(:disabled) { border-color: var(--color-btn-solid); color: var(--color-ps-blue); }
+
+/* 幽灵：辅助/跳转，悬停才浮出底色 */
+.btn-ghost { background-color: transparent; color: var(--color-ps-text-sub); }
+.btn-ghost:hover:not(:disabled) { background-color: var(--color-nav-hover); color: var(--color-ps-text); }
+
+/* 危险：描边形态的语义配色（停止/删除类），与主色橙明显区隔；实心红留给确认弹窗内使用 */
+.btn-danger {
+  background-color: var(--color-nav-hover);
+  border-color: var(--color-danger-line);
+  color: var(--color-danger-text);
+}
+.btn-danger:hover:not(:disabled) { background-color: var(--color-danger-soft); border-color: var(--color-danger-text); }
+
+/* ── 表单输入：与 .btn 同一套圆角/字号，底色比卡片再暗一档以保持「凹进去」的输入感 ── */
+.field {
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--color-ps-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-field-bg);
+  color: var(--color-ps-text);
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.25rem;
+  transition: border-color 0.18s ease;
+}
+.field::placeholder { color: var(--color-ps-text-sub); opacity: 1; }
+.field:focus { outline: none; border-color: var(--color-btn-solid); }
+
 

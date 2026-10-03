@@ -10,10 +10,9 @@ import { RefreshCw, Thermometer, Fan, Power } from 'lucide-react'
  * 注意：真正写 /dev/icc_fan 的调速已由 fan_control.c 常驻守护落地；FanControlCard 在
  * /fan_control 返回 supported:false 或请求失败时优雅显示「未接入」，不谎报成功。 */
 
-const BTN_GHOST =
-  'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[13px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
-const BTN_PRIMARY =
-  'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-ps-blue text-white text-[13px] font-bold hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition'
+/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层（描边 / 实心两档） */
+const BTN_GHOST = 'btn btn-outline'
+const BTN_PRIMARY = 'btn btn-primary'
 
 function MetricCard({ label, value, unit, warn }) {
   return (

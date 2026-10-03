@@ -212,17 +212,18 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
 
   return (
     <div className="space-y-6">
-      {/* [CN-FORK] 风格统一：页头 text-2xl 与其它页面标题对齐 */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* [CN-FORK] v0.5.2.85 页头改用骨架层 .page-head（窄屏堆叠 / ≥768px 标题左、操作右），
+          上传按钮统一为 .btn.btn-primary：主色实心是唯一「亮点」，浅色主题下由变量自动加深 */}
+      <div className="page-head">
         <h2 className="text-2xl font-bold text-white tracking-tight">
           {t("storage_hub.title_1", "Payload")} <span className="text-ps-blue">{t("storage_hub.title_2", "Management")}</span>
         </h2>
 
         {!isPS5 && (
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="page-actions">
             {/* [CN-FORK] 上传按钮前显示服务器 IP:端口 */}
             <span className="text-xs font-mono text-zinc-500 tracking-tight">{ip}:8911</span>
-            <label className="inline-flex items-center gap-2 px-4 py-2 bg-ps-blue hover:bg-ps-blue/90 text-white rounded-lg font-semibold text-sm cursor-pointer transition-all shrink-0">
+            <label className="btn btn-primary">
               <Upload className="w-4 h-4" />
               <span>{t("storage_hub.upload_btn", "Upload ELF Payload")}</span>
               <input type="file" className="hidden" onChange={onUpload} accept={isIOS ? undefined : ".elf,.bin"} />
@@ -364,9 +365,9 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                onChange={e => handleSortChange(e.target.value)}
                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
              >
-               <option value="category" className="bg-[#121214]">{t("storage_hub.sort_category", "Category")}</option>
-               <option value="update_time" className="bg-[#121214]">{t("storage_hub.sort_time", "Update Time")}</option>
-               <option value="name" className="bg-[#121214]">{t("storage_hub.sort_name", "Name")}</option>
+               <option value="category" className="bg-ps-surface">{t("storage_hub.sort_category", "Category")}</option>
+               <option value="update_time" className="bg-ps-surface">{t("storage_hub.sort_time", "Update Time")}</option>
+               <option value="name" className="bg-ps-surface">{t("storage_hub.sort_name", "Name")}</option>
             </select>
             <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-zinc-500">
               <ChevronDown className="w-5 h-5" />

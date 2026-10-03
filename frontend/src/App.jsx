@@ -480,8 +480,10 @@ function App() {
         {confirmModal.message}
       </Modal>
 
+      {/* [CN-FORK] v0.5.2.85 侧栏底改 bg-ps-surface（变量驱动）：深色为藏蓝夜轨、浅色为淡蓝侧栏，
+          与画布 ps-black 拉开一档层次，不再靠 bg-black/40 的半透黑叠加 */}
       <aside className={cn(
-        "flex-col bg-black/40 border-r border-white/5 transition-all duration-500 z-[100] h-screen",
+        "flex-col bg-ps-surface border-r border-white/5 transition-all duration-500 z-[100] h-screen",
         isPS5 ? "flex" : "hidden md:flex",
         sidebarExpanded ? "w-80" : "w-28"
       )}>
@@ -503,7 +505,7 @@ function App() {
           {/* [CN-FORK] 菜单按「常用功能 / 系统管理」分组，符合中文后台习惯；视图 id 与上游保持一致 */}
           <nav className="flex-1 space-y-2 overflow-y-auto custom-scrollbar">
             {sidebarExpanded && (
-              <p className="label-caps px-4 pb-2 !text-zinc-500">{t("app.nav.group_main", "Main")}</p>
+              <p className="nav-group-title">{t("app.nav.group_main", "Main")}</p>
             )}
             {/* [CN-FORK] v0.5.1.64 删侧栏「主页」入口（DashboardView 已下线），首项即「管理 Payload」 */}
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} />
@@ -513,7 +515,7 @@ function App() {
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'common_entries'} onClick={() => setView('common_entries')} icon={Link2} label={t("app.nav.common_entries", "Quick Links")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'game_manage'} onClick={() => setView('game_manage')} icon={Gamepad2} label={t("app.nav.game_manage", "Game Manager")} />
             {sidebarExpanded && (
-              <p className="label-caps px-4 pt-5 pb-2 !text-zinc-500">{t("app.nav.group_system", "System")}</p>
+              <p className="nav-group-title">{t("app.nav.group_system", "System")}</p>
             )}
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} />
             <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} />
@@ -663,8 +665,8 @@ function App() {
         </div>
       )}
       {showLogs && (
-        <div className="fixed inset-0 z-[9999] bg-[#08080a] flex flex-col animate-in fade-in duration-300">
-          <div className="p-6 md:p-8 border-b border-white/10 flex items-center justify-between bg-[#08080a]/95 backdrop-blur-xl sticky top-0 z-10">
+        <div className="fixed inset-0 z-[9999] bg-ps-black flex flex-col animate-in fade-in duration-300">
+          <div className="p-6 md:p-8 border-b border-white/10 flex items-center justify-between bg-ps-black/95 backdrop-blur-xl sticky top-0 z-10">
             <div className="flex items-center space-x-4">
               <Terminal className="w-8 h-8 text-ps-blue" />
               <h3 className="text-3xl font-black text-white uppercase italic tracking-tighter">{t("app.logs.title", "Logs")}</h3>

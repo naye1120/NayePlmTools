@@ -1,3 +1,14 @@
+## v0.5.2.85 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **整站配色改「藏蓝结构 + 亮橙动作」，并补上侧栏/页头/按钮的骨架层**：
+  * 换色只动令牌层，不动任何类名：`tailwind.config.js` 把 `ps-blue` 由赤陶橘改亮橙 `#ff6600`、`ps-black/ps-surface/ps-card/ps-border` 改藏蓝夜阶（`#0c0f1a / #11162a / #1b2033 / #2c3350`）、中性 `zinc` 整阶换藏蓝灰（`#e8ecff…#0c0f1a`），语义色改青柠/暖黄/珊瑚；新增 `ink` 藏蓝阶与 `danger` 别名。全站 126 处 `text-ps-blue`、~180 处 `text-zinc-*` 等类名原样保留即自动跟随，上游后续沿用同类名也自动接色。
+  * 深色档按「再深一些」把结构藏蓝从样张的 `#4a5fa5` 压到 `#33477f`，浅底上的动作色文字用亮橙深阶 `#b84d00` 保对比度，实心按钮仍用 `#ff6600` + 白字（与其它 `bg-ps-blue` 一致，避免两种橙）。
+  * `index.css` / `light-theme.css` 的暖色字面量整体清扫到藏蓝阶（含滚动条、卡片悬停、Toast 底色、面板描边），`.label-caps` 改走 `--color-ps-text-sub` 变量，浅色主题翻变量即跟随。
+  * 骨架层（`index.css` 新增，颜色全走 CSS 变量，浅色由 `light-theme.css` 翻变量整组跟随，无需 `!important` 重映射）：侧栏分组头 `.nav-group-title`、菜单项 `.nav-item` + 选中态藏蓝底与**左侧亮橙竖条**（不再整块实心橙，把唯一亮点留给主操作按钮）、统一页头 `.page-head` / `.page-desc` / `.page-actions`、三档按钮 `.btn` + `.btn-primary`/`.btn-outline`/`.btn-ghost`（危险语义 `.btn-danger`）、表单 `.field`。
+  * 落地：侧栏（`App.jsx` 分组头与底色）、`NavButton` 选中态，以及「管理 Payload / 自动加载 / 活动进程 / 常用入口 / 游戏管理 / PKG Manager / 温控」各页头与按钮收口到骨架层——原先各视图各自复制的五份 `BTN_GHOST`/`BTN_PRIMARY` 字符串常量改为引用同一套类名。间隙用 `* + *` 外边距而非 flex `gap`（PS5 老内核 WebKit 不支持 flex gap）。
+  * 未动：字号与间距尺度（含 `p-4 = 0.5rem`）、组件结构、后端与数据流一行未改。
+
 ## v0.5.2.84 (CN-FORK)
 
 ### 🚀 Features

@@ -7,7 +7,8 @@ import { RefreshCw, ExternalLink } from 'lucide-react'
  * 可行前提：PKG Manager 响应不设 X-Frame-Options/CSP（已核对其源码），且浏览器 cookie
  * 不区分端口，其登录态在 iframe 内正常。上传更新等低频操作在设置页管理卡片。 */
 
-const BTN_GHOST = 'inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[14px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
+/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层（描边档） */
+const BTN_GHOST = 'btn btn-outline'
 
 export default function PkgManagerFrame() {
   const { t } = useTranslation()

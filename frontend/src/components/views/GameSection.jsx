@@ -8,8 +8,8 @@ import { Gamepad2, RefreshCw, Download, Camera, Pencil, Tag } from 'lucide-react
  * 图标走独立 /game_icon?tid= 端点读 icon0.png；读不到（onError）回退占位图。
  * 导出存档 / 导出截图 / 改名 / 多标签 均为后续功能，先以禁用按钮占位（不接后端）。 */
 
-const BTN_GHOST =
-  'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-zinc-200 text-[13px] font-bold hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition'
+/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层（描边档） */
+const BTN_GHOST = 'btn btn-outline'
 
 /* [CN-FORK] 由 TITLE_ID 前缀判断主机平台（后端 gm_tid_is_game 白名单即这几类前缀）。 */
 function gamePlatform(tid) {
