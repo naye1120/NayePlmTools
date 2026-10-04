@@ -566,8 +566,11 @@ function App() {
       </aside>
 
       {/* MOBILE BOTTOM NAV */}
-      <nav className={cn(
-        "fixed bottom-0 inset-x-0 z-[100] bg-black/80 border-t border-white/5 h-[calc(5rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] flex items-center overflow-x-auto hide-scrollbar",
+      <nav
+        style={{ gridTemplateColumns: `repeat(${NAV_ITEMS.length}, minmax(0, 1fr))` }}
+        className={cn(
+        /* [CN-FORK] v0.5.2.96 等宽格子取代横向滚动：七个入口全部一屏可见、拇指可及 */
+        "fixed bottom-0 inset-x-0 z-[100] bg-black/80 border-t border-white/5 h-[calc(5rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] grid",
         isPS5 ? "hidden" : "md:hidden"
       )}>
         {/* 手机端任务栏与侧栏同源（NAV_ITEMS）：手机端任务栏此前手动加长到与桌面侧栏同项，
