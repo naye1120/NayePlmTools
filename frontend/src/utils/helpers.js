@@ -1,7 +1,10 @@
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
-export const isPS5 = /PlayStation/i.test(navigator.userAgent);
+/* [CN-FORK] v0.5.2.98 允许用 ?device=ps5 在电脑/手机上预览电视端形态（遥控器空间导航、
+ * 大命中区、隐藏底部栏）。真机 UA 本来就命中，不看这个参数；线上地址没人带这个 query。 */
+export const isPS5 = /PlayStation/i.test(navigator.userAgent) ||
+  /[?&]device=ps5(&|$)/.test(window.location.search);
 export const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 export function cn(...inputs) {

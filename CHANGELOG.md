@@ -1,3 +1,17 @@
+## v0.5.2.98 (CN-FORK)
+
+### 🐛 Bug Fixes
+* **修骨架重构（.92–.97）留下的四处「一点就整站死」**，配色契约一行未动：
+  * `PkgManagerCard.jsx` 用了 `cn()` 却没有 import → 一进「设置」页抛 `ReferenceError: cn is not defined`，React 19 卸载整棵根节点，**之后每个页面都点不动**，看起来像整个应用死了。
+  * `CommonEntriesView.jsx` 的取消按钮残留 `setMsg(null)`（`.94` 把内联状态行换成 Toast 时删掉的 state）→「常用配置」新增条目再点取消同样整树卸载。改成只 `setAdding(false)`。
+  * `utils/spatialNav.js` 的 Escape 分支引用只在 Enter 分支里声明的 `active` → 遥控器「返回」一按就报错。已提到 `onKeyDown` 顶部。
+  * `utils/spatialNav.js` 方向键主干：`pickNext()` 读的是候选对象上的 `from.cx/from.cy`，传进去的却是裸 DOM 元素 → 坐标 undefined、代价函数全程 NaN，**电视端方向键从第二次按键起一步不动**（`.92` 上线即失效）。现改为传「候选集合里查到的那一项」；顺带修 `body` 也过得了 `visibleRect` 导致进不去「首次落焦」分支的问题，并把焦点环 `.is-focus` 改由 `focusTarget()` 直接挂（老内核不保证派发 `focusin`，环不出现等于遥控器看不见自己在哪）。
+* **数据与文案两处**：`mock-server.js` 的 `/processes_list` 补 `memory` / `is_daemon`（后端每条都带这两个字段；mock 漏了会让 `p.memory.toFixed(1)` 抛 TypeError，勾「显示所有系统进程」即崩）。上游 `zh-CN.json` 的 `manage_sources.remove_title` 值错成「显示所有系统进程」，删除来源的确认框标题跟着错——按覆盖规范只在 `locales-overlay/zh-CN.json` 加「删除来源」，不动 locales 子模块。
+* `ui/PageHead.jsx` 的 `desc` 容器从 `<p>` 改 `<div>`：自启页往里放了「保存中」指示块，`<p>` 嵌 `<div>` 是非法 HTML，内核会自己拆标签导致排版错位。
+* **预览口子**：`utils/helpers.js` 的 `isPS5` 增加 `?device=ps5` 判定，电脑/手机可直接预览电视端形态（大命中区 + 方向键导航 + 隐藏底部栏）；真机 UA 本来就命中，不看这个参数。
+* **验收方式改了**：`.92`–`.97` 六批只跑过 `vite build`，而 esbuild 不做作用域检查，上面这几处编译期全绿、运行期才炸。这批起以 `npm run lint` 的 `no-undef` 为守门项 + 逐页逐控件实测（`mock-server.js` 里 Node `process` 的报错属 ESLint 浏览器 globals 配置的既有误报，未动）。
+
+
 ## v0.5.2.97 (CN-FORK)
 
 ### 🚀 Features & UX Improvements

@@ -128,7 +128,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.97'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.98'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -370,10 +370,20 @@ app.get('/list_payloads', (req, res) => {
 });
 
 /* [CN-FORK] v0.5.2.83 进程列表 mock（实机 process_mgr.c）：通用拉起前先查同名进程，
- * 避免对「已在跑但只监听 127.0.0.1」的程序重复拉起叠出第二个实例。未拉起的 ShadowMountPlus 不在表内。 */
+ * 避免对「已在跑但只监听 127.0.0.1」的程序重复拉起叠出第二个实例。未拉起的 ShadowMountPlus 不在表内。
+ * v0.5.2.98 补齐 memory / is_daemon：后端 process_mgr.c 每条都带这两个字段，mock 漏了会让
+ * 前端 p.memory.toFixed(1) 直接抛 TypeError（勾「显示所有系统进程」即崩）。 */
 const mockProcs = ['elfldr.elf', 'NayePlmTools.elf', 'pkgmgr.elf', 'dbst.elf', 'kstuff.elf'];
+const mockMemMiB = [128.4, 96.2, 210.7, 44.1, 12.3];
 app.get('/processes_list', (req, res) => {
-  res.json({ processes: mockProcs.map((name, i) => ({ pid: 89 + i, name })) });
+  res.json({
+    processes: mockProcs.map((name, i) => ({
+      pid: 89 + i,
+      name,
+      memory: mockMemMiB[i],
+      is_daemon: name !== 'elfldr.elf',
+    })),
+  });
 });
 
 app.get('/autoload_status', (req, res) => {

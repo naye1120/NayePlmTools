@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Play, Power, Upload, RefreshCw, Package } from 'lucide-react'
 import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
+import { cn } from '../../utils/helpers' /* [CN-FORK] v0.5.2.98 补回漏掉的 cn 导入：缺它会让整棵 React 树崩溃 */
 
 /* [CN-FORK] 设置页的 PKG Manager 管理卡片。侧栏「PKG安装」菜单已改为自动拉起并铺满
  * 右侧内容区直接跑它自带界面（:8844），本卡片保留低频管理功能：查看状态/版本、

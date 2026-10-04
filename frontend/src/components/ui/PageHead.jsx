@@ -24,7 +24,9 @@ const PageHead = ({ title, desc, actions, back, backLabel, bleed = true, classNa
         )}
         <div className="min-w-0">
           <h2 className="text-2xl font-bold text-white tracking-tight">{title}</h2>
-          {desc && <p className="page-desc max-w-2xl">{desc}</p>}
+          {/* [CN-FORK] v0.5.2.98 desc 容器从 <p> 改 <div>：autoload 页往里放了「保存中」指示块
+              （div），<p> 嵌 <div> 是非法 HTML，老内核会自己拆标签导致排版错位。 */}
+          {desc && <div className="page-desc max-w-2xl">{desc}</div>}
         </div>
       </div>
       {actions && <div className="page-actions">{actions}</div>}

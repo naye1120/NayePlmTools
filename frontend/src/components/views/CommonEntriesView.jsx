@@ -299,7 +299,9 @@ export default function CommonEntriesView({ showConfirm, addToast }) {
                 <Check className="w-4 h-4" />
                 {t('entries.save', '保存')}
               </button>
-              <button onClick={() => { setAdding(false); setMsg(null) }} className={cn(BTN_GHOST, 'ml-2')}>
+              {/* [CN-FORK] v0.5.2.98 取消按钮不再调 setMsg：内联状态行已在 .94 换成 Toast，
+                  这个残留引用会让整棵 React 树崩掉（一进水品页就白屏）。 */}
+              <button onClick={() => setAdding(false)} className={cn(BTN_GHOST, 'ml-2')}>
                 {t('entries.cancel', '取消')}
               </button>
             </div>

@@ -114,6 +114,14 @@ function focusTarget(el) {
   } catch (e) {
     /* 老内核在某些节点上会抛，忽略即可，下个按键再试 */
   }
+  /* [CN-FORK] v0.5.2.98 挂焦点环不依赖 focusin 事件：老内核在页面刚加载、或某些节点上
+     不一定派发 focusin，环不出现就等于遥控器「看不见自己在哪」。这里直接挂类，
+     onFocusIn/onFocusOut 那套仍保留，两条路指向同一个 .is-focus。 */
+  if (el && el.classList) {
+    const prev = document.querySelector('.is-focus');
+    if (prev && prev !== el) prev.classList.remove('is-focus');
+    el.classList.add('is-focus');
+  }
 }
 
 export function enableSpatialNav() {
@@ -130,13 +138,25 @@ export function enableSpatialNav() {
   const onKeyDown = (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const dir = DIRS[e.key];
+    /* [CN-FORK] v0.5.2.98 active 提到函数顶：原来只在 Enter 分支里声明，Escape 分支引用它
+       会抛 ReferenceError，导致遥控器返回键整条路径失效。 */
+    const active = document.activeElement;
     if (dir) {
-      const active = document.activeElement;
       if (isTextEntry(active)) return; // 文本框里方向键归原生
       e.preventDefault();
       const list = collect();
       if (!list.length) return;
-      const from = active && visibleRect(active) ? active : null;
+      /* [CN-FORK] v0.5.2.98 起点取「候选集合里的那一项」而不是裸元素：pickNext 读的是
+         from.cx/from.cy（候选对象上的中心坐标），旧写法把元素直接传进去，坐标变成 undefined，
+         代价函数全程 NaN → 任何方向都找不到下一个控件，电视端方向键整体失灵。
+         另外 body/documentElement 的矩形也满足 visibleRect，旧写法会把它们当成当前焦点，
+         于是连「首次落焦」分支都进不去。 */
+      let from = null;
+      if (active && active !== document.body && active !== document.documentElement) {
+        for (let i = 0; i < list.length; i++) {
+          if (list[i].el === active) { from = list[i]; break; }
+        }
+      }
       if (!from) {
         // 首次按下：把焦点落到当前屏上最靠上、最靠左的控件，让用户立刻看见自己在哪
         const sorted = list.slice().sort((a, b) => (a.r.top - b.r.top) || (a.r.left - b.r.left));
@@ -149,7 +169,7 @@ export function enableSpatialNav() {
         return;
       }
       // 这个方向已到屏内尽头：滚一屏，再在滚动后的画面里挑同方向的第一个控件
-      const scroller = scrollParentOf(from);
+      const scroller = scrollParentOf(from.el);
       scrollByStep(scroller, dir[0], dir[1]);
       next = pickNext(from, collect(), dir[0], dir[1]);
       if (next) focusTarget(next.el);
@@ -157,7 +177,6 @@ export function enableSpatialNav() {
     }
     if (e.key === 'Enter' || e.key === 'Spacebar' || e.keyCode === 13) {
       // 遥控器 OK 落在 <button>/<a> 上由原生激活；落在用 div 实现的可点击行上需要手动点一次
-      const active = document.activeElement;
       if (active && active.tagName !== 'BUTTON' && active.tagName !== 'A' &&
           active.tagName !== 'INPUT' && active.tagName !== 'SELECT' && active.tagName !== 'TEXTAREA' &&
           (active.getAttribute('role') === 'button' || active.getAttribute('role') === 'link')) {
