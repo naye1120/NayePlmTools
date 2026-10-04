@@ -215,9 +215,12 @@ body {
   outline: none;
 }
 
-/* [CN-FORK] 统一板块容器：现代扁平卡片（固定圆角/描边/板块头），颜色走 CSS 变量双主题自动跟随 */
+/* [CN-FORK] 统一板块容器：现代扁平卡片（固定圆角/描边/板块头），颜色走 CSS 变量双主题自动跟随
+ * [CN-FORK] v0.5.2.90 底色从 card 档并到 inset 档：`.panel-card` 曾全站只有「管理 Payload」在用，
+ * 其它页的板块都是手写 bg-white/[0.03]（收口后即 inset），同一角色两套底（深档 #0a101d vs #05080e）。
+ * 现按用户指定统一到 inset，card 档只留给 bg-ps-card 这类字面容器。 */
 .panel-card {
-  background: var(--color-card);
+  background: var(--color-inset);
   border: 1px solid var(--color-line);
   border-radius: 0.75rem;
   overflow: hidden;

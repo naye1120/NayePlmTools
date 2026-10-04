@@ -1,3 +1,11 @@
+## v0.5.2.90 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **板块容器统一到一档底：`.panel-card` 的底色从 `card` 档并到 `inset` 档**（对应反馈「管理 Payload 与设置这两页的背景不一样 / bg-white/[0.03]、panel-card 改成和其他的相同」）：
+  * 实测病灶：`.panel-card` 全站只有「管理 Payload」的三个板块在用（深色底 `#0a101d`），其它页的板块——设置 9 块、温控、游戏管理、常用入口、PKG 卡——都是上游手写的 `bg-white/[0.03]`，在 `.87` 收口层里被并进了内嵌件档（深色合成 ≈ `#05080e`）。同一个「板块」角色因此有两套底，相差 R5/G8/B15，浅色下也一样（纯白 vs `#fafbfd`）。
+  * 现按用户指定把 `.panel-card` 改读 `var(--color-inset)`，两页起视觉同一档；`card` 档不再由板块容器使用，只留给 `bg-ps-card` 这类字面容器。板块内的行/输入框/徽章仍是 inset，靠双层叠加与描边区分。
+  * 未动：圆角与描边尺度、字号间距、组件结构与后端。
+
 ## v0.5.2.89 (CN-FORK)
 
 ### 🚀 Features & UX Improvements
