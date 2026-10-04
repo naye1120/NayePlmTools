@@ -159,9 +159,10 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 pb-12">
+    /* [CN-FORK] v0.5.2.99 容器对齐「管理 Payload」：去掉 max-w-5xl 居中与页内 pb-12，
+     * 正文吃满 main 的内容列；页头因此恢复出血（bleed 默认 true），粘顶条的分界线铺到边。 */
+    <div className="space-y-6">
       <PageHead
-        bleed={false}
         title={t("settings.title", "Settings")}
       />
 

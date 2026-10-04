@@ -1,3 +1,5 @@
+/* [CN-FORK] v0.5.2.99 eslint 不认 Node 全局（与 vite.config.js 同一处理），这里只声明用到的两个 */
+/* global process, Buffer */
 import express from 'express';
 import cors from 'cors';
 import http from 'node:http'; // [CN-FORK] PKG Manager 桩服务：真实监听 8844 供本地端到端验证
@@ -128,7 +130,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.98'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.99'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -198,6 +200,146 @@ app.post('/pkgmanager_upload', (req, res) => {
     res.json({ ok: true, version: pkgInstalled });
   });
 });
+
+/* [CN-FORK] v0.5.2.99 常用配置「账号 / 远程游玩配对」板块 mock。
+ * 接口形状逐条对齐并入后的真接口（src/psaccounts/api.c + accounts.c/avatar.c），状态在内存里
+ * 真的会翻转：激活 / 登入登出 / 改名 / 换 Account ID 都会改到位，用来把每个按钮的前端逻辑走一遍。
+ * 不写注册表、不碰文件 —— 真机行为只由 payload 侧决定。 */
+/* [CN-FORK] v0.5.2.99 PIN 有效期与实机同源一档：src/psaccounts/accounts.c 的 PIN_TTL_SEC=180 */
+const ACCT_PIN_TTL = 180
+const acct = {
+  name: 'User11', activated: true, signedIn: true, autoLogin: true, slot: 1,
+  userId: 438122023, userIdHex: '0x1A1D3627',
+  accountId: '0x7ed3586971779f76', derivedId: '0x7ed3586971779f76',
+  pendingRecords: 2, pin: null, safetyDirty: true,
+}
+const b64OfHex = (raw) => {
+  const be = []
+  for (let i = 0; i < 8; i++) be.push(parseInt(raw.slice(i * 2, i * 2 + 2), 16))
+  return Buffer.from(be.slice().reverse()).toString('base64')
+}
+const decOfHex = (raw) => BigInt('0x' + raw).toString(10)
+const acctObj = () => {
+  const raw = acct.accountId.replace(/^0x/, '')
+  return {
+    userId: acct.userId, userIdHex: acct.userIdHex, name: acct.name, slot: acct.slot,
+    activated: acct.activated, signedIn: acct.signedIn, current: true, autoLogin: acct.autoLogin,
+    loginFlag: acct.signedIn ? 6 : 4098,
+    state: acct.signedIn ? 'signed-in' : 'activated-offline',
+    pendingRecords: acct.pendingRecords,
+    accountId: acct.activated ? acct.accountId : '',
+    accountIdB64: acct.activated ? b64OfHex(raw) : '',
+    accountIdDec: acct.activated ? decOfHex(raw) : '',
+    derivedId: acct.derivedId,
+  }
+}
+const acctPinLine = () => {
+  const raw = acct.accountId.replace(/^0x/, '')
+  return {
+    pin: acct.pin.pinRaw.slice(0, 4) + ' ' + acct.pin.pinRaw.slice(4),
+    pinRaw: acct.pin.pinRaw, expiresIn: ACCT_PIN_TTL,
+    remaining: Math.max(0, Math.round((acct.pin.deadline - Date.now()) / 1000)),
+    userId: acct.userId, name: acct.name, slot: acct.slot,
+    activated: acct.activated, signedIn: acct.signedIn,
+    accountId: acct.activated ? acct.accountId : '',
+    accountIdB64: acct.activated ? b64OfHex(raw) : '',
+  }
+}
+
+app.get('/api/accounts', (req, res) => {
+  /* 第二条是 current:false：验证界面挑的确实是前台账号，而不是清单里的第一个 */
+  const other = {
+    ...acctObj(), userId: 911234567, userIdHex: '0x36425207', name: 'SecondUser', slot: 2,
+    current: false, autoLogin: false, activated: false, signedIn: false, pendingRecords: 0,
+    accountId: '', accountIdB64: '', accountIdDec: '', derivedId: '0x2f6c0a1b3c4d5e6f',
+    loginFlag: 4098, state: 'activated-offline',
+  }
+  res.json({ ok: true, mainUserId: acct.userId, currentUserId: acct.userId, accounts: [acctObj(), other] })
+})
+
+app.get('/api/accounts/:action', (req, res) => {
+  const a = req.params.action
+  if (a === 'preview') {
+    return res.json({
+      ok: true, action: 'signin', slot: acct.slot, mainUserId: acct.userId, owner: acct.userId,
+      pendingForOwner: acct.pendingRecords, targetIsMain: true, writesBaseSlot: false,
+      baseSlotKeys: 0, targetSlotKeys: 22, regKeys: 22, npFiles: 2, ents: [],
+    })
+  }
+  if (a === 'activate') {
+    const id = req.query.accountId
+    if (id) {
+      const s = String(id).toLowerCase()
+      acct.accountId = s.startsWith('0x') ? s : '0x' + BigInt(s).toString(16).padStart(16, '0')
+    }
+    acct.activated = true
+  }
+  if (a === 'deactivate') acct.activated = false
+  if (a === 'signout') acct.signedIn = false
+  if (a === 'signin') {
+    /* 服务端那道 confirm=online 闸在 mock 里同样要生效，否则测不出「漏参数=409」 */
+    if (req.query.confirm !== 'online') {
+      return res.status(409).json({ ok: false, needConfirm: 'online', message: 'need confirm' })
+    }
+    acct.signedIn = true
+  }
+  if (a === 'rename') {
+    const to = req.query.to
+    if (to === 'Taken') return res.json({ ok: false, message: 'rejected: "Taken" already occupies slot 2' })
+    if (to) acct.name = String(to)
+  }
+  const msg = {
+    activate: 'activated ' + acct.name, deactivate: 'deactivated ' + acct.name,
+    signout: acct.name + ' signed out', signin: acct.name + ' signed in', rename: 'renamed',
+  }[a]
+  res.json({ ok: true, message: msg || 'ok', account: acctObj() })
+})
+
+app.get('/api/safety', (req, res) => {
+  res.json({
+    ok: true, mode: 'status', dir: '/data/offact/backup', line: '2 reg, 1 file', writable: true,
+    regBackups: acct.safetyDirty ? 2 : 0, fileBackups: acct.safetyDirty ? 1 : 0,
+    regRestored: 0, filesRestored: 0, message: '',
+    entries: [{ ent: '0x07800500', type: 'bin', declared: 8, owner: acct.userId }],
+  })
+})
+app.get('/api/safety/restore', (req, res) => {
+  acct.safetyDirty = false
+  res.json({ ok: true, message: 'restored 2 registry value(s) and 1 file(s); backup log cleared — reboot to apply' })
+})
+
+app.get('/api/remoteplay/pin', (req, res) => {
+  acct.pin = { pinRaw: String(Math.floor(10000000 + Math.random() * 89999999)), deadline: Date.now() + ACCT_PIN_TTL * 1000 }
+  res.json({ ok: true, status: 'waiting', ...acctPinLine(), message: '配对要填 PIN + Account ID。这一步只读。' })
+})
+app.get('/api/remoteplay/pin/status', (req, res) => {
+  if (!acct.pin) {
+    return res.json({ ok: false, status: 'idle', message: '当前没有进行中的配对 —— 点「生成 PIN」重新来一条' })
+  }
+  const remain = Math.round((acct.pin.deadline - Date.now()) / 1000)
+  if (remain <= 0) {
+    acct.pin = null
+    return res.json({ ok: true, status: 'expired', message: 'PIN 已过期，会话已收尾（0x0）' })
+  }
+  res.json({ ok: true, status: 'waiting', ...acctPinLine(), stat: 0,
+    message: '正在等你在 Chiaki 里填 PIN + Account ID（还剩 ' + remain + ' 秒）' })
+})
+
+app.get('/api/avatar', (req, res) => res.status(404).json({ ok: false, error: 'no avatar for that user' }))
+app.post('/api/avatar/upload', (req, res) => {
+  let n = 0
+  req.on('data', (c) => { n += c.length })
+  req.on('end', () => res.json({
+    ok: true, source: 'mock', size: n, sourceWidth: 260, sourceHeight: 260,
+    mode: req.query.mode || 'crop', sizes: [64, 128, 260, 440], workDir: '/tmp/mock',
+  }))
+})
+app.get('/api/avatar/apply-current-user', (req, res) => {
+  res.json({
+    ok: true, dest: '/system_data/priv/cache/profile/0x1A1D3627', user: acct.name + ' (0x1A1D3627)',
+    copied: 11, failed: 0, safety: '1 file backed up', files: [],
+  })
+})
 
 // [CN-FORK] 常用入口 mock：内存清单 + 新增/删除（实机由 quicklinks.c 读写 /data 下 json 并 TCP 探活）
 /* [CN-FORK] program 字段：本机程序类入口（实机由 quicklinks.c 按「本机 host + 8844 端口」识别），

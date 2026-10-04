@@ -163,43 +163,29 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
     </div>
   )
 
+  /* [CN-FORK] v0.5.2.99 页面级大标题（<PageHead>）上移到整页最顶，与其他菜单页同一档；
+   * 序列这一列随之降为「板块」：原来压在列首的 24px 页头改成与左列「可用的 Payload」
+   * 同款的板块小标题，保存状态与「停用自启」交给页头，列里只剩列表本体。 */
   const renderSequence = () => (
-    <div className="space-y-8 flex flex-col h-full min-h-0">
-      {/* [CN-FORK] v0.5.2.94 页头改走共用 <PageHead>：粘顶，长序列滚到底也看得到「停用自启」；
-          保存状态那条一行留在 desc 位置（高度固定，不会因出现/消失把列表顶得跳一下）。 */}
-      <PageHead
-        title={<>{t("autoload.sequence_title_1", "Autoload")} <span className="text-ps-blue">{t("autoload.sequence_title_2", "Sequence")}</span></>}
-        desc={
-          <div className="h-6 mt-1 overflow-hidden">
-            {saving ? (
-              <div className="flex items-center text-ps-blue/60 text-xs font-bold uppercase tracking-widest">
-                <RefreshCw className="w-3 h-3 mr-2" />
-                <span>{t("autoload.saving", "Saving Changes...")}</span>
-              </div>
-            ) : saved ? (
-              <div className="flex items-center text-emerald-500 text-xs font-bold uppercase tracking-widest">
-                <CheckCircle2 className="w-3 h-3 mr-2" />
-                <span>{t("autoload.saved", "All Changes Saved")}</span>
-              </div>
-            ) : null}
-          </div>
-        }
-        actions={
-          <button onClick={() => handleToggle(false)} className="btn btn-danger">
-            {t("autoload.disable_btn", "Disable Autoload")}
-          </button>
-        }
-      />
+    <div className="space-y-4 flex flex-col h-full min-h-0">
+      <h3 className="shrink-0 label-caps !text-white !opacity-100 text-xl tracking-widest">
+        {t("autoload.sequence_title_1", "Autoload")} <span className="text-ps-blue">{t("autoload.sequence_title_2", "Sequence")}</span>
+      </h3>
 
       <div className="glass-panel p-4 rounded-ps-2xl border-white/10 flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-2 mb-2 pb-6">
           {autoloadList.map((p, i) => (
             <div key={`${p}-${i}`} className="relative row-link flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
-              <div className="absolute top-0 left-0 w-6 h-6 rounded-full bg-dark flex items-center justify-center z-20">
-                <span className="text-gray-500 text-[12px] font-black">{i + 1}</span>
-              </div>
-              <div className="flex items-center min-w-0 pl-2">
-                <PayloadName path={p} className="text-white" stacked />
+              {/* [CN-FORK] v0.5.2.99 序号从「绝对定位压在行左上角」改成正常流里的前导列。
+                  旧写法有两个问题：一是它的底 bg-dark 在项目里根本没有定义（Tailwind 生成不出这条
+                  规则 → 透明），数字是悬空压在 payload 名字上的；二是它锚在行的 border-box 角上，
+                  名字容器只给了 pl-2，450px 宽下两者实测重叠 16×14px，第一个字被序号盖住。
+                  现在序号占固定 1.5rem 前导列，名字跟着往后排，谁也不叠谁。 */}
+              <div className="flex items-center min-w-0">
+                <span className="w-6 flex-none text-center text-[12px] font-black text-zinc-500 tabular-nums">{i + 1}</span>
+                <div className="min-w-0 ml-1">
+                  <PayloadName path={p} className="text-white" stacked />
+                </div>
               </div>
               {/* [CN-FORK] v0.5.2.94 三个 32px 小方钮换成共用 .icon-btn（与 PC 44px / 电视 68px 同一档命中区）；
                   原来 hover 才变实心橙，电视端没有 hover，看着像三块不能按的灰片。 */}
@@ -262,7 +248,35 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
   }
 
   return (
-    <div className="h-full flex flex-col min-h-0">
+    <div className="space-y-6 h-full flex flex-col min-h-0">
+      {/* [CN-FORK] v0.5.2.99 与其他菜单页同款的页级大标题：标题在左、「停用自启」在右。
+       * 保存状态只在真的在保存/刚保存完时才渲染 desc —— 常驻的 h-6 占位会把页头撑得
+       * 比其他菜单页高一截（用户反馈「太高了」），空闲时必须与无 desc 的页头等高。 */}
+      <PageHead
+        title={t("autoload.page_title", "Autoload")}
+        desc={
+          saving || saved ? (
+            <div className="h-6 overflow-hidden">
+              {saving ? (
+                <div className="flex items-center text-ps-blue/60 text-xs font-bold uppercase tracking-widest">
+                  <RefreshCw className="w-3 h-3 mr-2" />
+                  <span>{t("autoload.saving", "Saving Changes...")}</span>
+                </div>
+              ) : (
+                <div className="flex items-center text-emerald-500 text-xs font-bold uppercase tracking-widest">
+                  <CheckCircle2 className="w-3 h-3 mr-2" />
+                  <span>{t("autoload.saved", "All Changes Saved")}</span>
+                </div>
+              )}
+            </div>
+          ) : undefined
+        }
+        actions={
+          <button onClick={() => handleToggle(false)} className="btn btn-danger">
+            {t("autoload.disable_btn", "Disable Autoload")}
+          </button>
+        }
+      />
       <div className="flex-1 flex flex-col min-h-0">
         <div className={cn(
           "gap-6 h-full min-h-0",

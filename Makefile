@@ -8,7 +8,11 @@ STRIP  := /opt/ps5-payload-sdk/bin/prospero-strip
 # Paths
 SDK      := /opt/ps5-payload-sdk
 TARGET   := $(SDK)/target
-INCLUDES := -Iinclude -I$(TARGET)/include
+INCLUDES := -Iinclude -I$(TARGET)/include \
+           -Isrc/psaccounts -Isrc/psaccounts/third_party
+# [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入需要的两个库（SDK 里是 .so）：
+#   -lkernel_sys     sys_lite.c 的凭据提权（kernel_set_ucred / root / jail）
+#   -lSceRemoteplay  accounts.c 生成远程游玩配对 PIN（只读，不调用即不占会话）
 LIBS     := $(TARGET)/lib/libcurl.a \
             $(TARGET)/lib/libmbedtls.a \
             $(TARGET)/lib/libmbedx509.a \
@@ -16,7 +20,8 @@ LIBS     := $(TARGET)/lib/libcurl.a \
             $(TARGET)/lib/libmicrohttpd.a \
             -L$(TARGET)/lib -lpthread \
             -lSceNetCtl -lSceUserService -lSceSystemService \
-            -lSceAppInstUtil -lSceHttp2 -lSceSsl -lSceNet -lSceRegMgr
+            -lSceAppInstUtil -lSceHttp2 -lSceSsl -lSceNet -lSceRegMgr \
+            -lkernel_sys -lSceRemoteplay
 
 # Source Files
 # [CN-FORK] v0.5.1.64 src/stats.c 已删除（主页硬件信息功能下线）
@@ -26,6 +31,12 @@ SRCS := src/main.c src/http_server.c src/config.c src/log_server.c \
         src/ps5_launcher.c src/notification.c src/utils.c src/autoload.c \
         src/app_installer.c src/history_mgr.c \
         src/pkgmanager.c src/pkgmanager_blob.S src/quicklinks.c src/thermal.c src/game_mgr.c src/fan_control.c
+# [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF（常用配置「账号 / 远程游玩」板块）
+# api.c 是原工程 websrv.c 的并入版：只留 /api/… 接口，监听循环/内嵌首页/exit 都不要了
+SRCS += src/psaccounts/api.c src/psaccounts/accounts.c src/psaccounts/npsignin.c \
+        src/psaccounts/offact.c src/psaccounts/avatar.c src/psaccounts/safety.c \
+        src/psaccounts/sys_lite.c \
+        src/psaccounts/third_party/cJSON.c src/psaccounts/third_party/stb_impl.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf
 VERSION := $(shell grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"')

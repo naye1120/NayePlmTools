@@ -91,7 +91,11 @@ export default defineConfig(({ command }) => ({
       '/game_icon': { target: API_TARGET, changeOrigin: true },
       '/fan_control': { target: API_TARGET, changeOrigin: true },
       /* [CN-FORK] v0.5.1.64 删 /game_icon 代理：「当前游戏」探测随主页一起下线 */
-      '/repository_install': { target: API_TARGET, changeOrigin: true }
+      '/repository_install': { target: API_TARGET, changeOrigin: true },
+      /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入：账号板块整组接口在 /api/ 前缀下
+       * （/api/accounts[/…]、/api/safety[/restore]、/api/avatar[…]、/api/remoteplay/pin[/status]）。
+       * 一条前缀代理覆盖全部；缺了会被 SPA fallback 吞成 index.html，界面只显示「读不到账号列表」。 */
+      '/api': { target: API_TARGET, changeOrigin: true }
     }
   }
 }))

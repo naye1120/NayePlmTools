@@ -5,9 +5,9 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-- 版本：`MENU_VERSION = 0.5.2.98`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
-- 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），全部**只本地提交、未打包**。上一个也是唯一的现行正式包仍是 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（内嵌标题真实短哈希 `87e6ad3`，非 DEV），.87 的配色改动**尚未实机验收**；.85/.86 是中间态，从未单独出包。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
-- 近期定型（.64 → .96）：
+- 版本：`MENU_VERSION = 0.5.2.99`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+- 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**，并作为 `.88`–`.99` 这批的**正式出包版**（此前 .88–.98 只本地提交、未打包；旧的现行包是 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `87e6ad3`，非 DEV）。.85/.86 是中间态，从未单独出包。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
+- 近期定型（.64 → .99）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
   - `.65` 「默认云端仓库」总开关 `DEFAULT_REPO_ENABLED`（现默认关，可彻底停用内置官方源）
   - `.66` 界面文案精简（更新日志压缩为一行摘要）
@@ -39,6 +39,13 @@
 > - `.96` 电视端补齐核心操作 + 清账：来源管理页不再「PS5 只给一张二维码」，三端共用同一份 CRUD（QR 降为页尾次级板块）；导航收敛为一份 `NAV_ITEMS`/`NAV_GROUPS`（侧栏与手机底部栏同源）；删死代码 `ui/PayloadButton.jsx` 与 `favoritePayloads`/`toggleFavorite`/`moveFavorite`/`isFavoriteEditMode`/`launchHistory`/`refreshHistory`。
 > - `.97` 互斥分段控件收成一个 `ui/Segmented.jsx`（`role=radiogroup`/`radio`，轨道 `inset` 档 + 一根线，选中档仍是全站唯一 `.sel-chip`，轨道用 `grid` 等宽列 + `gap`，不用 flex `gap`）；接入外观三档 / 管理页排序 / 温控档位 / 自启延时四处，顺带去掉外观档上那圈早于改色时代的蓝色光晕。
 
+> **`.98`–`.99`（2026-10）**
+> - `.98` 崩溃清账：`AccountToolsSection` 之外的四起「构建全绿、运行期整站死」全是同一类（漏 import / 残留已删 state / 引用越界变量），已修；mock 补齐缺字段；修掉一处上游错词条。教训写进 §3 验收线。
+> - `.99` **PS5 Account Tools 源码并入主 ELF**（用户指令：不照搬 pkgmanager 的黑盒+iframe 模式，走「纯内置」）。`src/psaccounts/`（`accounts.c/.h` 账号与注册表、`registry.c` SysReg 16 槽扫描、`np_files.c` auth.dat/config.dat、`avatar.c` 头像 64/128/260/440、`remoteplay.c` PIN、`backup_ledger.c` 安全备份台账、`sys_lite.c` 凭据提权）编进 `NayePlmTools_*.elf`，API 挂在本机 `:8911` 的 `/api/*` 下，前端「常用配置 → 账号工具」是原生 React 板块（`components/views/AccountToolsSection.jsx`），无第二进程、无 iframe。**两处并入时必须的处理（后续加路由都要照做）**：① 全部 `/api/*` 走 `pthread_mutex_t acct_api_mu` 串行化（账号侧读写注册表/文件非并发安全）；② `con_cls` 所有权用带 magic 标记的 `acct_conn_t` + 四处 daemon 启动点都注册 `MHD_OPTION_NOTIFY_COMPLETED`，`http_on_request_completed` 里以 `(void *)1` 哨兵守卫，避免双方重复 free。与已测试原版（`D:\offact-new`）**有意保留的两处偏差**：登入不再走 web 侧确认口令闸门（服务端 `confirm=online` 校验仍在）；PIN 有效期 300s → **180s**（`src/psaccounts/accounts.c` 的 `PIN_TTL_SEC`，看门狗是我们自己的超时，不改固件的发码窗口）。
+> - `.99` **动作橙转档**（用户：「主页的棕色调整为橙色」，圈定「整块橙色按钮本身」）：`#ff7a2e` → `#ff9410`（色相 21.8°→33.2°、B 46→16，饱和到底）。触点 = `tailwind.config.js`（`ps-blue`/`ps-blue-glow`/`vividOrange` 300/400/500）+ `index.css`（`--color-sel-bg`/`--color-action`/`-hover`/`--color-on-action`/`--color-action-tint`/`-line`/`--color-ps-blue`/`-glow` + `index.css:23` 老内核兜底字面量）+ `AutoloadOverlay.jsx:138` 阴影字面量。块体对 `#0a101d` 8.6:1、`#1b0e02` 标签字对块 8.7:1。**4+1 档令牌契约与 `light-theme.css` 一律未动**（浅色实心档仍是 `#F25C05`）。
+> - `.99` 账号板块 9 处实测修订：登入去弹窗、PIN 180s、「重命名」→「修改」、自动登录标记改暖黄特殊色、PIN 说明 `break-all`→`break-words`（不再从词中间换行）、复制按钮紧跟 PIN 数字且复制的是**无空格原始 8 位**、同步按钮核实为「已激活且十六进制不同 → 写注册表 activate」（与原版一致），并让 PIN 卡片账号行跟随换算、三种账号 ID 的复制按钮移到格子内部且点击后实心反馈、可编辑框与只读框以 `.field-ro` 虚线区分、头像框加 `Camera` 角标提示可点。
+> - `.99` **页面容器约定**（写进 `ui/PageHead.jsx` 头注释，新页面照抄）：根节点一律 `<div className="space-y-6">`，**不限页面宽、不居中、不另加页底内边距**，页头永远吃默认出血（`bleed` 开关已删，因为限宽会让页头内缩、和相邻菜单页对不齐）；要窄阅读列就限板块内部。浮层/粘顶/遮罩底**必须实色**（`--color-rail` / `--color-card`，`bg-black/80` 那类半透明会在滚动内容后面透出来）。尺度不写死：底部栏高度读 `--bar-h`。
+
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
 | --- | --- |
@@ -60,10 +67,11 @@
 - `process_mgr.c` 进程枚举；`ps5_launcher.c`/`app_installer.c` 应用启动与磁贴安装（双变体）；`pkgmanager.c`+`pkgmanager_blob.S` 内置 PKG Manager 独立进程集成。
 - `game_mgr.c` 游戏磁贴扫描、格式探测（直读 `mount.lnk`/`mount_img.lnk`）与 deeplink 枚举（app.db 列序按建表 SQL 实时定位）；`thermal.c` 温控只读状态；`fan_control.c` 风扇温控（模型 A + 常驻守护线程）。
 - `quicklinks.c` 常用入口探活 + app.db 磁贴链接按需同步（stat+IP 闸门 + `src`/`hidden` 字段；收录时 127.0.0.1 改写为本机 LAN IP）；`history_mgr.c` 会话历史；`notification.c` 启动通知；`log_server.c` 日志；`config.c` 配置持久化；`sha256.c`/`json_helpers.c`/`utils.c` 基础设施。
-- **铁律**：fork 不改 C 后端的路由/配置键/文件路径，保证升级上游时行为一致。
+- `src/psaccounts/`（`.99` 并入）账号工具：注册表 16 槽扫描、离线激活、NP 假登录（auth.dat/config.dat）、头像写回、安全备份台账、`libSceRemoteplay` 配对 PIN（单会话 + 看门狗线程，退出前 `accounts_pin_shutdown()`）。路由全部在 `http_server.c` 的 `/api/*` 分支，**串行化 + con_cls 所有权**两条约定见 §0 的 `.99` 条目。
+- **铁律**：fork 不改 C 后端的路由/配置键/文件路径，保证升级上游时行为一致。（例外：`.99` 新增的 `/api/*` 账号路由，纯增量，不动上游路由。）
 
 ### 2.2 React 前端（`frontend/src/`）
-- `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、ManageSources、CommonEntries、MoveFromUsb、Donate、PkgManagerFrame...）。
+- `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、ManageSources、CommonEntries、MoveFromUsb、Donate、PkgManagerFrame...）。
 - `i18n.js` 加载 locale（子模块）+ **合并 `locales-overlay/<lang>.json`（后者优先）**；完成度 <70% 的语言不注册。
 - `components/ui/` 共用件：`Section`（板块 = `.panel-card` + 板块头 + body，`headless`/`bodyPad` 供自带头的卡片复用）、`PageHead`（页头 + 粘顶，`back`/`bleed`）、`EmptyState`、`LoadingState`、`Modal`、`Toast`、`Switch`（唯一开关）、`Segmented`（唯一互斥分段）、`NavButton`、`PayloadName`。**新页面一律用这些件，不要再手写板块容器 / 空态 / spinner。**
 - `utils/spatialNav.js`：仅 `isPS5` 挂载的遥控器空间导航。
@@ -101,7 +109,7 @@ bash tools/build_tiles.sh   # 双磁贴变体一次出齐：-me(NAYE00001 媒体
 - **自启**：`autoload.txt` 延时行 `!` 前缀 + 前导空行需自愈规范化；安装 payload 后同步登记到 `ps5_autoloader`（全局覆盖）。
 - **网络**：用户态代码用 socket 前必须 `sceNetCtlInit` + `sceUserServiceInitialize(256)`。
 - **传感器/硬件**：`sceKernelIccGet*` 会 crash、Sony 传感器 API 非可重入 —— 这是 `.64` 下线硬件信息的根因；`/dev/dce` ioctl 默认停用 + `safe_mode` 哨兵文件用于防死机。
-- **提权**：官方范式只改 authid/caps 且用完还原（勿改 uid/prison/rootdir）。
+- **提权**：官方范式只改 authid/caps 且用完还原（勿改 uid/prison/rootdir）。**已知偏差（待裁决）**：`.99` 移植的 `src/psaccounts/sys_lite.c` 里 `escalate_creds()` 沿用 `D:\offact-new` 已测行为——一次性提满 root + jailbreak 且不还原，因为写 SysReg 与 `/system_data/priv` 头像路径都需要它。这是移植保真，不是本 fork 的新增风险；若要收口成官方范式，必须先实测账号写入是否仍能成功。
 - **前端**：Vite 未代理的 API 会被 SPA fallback 吞成 index.html → 页面转圈；`!text-white` important 变体、tailwind 字面色需单独映射。
 - **PS5 老内核三条硬约束**：① flex 盒的 `gap` 不生效（`grid` 的 `gap` 生效）——横排/竖排间距一律用 `* + *` 外边距或 `.stack-x`；② 不支持 `@layer`，`index.css` 顶部那批 `LEGACY FALLBACKS` 是给老内核兜底的关键工具类，别删；③ `animate-in / slide-in-from-*` 之类是死类名（`tailwindcss-animate` 未安装），别指望它做动画。
 - **C 字符串**：分段字符串字面量不要拆断 JSON key（会导致设置页开关失灵）。

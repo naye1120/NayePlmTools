@@ -21,8 +21,10 @@
 .text-zinc-400 { color: #96a1bd !important; }
 .text-zinc-500 { color: #7f8aa8 !important; }
 /* [CN-FORK] v0.5.2.89 图标盒的矩形底取消后，橙色只剩图标本身：深色档的动作色文字/图标
- * 从偏淡的 #ff9152 提到实心橙同值 #ff7a2e（在 #0a101d 卡片上对比约 7:1，读得清）。 */
-.text-ps-blue { color: #ff7a2e !important; }
+ * 从偏淡的 #ff9152 提到实心橙同值 #ff7a2e（在 #0a101d 卡片上对比约 7:1，读得清）。
+ * [CN-FORK] v0.5.2.99 动作橙整体转档（#ff7a2e → #ff9410），老内核兜底字面量跟着同步，
+ *   否则实机上兜底那条会盖住变量档、出现两套橙。 */
+.text-ps-blue { color: #ff9410 !important; }
 @media (min-width: 768px) {
   .md\:hidden { display: none !important; }
   .md\:flex { display: flex !important; }
@@ -98,21 +100,26 @@
   --color-line-hover: #2b3550;
 
   /* ── 选中底（第 5 档，唯一）：S2 = 实心动作色芯片 ── */
-  --color-sel-bg: #ff7a2e;
+  --color-sel-bg: #ff9410;
   --color-sel-fg: #1b0e02;
 
   /* ── 动作色：实心档 / 悬停 / 橙底上的字色 / 薄染 / 文字档 ──
    * --color-ps-blue 是「橙色的字与图标」，浅底要翻成够深的橙才读得清；
    * --color-action 是「橙色的底」，两个角色分开，别再混用。
    * [CN-FORK] v0.5.2.89 图标盒的矩形底取消后，橙色只剩图标本身，深档文字档从 #ff9152
-   * 提到实心橙同值的 #ff7a2e（在 #0a101d 卡片上对比约 7:1，够读）。 */
-  --color-action: #ff7a2e;
-  --color-action-hover: #ff9152;
+   * 提到实心橙同值的 #ff7a2e（在 #0a101d 卡片上对比约 7:1，够读）。
+   * [CN-FORK] v0.5.2.99 用户指主页整块橙色按钮发棕，动作橙从 #ff7a2e 转档为 #ff9410：
+   *   色相 21.8°→33.2°（离开砖红/赭橙那段，落进正橙），蓝通道 46→16（把压在深底上
+   *   发闷的那点灰味去掉，满饱和）。橙底深棕字与深底橙字两档对比都只升不降：
+   *   实心块 vs #0a101d 卡片 8.6:1、#1b0e02 字 vs 橙底 8.7:1。
+   *   浅色档（theme/light-theme.css）本轮未动：它要压深才够白底对比，仍是 #f25c05。 */
+  --color-action: #ff9410;
+  --color-action-hover: #ffa838;
   --color-on-action: #1b0e02;
-  --color-action-tint: rgba(255, 122, 46, 0.10);
-  --color-action-line: rgba(255, 122, 46, 0.32);
-  --color-ps-blue: #ff7a2e;
-  --color-ps-blue-glow: rgba(255, 122, 46, 0.4);
+  --color-action-tint: rgba(255, 148, 16, 0.10);
+  --color-action-line: rgba(255, 148, 16, 0.32);
+  --color-ps-blue: #ff9410;
+  --color-ps-blue-glow: rgba(255, 148, 16, 0.4);
 
   /* ── 文字阶：主 / 次要 / 辅助 / 占位符 ── */
   --color-ps-text: #eef2fb;
@@ -139,7 +146,17 @@
    * 命中区最小尺寸与整行行高。WCAG 2.2 底线是 24×24，业界实测标准是 iOS 44pt /
    * Material 48dp；电视端隔着 3 米用遥控器看，要再放大一档才点得着。
    * 只在这一处定义，端上的差异靠 html[data-device] 覆盖，别在组件里各写各的 padding。 */
-  --ctl-h: 2.75rem; /* 44px：按钮、输入框、图标钮的最小边长 */
+  /* [CN-FORK] v0.5.2.99 用户要求把控件高度降四分之一：44 → 33（电视档 68 → 51）。
+   * 这一档管的是 .btn / .icon-btn / .field / .segmented-item 四个角色，改一处四个同步，
+   * 不会出现「按钮 33、旁边的输入框还是 44」的错高。菜单另立 --nav-h 保持原样：
+   * PC 侧栏项由 p-4 + 24px 图标撑到 56（min-height 不 binding），但电视端侧栏项内边距只有
+   * 8px，高度全靠 min-height 撑着，共用一个令牌就会把菜单一起降掉。底部栏格子是 h-full，不受影响。
+   * 记一笔代价：33px 低于 iOS 44pt / Material 48dp 的触屏建议值，拇指命中率会降。 */
+  --ctl-h: 2.0625rem; /* 33px：按钮、输入框、图标钮的最小边长 */
+  --nav-h: 2.75rem;   /* 44px：菜单项自己一档，不跟着 --ctl-h 降（用户明确「菜单除外」） */
+  /* [CN-FORK] v0.5.2.99 手机底部栏高度：原 5rem(80px) 按用户要求减三分之一 → 53px。
+   * 这一档被三处读：栏本身、pkg 页给 iframe 的视口高扣减、正文底部留白，所以立令牌不写死。 */
+  --bar-h: 3.3333rem;
   --row-h: 3.5rem;  /* 56px：整行作为唯一点击/聚焦单元时的行高 */
   /* 开关轨道：整站唯一一档尺寸（原来是五个副本各写 w-14 h-7 + md:w-20 h-10 两档） */
   --switch-w: 3.5rem;
@@ -150,7 +167,8 @@
 /* PS5 浏览器（1920×1080 + 遥控器）：命中区整体上抬一档。
  * 这个属性由 App.jsx 在挂载时按 UA 写入，与 isPS5 判定同源。 */
 html[data-device="ps5"] {
-  --ctl-h: 4.25rem; /* 68px */
+  --ctl-h: 3.1875rem; /* 51px：同比例降四分之一（原 68px） */
+  --nav-h: 4.25rem;   /* 68px：电视端菜单维持原样（这一档此前是 binding 的，侧栏项靠它定高） */
   --row-h: 5.5rem;  /* 88px */
   --switch-w: 5.5rem;
   --switch-h: 2.75rem;
@@ -389,7 +407,9 @@ h1, h2, h3, h4 {
 .nav-item {
   display: flex;
   align-items: center;
-  min-height: var(--ctl-h);
+  /* [CN-FORK] v0.5.2.99 菜单单独吃 --nav-h：电视端侧栏项的内边距只有 8px，
+     高度全靠这条 min-height 撑着，跟着 --ctl-h 一起降就把菜单也改小了。 */
+  min-height: var(--nav-h);
   color: var(--color-ps-text-sub);
   cursor: pointer;
   transition: background-color 0.18s ease, color 0.18s ease;
@@ -459,14 +479,33 @@ h1, h2, h3, h4 {
     padding: 1rem 4rem 1.1rem;
   }
 }
+/* [CN-FORK] v0.5.2.99 电视端另给一份：出血量必须等于 <main> 的左右内边距，否则粘顶条
+ * 和正文列对不齐。此前这份对齐只挂在视口断点（≥768px）上，而 main 的 px-16 在电视档是
+ * 无条件生效的 —— 两个条件不同源，电视档窄窗口下实测 main 内边距 64、页头只出血 24，
+ * 页头左右各内缩 40px（450px 窗口下量到页头只剩 48px 宽），正好把侧栏和正文之间那截
+ * 让出来又盖回侧栏边缘，看着就是「错位覆盖」。 */
+html[data-device="ps5"] .head-bar {
+  margin: 0 -4rem;
+  padding: 1rem 4rem 1.1rem;
+}
 
-/* 限了列宽的页面（max-w-5xl mx-auto 这类）不吃这份负外边距：bleed=false 时回到零出血，
- * 否则粘顶条会横向伸出内容列去啃 main 的内边距，分界线左右留白、看着像没做完。 */
-.head-bar--flush {
-  margin-left: 0;
-  margin-right: 0;
-  padding-left: 0;
-  padding-right: 0;
+/* [CN-FORK] v0.5.2.99 原来这里有一份 .head-bar--flush（配 PageHead 的 bleed={false}），
+ * 给限了列宽的页面把负外边距归零。页面容器全站统一成「不限宽、吃满 main 内容列」之后
+ * 没有调用者了，连开关一起删掉，免得再有人用限宽页面把页头对齐做出第二种样子。
+ * 同期删掉的还有下面那份 .head-cols：自动加载页的 24px 大标题已从「右列内部」上移到整页顶部，
+ * 页头不再落在栅格列里，也就没有「出血量啃相邻列」的问题了。 */
+
+/* [CN-FORK] v0.5.2.99 窄屏页头说明限两行：常用入口那句解释在 450px 宽下排到 8 行（160px），
+ * 加上标题和换行的操作钮，粘顶条高到 269px = 屏幕的 34%，列表第一屏直接被压在它下面。
+ * 只限纯文字说明（PageHead 里 typeof desc === 'string' 才挂这个类），autoload 那条
+ * 定高 h-6 的「保存中」指示块不受影响。-webkit-line-clamp 是老 WebKit 的原生扩展，电视端可用。 */
+@media (max-width: 767px) {
+  .page-desc--clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
 }
 
 /* ── 横排控件组（弹窗按钮行、表单行）：窄屏竖堆、≥768px 横排 ──
@@ -526,7 +565,7 @@ h1, h2, h3, h4 {
 .icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 /* 图标本身保持原来的小尺寸，放大的是可点区域而不是图形 */
 .icon-btn > svg { width: 1.15rem; height: 1.15rem; }
-/* 电视端可点区域到了 68px，图形跟着放大一档才在沙发上看得到 */
+/* 电视端可点区域到了 --ctl-h 的电视档（51px），图形跟着放大一档才在沙发上看得到 */
 html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 
 /* 开关（ui/Switch.jsx）：轨道和旋钮的尺寸只在这一处定义，组件里不写死宽高，
@@ -595,6 +634,33 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 }
 .field::placeholder { color: var(--color-placeholder); opacity: 1; }
 .field:focus { outline: none; border-color: var(--color-action); }
+
+/* [CN-FORK] v0.5.2.99 账号板块 ID 格的两条补充类（用户实测反馈）：
+ * .field-ro    只读档：Base64 / 十进制两格是换算结果，点不动也改不了，用虚线边 + 辅助文字色
+ *              与旁边实线可编辑框分开；一档都不新增，仍读 --color-line / --color-inset。
+ * .field-btn-pad / .field-btn  把复制钮嵌进框内右端（原来钮在框外，三个格子看不出谁是谁的），
+ *              点击后 .is-copied 用动作色实心一档，让「已经复制到了」当场看得见。 */
+.field-ro { border-style: dashed; color: var(--color-ps-text-sub); }
+.field-btn-pad { padding-right: 2.3rem; }
+.field-btn {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  bottom: 2px;
+  width: 1.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.4rem;
+  background-color: transparent;
+  color: var(--color-ps-text-sub);
+  cursor: pointer;
+}
+.field-btn:hover:not(:disabled) { color: var(--color-action); background-color: var(--color-action-tint); }
+.field-btn.is-copied { color: var(--color-action); background-color: var(--color-action-tint); }
+/* PIN 后面那颗用的是通用 .icon-btn，同样给它一个复制成功的实心档 */
+.icon-btn.is-copied { color: var(--color-action); background-color: var(--color-action-tint); }
 
 /* ============================================================================
  * [CN-FORK] v0.5.2.87 「一档一色」收口层

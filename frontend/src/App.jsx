@@ -570,15 +570,19 @@ function App() {
         style={{ gridTemplateColumns: `repeat(${NAV_ITEMS.length}, minmax(0, 1fr))` }}
         className={cn(
         /* [CN-FORK] v0.5.2.96 等宽格子取代横向滚动：七个入口全部一屏可见、拇指可及 */
-        "fixed bottom-0 inset-x-0 z-[100] bg-black/80 border-t border-white/5 h-[calc(5rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] grid",
+        /* [CN-FORK] v0.5.2.99 底部栏底改实色 rail 档（bg-ps-surface → var(--color-rail)）。
+         * 原来是 bg-black/80：收口层只并了 /20 /40 /50 到 inset 档，/80 没人管，于是它是字面的
+         * 八成黑 —— 列表滚到底时「Shadow Mount + 自动 / http://127.0.0.1:10101/」直接从导航栏
+         * 后面透出来（v0.5.2.88 定的约束：浮层底必须实色）。改走变量还顺带修了浅色主题：
+         * 浅色下这条栏此前是块压不黑的死黑。 */
+        "fixed bottom-0 inset-x-0 z-[100] bg-ps-surface border-t border-ps-border h-[calc(var(--bar-h)+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] grid",
         isPS5 ? "hidden" : "md:hidden"
       )}>
         {/* 手机端任务栏与侧栏同源（NAV_ITEMS）：手机端任务栏此前手动加长到与桌面侧栏同项，
             现在不用再担心两边漂移；捐赠不占底部标签位，由设置页「支持作者」入口进入。 */}
-        {NAV_ITEMS.map((i, idx) => (
+        {NAV_ITEMS.map((i) => (
           <NavButton
             key={i.id}
-            showSeparator={idx > 0}
             active={view === i.id}
             onClick={() => setView(i.id)}
             icon={i.icon}
@@ -604,9 +608,9 @@ function App() {
           view === 'pkg'
             ? (isPS5
                 ? "pt-0 px-0 pb-0 flex-1 overflow-hidden max-w-none"
-                : "pt-0 px-0 pb-0 max-w-none overflow-hidden h-[calc(100dvh_-_5rem)] md:h-auto md:flex-1")
+                : "pt-0 px-0 pb-0 max-w-none overflow-hidden h-[calc(100dvh_-_var(--bar-h))] md:h-auto md:flex-1")
             : cn("max-w-[1800px] mx-auto",
-                isPS5 ? "pt-16 px-16 pb-12 flex-1 overflow-y-auto" : "pt-6 px-6 pb-36 md:pt-16 md:px-16 md:pb-12 md:flex-1 md:overflow-y-auto")
+                isPS5 ? "pt-16 px-16 pb-12 flex-1 overflow-y-auto" : "pt-6 px-6 pb-[calc(var(--bar-h)+4rem)] md:pt-16 md:px-16 md:pb-12 md:flex-1 md:overflow-y-auto")
         )}>
           {/* [CN-FORK] v0.5.1.64 主页视图整体删除（硬件信息探测下线 + 不再保留空壳页） */}
 
@@ -702,7 +706,9 @@ function App() {
       )}
       {showLogs && (
         <div className="fixed inset-0 z-[9999] bg-ps-black flex flex-col animate-in fade-in duration-300">
-          <div className="p-6 md:p-8 border-b border-white/10 flex items-center justify-between bg-ps-black/95 backdrop-blur-xl sticky top-0 z-10">
+          {/* [CN-FORK] v0.5.2.99 粘顶条底改实色 rail 档：bg-ps-black/95 留 5% 透影，
+              且 backdrop-blur-xl 在 PS5 老内核 WebKit 上根本不支持（写了等于没写）。 */}
+          <div className="p-6 md:p-8 border-b border-ps-border flex items-center justify-between bg-ps-surface sticky top-0 z-10">
             <div className="flex items-center space-x-4">
               <Terminal className="w-8 h-8 text-ps-blue" />
               <h3 className="text-3xl font-black text-white uppercase italic tracking-tighter">{t("app.logs.title", "Logs")}</h3>

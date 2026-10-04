@@ -28,11 +28,25 @@
 #include "app_installer.h"
 #include "utils.h" /* [CN-FORK] pldmgr_get_local_ip 提前取 IP */
 #include "fan_control.h" /* [CN-FORK] 风扇温控常驻重发守护 */
+/* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入：提权入口 + 远程游玩会话收尾 */
+#include "psaccounts/sys.h"
+#include "psaccounts/accounts.h"
 
 #define DEFAULT_PORT MENU_PORT
 
 /* Defined in http_server.c — set to 0 by /shutdown route */
 extern volatile int http_keep_running;
+
+/* [CN-FORK] v0.5.2.99 MHD 生命周期收成一个函数：本文件原有 4 处 MHD_start_daemon
+ * （首启、待机唤醒、换 IP、断网回环），账号接口的流式上传状态需要在请求结束时
+ * 回收（头像传到一半关页面），补 NOTIFY_COMPLETED 必须 4 处都带上，漏一处就是
+ * 只在某种重启路径下才泄漏。参数与原来完全一致，只是多一个回调。 */
+static struct MHD_Daemon *http_daemon_start(unsigned short port) {
+    return MHD_start_daemon(
+        MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, port, NULL, NULL,
+        &http_on_request, NULL, MHD_OPTION_NOTIFY_COMPLETED,
+        &http_on_request_completed, NULL, MHD_OPTION_END);
+}
 
 static volatile sig_atomic_t resume_flag = 0;
 
@@ -116,6 +130,12 @@ int main(int argc, char *argv[]) {
     }
 
     int user_prio = 256;
+    /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入：原项目靠 ELF 加载器的
+     * .init 构造函数自动提权（写 SysReg 槽位与 /system_data/priv 的 auth.dat
+     * 必须要 root + 换 rootdir/jaildir）。并入主 ELF 后没有构造函数这回事，
+     * 所以在 UserService 初始化之前显式调用一次；失败只记日志，不拦启动，
+     * 后续每个 /api 请求会各自返回真实的权限错误。 */
+    psaccounts_escalate();
     if (sceUserServiceInitialize(&user_prio) == 0) {
         pldmgr_log("[PLDMGR] User Service initialized.\n");
     }
@@ -172,8 +192,7 @@ int main(int argc, char *argv[]) {
     signal(SIGCONT, handle_sigcont);
 
     /* Start the MHD daemon */
-    daemon = MHD_start_daemon(MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, port,
-                              NULL, NULL, &http_on_request, NULL, MHD_OPTION_END);
+    daemon = http_daemon_start(port);
 
     if (NULL == daemon) {
         pldmgr_log("[PLDMGR] Failed to start HTTP daemon!\n");
@@ -230,9 +249,7 @@ int main(int argc, char *argv[]) {
 
             usleep(1000000); /* 1s for network stack to stabilize */
 
-            daemon = MHD_start_daemon(MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG,
-                                      port, NULL, NULL, &http_on_request, NULL,
-                                      MHD_OPTION_END);
+            daemon = http_daemon_start(port);
 
             if (daemon) {
                 /* Re-read current IP */
@@ -266,9 +283,7 @@ int main(int argc, char *argv[]) {
 
                 usleep(800000);
 
-                daemon = MHD_start_daemon(MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG,
-                                          port, NULL, NULL, &http_on_request, NULL,
-                                          MHD_OPTION_END);
+                daemon = http_daemon_start(port);
 
                 if (daemon) {
                     strcpy(current_ip, new_ip);
@@ -288,9 +303,7 @@ int main(int argc, char *argv[]) {
 
                 usleep(300000);
 
-                daemon = MHD_start_daemon(
-                    MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, port, NULL,
-                    NULL, &http_on_request, NULL, MHD_OPTION_END);
+                daemon = http_daemon_start(port);
 
                 if (daemon) {
                     pldmgr_log("[PLDMGR] Server restarted after network loss "
@@ -307,6 +320,11 @@ int main(int argc, char *argv[]) {
     pldmgr_log("[PLDMGR] Shutting down...\n");
     if (daemon)
         MHD_stop_daemon(daemon);
+
+    /* [CN-FORK] v0.5.2.99 收尾远程游玩会话：必须停在 MHD_stop_daemon 之后，
+     * 否则还能收到 /api/remoteplay/pin。带着已初始化的 libSceRemoteplay 会话
+     * 退出的话，服务被死进程占住，下次 Initialize 稳定吃 0x80fc0003，只能重启主机解锁。 */
+    accounts_pin_shutdown();
 
     sleep(1);
 

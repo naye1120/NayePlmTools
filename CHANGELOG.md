@@ -1,3 +1,28 @@
+## v0.5.2.99 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **PS5 Account Tools 整功能并入主 ELF，做成「常用配置」页的原生板块**（源工程 `D:\offact-new` 前后端已实测，本批只做移植，不自创逻辑）：
+  * 后端新增 `src/psaccounts/`（accounts / npsignin / offact / avatar / safety / sys_lite / api + cJSON、stb 第三方层 + `np_templates/`）。账号离线激活、假登录（auth.dat / config.dat）、改名、头像四档（64/128/260/440）、注册表逐键备份与还原、远程游玩配对 PIN 全部在主 payload 进程内跑；`Makefile` 补 SRCS 与 `-lkernel_sys -lSceRemoteplay`。
+  * 接口挂到自己的 8911：`src/http_server.c` 在最前面加 `psaccounts_wants(url)` 认领块把 `/api/*` 转给 `psaccounts_handle()`。两处集成隐患单独处理 —— ① MHD 是 THREAD_PER_CONNECTION 而移植模块是全局无锁（备份账本、登录计划、libSceRemoteplay 单会话），全部 `/api/*` 串行进 `acct_api_mu`；② `con_cls` 所有权用 magic-tag 结构 + 四处 `MHD_start_daemon` 都注册 `MHD_OPTION_NOTIFY_COMPLETED`，收尾统一走 `http_on_request_completed()`（`(void *)1` 哨兵那一档跳过）。1 秒轮询的 `/api/remoteplay/pin/status` 进日志静音名单。
+  * 前端 `views/AccountToolsSection.jsx` 由「第二个进程 + iframe 黑盒」改写为原生 Section 板块（同源 `/api/…`）：前台账号卡、三种格式 ID 与换算、登入/登出/激活/反激活/改名、头像上传裁剪、PIN 卡与倒计时。`vite.config.js` 补 `/api` 代理，`mock-server.js` 按真接口形状实现整套 `/api/*`（状态在内存里真翻转），locales-overlay 补 81 条中英词条。
+* **深色主题动作橙转档**（用户指「主页整块橙色按钮发棕」）：`#ff7a2e` → `#ff9410`，色相 21.8°→33.2° 离开砖红/赭橙段、蓝通道 46→16 去掉压在深底上的灰味，仍是纯色满饱和，无渐变。一处令牌改到位：`--color-action` / `-hover` / `-tint` / `-line` / `--color-sel-bg` / `--color-ps-blue` / `-glow`，并同步老内核兜底字面量 `.text-ps-blue`、`tailwind.config.js` 的 `ps-blue` 与 `vividOrange[300~500]`、`AutoloadOverlay` 的阴影 rgba。「4+1 档中性底 + 1 档选中底」契约与浅色档（`#f25c05`，白底要压深才够对比）均未动。橙块 vs 卡片底 8.6:1、块上文字 8.7:1，只升不降。
+* **账号板块首轮实测的 9 处修订**：
+  * 点「登入」不再走网页侧「只读预览 + 手打 SIGNIN」那道闸，直接执行；服务端 `confirm=online` 这道独立的门保留，写前的逐键抄原值也照旧，去掉的只是弹窗那一步。
+  * PIN 有效期 300 秒 → 180 秒（`accounts.c` 的 `PIN_TTL_SEC`，看门狗与接口按它走；mock、界面兜底档、`pin_hint` 文案同步）。
+  * 「重命名」按钮文案改「修改」；★ 自动登录芯片从灰档提为暖黄鲜档（`bg-amber-500/20 text-amber-400`，走收口层的 warn 档，不新增第 6 种底）。
+  * PIN 卡里那行账号说明原用 `break-all`，会在「账号 ID：」中间被截断换行 → 改 `break-words`，只在分隔符处折行。
+  * 复制钮原本吊在卡片右上角、离 PIN 隔一整行 → 挪到数字紧跟处，复制的是 8 位原始码（不含显示用的空格）。
+  * 三格 ID 的复制钮全部嵌进框内右端（新增骨架层 `.field-btn` / `.field-btn-pad`），点击后钮本身变动作色 + 图标换成勾，1.4 秒复位。
+  * 可编辑与只读分开：换算出来的 Base64 / 十进制两格走新增的 `.field-ro`（虚线边 + 辅助字色），可编辑两格保持实线，并各补一行「· 可编辑」标签。
+  * 头像框底部常驻一条相机角标（`.96` 之前只有 `title`，实机浏览器与遥控器都不弹 title，等于没人知道这格能点）。
+  * 「同步」按源工程语义核到实处：已激活且与主机不一致时确实 `activate?accountId=0x..` 写回注册表；并补上源工程 `updatePinLine` 的等价行为 —— PIN 卡显示的 Chiaki ID 跟着框内换算结果走，不再各说各话。
+* **页面容器全站统一（骨架重构收尾，配色契约仍不动）**：
+  * 根节点一律 `<div className="space-y-6">`，去掉各页自己写的 `max-w-5xl/4xl/3xl mx-auto` 与页内 `pb-12/pb-20`；正文吃满 `main` 的内容列，页头恢复默认出血（`PageHead` 的 `bleed` 开关删掉），粘顶分界线才铺到边。涉及设置、常用配置、游戏管理、来源管理、从 USB 导入五页。
+  * 「常用入口」页大标题改回与侧栏同词的「常用配置」，长 `desc` 说明去掉；纯文字 `desc` 在窄屏限两行（新增 `.page-desc--clamp`），避免 450px 宽下排到八行把页头撑成屏幕三分之一。自启页的页头从「序列」列首上移到页面级，保存状态改成只在保存/刚保存完时渲染（原来常驻 `h-6` 占位让页头比别的页高一截）。
+  * 浮层底必须实色（`.88` 定的约束）：手机底部导航栏 `bg-black/80` → `bg-ps-surface`（浅色主题下它此前是块压不死的黑）、日志页粘顶条、常用入口「正在启动」遮罩同理；`.96` 丢掉的那半句 `border-none` 补回，七个格子不再各画一圈亮边框、格子间分隔线去掉。命中区尺度里的 `5rem` 写死值改读 `--bar-h`。
+  * 自启序列的序号从「绝对定位压在行左上角」改成正常流前导列：旧底 `bg-dark` 在项目里没有定义（Tailwind 生成不出规则 → 透明），数字悬空压在 payload 名字上，450px 宽下实测重叠 16×14px。
+
+
 ## v0.5.2.98 (CN-FORK)
 
 ### 🐛 Bug Fixes

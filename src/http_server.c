@@ -32,6 +32,9 @@
 #include "thermal.h"    /* [CN-FORK] 温控只读端点 /thermal_stats */
 #include "game_mgr.h"   /* [CN-FORK] 游戏列表 /game_list + 图标 /game_icon */
 #include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
+/* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF：账号/头像/安全还原/远程游玩
+ * 配对接口认领 /api/ 前缀，其余路由仍全部归本文件 */
+#include "psaccounts/api.h"
 
 #include "assets_index_html.h"
 #include "assets_cache_appcache.h"
@@ -141,6 +144,9 @@ static int is_noisy_route(const char *url) {
     /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
     if (strcmp(url, ROUTE_PKG_STATUS) == 0) return 1; /* [CN-FORK] PKG安装页轮询，降噪 */
     if (strcmp(url, "/events") == 0) return 1;
+    /* [CN-FORK] v0.5.2.99 远程游玩配对的进度查询，界面每 1 秒问一次，降噪；
+     * 出码/配对成功/失败/超时那几条仍会记日志（是别的 URL）。 */
+    if (strcmp(url, "/api/remoteplay/pin/status") == 0) return 1;
     return 0;
 }
 
@@ -167,6 +173,19 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
 
     /* Set flag that we received a request (meaning browser is open) */
     log_server_set_active();
+
+    /* ── [CN-FORK] v0.5.2.99 账号板块接口：整段认领给 psaccounts，路径 /api/… ──
+     * 必须放在下面的 *con_cls == NULL 注册块之前：那个块末尾会给所有其它请求
+     * 打 *con_cls = (void *)1 的占位标记，而 psaccounts 把 *con_cls 当作自己的
+     * 状态结构解引用 —— 一旦被打了标记，这里读 magic 就是访问地址 1，直接崩。
+     * 认领之后本请求不再走下面任何链，*con_cls 由 psaccounts 自己分配/回收。 */
+    if (psaccounts_wants(url)) {
+        if (!is_noisy_route(url)) {
+            pldmgr_log("[PLDMGR] Request: %s %s\n", method, url);
+        }
+        return psaccounts_handle(conn, url, method, upload_data,
+                                 upload_data_size, con_cls);
+    }
 
     /* ── Initial call for a new request ────────────────────── */
     if (*con_cls == NULL) {
@@ -1242,4 +1261,20 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     MHD_destroy_response(resp);
 
     return ret;
+}
+
+/* [CN-FORK] v0.5.2.99 账号板块的流式头像上传需要在请求结束时回收状态（浏览器
+ * 传到一半关页面/断网）。本工程原有的 UploadStatus/PostStatus 都在各链末尾
+ * 自行 free 并把 *con_cls 置 NULL，所以这里只需要转发给 psaccounts；它自己再用
+ * magic 头认一遍，不是它的状态一律不动。
+ * (void *)1 是上面注册块给普通请求打的占位标记，不是指针，绝不能解引用。 */
+void http_on_request_completed(void *cls, struct MHD_Connection *conn,
+                               void **con_cls,
+                               enum MHD_RequestTerminationCode toe) {
+    (void)cls;
+    (void)conn;
+    (void)toe;
+
+    if (con_cls == NULL || *con_cls == NULL || *con_cls == (void *)1) return;
+    psaccounts_conn_completed(*con_cls);
 }

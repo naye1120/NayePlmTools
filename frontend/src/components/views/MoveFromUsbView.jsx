@@ -58,16 +58,16 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto pb-20">
+    /* [CN-FORK] v0.5.2.99 容器全站统一：去掉 max-w-4xl 居中与 pb-20，正文吃满 main 内容列，
+     * 页头恢复出血，板块间距交给根节点的 space-y-6。 */
+    <div className="space-y-6">
       <PageHead
-        bleed={false}
         title={<>{t("move_usb.title_1", "Import")} <span className="text-ps-blue">{t("move_usb.title_2", "to Internal")}</span></>}
-        desc={t("move_usb.description", "Import the selected payload from your USB drive to the PS5's internal data storage.")}
         back={onBack}
         backLabel={t("move_usb.back_btn", "Back to Management")}
       />
 
-      <Section className="mt-6" icon={Usb} title={t("move_usb.source_path_label", "Source Path")} bodyClass="space-y-5">
+      <Section icon={Usb} title={t("move_usb.source_path_label", "Source Path")} bodyClass="space-y-5">
         <div className="flex items-center min-w-0">
           <div className="p-3 md:p-4 shrink-0 -ml-2">
             <Usb className="w-6 h-6 md:w-7 md:h-7 text-ps-blue" />

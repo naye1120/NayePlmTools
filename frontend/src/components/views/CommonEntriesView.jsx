@@ -7,6 +7,7 @@ import Section from '../ui/Section'
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
+import AccountToolsSection from './AccountToolsSection' /* [CN-FORK] v0.5.2.99 账号/远程游玩配对板块（移植自 PS5 Account Tools） */
 
 /* [CN-FORK] 「常用入口」页：手动维护的快捷访问清单（IP:port 类服务导航）。
  * 数据存 payload 侧 /data/nayeplmtools/quicklinks.json（非浏览器 localStorage），
@@ -240,13 +241,13 @@ export default function CommonEntriesView({ showConfirm, addToast }) {
   const list = entries || []
 
   return (
-    <div className="max-w-5xl mx-auto pb-12">
+    /* [CN-FORK] v0.5.2.99 容器对齐「管理 Payload」：去掉 max-w-5xl 居中与页内 pb-12（正文吃满
+     * main 内容列），页头恢复出血；板块间距改由根节点的 space-y-6 给，内层不再补 mt-6。 */
+    <div className="space-y-6">
       {/* [CN-FORK] v0.5.2.94 页头从卡片里挪到页面级并粘顶：主操作（添加入口）常驻可见，
           不必先滚到页首才能点。卡片式板块头则交给 Section 统一形状。 */}
       <PageHead
-        bleed={false}
-        title={t('entries.title', '常用入口')}
-        desc={t('entries.desc', '常用插件与局域网服务的快捷访问清单（如 http://192.168.1.214:8844）。条目保存在主机上，手机、电脑、PS5 打开本页看到的都是同一份；绿点表示当前可连通。')}
+        title={t('entries.title', '常用配置')}
         actions={!adding && (
           <button onClick={() => setAdding(true)} className={BTN_PRIMARY}>
             <Plus className="w-4 h-4" />
@@ -255,8 +256,9 @@ export default function CommonEntriesView({ showConfirm, addToast }) {
         )}
       />
 
-      <div className="mt-6 space-y-8">
-      {/* [CN-FORK] 布局：板块一 常用入口（沿用原 quicklinks 全部功能）；板块二 温控管理。
+      <div className="space-y-8">
+      {/* [CN-FORK] 布局：板块一 常用入口（沿用原 quicklinks 全部功能）；板块二 账号 / 远程游玩
+          配对（移植自 PS5 Account Tools）；板块三 温控管理。
           游戏管理板块已抽出为独立页（侧栏「游戏管理」），不再挂在本页。 */}
       <Section
         id="quicklinks"
@@ -358,8 +360,10 @@ export default function CommonEntriesView({ showConfirm, addToast }) {
                 </div>
                 <p className="text-[12px] text-zinc-500 break-all leading-relaxed">{e.url}</p>
               </a>
+              {/* [CN-FORK] v0.5.2.99 「正在启动」遮罩改实色 card 档：原来是 bg-black/80，
+                  条目名和网址会从遮罩下面透出来，浅色主题下更是变成一块压不死的黑。 */}
               {startingIdx === i ? (
-                <div className="absolute inset-0 bg-black/80 rounded-xl flex flex-col items-center justify-center space-y-2.5 px-4">
+                <div className="absolute inset-0 bg-ps-card rounded-xl flex flex-col items-center justify-center space-y-2.5 px-4">
                   <RefreshCw className="w-5 h-5 text-ps-blue animate-spin" />
                   <p className="text-[13px] text-white text-center">
                     {t('entries.starting_prog', '正在启动 {{name}}…', { name: e.name })}
@@ -381,7 +385,12 @@ export default function CommonEntriesView({ showConfirm, addToast }) {
       )}
       </Section>
 
-      {/* [CN-FORK] 板块二 温控管理：读 /thermal_stats 展示 CPU/GPU/SSD 温度 + 风扇 */}
+      {/* [CN-FORK] v0.5.2.99 板块二 PS5 Account Tools：账号离线激活 / 登入登出 / 账号 ID /
+          头像 / 远程游玩配对 PIN。源码已并入本 payload，接口走同源 /api/…，界面是本页原生的
+          Section 板块（不再是第二个进程 + iframe），所以确认弹窗与 Toast 沿用全站规范。 */}
+      <AccountToolsSection showConfirm={showConfirm} addToast={addToast} />
+
+      {/* [CN-FORK] 板块三 温控管理：读 /thermal_stats 展示 CPU/GPU/SSD 温度 + 风扇 */}
       <ThermalSection />
       </div>
     </div>

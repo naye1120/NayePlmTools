@@ -100,15 +100,16 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
    * 移除都是 .icon-btn（电视端 68px 命中区）且方向键走得到，电视端可以直接管理本机源列表；
    * 只把「用手机或电脑打开本地址」留成一个次级板块（下面 isPS5 那段），因为遥控器敲长 URL 确实难受。 */
   return (
-    <div className="w-full max-w-3xl mx-auto pb-12 min-w-0">
+    /* [CN-FORK] v0.5.2.99 容器全站统一：去掉 max-w-3xl 居中，正文吃满 main 内容列，
+     * 页头恢复出血；min-w-0 保留（列里的长 URL 靠它才压得住，不会把列撑宽）。 */
+    <div className="space-y-6 min-w-0">
       <PageHead
-        bleed={false}
         title={<>{t("manage_sources.web_title_1", "Payload")} <span className="text-ps-blue">{t("manage_sources.web_title_2", "Sources")}</span></>}
         back={onBack}
         backLabel={t("manage_sources.back_btn", "Back")}
       />
 
-      <div className="mt-6 space-y-4">
+      <div className="space-y-4">
         <Section
           id="sources-list"
           icon={Globe}
