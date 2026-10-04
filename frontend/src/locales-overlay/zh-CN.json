@@ -70,7 +70,7 @@
   "settings.theme_title": "外观",
   "settings.theme_desc": "选择深色或浅色界面；「跟随系统」会随操作系统设置自动切换。",
   "settings.donate_title": "支持作者",
-  "settings.donate_desc": "本程序是 naye 基于原作者 itsPLK 的 Payload Manager 维护的中文分支（当前 v0.5.2.86）。如果喜欢原作，可以请作者喝一杯咖啡。",
+  "settings.donate_desc": "本程序是 naye 基于原作者 itsPLK 的 Payload Manager 维护的中文分支（当前 v0.5.2.87）。如果喜欢原作，可以请作者喝一杯咖啡。",
     "storage_hub.launch": "启动",
   "donate.description": "如果你喜欢本项目，可以支持原作者。非常感谢！",
   "donate.fork_title": "关于本 Fork",

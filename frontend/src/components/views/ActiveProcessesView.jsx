@@ -89,7 +89,12 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
         </h2>
         <div className="page-actions">
           <label className="flex items-center space-x-3 cursor-pointer group">
-            <div className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-ps-blue focus:ring-offset-2 focus:ring-offset-black bg-white/10 group-hover:bg-white/20">
+            {/* [CN-FORK] v0.5.2.87 开关收口到契约的第 5 档：关闭态用内嵌件底（inset），开启态整条槽变实心橙芯片，
+                旋钮恒为白——此前是「槽不变、旋钮从白变橙」，选中信号弱 */}
+            <div className={cn(
+              "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
+              showAll ? "sel-chip" : "bg-white/10 group-hover:bg-white/20"
+            )}>
               <input
                 type="checkbox"
                 className="sr-only"
@@ -99,7 +104,7 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
               <span
                 className={cn(
                   "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
-                  showAll ? "translate-x-6 bg-ps-blue" : "translate-x-1"
+                  showAll ? "translate-x-6" : "translate-x-1"
                 )}
               />
             </div>

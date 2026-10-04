@@ -162,7 +162,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
                   {/* Priority index */}
                   <div className={cn(
                     'w-9 h-9 rounded-xl flex items-center justify-center text-sm font-black shrink-0',
-                    idx === 0 ? 'bg-ps-blue/20 text-ps-blue' : 'bg-white/5 text-zinc-500'
+                    idx === 0 ? 'sel-chip' : 'bg-white/5 text-zinc-500'
                   )}>
                     {idx + 1}
                   </div>

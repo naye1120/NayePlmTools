@@ -186,7 +186,7 @@ const AutoloadOverlay = ({ status, onCancel, onFinish, isPS5 }) => {
                     data-active={active}
                     className={cn(
                       "flex items-center justify-between p-5 rounded-2xl border transition-all duration-500",
-                      active ? 'bg-ps-blue/20 border-ps-blue scale-[1.02] z-10' :
+                      active ? 'sel-chip scale-[1.02] z-10' :
                         done ? 'bg-emerald-500/5 border-emerald-500/20 opacity-100' : 'bg-white/5 border-white/10 opacity-40'
                     )}>
                     <div className="flex items-center space-x-5">

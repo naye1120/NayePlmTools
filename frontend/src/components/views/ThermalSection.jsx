@@ -115,7 +115,7 @@ function FanControlCard() {
           disabled={!supported || busy}
           onClick={toggleEnabled}
           className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-bold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
-            enabled ? 'bg-ps-blue/20 border-ps-blue/50 text-ps-blue' : 'bg-white/5 border-white/10 text-zinc-400'
+            enabled ? 'sel-chip' : 'bg-white/5 border-white/10 text-zinc-400'
           }`}
         >
           <Power className="w-4 h-4" />
@@ -151,7 +151,7 @@ function FanControlCard() {
                 disabled={!enabled}
                 onClick={() => setTarget(p.v)}
                 className={`px-2.5 py-1 rounded-md text-[12px] font-bold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
-                  target === p.v ? 'bg-ps-blue/20 border-ps-blue/50 text-ps-blue' : 'bg-white/5 border-white/10 text-zinc-300 hover:bg-white/10'
+                  target === p.v ? 'sel-chip' : 'bg-white/5 border-white/10 text-zinc-300 hover:bg-white/10'
                 }`}
               >
                 {p.label}

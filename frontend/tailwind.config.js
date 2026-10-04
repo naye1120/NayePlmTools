@@ -4,6 +4,10 @@
 // [CN-FORK] v0.5.2.85 padding 的 4 档同步收紧到 0.5rem（含 px-4/py-4），与控件间隙的紧凑度对齐。
 // [CN-FORK] v0.5.2.86 色板转「墨蓝通透」：夜底压到近黑（#04060B）、背景去灰味，蓝味只留在线条与选中底，
 //   动作色仍是亮橙（#FF7A2E），高饱和彩色专门留给图标与状态/警示标签（薄荷绿/暖黄/鲜红）。
+// [CN-FORK] v0.5.2.87 「一档一色」：每套主题只留 4 档中性底（画布/侧栏/卡片/内嵌件）+ 1 档选中底，
+//   深色档主内容区再沉一档（卡片 #0A101D、内嵌件 #0F1728、侧栏 #070A12、线条 #1B2438）；
+//   顺带把此前漏掉、一直吃 Tailwind 默认色的 amber/green 两个色族并进暖黄/薄荷绿，全站只剩一套鲜色。
+//   具体收口手法见 src/index.css 末尾的「一档一色」收口层（全部走 CSS 变量，浅色档在 light-theme.css 翻变量）。
 // 关键手法：**只换 token 值、不改任何类名**——上游与 fork 各处写的 bg-ps-blue / text-zinc-400 等类名原样保留，
 // 换色因此是全站一次性生效且零侵入（上游后续沿用同类名即继续自动跟随）。ps-* 的类名是历史包袱，
 // 现指向橙/藏蓝，勿按字面理解成「PS 蓝 / 黑」。
@@ -16,11 +20,11 @@ const compact = {
   28: '4.2rem', 32: '4.8rem',
 }
 
-// [CN-FORK] v0.5.2.86 色板转「墨蓝通透」：夜底接近纯黑、蓝味只留在线条与选中底，彩色集中在语义状态色
-// [CN-FORK] 藏蓝灰阶：替换 zinc。深底文字冷白偏蓝（#EEF2FB），次要文字中性冷灰（#7F8AA8），不发暖不发闷灰
+// [CN-FORK] 藏蓝灰阶：替换 zinc。100~300 是深底上的冷白文字，400~600 是三级灰阶文字（v0.5.2.87 整档提亮一档），
+//   800/900/950 三档被复用为中性底：800=发丝线、900=卡片底、950=页面底，确保「同一个色名只有一个来源」
 const navyInk = {
-  50: '#F5F7FC', 100: '#EEF2FB', 200: '#DCE3F2', 300: '#AEB9D2', 400: '#7F8AA8',
-  500: '#5F6883', 600: '#414B66', 700: '#2B3550', 800: '#1E2740', 900: '#0E1424', 950: '#04060B',
+  50: '#F5F7FC', 100: '#EEF2FB', 200: '#DCE3F2', 300: '#AEB9D2', 400: '#96A1BD',
+  500: '#7F8AA8', 600: '#616B88', 700: '#3A4B73', 800: '#1B2438', 900: '#0A101D', 950: '#04060B',
 }
 
 // [CN-FORK] 亮橙（动作主色）：实心 bg + 白字，是页面唯一的「亮点」；700 档 #B8410A 供浅底文字用
@@ -56,30 +60,30 @@ export default {
     extend: {
       colors: {
         // [CN-FORK] 类名保留、值已换：ps-blue 现在是亮橙（动作色），ps-black/ps-surface 是墨蓝深夜底
+        // [CN-FORK] v0.5.2.87 中性底四档定名（类名 = 角色名，别再当第 5 种底色用）：
+        //   ps-black=画布 / ps-surface=侧栏 / ps-card=卡片 / ps-border=发丝线；
+        //   第 4 档「内嵌件」（图标块、输入框、行、开关槽）用 --color-inset，见 index.css 收口层
         'ps-blue': '#ff7a2e',
         'ps-blue-glow': 'rgba(255, 122, 46, 0.4)',
         'ps-black': '#04060b',
-        'ps-surface': '#080c16',
-        'ps-card': '#0e1424',
-        'ps-border': '#1e2740',
+        'ps-surface': '#070a12',
+        'ps-card': '#0a101d',
+        'ps-border': '#1b2438',
         // [CN-FORK] 语义文字色：走 CSS 变量随主题翻转（index.css 深色默认 / light-theme.css 浅色覆盖）
         'ps-text': 'var(--color-ps-text)',
-        // [CN-FORK] 结构墨色：侧栏选中底、页头分隔、次级强调这类「非动作」的结构性用色。
-        //   v0.5.2.86 按用户指令把夜底与卡片整体下沉，蓝味收敛到线条与选中底（bg-ink-800 #141D33 / 描边 ink-600 #253A6B）
-        ink: {
-          50: '#F5F7FC', 100: '#E6ECFA', 200: '#C3D0EC', 300: '#8FA2CE', 400: '#5C74AE',
-          500: '#3A5490', 600: '#253A6B', 700: '#1B2B54', 800: '#141D33', 900: '#0E1424', 950: '#04060B',
-        },
         // [CN-FORK] 语义别名，新组件优先用这几个名字写，别再写 ps-blue 字面
         primary: vividOrange,
         success: lime,
         warning: warmYellow,
         danger: coral,
-        // [CN-FORK] 整阶替换：zinc 系藏蓝灰、red 系珊瑚、emerald 青柠、yellow 暖黄
+        // [CN-FORK] 整阶替换：zinc 系藏蓝灰、red 系珊瑚、emerald 青柠、yellow 暖黄。
+        //   v0.5.2.87 补 amber/green 两个漏网色族（此前一直吃 Tailwind 默认色，是「颜色杂」的残留来源）
         zinc: navyInk,
         red: coral,
         emerald: lime,
+        green: lime,
         yellow: warmYellow,
+        amber: warmYellow,
       },
       borderRadius: {
         'ps-xl': '1rem',

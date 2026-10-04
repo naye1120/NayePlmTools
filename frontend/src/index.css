@@ -13,12 +13,13 @@
 .flex-col { flex-direction: column; }
 .items-center { align-items: center !important; }
 .justify-center { justify-content: center !important; }
-.ps5-bg { background-color: var(--color-ps-black) !important; }
+.ps5-bg { background-color: var(--color-canvas) !important; }
 .text-white { color: #ffffff !important; }
-/* [CN-FORK] v0.5.2.86 色板转「墨蓝通透」（类名不变、值变）：中性文字走冷白/冷灰阶，动作色亮橙，彩色留给状态标签 */
+/* [CN-FORK] v0.5.2.87 「一档一色」：老内核兜底字面量同步到新档（深底文字三档 + 动作色文字档） */
 .text-zinc-100 { color: #eef2fb !important; }
 .text-zinc-300 { color: #aeb9d2 !important; }
-.text-zinc-400 { color: #7f8aa8 !important; }
+.text-zinc-400 { color: #96a1bd !important; }
+.text-zinc-500 { color: #7f8aa8 !important; }
 .text-ps-blue { color: #ff9152 !important; }
 @media (min-width: 768px) {
   .md\:hidden { display: none !important; }
@@ -68,36 +69,60 @@
 }
 
 :root {
-  /* [CN-FORK] v0.5.2.86 「墨蓝通透」深色档：夜底压到近黑、底子里的灰提走，蓝味只留在线条与选中底；
-     文字冷白偏蓝，动作色亮橙，高饱和彩色只给图标与状态/警示标签 */
-  --color-ps-blue: #ff7a2e;
+  /* ==========================================================================
+   * [CN-FORK] v0.5.2.87 颜色令牌：每套主题只有「4 档中性底 + 1 档选中底」
+   *
+   * 中性底按角色命名，一档一个值，禁止再出现「同类部件多个背景色」：
+   *   canvas  页面画布底      rail  侧栏/浮层底     card  卡片与板块底
+   *   inset   内嵌件底（图标块、输入框、行、开关槽、薄面板）
+   *   inset-hover 只是 inset 的悬停反馈，不算第 5 档
+   *   line / line-hover 两根发丝线
+   * 深色档按「主内容区再沉一档」把 card/inset/rail/line 整体压深。
+   * 浅色档在 theme/light-theme.css 的 :root[data-theme="light"] 整组翻转，
+   * 下方样式与收口层全部只读这些变量，因此两套主题共用同一套规则。
+   * ========================================================================*/
+
+  /* ── 中性底 4 档 + 发丝线 ── */
+  --color-canvas: #04060b;
+  --color-rail: #070a12;
+  --color-card: #0a101d;
+  --color-inset: #0f1728;
+  --color-inset-hover: #161f33;
+  --color-line: #1b2438;
+  --color-line-hover: #2b3550;
+
+  /* ── 选中底（第 5 档，唯一）：S2 = 实心动作色芯片 ── */
+  --color-sel-bg: #ff7a2e;
+  --color-sel-fg: #1b0e02;
+
+  /* ── 动作色：实心档 / 悬停 / 橙底上的字色 / 薄染（图标块）/ 文字档 ──
+   * --color-ps-blue 是「橙色的字」，浅底要翻成深阶橙才读得清；
+   * --color-action 是「橙色的底」，浅底反而要压深以保住上面的字。两个角色分开，别再混用。 */
+  --color-action: #ff7a2e;
+  --color-action-hover: #ff9152;
+  --color-on-action: #1b0e02;
+  --color-action-tint: rgba(255, 122, 46, 0.10);
+  --color-action-line: rgba(255, 122, 46, 0.32);
+  --color-ps-blue: #ff9152;
   --color-ps-blue-glow: rgba(255, 122, 46, 0.4);
-  --color-ps-black: #04060b;
-  --color-ps-surface: #080c16;
-  --color-ps-card: #0e1424;
-  --color-ps-border: #1e2740;
-  /* [CN-FORK] 结构墨色：侧栏选中底/页头等结构性用色；B 档收敛为深蓝、只在线条与选中底出现 */
-  --color-ink: #253a6b;
-  --color-ink-soft: #141d33;
-  --color-ink-on: #ff9152;
-  /* [CN-FORK] 语义文字色：浅色主题由 light-theme.css 变量层翻转，不经类名重映射，老内核浏览器也生效 */
+
+  /* ── 文字阶：主 / 次要 / 辅助 / 占位符 ── */
   --color-ps-text: #eef2fb;
-  --color-ps-text-sub: #7f8aa8;
-  /* [CN-FORK] 骨架层（侧栏选中/按钮）用到的派生变量，浅色主题在 light-theme.css 翻转 */
-  --color-nav-hover: rgba(255, 255, 255, 0.04);
-  --color-nav-active-bg: #141d33;
-  --color-nav-active-fg: #e6ecff;
-  /* [CN-FORK] 实心按钮底色与 tailwind 的 bg-ps-blue 字面值保持一致（深色档同色），
-     悬停方向按主题走（深底提亮、浅底压深）；浅色档在 light-theme.css 单独压深以保白字对比度 */
-  --color-btn-solid: #ff7a2e;
-  --color-btn-solid-hover: #ff9152;
-  --color-danger-line: rgba(255, 107, 107, 0.3);
-  --color-danger-text: #ff6b6b;
-  --color-danger-soft: rgba(255, 107, 107, 0.14);
-  --color-field-bg: #121a2c;
-  
+  --color-ps-text-sub: #96a1bd;
+  --color-ps-text-faint: #7f8aa8;
+  --color-placeholder: #7f8aa8;
+
+  /* ── 语义色：一个语义一档薄底 + 一根线（文字档由各视图的 text-emerald/red 类名负责）── */
+  --color-ok-tint: rgba(46, 230, 168, 0.12);
+  --color-ok-line: rgba(46, 230, 168, 0.3);
+  --color-warn-tint: rgba(255, 216, 77, 0.12);
+  --color-warn-line: rgba(255, 216, 77, 0.32);
+  --color-err: #ff6b6b;
+  --color-err-tint: rgba(255, 107, 107, 0.12);
+  --color-err-line: rgba(255, 107, 107, 0.3);
+
   --font-inter: "Inter", system-ui, sans-serif;
-  
+
   --radius-ps-xl: 1rem;
   --radius-ps-2xl: 1.5rem;
   --radius-ps-3xl: 2rem;
@@ -117,7 +142,7 @@ html, body {
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--color-ps-black);
+  background-color: var(--color-canvas);
   color: var(--color-ps-text);
   font-family: var(--font-inter);
   font-size: 16px; /* Default for mobile/web */
@@ -135,7 +160,7 @@ body {
 }
 
 .ps5-bg {
-  background-color: var(--color-ps-black);
+  background-color: var(--color-canvas);
   /* background-image: 
     radial-gradient(circle at 0% 0%, rgba(0, 149, 255, 0.05) 0%, transparent 50%),
     radial-gradient(circle at 100% 100%, rgba(0, 149, 255, 0.03) 0%, transparent 50%); */
@@ -152,31 +177,31 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2b3550;
+  background: var(--color-line-hover);
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-ps-blue);
+  background: var(--color-action);
 }
 
 /* Glassmorphism & Cards */
 .glass-panel {
-  background: var(--color-ps-surface);
-  border-right: 1px solid var(--color-ps-border);
+  background: var(--color-rail);
+  border-right: 1px solid var(--color-line);
 /* backdrop-filter: blur(12px); */
 }
 
 .glass-card {
-  background: var(--color-ps-card);
-  border: 1px solid var(--color-ps-border);
+  background: var(--color-card);
+  border: 1px solid var(--color-line);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 /* box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5); */
 }
 
 .glass-card:hover, .glass-card:focus {
-  background: #161e33;
-  border-color: var(--color-ps-blue);
+  background: var(--color-inset-hover);
+  border-color: var(--color-action);
   transform: translateY(-2px);
 /* box-shadow: 0 0 30px var(--color-ps-blue-glow); */
   outline: none;
@@ -184,20 +209,20 @@ body {
 
 /* [CN-FORK] 统一板块容器：现代扁平卡片（固定圆角/描边/板块头），颜色走 CSS 变量双主题自动跟随 */
 .panel-card {
-  background: var(--color-ps-card);
-  border: 1px solid var(--color-ps-border);
+  background: var(--color-card);
+  border: 1px solid var(--color-line);
   border-radius: 0.75rem;
   overflow: hidden;
   transition: border-color 0.2s ease;
 }
-.panel-card:hover { border-color: rgba(255, 122, 46, 0.3); }
+.panel-card:hover { border-color: var(--color-action-line); }
 .panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.875rem 1.25rem;
-  border-bottom: 1px solid var(--color-ps-border);
+  border-bottom: 1px solid var(--color-line);
 }
 
 /* Sidebar Item Focus */
@@ -260,8 +285,8 @@ h1, h2, h3, h4 {
 .ps5-robust-spinner {
   width: 6rem;
   height: 6rem;
-  border: 8px solid rgba(255, 255, 255, 0.05);
-  border-left-color: var(--color-ps-blue);
+  border: 8px solid var(--color-inset-hover);
+  border-left-color: var(--color-action);
   border-radius: 50%;
   animation: ps5-native-spin 1s linear infinite;
   -webkit-animation: ps5-native-spin 1s linear infinite;
@@ -282,12 +307,16 @@ h1, h2, h3, h4 {
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
 /* ============================================================================
- * [CN-FORK] v0.5.2.85 骨架层：侧栏分组头 + 选中动作色竖条、统一页头、三档按钮
+ * [CN-FORK] v0.5.2.85 骨架层：侧栏分组头 + 选中态、统一页头、三档按钮、表单域
  *
  * 手法：这一层的颜色**全部走 CSS 变量**（深色默认值在本文件 :root，浅色在
  * light-theme.css 的 :root[data-theme="light"] 翻转）。因此不需要写 !important
  * 类名重映射，PS5 老内核 WebKit 上也能整组跟随主题；上游组件不引用这些类名，
  * 零冲突、零侵入。样式一律纯色，无渐变（遵循「禁用渐变」规范）。
+ *
+ * v0.5.2.87 按「一档一色」契约调整两处：侧栏选中态从「藏蓝底 + 左侧橙竖条」改为
+ * S2（实心橙芯片 + 深墨字），与开关/分段标签的选中态用同一个变量；主按钮文字
+ * 从写死 #ffffff 改为 --color-on-action（深档墨字、浅档白字）。
  * ==========================================================================*/
 
 /* ── 侧栏：分组头（原「主功能 / 设备 / 系统」这类小标题）── */
@@ -303,33 +332,30 @@ h1, h2, h3, h4 {
 }
 .nav-group-title:first-child { margin-top: 0; }
 
-/* ── 侧栏：菜单项 + 选中态左侧动作色竖条 ──
- * 只负责「定位上下文 + 配色语义」，盒模型（p-4 / rounded-2xl / space-x-4）仍由组件上的
+/* ── 侧栏：菜单项 + 选中态（S2：实心动作色芯片）──
+ * 只负责「配色语义」，盒模型（p-4 / rounded-2xl / space-x-4）仍由组件上的
  * Tailwind 类决定：本文件在 @tailwind utilities 之后，.nav-item 若也写 padding/gap 会盖掉工具类。 */
 .nav-item {
-  position: relative;
   display: flex;
   align-items: center;
   color: var(--color-ps-text-sub);
   cursor: pointer;
   transition: background-color 0.18s ease, color 0.18s ease;
 }
-.nav-item:hover { background-color: var(--color-nav-hover); color: var(--color-ps-text); }
-.nav-item.is-active {
-  background-color: var(--color-nav-active-bg);
-  color: var(--color-nav-active-fg);
+.nav-item:hover { background-color: var(--color-inset-hover); color: var(--color-ps-text); }
+.nav-item.is-active,
+.nav-item.is-active:hover {
+  background-color: var(--color-sel-bg);
+  color: var(--color-sel-fg);
   font-weight: 700;
 }
-.nav-item.is-active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 22%;
-  width: 3px;
-  height: 56%;
-  border-radius: 0 3px 3px 0;
-  background-color: var(--color-ps-blue);
-}
+/* 选中项内部的图标与文字必须跟着芯片走，不能被 text-zinc 系或 text-white 这类工具类顶掉 */
+.nav-item.is-active > *,
+.nav-item.is-active .text-white,
+.nav-item.is-active .text-zinc-100,
+.nav-item.is-active .text-zinc-300,
+.nav-item.is-active .text-zinc-400,
+.nav-item.is-active .text-ps-blue { color: var(--color-sel-fg) !important; }
 
 /* ── 统一页头：窄屏上下堆叠，≥768px 标题在左、操作在右 ──
  * 标题字号仍由组件上的 Tailwind 类（text-2xl font-bold）决定，这里只给布局与颜色语义，
@@ -381,44 +407,188 @@ h1, h2, h3, h4 {
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn > * + * { margin-left: 0.3rem; }
 
-/* 实心：页面唯一的「亮点」，一个视图里最多一个主操作 */
-.btn-primary { background-color: var(--color-btn-solid); color: #ffffff; }
-.btn-primary:hover:not(:disabled) { background-color: var(--color-btn-solid-hover); }
+/* 实心：页面唯一的「亮点」，一个视图里最多一个主操作。
+ * 与文件末尾的 .sel-chip 同档同色（选中态与主按钮共用 S2），这里只补盒模型 */
+.btn-primary {
+  background-color: var(--color-sel-bg);
+  color: var(--color-sel-fg);
+}
+.btn-primary:hover:not(:disabled) { background-color: var(--color-action-hover); }
+.btn-primary > * { color: var(--color-sel-fg); }
 
 /* 描边：次要操作 */
 .btn-outline {
-  background-color: var(--color-ps-card);
-  border-color: var(--color-ps-border);
+  background-color: var(--color-card);
+  border-color: var(--color-line);
   color: var(--color-ps-text);
 }
-.btn-outline:hover:not(:disabled) { border-color: var(--color-btn-solid); color: var(--color-ps-blue); }
+.btn-outline:hover:not(:disabled) { border-color: var(--color-action); color: var(--color-ps-blue); }
 
 /* 幽灵：辅助/跳转，悬停才浮出底色 */
 .btn-ghost { background-color: transparent; color: var(--color-ps-text-sub); }
-.btn-ghost:hover:not(:disabled) { background-color: var(--color-nav-hover); color: var(--color-ps-text); }
+.btn-ghost:hover:not(:disabled) { background-color: var(--color-inset); color: var(--color-ps-text); }
 
 /* 危险：描边形态的语义配色（停止/删除类），与主色橙明显区隔；实心红留给确认弹窗内使用 */
 .btn-danger {
-  background-color: var(--color-nav-hover);
-  border-color: var(--color-danger-line);
-  color: var(--color-danger-text);
+  background-color: var(--color-inset);
+  border-color: var(--color-err-line);
+  color: var(--color-err);
 }
-.btn-danger:hover:not(:disabled) { background-color: var(--color-danger-soft); border-color: var(--color-danger-text); }
+.btn-danger:hover:not(:disabled) { background-color: var(--color-err-tint); border-color: var(--color-err); }
 
-/* ── 表单输入：与 .btn 同一套圆角/字号，底色比卡片再暗一档以保持「凹进去」的输入感 ── */
+/* ── 表单输入：与 .btn 同一套圆角/字号，底色用第 4 档中性底（inset）保持「凹进去」的输入感 ── */
 .field {
   width: 100%;
   padding: 0.45rem 0.75rem;
-  border: 1px solid var(--color-ps-border);
+  border: 1px solid var(--color-line);
   border-radius: 0.5rem;
-  background-color: var(--color-field-bg);
+  background-color: var(--color-inset);
   color: var(--color-ps-text);
   font-family: inherit;
   font-size: 0.9rem;
   line-height: 1.25rem;
   transition: border-color 0.18s ease;
 }
-.field::placeholder { color: var(--color-ps-text-sub); opacity: 1; }
-.field:focus { outline: none; border-color: var(--color-btn-solid); }
+.field::placeholder { color: var(--color-placeholder); opacity: 1; }
+.field:focus { outline: none; border-color: var(--color-action); }
+
+/* ============================================================================
+ * [CN-FORK] v0.5.2.87 「一档一色」收口层
+ *
+ * 用户指令：「同一个类型的部件，同配色下不要有多个背景颜色」。此前的病灶是同类部件
+ * 各自写 bg-white/5、/10、/20、/[0.01~0.03]、bg-black/20、/40、/50、bg-zinc-600，
+ * 以及选中态用 bg-ps-blue/5~/20 的薄染（跟图标块的薄染分不出谁是被选中的）。
+ *
+ * 手法：**只在这一层把类名映射到角色变量**，全部带 !important，写在 @tailwind
+ * utilities 之后所以能盖住工具类；因为映射目标是 CSS 变量，浅色档只翻变量即可
+ * 整组跟随，不需要在 light-theme.css 里再写一套 bg 重映射（那套已删）。
+ * 组件类名一行不动，上游新增同类部件沿用这些类名即自动接色。
+ *
+ * 故意不收口的（保持原样，它们是语义/叠层不是「底」）：
+ *   bg-white（开关旋钮、进度条填充）、bg-black/55~/80（封面叠层与模态遮罩）、
+ *   bg-ps-blue/85（封面角标）、bg-ps-blue|red-600 等实心色（动作/危险本身）。
+ * ==========================================================================*/
+
+/* ── 第 4 档中性底：内嵌件（图标块、输入框、行、开关槽、薄面板、搜索条）── */
+.bg-white\/5,
+.md\:bg-white\/5,
+.bg-white\/10,
+.md\:bg-white\/10,
+.bg-white\/20,
+.bg-white\/\[0\.01\],
+.bg-white\/\[0\.015\],
+.bg-white\/\[0\.02\],
+.bg-white\/\[0\.03\],
+.bg-black\/20,
+.bg-black\/40,
+.bg-black\/50,
+.bg-zinc-600 { background-color: var(--color-inset) !important; }
+
+/* 悬停：还是同一个 inset，只加一点亮度，不引入第 5 种底 */
+.hover\:bg-white\/5:hover,
+.hover\:bg-white\/10:hover,
+.hover\:bg-white\/20:hover,
+.hover\:bg-white\/\[0\.02\]:hover,
+.hover\:bg-white\/\[0\.03\]:hover,
+.group-hover\:bg-white\/10,
+.group-hover\:bg-white\/20 { background-color: var(--color-inset-hover) !important; }
+
+/* ── 发丝线：border-white/5~/20 全部并到一根线 ── */
+.border-white\/5,
+.md\:border-white\/5,
+.border-white\/10,
+.md\:border-white\/10,
+.border-white\/15,
+.border-white\/20,
+.divide-white\/5 > * + *,
+.divide-white\/10 > * + * { border-color: var(--color-line) !important; }
+.hover\:border-white\/5:hover,
+.hover\:border-white\/10:hover,
+.hover\:border-white\/20:hover,
+.focus-within\:border-white\/10:focus-within { border-color: var(--color-line-hover) !important; }
+
+/* ── 动作色薄染：bg-ps-blue/5~/20 原本有 4 档浓淡，现统一一档（图标块等「非选中」用途）──
+ * 选中态不再用薄染：那 4 处调用点已换成实心芯片（规则在文件末尾的 .sel-chip）。 */
+.bg-ps-blue\/5,
+.bg-ps-blue\/10,
+.bg-ps-blue\/15,
+.bg-ps-blue\/20,
+.hover\:bg-ps-blue\/10:hover,
+.hover\:bg-ps-blue\/20:hover,
+.group-hover\:bg-ps-blue\/10 { background-color: var(--color-action-tint) !important; }
+.border-ps-blue\/20,
+.border-ps-blue\/30,
+.border-ps-blue\/40,
+.border-ps-blue\/50 { border-color: var(--color-action-line) !important; }
+
+/* ── 中性底类名本身：bg-ps-black / bg-ps-surface / bg-ps-card 是 Tailwind 字面色，
+ * 不读 CSS 变量，所以在这里改成变量驱动，两套主题就不用各写一份了 ── */
+.bg-ps-black { background-color: var(--color-canvas) !important; }
+.bg-ps-surface { background-color: var(--color-rail) !important; }
+.bg-ps-card { background-color: var(--color-card) !important; }
+.border-ps-border { border-color: var(--color-line) !important; }
+.text-ps-text { color: var(--color-ps-text) !important; }
+
+/* ── 实心动作底上的文字（开关旋钮、实心芯片、hover 变橙底的按钮）：字色跟 --color-sel-fg 走，
+ * 深色档是墨字、浅色档是白字，一处变量翻转两档都到位 ── */
+.bg-ps-blue.text-white,
+.bg-ps-blue .text-white,
+.bg-ps-blue .text-zinc-100,
+.hover\:bg-ps-blue.text-white:hover,
+.hover\:bg-ps-blue:hover .text-white,
+.hover\:bg-ps-blue:hover .hover\:text-white { color: var(--color-sel-fg) !important; }
+
+/* ── 语义色各收一档薄底 + 一根线（此前 /5 /10 /20 /950/90 混着用）── */
+.bg-emerald-500\/5,
+.bg-emerald-500\/10,
+.bg-green-500\/10,
+.bg-emerald-950\/90 { background-color: var(--color-ok-tint) !important; }
+.border-emerald-500\/20,
+.border-emerald-500\/30 { border-color: var(--color-ok-line) !important; }
+
+.bg-yellow-400\/5,
+.bg-yellow-400\/20,
+.bg-amber-500\/10,
+.bg-amber-500\/20 { background-color: var(--color-warn-tint) !important; }
+.border-amber-500\/20,
+.border-amber-500\/50,
+.border-yellow-400\/50 { border-color: var(--color-warn-line) !important; }
+
+.bg-red-500\/5,
+.bg-red-500\/10,
+.bg-red-600\/10,
+.bg-red-950\/5,
+.bg-red-950\/20,
+.bg-red-950\/90 { background-color: var(--color-err-tint) !important; }
+.hover\:bg-red-500\/5:hover,
+.hover\:bg-red-500\/10:hover,
+.hover\:bg-red-600\/10:hover,
+.group-hover\:bg-red-500\/10 { background-color: var(--color-err-tint) !important; }
+.border-red-500\/10,
+.border-red-500\/20,
+.border-red-500\/30,
+.border-red-600\/20 { border-color: var(--color-err-line) !important; }
+.hover\:border-red-500\/50:hover { border-color: var(--color-err-line) !important; }
+.placeholder-zinc-600::placeholder { color: var(--color-placeholder) !important; }
+.text-ps-text-sub { color: var(--color-ps-text-sub) !important; }
+
+/* ── 选中芯片（契约里的第 5 档，放最末尾）：侧栏选中、分段标签、开关槽、当前优先序号、
+ * 执行中的行……所有「这一个是被选中的」都用它。只给颜色，
+ * 圆角/内边距/字号留给组件自己的 Tailwind 类。
+ * 必须在上面所有 bg/border 收口规则之后：组件上残留的 border-white/10 与 .sel-chip 同权重，
+ * 靠源码顺序取胜的就是写在后面的这一条（实测：放前面时芯片会被描回一根发丝线）。 */
+.sel-chip {
+  background-color: var(--color-sel-bg) !important;
+  color: var(--color-sel-fg) !important;
+  border-color: transparent !important;
+}
+.sel-chip > *,
+.sel-chip .text-white,
+.sel-chip .text-zinc-100,
+.sel-chip .text-zinc-200,
+.sel-chip .text-zinc-300,
+.sel-chip .text-zinc-400,
+.sel-chip .text-zinc-500,
+.sel-chip .text-ps-blue { color: var(--color-sel-fg) !important; }
 
 

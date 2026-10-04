@@ -1,45 +1,57 @@
 /* ============================================================================
  * [CN-FORK] light-theme.css
- * 浅色主题「类名重映射层」。
+ * 浅色主题「变量档 + 文字档」翻转层。
  *
- * 设计原则（fork 维护友好）：
- *   本文件不修改任何上游组件的 Tailwind 类名，而是在 <html data-theme="light">
- *   时把上游硬编码的「暗色工具类」整体重映射为浅色语义色。
- *   上游后续更新只要沿用同一套色板类（white/black/zinc/ps-*），本层即持续有效；
- *   若上游引入新颜色类，仅需在此追加一行映射。
+ * 设计原则（v0.5.2.87 起）：
+ *   颜色只有一个源头 —— index.css 的 :root 变量档。本文件先把变量整组翻成浅色档，
+ *   再把「上游写死的暗色文字工具类」（text-white / text-zinc-*）重映射为浅底可读色。
+ *   背景与描线的收口（一档一色）已经写在 index.css 的「一档一色」收口层里，
+ *   映射目标是变量，所以这里**不再需要**一套 bg/border 的类名重映射。
+ *   剩下留在本文件的只有两类：不读 CSS 变量的实心动作底（bg-ps-blue 系列），
+ *   以及刻意保持深色的叠层豁免（封面叠层、模态遮罩、实心底上的白字）。
  *
- * 浅色色板（[CN-FORK] v0.5.2.86 「墨蓝通透」的浅色档）：
- *   画布   #ffffff   卡片 #ffffff   侧栏/面 #f6f8fc
- *   主文字 #0c1220   次要 #606a80   辅助 #9aa3b5   禁用 #d5dbe8
- *   描边   #e7ebf3   动作色文字用亮橙深阶 #b8410a（浅底上保对比度），实心按钮 #f25c05，结构墨色 #1b2b54
+ * 浅色色板（[CN-FORK] v0.5.2.87 「一档一色」浅色档）：
+ *   画布   #ffffff   侧栏 #f6f8fc   卡片 #ffffff   内嵌件 #eef2f8   描线 #e7ebf3
+ *   主文字 #0c1220   次要 #3a4661   辅助 #5a677f   更淡 #6b7891   占位符 #8b95a8
+ *   选中底/实心按钮 #f25c05 + 白字；动作色「文字」档用深阶橙 #b8410a 保对比度
  *   状态色：成功 #12996b / 警示 #bd7f0f / 危险 #a91f22（与动作橙严格区隔）
  * ==========================================================================*/
 
-/* ── 1. CSS 变量翻转（glass-panel / glass-card / .ps5-bg / 骨架层等变量驱动的样式自动跟随）── */
+/* ── 1. 变量档翻转：index.css 的收口层与骨架层全部只读这些变量，翻一次即全站跟随 ── */
 :root[data-theme="light"] {
   color-scheme: light;
-  --color-ps-black: #ffffff;
-  --color-ps-surface: #f6f8fc;
-  --color-ps-card: #ffffff;
-  --color-ps-border: #e7ebf3;
+  /* 中性底 4 档 + 发丝线 */
+  --color-canvas: #ffffff;
+  --color-rail: #f6f8fc;
+  --color-card: #ffffff;
+  --color-inset: #eef2f8;
+  --color-inset-hover: #e4e9f3;
+  --color-line: #e7ebf3;
+  --color-line-hover: #ccd4e2;
+  /* 选中底（S2）：实心橙在浅底压深一档，上面的字改白 */
+  --color-sel-bg: #f25c05;
+  --color-sel-fg: #ffffff;
+  /* 动作色 */
+  --color-action: #f25c05;
+  --color-action-hover: #dd5208;
+  --color-on-action: #ffffff;
+  --color-action-tint: rgba(242, 92, 5, 0.1);
+  --color-action-line: rgba(242, 92, 5, 0.35);
   --color-ps-blue: #b8410a;
-  /* [CN-FORK] 语义文字色翻转：使用 var(--color-ps-text) 的元素（如云端仓库 IP 地址）直接跟随主题，
-     不依赖下方 !important 类名重映射（PS5 老内核 WebKit 上该机制不可靠） */
+  --color-ps-blue-glow: rgba(184, 65, 10, 0.3);
+  /* 文字阶：v0.5.2.87 按用户「字体太灰暗」整档提黑（次要 606a80 → 3a4661） */
   --color-ps-text: #0c1220;
-  --color-ps-text-sub: #606a80;
-  /* [CN-FORK] 骨架层（index.css 的 .nav-item / .page-head / .btn-*）浅色档 */
-  --color-ink: #1b2b54;
-  --color-ink-soft: #eaf0fb;
-  --color-nav-hover: rgba(12, 18, 32, 0.04);
-  --color-nav-active-bg: #eaf0fb;
-  --color-nav-active-fg: #1b2b54;
-  /* 实心按钮在浅底压深一档（#f25c05），保证橙底上的白字仍读得清；悬停继续往深走 */
-  --color-btn-solid: #f25c05;
-  --color-btn-solid-hover: #dd5208;
-  --color-danger-line: rgba(217, 45, 45, 0.28);
-  --color-danger-text: #a91f22;
-  --color-danger-soft: rgba(217, 45, 45, 0.1);
-  --color-field-bg: #f6f8fc;
+  --color-ps-text-sub: #3a4661;
+  --color-ps-text-faint: #5a677f;
+  --color-placeholder: #8b95a8;
+  /* 语义色薄底与线：浅底换成实色浅染，比 rgba 更干净 */
+  --color-ok-tint: #e2f7ef;
+  --color-ok-line: rgba(18, 153, 107, 0.28);
+  --color-warn-tint: #fdf2d9;
+  --color-warn-line: rgba(189, 127, 15, 0.35);
+  --color-err: #a91f22;
+  --color-err-tint: #fdeaea;
+  --color-err-line: rgba(217, 45, 45, 0.28);
 }
 
 :root[data-theme="light"] body {
@@ -52,11 +64,10 @@
   box-shadow: 0 1px 2px rgba(12, 18, 32, 0.06), 0 1px 3px rgba(12, 18, 32, 0.04);
 }
 [data-theme="light"] .glass-card:hover {
-  background: #ffffff !important;
   box-shadow: 0 4px 12px rgba(12, 18, 32, 0.1);
 }
 
-/* ── 2. 文字颜色重映射 ── */
+/* ── 2. 文字档重映射（上游写死在暗色档上的 text-white / text-zinc-* / 语义色文字）── */
 [data-theme="light"] .text-white { color: #0c1220 !important; }
 [data-theme="light"] .hover\:text-white:hover { color: #0c1220 !important; }
 [data-theme="light"] .text-white\/90 { color: rgba(12, 18, 32, 0.9) !important; } /* [CN-FORK] 补漏：云端仓库分类组头用了 text-white/90，此前无映射导致浅色下白字 */
@@ -64,16 +75,16 @@
 [data-theme="light"] .text-white\/10 { color: rgba(12, 18, 32, 0.14) !important; }
 [data-theme="light"] .text-white\/5 { color: rgba(12, 18, 32, 0.1) !important; }
 
+/* [CN-FORK] v0.5.2.87 整档提黑：原来 zinc-100~300 落在 #162033、400 在 #606a80，正文与说明都偏灰 */
 [data-theme="light"] .text-zinc-100,
 [data-theme="light"] .text-zinc-200,
-[data-theme="light"] .text-zinc-300 { color: #162033 !important; }
-[data-theme="light"] .text-zinc-400 { color: #606a80 !important; }
-[data-theme="light"] .text-zinc-500 { color: #707a92 !important; }
-[data-theme="light"] .text-zinc-600 { color: #9aa3b5 !important; }
-[data-theme="light"] .text-zinc-700 { color: #aab3c6 !important; }
-[data-theme="light"] .text-zinc-800 { color: #d5dbe8 !important; }
-[data-theme="light"] .text-gray-500 { color: #707a92 !important; }
-[data-theme="light"] .placeholder-zinc-600::placeholder { color: #a4adc0 !important; }
+[data-theme="light"] .text-zinc-300 { color: #0c1220 !important; }
+[data-theme="light"] .text-zinc-400 { color: #3a4661 !important; }
+[data-theme="light"] .text-zinc-500 { color: #46536e !important; }
+[data-theme="light"] .text-zinc-600 { color: #5a677f !important; }
+[data-theme="light"] .text-zinc-700 { color: #6b7891 !important; }
+[data-theme="light"] .text-zinc-800 { color: #8a94a8 !important; }
+[data-theme="light"] .text-gray-500 { color: #46536e !important; }
 
 /* 语义色：浅底上加深保证对比度。[CN-FORK] v0.5.2.86 警示/危险类文字回归真红（此前跟动作橙混成一种颜色） */
 [data-theme="light"] .text-red-400,
@@ -81,36 +92,27 @@
 [data-theme="light"] .text-red-500,
 [data-theme="light"] .text-red-600 { color: #a91f22 !important; }
 [data-theme="light"] .hover\:text-red-600:hover { color: #8a1a1d !important; }
-[data-theme="light"] .text-yellow-400 { color: #bd7f0f !important; }
-[data-theme="light"] .text-green-400 { color: #12996b !important; }
-[data-theme="light"] .text-emerald-400 { color: #12996b !important; }
 [data-theme="light"] .text-red-500\/60 { color: rgba(169, 31, 34, 0.78) !important; }
+/* [CN-FORK] v0.5.2.87 amber 色族并进暖黄后，token 值变成 #FFDD66 这类亮档，浅底必须一起压深 */
+[data-theme="light"] .text-yellow-400,
+[data-theme="light"] .text-amber-400,
+[data-theme="light"] .text-amber-400\/80,
+[data-theme="light"] .text-amber-500 { color: #bd7f0f !important; }
+[data-theme="light"] .text-green-400,
+[data-theme="light"] .text-emerald-400,
+[data-theme="light"] .text-emerald-400\/80,
+[data-theme="light"] .text-emerald-500 { color: #12996b !important; }
 /* 装饰性填充（星星/心形）保持高饱和，浅底可见 */
 [data-theme="light"] .fill-yellow-400 { fill: #e0ae27 !important; color: #e0ae27 !important; }
 [data-theme="light"] .fill-current { fill: currentColor; }
 
-/* ── 3. 背景重映射：半透明白「提亮」 → 半透明黑「压暗」 ── */
-[data-theme="light"] .bg-white\/5,
-[data-theme="light"] .hover\:bg-white\/5:hover,
-[data-theme="light"] .md\:bg-white\/5 { background-color: rgba(12, 18, 32, 0.04) !important; }
-[data-theme="light"] .bg-white\/10,
-[data-theme="light"] .hover\:bg-white\/10:hover { background-color: rgba(12, 18, 32, 0.07) !important; }
-[data-theme="light"] .bg-white\/20,
-[data-theme="light"] .hover\:bg-white\/20:hover,
-[data-theme="light"] .group-hover\:bg-white\/20 { background-color: rgba(12, 18, 32, 0.12) !important; }
-[data-theme="light"] .bg-white\/\[0\.01\] { background-color: rgba(12, 18, 32, 0.012) !important; }
-[data-theme="light"] .bg-white\/\[0\.015\] { background-color: rgba(12, 18, 32, 0.018) !important; }
-[data-theme="light"] .bg-white\/\[0\.02\],
-[data-theme="light"] .hover\:bg-white\/\[0\.02\]:hover { background-color: rgba(12, 18, 32, 0.025) !important; }
-[data-theme="light"] .bg-white\/\[0\.03\],
-[data-theme="light"] .hover\:bg-white\/\[0\.03\]:hover { background-color: rgba(12, 18, 32, 0.035) !important; }
-
-/* 深色玻璃容器 → 白色卡片 */
-[data-theme="light"] .bg-black\/20 { background-color: rgba(255, 255, 255, 0.65) !important; }
-[data-theme="light"] .bg-black\/40 { background-color: rgba(255, 255, 255, 0.92) !important; }
-[data-theme="light"] .bg-black\/50 { background-color: #ffffff !important; }
-[data-theme="light"] .bg-ps-black\/95 { background-color: rgba(255, 255, 255, 0.95) !important; }
-[data-theme="light"] .bg-ps-black { background-color: #ffffff !important; }
+/* ── 3. 少数不读 CSS 变量的实心类名 ── */
+/* [CN-FORK] v0.5.2.86 ps-blue 的字面值是深色档动作橙 #FF7A2E，白底上实心橙底 + 白字对比不足，
+   浅档实心橙底统一压到 #F25C05（与变量档 --color-sel-bg / --color-action 的浅色值保持一致） */
+[data-theme="light"] .bg-ps-blue,
+[data-theme="light"] .hover\:bg-ps-blue:hover { background-color: #f25c05 !important; }
+/* 封面角标：叠在封面上，两种主题都保持半透深色底 */
+[data-theme="light"] .bg-ps-blue\/85 { background-color: rgba(242, 92, 5, 0.9) !important; }
 
 /* 移动端底部导航（bg-black/80 之一）→ 白色悬浮栏；模态遮罩保持压暗 */
 [data-theme="light"] nav.bg-black\/80 {
@@ -118,91 +120,48 @@
   box-shadow: 0 -2px 16px rgba(12, 18, 32, 0.08);
 }
 
-/* 红色/绿色 Toast（深色系）→ 浅色通知条 */
-[data-theme="light"] .bg-red-950\/90 { background-color: #fdeaea !important; }
-[data-theme="light"] .bg-red-950\/20 { background-color: #fdeaea !important; }
-[data-theme="light"] .bg-red-950\/5 { background-color: rgba(217, 45, 45, 0.05) !important; }
-[data-theme="light"] .bg-red-600\/10,
-[data-theme="light"] .hover\:bg-red-600\/10:hover,
-[data-theme="light"] .bg-red-500\/10 { background-color: rgba(217, 45, 45, 0.07) !important; }
-[data-theme="light"] .bg-emerald-950\/90 { background-color: #e2f7ef !important; }
-[data-theme="light"] .bg-yellow-400\/5 { background-color: rgba(189, 127, 15, 0.06) !important; }
-[data-theme="light"] .bg-yellow-400\/20 { background-color: #fdf2d9 !important; }
-[data-theme="light"] .bg-transparent { background-color: transparent !important; }
-
-/* ── 4. 边框 / 分隔线 ── */
-[data-theme="light"] .border-white\/5,
-[data-theme="light"] .md\:border-white\/5 { border-color: rgba(12, 18, 32, 0.07) !important; }
-[data-theme="light"] .border-white\/10,
-[data-theme="light"] .hover\:border-white\/10:hover { border-color: rgba(12, 18, 32, 0.12) !important; }
-[data-theme="light"] .border-white\/20 { border-color: rgba(12, 18, 32, 0.18) !important; }
-[data-theme="light"] .divide-white\/5 > * + * { border-color: rgba(12, 18, 32, 0.07) !important; }
-[data-theme="light"] .border-red-500\/10 { border-color: rgba(217, 45, 45, 0.15) !important; }
-[data-theme="light"] .border-red-500\/20 { border-color: rgba(217, 45, 45, 0.2) !important; }
-[data-theme="light"] .border-red-500\/30 { border-color: rgba(217, 45, 45, 0.3) !important; }
-[data-theme="light"] .border-red-600\/20 { border-color: rgba(217, 45, 45, 0.2) !important; }
-[data-theme="light"] .border-yellow-400\/50 { border-color: rgba(189, 127, 15, 0.35) !important; }
-[data-theme="light"] .hover\:border-red-600:hover { border-color: #a91f22 !important; }
-
-/* ── 5. 滚动条 / 焦点环 ── */
-[data-theme="light"] ::-webkit-scrollbar-thumb { background: #ccd4e2; }
-[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: var(--color-ps-blue); }
-[data-theme="light"] .ps5-robust-spinner {
-  border-color: rgba(12, 18, 32, 0.08);
-  border-left-color: var(--color-ps-blue);
+/* 模态遮罩保持暗色压底（中文规范：遮罩不随主题反色）*/
+[data-theme="light"] .fixed.inset-0 .absolute.inset-0.bg-black\/80 {
+  background-color: rgba(4, 6, 11, 0.5) !important;
 }
 
-/* ── 6. 实心彩色底上的白字豁免（必须放在最后，靠源码顺序取胜）── */
-[data-theme="light"] .bg-ps-blue.text-white,
-[data-theme="light"] .bg-ps-blue .text-white,
+/* ── 4. 实心彩色底上的白字豁免（放在最后，靠源码顺序取胜）── */
 [data-theme="light"] .bg-red-600.text-white,
 [data-theme="light"] .bg-red-600 .text-white,
 [data-theme="light"] .bg-red-500.text-white,
-[data-theme="light"] .hover\:bg-ps-blue.text-white:hover,
-[data-theme="light"] .hover\:bg-ps-blue:hover .text-white,
-[data-theme="light"] .hover\:bg-ps-blue:hover .hover\:text-white,
 [data-theme="light"] .hover\:bg-red-600.text-white:hover,
 [data-theme="light"] .hover\:bg-red-600:hover .text-white,
+[data-theme="light"] .hover\:bg-red-600.hover\:text-white:hover,
 [data-theme="light"] .hover\:bg-red-500:hover .text-white,
 [data-theme="light"] .group\/btn:hover .group-hover\/btn\:text-white,
-[data-theme="light"] .bg-ps-blue .group-hover\:text-white:hover {
+[data-theme="light"] .bg-ps-blue .group-hover\:text-white:hover,
+[data-theme="light"] .bg-emerald-600.text-white,
+[data-theme="light"] .bg-emerald-600 .text-white,
+[data-theme="light"] .bg-emerald-500.text-white,
+[data-theme="light"] .bg-emerald-500 .text-white,
+[data-theme="light"] .hover\:bg-emerald-500.text-white:hover,
+[data-theme="light"] .hover\:bg-emerald-500:hover .text-white {
   color: #ffffff !important;
 }
 
 /* [CN-FORK] 游戏磁贴操作按钮与角标：刻意用半透深色芯片 bg-black/55、半透蓝底角标 bg-ps-blue/85 叠在封面上，
  * 两种主题下底都是深色，白字/白图标必须保持白，不能被上面 .text-white→#0c1220 洗成近黑（否则黑底黑图标看不清）。 */
 [data-theme="light"] .bg-black\/55.text-white,
-[data-theme="light"] .bg-black\/55 .text-white,
-[data-theme="light"] .bg-ps-blue\/85.text-white {
+[data-theme="light"] .bg-black\/55 .text-white {
   color: #ffffff !important;
-}
-
-/* 模态遮罩保持暗色压底（中文规范：遮罩不随主题反色）*/
-[data-theme="light"] .fixed.inset-0 .absolute.inset-0.bg-black\/80 {
-  background-color: rgba(4, 6, 11, 0.5) !important;
 }
 
 /* ============================================================================
  * [CN-FORK] v1.1 视觉验收补丁（对应审查报告 Bug A~D）
+ * Bug A 的 bg-ps-card / bg-ps-surface / border-ps-border 已上移到 index.css 的收口层
+ * （改成变量驱动后两套主题共用一条规则），这里只剩动作色文字档与 important 变体。
  * ==========================================================================*/
-
-/* Bug A：tailwind.config 里的字面色 ps-card/ps-border 不走 CSS 变量，需单独重映射 */
-[data-theme="light"] .bg-ps-card { background-color: #ffffff !important; }
-[data-theme="light"] .bg-ps-surface { background-color: #f6f8fc !important; }
-[data-theme="light"] .border-ps-border { border-color: rgba(12, 18, 32, 0.08) !important; }
-
-/* [CN-FORK] v0.5.2.86 同理：ps-blue 字面值是深色档动作橙 #FF7A2E，白底上实心橙底 + 白字对比不足，
-   浅档实心按钮统一压到 #F25C05（与骨架层 --color-btn-solid 的浅色值保持一致）。
-   低透明度 tint（bg-ps-blue/5~/20 这类「橙底配橙字」的芯片）不需要压深：字色已由 text-ps-blue 映射负责 */
-[data-theme="light"] .bg-ps-blue,
-[data-theme="light"] .hover\:bg-ps-blue:hover { background-color: #f25c05 !important; }
-[data-theme="light"] .bg-ps-blue\/85 { background-color: rgba(242, 92, 5, 0.9) !important; }
 
 /* Bug B：带 important 修饰符的变体是独立类名（!text-white → .\!text-white），需单独映射 */
 [data-theme="light"] .\!text-white { color: #0c1220 !important; }
 [data-theme="light"] .\!text-ps-blue { color: #b8410a !important; }
 
-/* Bug D：浅底上 PS 蓝小字加深保对比度（实心 bg-ps-blue 不受影响） */
+/* Bug D：浅底上动作色小字加深保对比度（实心 bg-ps-blue 不受影响） */
 [data-theme="light"] .text-ps-blue,
 [data-theme="light"] .hover\:text-ps-blue:hover,
 [data-theme="light"] .group-hover\:text-ps-blue,
@@ -211,20 +170,32 @@
 [data-theme="light"] .hover\:border-ps-blue:hover,
 [data-theme="light"] .border-ps-blue { border-color: #b8410a !important; }
 
-/* emerald 系（成功态）补全：文字加深，实心底上白字保持 */
-[data-theme="light"] .text-emerald-400\/80 { color: #12996b !important; }
-[data-theme="light"] .text-emerald-500 { color: #12996b !important; }
-[data-theme="light"] .bg-emerald-500\/10 { background-color: rgba(18, 153, 107, 0.07) !important; }
-[data-theme="light"] .border-emerald-500\/20 { border-color: rgba(18, 153, 107, 0.2) !important; }
-
-/* Bug C：同元素同时带 hover:bg-ps-blue 与 hover:text-white 的情况（如侧栏汉堡按钮） */
-[data-theme="light"] .hover\:bg-ps-blue.hover\:text-white:hover,
-[data-theme="light"] .hover\:bg-red-600.hover\:text-white:hover,
-[data-theme="light"] .bg-emerald-600.text-white,
-[data-theme="light"] .hover\:bg-emerald-500.text-white:hover,
-[data-theme="light"] .bg-emerald-500 .text-white,
-[data-theme="light"] .bg-emerald-500.text-white,
-[data-theme="light"] .bg-emerald-600 .text-white,
-[data-theme="light"] .hover\:bg-emerald-500:hover .text-white {
-  color: #ffffff !important;
-}
+/* ============================================================================
+ * [CN-FORK] v0.5.2.87 实心动作底上的字（必须放在文件最末尾）
+ *
+ * 上面 §2/Bug D 把 text-white / text-zinc-* / text-ps-blue 整体翻成浅底深色，这些规则
+ * 的权重与 index.css 收口层里的「实心橙底 → --color-sel-fg」相同（都是两层类名），
+ * 靠源码顺序取胜的就是本文件 —— 所以实心橙芯片/主按钮内部的子元素在浅色下会被洗成
+ * 深色字（橙底配深墨字 = 糊）。这里再翻回白字，只有这一处例外。
+ * ==========================================================================*/
+[data-theme="light"] .bg-ps-blue.text-white,
+[data-theme="light"] .bg-ps-blue .text-white,
+[data-theme="light"] .hover\:bg-ps-blue.text-white:hover,
+[data-theme="light"] .hover\:bg-ps-blue:hover .text-white,
+[data-theme="light"] .hover\:bg-ps-blue:hover .hover\:text-white,
+[data-theme="light"] .btn-primary,
+[data-theme="light"] .btn-primary > *,
+[data-theme="light"] .sel-chip,
+[data-theme="light"] .sel-chip > *,
+[data-theme="light"] .sel-chip .text-white,
+[data-theme="light"] .sel-chip .text-zinc-100,
+[data-theme="light"] .sel-chip .text-zinc-300,
+[data-theme="light"] .sel-chip .text-zinc-400,
+[data-theme="light"] .sel-chip .text-zinc-500,
+[data-theme="light"] .sel-chip .text-ps-blue,
+[data-theme="light"] .nav-item.is-active,
+[data-theme="light"] .nav-item.is-active > *,
+[data-theme="light"] .nav-item.is-active .text-zinc-100,
+[data-theme="light"] .nav-item.is-active .text-zinc-300,
+[data-theme="light"] .nav-item.is-active .text-zinc-400,
+[data-theme="light"] .nav-item.is-active .text-ps-blue { color: #ffffff !important; }
