@@ -10,122 +10,121 @@
  *   剩下留在本文件的只有两类：不读 CSS 变量的实心动作底（bg-ps-blue 系列），
  *   以及刻意保持深色的叠层豁免（封面叠层、模态遮罩、实心底上的白字）。
  *
- * 浅色色板（[CN-FORK] v0.5.2.89 「一档一色」浅色档）：
- *   画布   #ffffff   侧栏 #fbfcfe   卡片 #ffffff   内嵌件 ≈#fafbfd（半透）   描线 #e7ebf3
- *   主文字 #0c1220   次要 #3a4661   辅助 #5a677f   更淡 #6b7891   占位符 #8b95a8
- *   选中底/实心按钮 #f25c05 + 白字；动作色「文字/图标」档同样用鲜橙 #f25c05
- *   状态色：成功 #12996b / 警示 #bd7f0f / 危险 #a91f22（与动作橙严格区隔）
+ * 浅色色板（[CN-FORK] v0.5.2.100 按参考页 ps5-remoteplay-pin 的蓝主色同族定制）：
+ *   画布   #ffffff   侧栏 #f6f8fa   卡片 #ffffff   内嵌件 ≈#f4f5f6（半透凹底）   描线 #d0d7de
+ *   主文字 #1f2328   次要 #454f59   辅助 #59636e   更淡 #8c959f   占位符 #8c959f
+ *   选中底/实心按钮 #2563eb + 白字；动作色「文字/图标」档用浅底可读的深蓝 #0969da
+ *   状态色：成功 #1a7f37 / 警示 #9a6700 / 危险 #cf222e（与动作蓝严格区隔）
  * ==========================================================================*/
 
 /* ── 1. 变量档翻转：index.css 的收口层与骨架层全部只读这些变量，翻一次即全站跟随 ── */
 :root[data-theme="light"] {
   color-scheme: light;
   /* 中性底 4 档 + 发丝线
-   * [CN-FORK] v0.5.2.89 内嵌件再调透（用户：浅色所有地方透明度依然不够）：tint alpha 从
-   * .042 降到 .02，行/输入框压在白底上 ≈ #fafbfd，几乎只剩一根发丝线在分层；
-   * 画布与卡片仍是纯白，rail 仍用实色（模态面板与粘顶条靠它挡内容）。 */
+   * [CN-FORK] v0.5.2.100 与深色档同构：画布/卡片纯白（「干净」不靠灰味），凹底靠半透明墨蓝压出，
+   *   侧栏用极浅一档实色压重心。rail 不能跟着调成半透明——它是模态面板与粘顶条的底。 */
   --color-canvas: #ffffff;
-  --color-rail: #fbfcfe;
+  --color-rail: #f6f8fa;
   --color-card: #ffffff;
-  --color-inset: rgba(12, 69, 155, 0.02);          /* 压在白画布/白卡片上 ≈ #fafbfd（.88 是 #f5f7fb） */
-  --color-inset-hover: rgba(12, 69, 155, 0.05);    /* 压在白画布上 ≈ #f3f6fa */
-  --color-line: #e7ebf3;
-  --color-line-hover: #ccd4e2;
-  /* 选中底（S2）：实心橙在浅底压深一档，上面的字改白 */
-  --color-sel-bg: #f25c05;
+  --color-inset: rgba(9, 30, 66, 0.045);           /* 压在白画布/白卡片上 ≈ #f4f5f6 */
+  --color-inset-hover: rgba(9, 30, 66, 0.09);      /* 压在白画布上 ≈ #eaebef */
+  --color-line: #d0d7de;
+  --color-line-hover: #afb8c1;
+  /* 选中底（S2）：实心蓝 + 白字，与深色档同值 */
+  --color-sel-bg: #2563eb;
   --color-sel-fg: #ffffff;
-  /* 动作色 */
-  --color-action: #f25c05;
-  --color-action-hover: #dd5208;
+  /* 动作色：浅底上实心底保持 #2563eb，悬停压深一档；「文字/图标」档另用更深的 #0969da 才够对比 */
+  --color-action: #2563eb;
+  --color-action-hover: #1d4ed8;
   --color-on-action: #ffffff;
-  --color-action-tint: rgba(242, 92, 5, 0.1);
-  --color-action-line: rgba(242, 92, 5, 0.35);
-  --color-ps-blue: #f25c05;
-  --color-ps-blue-glow: rgba(242, 92, 5, 0.3);
-  /* 文字阶：v0.5.2.87 按用户「字体太灰暗」整档提黑（次要 606a80 → 3a4661） */
-  --color-ps-text: #0c1220;
-  --color-ps-text-sub: #3a4661;
-  --color-ps-text-faint: #5a677f;
-  --color-placeholder: #8b95a8;
+  --color-action-tint: rgba(37, 99, 235, 0.1);
+  --color-action-line: rgba(37, 99, 235, 0.35);
+  --color-ps-blue: #0969da;
+  --color-ps-blue-glow: rgba(9, 105, 218, 0.3);
+  /* 文字阶：主档近黑，次要/辅助跟着提深（用户反馈过「浅色字体太灰暗」） */
+  --color-ps-text: #1f2328;
+  --color-ps-text-sub: #454f59;
+  --color-ps-text-faint: #59636e;
+  --color-placeholder: #8c959f;
   /* 语义色薄底与线：浅底换成实色浅染，比 rgba 更干净 */
-  --color-ok-tint: #e2f7ef;
-  --color-ok-line: rgba(18, 153, 107, 0.28);
-  --color-warn-tint: #fdf2d9;
-  --color-warn-line: rgba(189, 127, 15, 0.35);
-  --color-err: #a91f22;
-  --color-err-tint: #fdeaea;
-  --color-err-line: rgba(217, 45, 45, 0.28);
+  --color-ok-tint: #dafbe1;
+  --color-ok-line: rgba(26, 127, 55, 0.28);
+  --color-warn-tint: #fff8c5;
+  --color-warn-line: rgba(154, 103, 0, 0.32);
+  --color-err: #cf222e;
+  --color-err-tint: #ffebe9;
+  --color-err-line: rgba(207, 34, 46, 0.28);
 }
 
 :root[data-theme="light"] body {
   background-color: #ffffff !important;
-  color: #0c1220 !important;
+  color: #1f2328 !important;
 }
 
 /* 浅色下卡片加投影，弥补白底失去的层次 */
 [data-theme="light"] .glass-card {
-  box-shadow: 0 1px 2px rgba(12, 18, 32, 0.06), 0 1px 3px rgba(12, 18, 32, 0.04);
+  box-shadow: 0 1px 2px rgba(31, 35, 40, 0.06), 0 1px 3px rgba(31, 35, 40, 0.04);
 }
 [data-theme="light"] .glass-card:hover {
-  box-shadow: 0 4px 12px rgba(12, 18, 32, 0.1);
+  box-shadow: 0 4px 12px rgba(31, 35, 40, 0.1);
 }
 
 /* ── 2. 文字档重映射（上游写死在暗色档上的 text-white / text-zinc-* / 语义色文字）── */
-[data-theme="light"] .text-white { color: #0c1220 !important; }
-[data-theme="light"] .hover\:text-white:hover { color: #0c1220 !important; }
-[data-theme="light"] .text-white\/90 { color: rgba(12, 18, 32, 0.9) !important; } /* [CN-FORK] 补漏：云端仓库分类组头用了 text-white/90，此前无映射导致浅色下白字 */
-[data-theme="light"] .text-white\/80 { color: rgba(12, 18, 32, 0.8) !important; }
-[data-theme="light"] .text-white\/10 { color: rgba(12, 18, 32, 0.14) !important; }
-[data-theme="light"] .text-white\/5 { color: rgba(12, 18, 32, 0.1) !important; }
+[data-theme="light"] .text-white { color: #1f2328 !important; }
+[data-theme="light"] .hover\:text-white:hover { color: #1f2328 !important; }
+[data-theme="light"] .text-white\/90 { color: rgba(31, 35, 40, 0.9) !important; } /* [CN-FORK] 补漏：云端仓库分类组头用了 text-white/90，此前无映射导致浅色下白字 */
+[data-theme="light"] .text-white\/80 { color: rgba(31, 35, 40, 0.8) !important; }
+[data-theme="light"] .text-white\/10 { color: rgba(31, 35, 40, 0.14) !important; }
+[data-theme="light"] .text-white\/5 { color: rgba(31, 35, 40, 0.1) !important; }
 
-/* [CN-FORK] v0.5.2.87 整档提黑：原来 zinc-100~300 落在 #162033、400 在 #606a80，正文与说明都偏灰 */
+/* zinc 阶在浅色下翻成灰墨的「深档」：100~300 并到主文字，400 起是三级次要文字 */
 [data-theme="light"] .text-zinc-100,
 [data-theme="light"] .text-zinc-200,
-[data-theme="light"] .text-zinc-300 { color: #0c1220 !important; }
-[data-theme="light"] .text-zinc-400 { color: #3a4661 !important; }
-[data-theme="light"] .text-zinc-500 { color: #46536e !important; }
-[data-theme="light"] .text-zinc-600 { color: #5a677f !important; }
-[data-theme="light"] .text-zinc-700 { color: #6b7891 !important; }
-[data-theme="light"] .text-zinc-800 { color: #8a94a8 !important; }
-[data-theme="light"] .text-gray-500 { color: #46536e !important; }
+[data-theme="light"] .text-zinc-300 { color: #1f2328 !important; }
+[data-theme="light"] .text-zinc-400 { color: #454f59 !important; }
+[data-theme="light"] .text-zinc-500 { color: #59636e !important; }
+[data-theme="light"] .text-zinc-600 { color: #6e7781 !important; }
+[data-theme="light"] .text-zinc-700 { color: #8c959f !important; }
+[data-theme="light"] .text-zinc-800 { color: #afb8c1 !important; }
+[data-theme="light"] .text-gray-500 { color: #59636e !important; }
 
-/* 语义色：浅底上加深保证对比度。[CN-FORK] v0.5.2.86 警示/危险类文字回归真红（此前跟动作橙混成一种颜色） */
+/* 语义色：浅底上加深保证对比度。危险必须跟动作蓝区隔，不能混成一种颜色 */
 [data-theme="light"] .text-red-400,
 [data-theme="light"] .text-red-400\/80,
 [data-theme="light"] .text-red-500,
-[data-theme="light"] .text-red-600 { color: #a91f22 !important; }
-[data-theme="light"] .hover\:text-red-600:hover { color: #8a1a1d !important; }
-[data-theme="light"] .text-red-500\/60 { color: rgba(169, 31, 34, 0.78) !important; }
-/* [CN-FORK] v0.5.2.87 amber 色族并进暖黄后，token 值变成 #FFDD66 这类亮档，浅底必须一起压深 */
+[data-theme="light"] .text-red-600 { color: #cf222e !important; }
+[data-theme="light"] .hover\:text-red-600:hover { color: #a51d2d !important; }
+[data-theme="light"] .text-red-500\/60 { color: rgba(207, 34, 46, 0.78) !important; }
+/* [CN-FORK] v0.5.2.87 amber 色族并进暖黄后，token 值变成亮档，浅底必须一起压深 */
 [data-theme="light"] .text-yellow-400,
 [data-theme="light"] .text-amber-400,
 [data-theme="light"] .text-amber-400\/80,
-[data-theme="light"] .text-amber-500 { color: #bd7f0f !important; }
+[data-theme="light"] .text-amber-500 { color: #9a6700 !important; }
 [data-theme="light"] .text-green-400,
 [data-theme="light"] .text-emerald-400,
 [data-theme="light"] .text-emerald-400\/80,
-[data-theme="light"] .text-emerald-500 { color: #12996b !important; }
+[data-theme="light"] .text-emerald-500 { color: #1a7f37 !important; }
 /* 装饰性填充（星星/心形）保持高饱和，浅底可见 */
-[data-theme="light"] .fill-yellow-400 { fill: #e0ae27 !important; color: #e0ae27 !important; }
+[data-theme="light"] .fill-yellow-400 { fill: #b08319 !important; color: #b08319 !important; }
 [data-theme="light"] .fill-current { fill: currentColor; }
 
 /* ── 3. 少数不读 CSS 变量的实心类名 ── */
-/* [CN-FORK] v0.5.2.86 ps-blue 的字面值是深色档动作橙 #FF7A2E，白底上实心橙底 + 白字对比不足，
-   浅档实心橙底统一压到 #F25C05（与变量档 --color-sel-bg / --color-action 的浅色值保持一致） */
+/* [CN-FORK] v0.5.2.100 深色档 ps-blue 字面值已是动作蓝 #2563EB，白底上实心蓝底 + 白字对比足够，
+   浅档实心底与深色档同值（与变量档 --color-sel-bg / --color-action 保持一致） */
 [data-theme="light"] .bg-ps-blue,
-[data-theme="light"] .hover\:bg-ps-blue:hover { background-color: #f25c05 !important; }
+[data-theme="light"] .hover\:bg-ps-blue:hover { background-color: #2563eb !important; }
 /* 封面角标：叠在封面上，两种主题都保持半透深色底 */
-[data-theme="light"] .bg-ps-blue\/85 { background-color: rgba(242, 92, 5, 0.9) !important; }
+[data-theme="light"] .bg-ps-blue\/85 { background-color: rgba(37, 99, 235, 0.9) !important; }
 
 /* 移动端底部导航（bg-black/80 之一）→ 白色悬浮栏；模态遮罩保持压暗 */
 [data-theme="light"] nav.bg-black\/80 {
   background-color: rgba(255, 255, 255, 0.94) !important;
-  box-shadow: 0 -2px 16px rgba(12, 18, 32, 0.08);
+  box-shadow: 0 -2px 16px rgba(31, 35, 40, 0.08);
 }
 
 /* 模态遮罩保持暗色压底（中文规范：遮罩不随主题反色）*/
 [data-theme="light"] .fixed.inset-0 .absolute.inset-0.bg-black\/80 {
-  background-color: rgba(4, 6, 11, 0.5) !important;
+  background-color: rgba(17, 19, 23, 0.5) !important;
 }
 
 /* ── 4. 实心彩色底上的白字豁免（放在最后，靠源码顺序取胜）── */
@@ -148,7 +147,7 @@
 }
 
 /* [CN-FORK] 游戏磁贴操作按钮与角标：刻意用半透深色芯片 bg-black/55、半透蓝底角标 bg-ps-blue/85 叠在封面上，
- * 两种主题下底都是深色，白字/白图标必须保持白，不能被上面 .text-white→#0c1220 洗成近黑（否则黑底黑图标看不清）。 */
+ * 两种主题下底都是深色，白字/白图标必须保持白，不能被上面 .text-white→#1f2328 洗成近黑（否则黑底黑图标看不清）。 */
 [data-theme="light"] .bg-black\/55.text-white,
 [data-theme="light"] .bg-black\/55 .text-white {
   color: #ffffff !important;
@@ -161,26 +160,26 @@
  * ==========================================================================*/
 
 /* Bug B：带 important 修饰符的变体是独立类名（!text-white → .\!text-white），需单独映射 */
-[data-theme="light"] .\!text-white { color: #0c1220 !important; }
-[data-theme="light"] .\!text-ps-blue { color: #f25c05 !important; }
+[data-theme="light"] .\!text-white { color: #1f2328 !important; }
+[data-theme="light"] .\!text-ps-blue { color: #0969da !important; }
 
-/* Bug D：动作色「文字与图标」档。[CN-FORK] v0.5.2.89 按用户「图标本身颜色可以鲜艳一点」
-   从深阶橙 #b8410a 提到与实心底同值的鲜橙 #f25c05（图标盒的矩形底取消后，橙色只剩图标本身）。 */
+/* Bug D：动作色「文字与图标」档。浅底上实心蓝做文字偏暗，另取更深一档的链接蓝 #0969da；
+   边框/描边仍用实心底同值的 #2563eb，线条比文字要更「实」才看得出。 */
 [data-theme="light"] .text-ps-blue,
 [data-theme="light"] .hover\:text-ps-blue:hover,
 [data-theme="light"] .group-hover\:text-ps-blue,
 [data-theme="light"] .text-ps-blue\/60,
-[data-theme="light"] .text-ps-blue\/80 { color: #f25c05 !important; }
+[data-theme="light"] .text-ps-blue\/80 { color: #0969da !important; }
 [data-theme="light"] .hover\:border-ps-blue:hover,
-[data-theme="light"] .border-ps-blue { border-color: #f25c05 !important; }
+[data-theme="light"] .border-ps-blue { border-color: #2563eb !important; }
 
 /* ============================================================================
  * [CN-FORK] v0.5.2.87 实心动作底上的字（必须放在文件最末尾）
  *
  * 上面 §2/Bug D 把 text-white / text-zinc-* / text-ps-blue 整体翻成浅底深色，这些规则
- * 的权重与 index.css 收口层里的「实心橙底 → --color-sel-fg」相同（都是两层类名），
- * 靠源码顺序取胜的就是本文件 —— 所以实心橙芯片/主按钮内部的子元素在浅色下会被洗成
- * 深色字（橙底配深墨字 = 糊）。这里再翻回白字，只有这一处例外。
+ * 的权重与 index.css 收口层里的「实心动作底 → --color-sel-fg」相同（都是两层类名），
+ * 靠源码顺序取胜的就是本文件 —— 所以实心蓝芯片/主按钮内部的子元素在浅色下会被洗成
+ * 深色字（蓝底配墨字 = 糊）。这里再翻回白字，只有这一处例外。
  * ==========================================================================*/
 [data-theme="light"] .bg-ps-blue.text-white,
 [data-theme="light"] .bg-ps-blue .text-white,

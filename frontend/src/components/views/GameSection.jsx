@@ -206,7 +206,10 @@ export default function GameSection() {
       ) : list.length === 0 ? (
         <EmptyState icon={Gamepad2} title={t('game.empty', '未发现已安装或已存在的游戏')} />
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        /* [CN-FORK] v0.5.2.100 用户指令「磁贴再小三分之一，变成自适应，屏幕宽就多放几个、
+           窄就少放几个，不要固定四个」：原来是 grid-cols-2 / sm:3 / lg:4，宽屏永远卡在 4 列，
+           一块磁贴 ≈355px。现在列宽下限交给 --tile-w（PC 168 / 电视 240），列数由容器自己算。 */
+        <div className="tile-grid">
           {list.map((g) => (
             <GameCard
               key={g.tid}

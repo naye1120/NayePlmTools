@@ -15,16 +15,16 @@
 .justify-center { justify-content: center !important; }
 .ps5-bg { background-color: var(--color-canvas) !important; }
 .text-white { color: #ffffff !important; }
-/* [CN-FORK] v0.5.2.87 「一档一色」：老内核兜底字面量同步到新档（深底文字三档 + 动作色文字档） */
-.text-zinc-100 { color: #eef2fb !important; }
-.text-zinc-300 { color: #aeb9d2 !important; }
-.text-zinc-400 { color: #96a1bd !important; }
-.text-zinc-500 { color: #7f8aa8 !important; }
-/* [CN-FORK] v0.5.2.89 图标盒的矩形底取消后，橙色只剩图标本身：深色档的动作色文字/图标
- * 从偏淡的 #ff9152 提到实心橙同值 #ff7a2e（在 #0a101d 卡片上对比约 7:1，读得清）。
- * [CN-FORK] v0.5.2.99 动作橙整体转档（#ff7a2e → #ff9410），老内核兜底字面量跟着同步，
- *   否则实机上兜底那条会盖住变量档、出现两套橙。 */
-.text-ps-blue { color: #ff9410 !important; }
+/* [CN-FORK] v0.5.2.87 「一档一色」：老内核兜底字面量同步到新档（深底文字三档 + 动作色文字档）
+ * [CN-FORK] v0.5.2.100 整套转参考页灰墨档：文字阶换成 #E6EDF3/#C9D1D9/#A1A9B3/#8B949E，
+ *   动作色文字/图标档由橙转蓝（深底上取亮蓝 #58A6FF，实心 #2563EB 压深底做文字只有约 3:1，读不清） */
+.text-zinc-100 { color: #e6edf3 !important; }
+.text-zinc-300 { color: #c9d1d9 !important; }
+.text-zinc-400 { color: #a1a9b3 !important; }
+.text-zinc-500 { color: #8b949e !important; }
+/* [CN-FORK] v0.5.2.89 图标盒的矩形底取消后，动作色只剩图标本身；深档文字档必须比实心底更亮才看得清。
+ * [CN-FORK] v0.5.2.100 动作色转蓝，老内核兜底字面量跟着同步，否则实机上这条会盖住变量档、出现两套主色。 */
+.text-ps-blue { color: #58a6ff !important; }
 @media (min-width: 768px) {
   .md\:hidden { display: none !important; }
   .md\:flex { display: flex !important; }
@@ -81,60 +81,57 @@
    *   inset   内嵌件底（图标块、输入框、行、开关槽、薄面板）
    *   inset-hover 只是 inset 的悬停反馈，不算第 5 档
    *   line / line-hover 两根发丝线
-   * 深色档按「主内容区再沉一档」把 card/inset/rail/line 整体压深。
+   * [CN-FORK] v0.5.2.100 整套换成参考页 ps5-remoteplay-pin 的「灰墨 + 蓝主色」：中性底走灰墨阶
+   *   （画布 #111317 / 侧栏与卡片 #1B1F25 / 内嵌件凹底 / 线 #30363D），动作色走蓝 #2563EB。
    * 浅色档在 theme/light-theme.css 的 :root[data-theme="light"] 整组翻转，
    * 下方样式与收口层全部只读这些变量，因此两套主题共用同一套规则。
    * ========================================================================*/
 
   /* ── 中性底 4 档 + 发丝线 ──
-   * [CN-FORK] v0.5.2.89 内嵌件再收一档：.88 的 tint 压在卡片上仍有 #0c1322 这块灰，
-   *   「管理 Payload」三段卡片里的行看不出错差别，这里把 alpha 再降一半，
-   *   行/输入框几乎与卡片同色，层次只由发丝线承担；压在画布上更是接近画布。
+   * [CN-FORK] v0.5.2.100 整套换成参考页 ps5-remoteplay-pin 的「灰墨」档（用户选定「整套照搬（含蓝主色）」）：
+   *   画布 #111317、侧栏与卡片 #1B1F25、内嵌件取参考页的凹陷底 #0D1117 一族、发丝线 #30363D。
+   *   inset 仍写成半透明：它同时坐在画布和卡片上，用 alpha 压暗才能在两种容器上都保持「凹进去」一档。
    *   rail 必须保持实色：它是模态面板 .glass-panel 与粘顶条的浮层底，透明会透出滚过的内容。 */
-  --color-canvas: #04060b;
-  --color-rail: #05080f;
-  --color-card: #0a101d;
-  --color-inset: rgba(74, 106, 181, 0.018);        /* 压在卡片上 ≈ #0b1220（.88 是 #0c1322、.87 是 #0f1728） */
-  --color-inset-hover: rgba(86, 120, 193, 0.07);   /* 压在卡片上 ≈ #0e1727，悬停仍靠亮度反馈 */
-  --color-line: #1b2438;
-  --color-line-hover: #2b3550;
+  --color-canvas: #111317;
+  --color-rail: #1b1f25;
+  --color-card: #1b1f25;
+  --color-inset: rgba(8, 10, 14, 0.3);             /* 压在卡片 #1B1F25 上 ≈ #151920，压在画布上 ≈ #0E1014 */
+  --color-inset-hover: rgba(203, 217, 230, 0.08);  /* 压在画布上 ≈ #202329、卡片上 ≈ #202328，比凹底明显提亮 */
+  --color-line: #30363d;
+  --color-line-hover: #444c56;
 
   /* ── 选中底（第 5 档，唯一）：S2 = 实心动作色芯片 ── */
-  --color-sel-bg: #ff9410;
-  --color-sel-fg: #1b0e02;
+  --color-sel-bg: #2563eb;
+  --color-sel-fg: #ffffff;
 
-  /* ── 动作色：实心档 / 悬停 / 橙底上的字色 / 薄染 / 文字档 ──
-   * --color-ps-blue 是「橙色的字与图标」，浅底要翻成够深的橙才读得清；
-   * --color-action 是「橙色的底」，两个角色分开，别再混用。
-   * [CN-FORK] v0.5.2.89 图标盒的矩形底取消后，橙色只剩图标本身，深档文字档从 #ff9152
-   * 提到实心橙同值的 #ff7a2e（在 #0a101d 卡片上对比约 7:1，够读）。
-   * [CN-FORK] v0.5.2.99 用户指主页整块橙色按钮发棕，动作橙从 #ff7a2e 转档为 #ff9410：
-   *   色相 21.8°→33.2°（离开砖红/赭橙那段，落进正橙），蓝通道 46→16（把压在深底上
-   *   发闷的那点灰味去掉，满饱和）。橙底深棕字与深底橙字两档对比都只升不降：
-   *   实心块 vs #0a101d 卡片 8.6:1、#1b0e02 字 vs 橙底 8.7:1。
-   *   浅色档（theme/light-theme.css）本轮未动：它要压深才够白底对比，仍是 #f25c05。 */
-  --color-action: #ff9410;
-  --color-action-hover: #ffa838;
-  --color-on-action: #1b0e02;
-  --color-action-tint: rgba(255, 148, 16, 0.10);
-  --color-action-line: rgba(255, 148, 16, 0.32);
-  --color-ps-blue: #ff9410;
-  --color-ps-blue-glow: rgba(255, 148, 16, 0.4);
+  /* ── 动作色：实心档 / 悬停 / 实心底上的字色 / 薄染 / 文字档 ──
+   * --color-ps-blue 是「主色的字与图标」，深底上要提亮一档才读得清（实心底仍用 #2563EB）；
+   * --color-action 是「主色的底」，两个角色分开，别再混用。
+   * [CN-FORK] v0.5.2.100 由亮橙 #FF9410 整套换成参考页的动作蓝 #2563EB（用户明确选择含蓝主色，
+   *   旧「主色不得为灰或蓝」约束本轮由用户解除）。深档悬停取亮一档 #3B82F6，浅档取深一档（见 light-theme.css）。 */
+  --color-action: #2563eb;
+  --color-action-hover: #3b82f6;
+  --color-on-action: #ffffff;
+  --color-action-tint: rgba(37, 99, 235, 0.16);
+  --color-action-line: rgba(37, 99, 235, 0.45);
+  --color-ps-blue: #58a6ff;
+  --color-ps-blue-glow: rgba(37, 99, 235, 0.4);
 
   /* ── 文字阶：主 / 次要 / 辅助 / 占位符 ── */
-  --color-ps-text: #eef2fb;
-  --color-ps-text-sub: #96a1bd;
-  --color-ps-text-faint: #7f8aa8;
-  --color-placeholder: #7f8aa8;
+  --color-ps-text: #e6edf3;
+  --color-ps-text-sub: #a1a9b3;
+  --color-ps-text-faint: #8b949e;
+  --color-placeholder: #6e7681;
 
-  /* ── 语义色：一个语义一档薄底 + 一根线（文字档由各视图的 text-emerald/red 类名负责）── */
-  --color-ok-tint: rgba(46, 230, 168, 0.12);
-  --color-ok-line: rgba(46, 230, 168, 0.3);
-  --color-warn-tint: rgba(255, 216, 77, 0.12);
-  --color-warn-line: rgba(255, 216, 77, 0.32);
-  --color-err: #ff6b6b;
-  --color-err-tint: rgba(255, 107, 107, 0.12);
-  --color-err-line: rgba(255, 107, 107, 0.3);
+  /* ── 语义色：一个语义一档薄底 + 一根线（文字档由各视图的 text-emerald/red 类名负责）──
+   * [CN-FORK] v0.5.2.100 状态色取参考页：绿 #3FB950 / 金 #D29922 / 红 #F87171 */
+  --color-ok-tint: rgba(63, 185, 80, 0.15);
+  --color-ok-line: rgba(63, 185, 80, 0.4);
+  --color-warn-tint: rgba(210, 153, 34, 0.16);
+  --color-warn-line: rgba(210, 153, 34, 0.42);
+  --color-err: #f87171;
+  --color-err-tint: rgba(248, 113, 113, 0.15);
+  --color-err-line: rgba(248, 113, 113, 0.38);
 
   --font-inter: "Inter", system-ui, sans-serif;
 
@@ -154,6 +151,9 @@
    * 记一笔代价：33px 低于 iOS 44pt / Material 48dp 的触屏建议值，拇指命中率会降。 */
   --ctl-h: 2.0625rem; /* 33px：按钮、输入框、图标钮的最小边长 */
   --nav-h: 2.75rem;   /* 44px：菜单项自己一档，不跟着 --ctl-h 降（用户明确「菜单除外」） */
+  /* [CN-FORK] v0.5.2.100 游戏磁贴列宽下限（用户：磁贴再小三分之一、别固定四列）。
+   * 只定「最窄一档」，实际每行放几块由容器宽度决定 —— 宽屏自动多放、窄屏自动少放。 */
+  --tile-w: 10.5rem;  /* 168px：PC/手机档一列下限 */
   /* [CN-FORK] v0.5.2.99 手机底部栏高度：原 5rem(80px) 按用户要求减三分之一 → 53px。
    * 这一档被三处读：栏本身、pkg 页给 iframe 的视口高扣减、正文底部留白，所以立令牌不写死。 */
   --bar-h: 3.3333rem;
@@ -170,6 +170,7 @@ html[data-device="ps5"] {
   --ctl-h: 3.1875rem; /* 51px：同比例降四分之一（原 68px） */
   --nav-h: 4.25rem;   /* 68px：电视端菜单维持原样（这一档此前是 binding 的，侧栏项靠它定高） */
   --row-h: 5.5rem;  /* 88px */
+  --tile-w: 15rem;    /* 240px：电视端磁贴一档（正文列约 1470px 时正好 6 列，比原来固定 4 列的 ≈355px 小三分之一） */
   --switch-w: 5.5rem;
   --switch-h: 2.75rem;
   --knob-d: 2.125rem;
@@ -255,11 +256,13 @@ body {
 }
 
 /* [CN-FORK] 统一板块容器：现代扁平卡片（固定圆角/描边/板块头），颜色走 CSS 变量双主题自动跟随
- * [CN-FORK] v0.5.2.90 底色从 card 档并到 inset 档：`.panel-card` 曾全站只有「管理 Payload」在用，
- * 其它页的板块都是手写 bg-white/[0.03]（收口后即 inset），同一角色两套底（深档 #0a101d vs #05080e）。
- * 现按用户指定统一到 inset，card 档只留给 bg-ps-card 这类字面容器。 */
+ * [CN-FORK] v0.5.2.90 底色曾从 card 档并到 inset 档（当时 inset 是「比卡片略深一点的染色」，两档差不到 4 个色阶，
+ *   用户要的是全站更平更透）。
+ * [CN-FORK] v0.5.2.100 换灰墨档后重新分档：参考页的层级是「页面底 #111317 → 卡片 #1B1F25（浮起）→
+ *   内嵌件 #0D1117 一族（凹下）」，板块与行必须是两个方向，所以 `.panel-card`（= ui/Section 的唯一形状）
+ *   回到 card 档，行/输入框/徽章留在 inset 档。要退回 .90 那种「板块与页面几乎同色」只改这一行即可。 */
 .panel-card {
-  background: var(--color-inset);
+  background: var(--color-card);
   border: 1px solid var(--color-line);
   border-radius: 0.75rem;
   overflow: hidden;
@@ -277,7 +280,7 @@ body {
 /* ── 焦点可见（[CN-FORK] v0.5.2.92）──
  * 原来这里是 `button:focus { outline: none }` 一行通杀，等于把键盘与遥控器的
  * 「我现在在哪」整个抹掉了——PS5 端只有方向键能操作，看不见焦点就寸步难行。
- * 现在改成：鼠标点按不给环（:focus-visible 之外一律去描边），键盘/遥控器给 2px 实心橙环。
+ * 现在改成：鼠标点按不给环（:focus-visible 之外一律去描边），键盘/遥控器给 2px 实心动作色环。
  * 老内核 WebKit 不认 :focus-visible，电视端由 utils/spatialNav.js 手动挂 .is-focus，
  * 两条路都指向同一个动作色，不引入第 6 种底。 */
 button:focus,
@@ -383,9 +386,10 @@ h1, h2, h3, h4 {
  * 类名重映射，PS5 老内核 WebKit 上也能整组跟随主题；上游组件不引用这些类名，
  * 零冲突、零侵入。样式一律纯色，无渐变（遵循「禁用渐变」规范）。
  *
- * v0.5.2.87 按「一档一色」契约调整两处：侧栏选中态从「藏蓝底 + 左侧橙竖条」改为
- * S2（实心橙芯片 + 深墨字），与开关/分段标签的选中态用同一个变量；主按钮文字
- * 从写死 #ffffff 改为 --color-on-action（深档墨字、浅档白字）。
+ * v0.5.2.87 按「一档一色」契约调整两处：侧栏选中态从「深色底 + 左侧竖条」改为
+ * S2（实心动作色芯片 + 芯片字色），与开关/分段标签的选中态用同一个变量；主按钮文字
+ * 从写死 #ffffff 改为 --color-on-action（当时深档墨字、浅档白字；`.100` 动作色转蓝后
+ * 两档都回到白字，变量仍保留，改的是值不是角色）。
  * ==========================================================================*/
 
 /* ── 侧栏：分组头（原「主功能 / 设备 / 系统」这类小标题）── */
@@ -589,6 +593,16 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 }
 .segmented-item { min-height: var(--ctl-h); padding: 0 0.6rem; }
 
+/* 游戏磁贴宫格（[CN-FORK] v0.5.2.100）：列数自适应，不再固定 grid-cols-2/3/4。
+ * repeat(auto-fill, minmax(--tile-w, 1fr)) 的意思是「先按下限数能放几列，再把剩余宽度平分给这些列」，
+ * 所以宽屏自然多放、窄屏自然少放；电视端只是把下限抬到 240px（--tile-w 的另一档）。
+ * 用 grid 不用 flex：PS5 老内核不支持 flex 盒的 gap，而 grid 的 gap 是支持的。 */
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile-w), 1fr));
+  gap: 0.45rem;
+}
+
 /* 实心：页面唯一的「亮点」，一个视图里最多一个主操作。
  * 与文件末尾的 .sel-chip 同档同色（选中态与主按钮共用 S2），这里只补盒模型 */
 .btn-primary {
@@ -610,7 +624,7 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 .btn-ghost { background-color: transparent; color: var(--color-ps-text-sub); }
 .btn-ghost:hover:not(:disabled) { background-color: var(--color-inset); color: var(--color-ps-text); }
 
-/* 危险：描边形态的语义配色（停止/删除类），与主色橙明显区隔；实心红留给确认弹窗内使用 */
+/* 危险：描边形态的语义配色（停止/删除类），与动作蓝明显区隔；实心红留给确认弹窗内使用 */
 .btn-danger {
   background-color: var(--color-inset);
   border-color: var(--color-err-line);
@@ -641,6 +655,11 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
  * .field-btn-pad / .field-btn  把复制钮嵌进框内右端（原来钮在框外，三个格子看不出谁是谁的），
  *              点击后 .is-copied 用动作色实心一档，让「已经复制到了」当场看得见。 */
 .field-ro { border-style: dashed; color: var(--color-ps-text-sub); }
+/* [CN-FORK] v0.5.2.100 可编辑档：用户要求「可编辑的两个文本框字体颜色做个区分」。
+ * 只读那两格已经是虚线边 + 辅助字色，可编辑这档再往「动作色文字」靠一档（深档亮蓝 #58A6FF、
+ * 浅档 #0969da 都由 --color-ps-blue 自己翻），三格并排时谁能动一眼分得清。
+ * 必须写在 .field 之后：同权重靠源码顺序取胜。 */
+.field-edit { color: var(--color-ps-blue); }
 .field-btn-pad { padding-right: 2.3rem; }
 .field-btn {
   position: absolute;
@@ -739,8 +758,8 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 .border-ps-border { border-color: var(--color-line) !important; }
 .text-ps-text { color: var(--color-ps-text) !important; }
 
-/* ── 实心动作底上的文字（开关旋钮、实心芯片、hover 变橙底的按钮）：字色跟 --color-sel-fg 走，
- * 深色档是墨字、浅色档是白字，一处变量翻转两档都到位 ── */
+/* ── 实心动作底上的文字（开关旋钮、实心芯片、hover 变动作色底的按钮）：字色跟 --color-sel-fg 走，
+ * 深色档是白字、浅色档也是白字（蓝底配墨字会糊），两档都由变量给出 ── */
 .bg-ps-blue.text-white,
 .bg-ps-blue .text-white,
 .bg-ps-blue .text-zinc-100,

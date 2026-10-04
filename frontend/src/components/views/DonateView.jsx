@@ -108,7 +108,7 @@ const DonateView = ({ version }) => {
           <dt className="text-zinc-500">{t("donate.fork_upstream_version", "Upstream version")}</dt>
           <dd className="text-white font-semibold">v0.5.2</dd>
           <dt className="text-zinc-500">{t("donate.fork_version", "This fork")}</dt>
-          <dd className="text-white font-semibold">v{version || '0.5.2.99'}</dd>
+          <dd className="text-white font-semibold">v{version || '0.5.2.100'}</dd>
         </dl>
         <p className="text-xs text-zinc-500 leading-relaxed">
           {t("donate.fork_donate_note", "Donations through the button above go to the original author (itsPLK), not this fork.")}

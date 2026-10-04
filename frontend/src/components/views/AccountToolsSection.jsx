@@ -16,6 +16,9 @@ import LoadingState from '../ui/LoadingState'
  *   · 「登入」不再走「只读预览 → 手打 SIGNIN」那道网页闸，点击即执行；服务端的
  *     confirm=online 这道独立的门保留，所以真正的防误写还在，少的只是弹窗这一步。
  *   · PIN 有效期从 300 秒改 180 秒（见 src/psaccounts/accounts.c 的 PIN_TTL_SEC）。
+ * [CN-FORK] v0.5.2.100 按用户指令再收三项：登出/激活这类操作前的确认弹窗全部去掉（点击即发，
+ *   结果仍用 Toast 报）；板块顶部那段说明文字与「欠 N 条原值记录」那句不再显示；
+ *   两个可编辑框（十六进制 ID / 账号显示名）的字色单独成一档，与只读的换算结果一眼分开。
  *
  * 卡片只绑**当前前台账号**（源工程如此，PIN 也只对前台账号生效）：要操作别的账号，
  * 先在主机上切过去再点刷新。/api/accounts 回来的 16 槽清单在这里只用来挑出那一个。 */
@@ -23,6 +26,9 @@ import LoadingState from '../ui/LoadingState'
 const BTN_PRIMARY = 'btn btn-primary'
 const BTN_GHOST = 'btn btn-outline'
 const INPUT_CLS = 'field'
+/* [CN-FORK] v0.5.2.100 可编辑框一档字色（.field-edit，见 index.css）：与只读换算结果（.field-ro 的
+ * 辅助字色 + 虚线边）拉开明显对比，用户要求「可编辑的两个文本框字体颜色做个区分」。 */
+const INPUT_EDIT = 'field field-edit'
 /* 内嵌卡底：与同页温控的 FanControlCard 同一档 */
 const SUB_CARD = 'bg-black/20 border border-white/10 rounded-xl p-4'
 
@@ -215,7 +221,7 @@ function CropModal({ show, src, onClose, onConfirm, busy, t }) {
   )
 }
 
-export default function AccountToolsSection({ showConfirm, addToast }) {
+export default function AccountToolsSection({ addToast }) {
   const { t } = useTranslation()
   const notify = useCallback((text, type = 'success') => addToast(text, type), [addToast])
 
@@ -427,20 +433,16 @@ export default function AccountToolsSection({ showConfirm, addToast }) {
     })()
   }
 
+  /* [CN-FORK] v0.5.2.100 用户指令「登入登出 激活等操作的大提示全不要」：确认弹窗去掉，点击即发。
+   * 回滚能力不在这个弹窗里——服务端写注册表前照旧逐键抄原值，登出照旧把 auth.dat / config.dat
+   * 抄进备份层再拿掉，所以少了的只是那一次打断。结果仍由 Toast 报（含槽位与记录条数）。 */
   const doSignout = () => {
     if (!acc) return
-    const pend = acc.pendingRecords || 0
-    const slotTxt = acc.slot ? t('acctools.slot_of', '（槽 {{slot}}）', { slot: acc.slot }) : ''
-    const head = pend
-      ? t('acctools.signout_head_pend', '登出 {{name}}：只回滚它名下 {{n}} 条原值记录{{slot}}，其他账号的待还原记录不动。', { name: acc.name, n: pend, slot: slotTxt })
-      : t('acctools.signout_head_none', '登出 {{name}}{{slot}}：它名下没有本工具的记录，说明这次登录不是我们写的。将按实测基线写回「已激活未登录」，并把 auth.dat / config.dat 抄进备份层后拿掉（写前逐键抄原值，还原时能放回来）。', { name: acc.name, slot: slotTxt })
-    showConfirm(t('acctools.signout', '登出'), `${head}\n\n${t('acctools.confirm_q', '确认？')}`, () => {
-      setBusy('signout')
-      ;(async () => {
-        await runAction(`/api/accounts/signout?user=${acc.userId}`, t('acctools.signout_fail', '登出失败'))
-        setBusy('')
-      })()
-    }, true)
+    setBusy('signout')
+    ;(async () => {
+      await runAction(`/api/accounts/signout?user=${acc.userId}`, t('acctools.signout_fail', '登出失败'))
+      setBusy('')
+    })()
   }
 
   /* [CN-FORK] v0.5.2.99 用户要求「点登入不用弹窗，直接进行操作」：网页侧的预览 + 手打口令
@@ -576,9 +578,8 @@ export default function AccountToolsSection({ showConfirm, addToast }) {
         </button>
       )}
     >
-      <p className="text-[14px] text-zinc-400 max-w-2xl">
-        {t('acctools.desc', '前台账号的离线激活 / 登录状态、账号 ID 三种格式与远程游玩配对 PIN。写注册表前逐键抄原值，点「登出」就按这批记录回滚。')}
-      </p>
+      {/* [CN-FORK] v0.5.2.100 用户指令：这段板块说明文字取消（acctools.desc 词条留在语言包里，
+          只是不再渲染）。要看行为差异去 HANDOVER §2.1。 */}
 
       {/* 源工程页顶的同步提示：账号卡与 PIN 卡都只绑前台账号，这行是当场证明「网页看到的是主机现在的状态」 */}
       <p className="text-[12px] text-zinc-500">{bootHint}</p>
@@ -740,7 +741,7 @@ export default function AccountToolsSection({ showConfirm, addToast }) {
                       点一下钮本身变动作色 + 图标换成勾，1.4 秒后复位 */}
                   <div className="relative flex-1 min-w-0">
                     <input
-                      className={cn(INPUT_CLS, 'field-btn-pad')}
+                      className={cn(INPUT_EDIT, 'field-btn-pad')}
                       value={hexId}
                       spellCheck={false}
                       onChange={(e) => onHexChange(e.target.value)}
@@ -780,7 +781,7 @@ export default function AccountToolsSection({ showConfirm, addToast }) {
                   {t('acctools.name_field', '账号显示名 · 可编辑')}
                 </div>
                 <input
-                  className={INPUT_CLS}
+                  className={INPUT_EDIT}
                   value={renameVal}
                   spellCheck={false}
                   onChange={(e) => setRenameVal(e.target.value)}
@@ -793,11 +794,9 @@ export default function AccountToolsSection({ showConfirm, addToast }) {
               </button>
             </div>
 
+            {/* [CN-FORK] v0.5.2.100 「欠 N 条原值记录」那句按用户指令不再渲染（只留绑定关系这句）。 */}
             <p className="text-[12px] text-zinc-500 mt-3">
               {t('acctools.acct_hint', '本卡片绑定当前前台账号（PIN 也只对它生效）—— 要操作别的账号，先在主机上切过去再刷新。')}
-              {acc.pendingRecords
-                ? t('acctools.pending_records', ' 本工具欠它 {{n}} 条原值记录。', { n: acc.pendingRecords })
-                : ''}
             </p>
           </>
         )}

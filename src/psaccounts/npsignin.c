@@ -35,8 +35,11 @@ int32_t sceRegMgrGetInt(uint32_t key, int32_t *value);
 int32_t sceRegMgrGetStr(uint32_t key, char *value, size_t size);
 int32_t sceRegMgrGetBin(uint32_t key, void *value, size_t size);
 
-/* 只读：用于改名后核对壳层（UserService）那一层的名字是否跟着变。 */
+/* 改名要动两层：注册表（持久）+ UserService（壳层「切换用户」列表实际显示的那一份）。
+ * SDK 头里没有这两个原型，但 libSceUserService 的两个导出符号都在（与 Get 同址的弱桩），
+ * 项目里的 extern 声明与 accounts.c/sys_lite.c 的 Get 保持同一签名。 */
 int sceUserServiceGetUserName(int32_t user_id, char *name, size_t max_size);
+int sceUserServiceSetUserName(int32_t user_id, const char *name, size_t max_size);
 
 
 /* ------------------------------------------------------------------ *
@@ -598,20 +601,38 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
     return -1;
   }
 
-  /* uid↔槽一致性：壳层显示的是 UserService 的名字，这里只读、只报告，
-   * 不在没有官方 Set 接口验证过的情况下盲写第二层。 */
+  /* 第二层：UserService 才是壳层「切换用户」列表实际显示的那一份。只写注册表会出现
+   * 「简介里改了、切换列表和重启后都还是旧名」，所以这里补一次 Set 再回读。
+   * 用定长零填充缓冲 + max_size=17（与 SysReg 的 STR(17) 对称）：Set 的第三个参数
+   * 无论按「容量」还是按「拷贝长度」解释，都不会读到越界字节。 */
   {
+    char buf[RENAME_NAME_BYTES];
     char shell[24] = {0};
-    int us = sceUserServiceGetUserName((int32_t)uid, shell, sizeof(shell));
-    if(us == 0 && strcmp(shell, new_name) != 0)
+    int set_rc, get_rc;
+
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "%s", new_name);
+    set_rc = sceUserServiceSetUserName((int32_t)uid, buf, sizeof(buf));
+    get_rc = sceUserServiceGetUserName((int32_t)uid, shell, sizeof(shell));
+
+    if(set_rc == 0 && get_rc == 0 && !strcmp(shell, new_name))
       snprintf(out->message, sizeof(out->message),
-               "slot %d renamed %s -> %s (verified). NOTE: UserService still "
-               "reports \"%s\" — reboot to see it; the old value is in the "
-               "backup log", out->slot, old_name, new_name, shell);
+               "slot %d renamed %s -> %s (registry + UserService both verified)",
+               out->slot, old_name, new_name);
+    else if(set_rc != 0)
+      snprintf(out->message, sizeof(out->message),
+               "slot %d renamed %s -> %s in registry (verified), but UserService "
+               "Set refused (0x%x) — the shell user list may keep the old name; "
+               "original value is in the backup log",
+               out->slot, old_name, new_name, (unsigned)set_rc);
     else
       snprintf(out->message, sizeof(out->message),
-               "slot %d renamed %s -> %s (registry + UserService agree)",
-               out->slot, old_name, new_name);
+               "slot %d renamed %s -> %s in registry (verified); UserService "
+               "reads \"%s\" (get 0x%x) — shell layer NOT confirmed, use Restore "
+               "if it looks wrong",
+               out->slot, old_name, new_name,
+               (get_rc == 0 && shell[0]) ? shell : "(unreadable)",
+               (unsigned)get_rc);
   }
 
   out->ok = 1;

@@ -5,9 +5,9 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-- 版本：`MENU_VERSION = 0.5.2.99`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
-- 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**，并作为 `.88`–`.99` 这批的**正式出包版**（此前 .88–.98 只本地提交、未打包；旧的现行包是 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `87e6ad3`，非 DEV）。.85/.86 是中间态，从未单独出包。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
-- 近期定型（.64 → .99）：
+- 版本：`MENU_VERSION = 0.5.2.100`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+- 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**，并作为这批的正式出包版。旧的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）已过期。`.85`/`.86` 是中间态，从未单独出包。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
+- 近期定型（.64 → .100）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
   - `.65` 「默认云端仓库」总开关 `DEFAULT_REPO_ENABLED`（现默认关，可彻底停用内置官方源）
   - `.66` 界面文案精简（更新日志压缩为一行摘要）
@@ -45,6 +45,14 @@
 > - `.99` **动作橙转档**（用户：「主页的棕色调整为橙色」，圈定「整块橙色按钮本身」）：`#ff7a2e` → `#ff9410`（色相 21.8°→33.2°、B 46→16，饱和到底）。触点 = `tailwind.config.js`（`ps-blue`/`ps-blue-glow`/`vividOrange` 300/400/500）+ `index.css`（`--color-sel-bg`/`--color-action`/`-hover`/`--color-on-action`/`--color-action-tint`/`-line`/`--color-ps-blue`/`-glow` + `index.css:23` 老内核兜底字面量）+ `AutoloadOverlay.jsx:138` 阴影字面量。块体对 `#0a101d` 8.6:1、`#1b0e02` 标签字对块 8.7:1。**4+1 档令牌契约与 `light-theme.css` 一律未动**（浅色实心档仍是 `#F25C05`）。
 > - `.99` 账号板块 9 处实测修订：登入去弹窗、PIN 180s、「重命名」→「修改」、自动登录标记改暖黄特殊色、PIN 说明 `break-all`→`break-words`（不再从词中间换行）、复制按钮紧跟 PIN 数字且复制的是**无空格原始 8 位**、同步按钮核实为「已激活且十六进制不同 → 写注册表 activate」（与原版一致），并让 PIN 卡片账号行跟随换算、三种账号 ID 的复制按钮移到格子内部且点击后实心反馈、可编辑框与只读框以 `.field-ro` 虚线区分、头像框加 `Camera` 角标提示可点。
 > - `.99` **页面容器约定**（写进 `ui/PageHead.jsx` 头注释，新页面照抄）：根节点一律 `<div className="space-y-6">`，**不限页面宽、不居中、不另加页底内边距**，页头永远吃默认出血（`bleed` 开关已删，因为限宽会让页头内缩、和相邻菜单页对不齐）；要窄阅读列就限板块内部。浮层/粘顶/遮罩底**必须实色**（`--color-rail` / `--color-card`，`bg-black/80` 那类半透明会在滚动内容后面透出来）。尺度不写死：底部栏高度读 `--bar-h`。
+
+> **`.100`（2026-10-05，正式出包版）**
+> - `.100` **整套配色照搬用户给的参考页（灰墨 + 蓝主色）**（用户：「按这个颜色重新设计页面的颜色风格，同时根据这个颜色风格定制浅色风格界面，只改颜色」；追问确认口径 = **「整套照搬（含蓝主色）」**）。**这一条解除了 fork 自 `.85` 起的硬约束「主色（动作色）不得为灰或蓝」** —— 那是当时的观感取向，不是技术限制，现由用户明确改判；后续别再拿旧禁令回退这次转档。中性底从墨蓝阶改灰墨阶（`--color-canvas #111317` / `rail`=`card` `#1b1f25` / `line #30363d` / `inset rgba(8,10,14,.3)`，浅档画布白、`rail #f6f8fa`、`line #d0d7de`），动作色 `#ff9410` → **`#2563eb`**（深档 hover `#3b82f6`、浅档 hover `#1d4ed8`），状态色跟参考页（绿 `#3fb950`、金 `#d29922`、红 `#f87171`；浅档 `#1a7f37`/`#9a6700`/`#cf222e`），文字阶 `#e6edf3`/`#c9d1d9`/`#a1a9b3`/`#8b949e`。**触点仍只三层文件**：`tailwind.config.js`（`navyInk`/`vividOrange`/`lime`/`warmYellow`/`coral` 五条色阶 + `ps-*` 字面量；**标识符一个没改**，`vividOrange` 这个名字现在装的是蓝）+ `index.css`（LEGACY 兜底字面量 + `:root` 深档 + `html[data-device="ps5"]`）+ `theme/light-theme.css`（整文件重写：变量翻转 + 上游暗色工具类重映射 + 实心底白字豁免清单照留）+ `AutoloadOverlay.jsx:138` 阴影 rgba。**「4+1 档一色」契约与禁用渐变照旧**（参考页的 `linear-gradient` 进度条与金色渐变徽标**没有**照搬）。深档「主色的字与图标」单独成一档 `#58a6ff`（实心 `#2563eb` 压 `#111317` 只约 3:1，做文字读不清；浅档对应 `#0969da`）—— `.text-ps-blue` 永远吃 `index.css:27` 那条 LEGACY `!important` 字面量，只改变量不生效。
+> - `.100` **`.panel-card` 底色退回 `card` 档**（`.90` 那次并到 `inset` 的前提是「半透明 tint 双层叠加会自己叠出第二档」；新色板是实色叠加，叠不出层次）。现在的角色表：**板块容器 = `card`（`#1b1f25` 浮起），板块内的行/输入框/徽章 = `inset`（凹下）**，与参考页「画布 → 卡片 → 内嵌件」三层同构。要退回 `.90` 的平档只改 `index.css` 的 `.panel-card` 一行。
+> - `.100` **改名不彻底的根因与修法**：原本只写 SysReg 槽 `REG_KEY_USERNAME + (slot-1)*65536`，而壳层「切换用户」列表与重启后显示读的是 **UserService** 那份，所以简介页名字变了、切换列表和重启后还是旧的。`src/psaccounts/npsignin.c` 补第二层：`sceUserServiceSetUserName(uid, name, len)` 后立刻 `sceUserServiceGetUserName` 回读比对，两种结果都进 `message`（Set 被拒时如实报「注册表已改、壳层可能仍显旧名」，不谎报成功）。SDK 没有这两个函数的头文件原型，按仓库既有惯例自声明 `extern`；符号在 `/opt/ps5-payload-sdk/target/lib/libSceUserService.so` 里 `nm -D` 查证存在。**实机是否真接受 Set 未经硬件验证**，接口失败会走 message 报出来。
+> - `.100` **账号操作去确认弹窗**（用户：「登入登出 激活等操作的大提示全不要」；口径确认 = 去**操作前**的确认弹窗，非去反馈）：`AccountToolsSection` 不再调 `showConfirm`，登出/激活/反激活点击即发请求；**操作后的 Toast 保留**。`CommonEntriesView` 因此不再向下传 `showConfirm`。服务端 `confirm=online` 那道独立闸门照旧。
+> - `.100` **游戏磁贴改自适应、尺寸降三分之一**（用户：「再小三分之一左右，变成自适应，屏幕宽就多放、窄就少放，别固定四个」）：`GameSection.jsx` 宫格容器从 `grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3` 换成新增骨架类 **`.tile-grid`**（`repeat(auto-fill, minmax(var(--tile-w), 1fr))`），列宽下限立令牌：`:root` `--tile-w: 10.5rem`(168px)、`html[data-device="ps5"]` `15rem`(240px)。电视档正文列约 1470px → 6 列 ≈245px（原固定 4 列 ≈355px）。**`grid` 的 `gap` 老内核支持**，不违反 flex gap 禁令。
+> - `.100` **账号板块文案与可编辑框配色**（用户：「说明文字取消」「『本公举欠他21条原值记录』这几个字也不要」「可编辑的两个文本框字体颜色做个区分」）：板块顶部 `<p>`（词条 `acctools.desc`）与 `pending_records` 片段不再渲染（**词条保留在语言包，只删渲染**）；两格可编辑输入框（十六进制 ID / 账号显示名）加 `.field-edit`（字色走 `--color-ps-blue`，深 `#58a6ff` / 浅 `#0969da`），只读的换算结果两格仍走 `.field-ro`（虚线边 + 辅助字色），三格并排时谁能动一眼分得清。
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |

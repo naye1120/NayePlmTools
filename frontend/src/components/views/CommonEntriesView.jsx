@@ -387,8 +387,9 @@ export default function CommonEntriesView({ showConfirm, addToast }) {
 
       {/* [CN-FORK] v0.5.2.99 板块二 PS5 Account Tools：账号离线激活 / 登入登出 / 账号 ID /
           头像 / 远程游玩配对 PIN。源码已并入本 payload，接口走同源 /api/…，界面是本页原生的
-          Section 板块（不再是第二个进程 + iframe），所以确认弹窗与 Toast 沿用全站规范。 */}
-      <AccountToolsSection showConfirm={showConfirm} addToast={addToast} />
+          Section 板块（不再是第二个进程 + iframe）。
+          [CN-FORK] v0.5.2.100 用户指令：这些操作不再弹确认框，所以这个板块不再接 showConfirm。 */}
+      <AccountToolsSection addToast={addToast} />
 
       {/* [CN-FORK] 板块三 温控管理：读 /thermal_stats 展示 CPU/GPU/SSD 温度 + 风扇 */}
       <ThermalSection />
