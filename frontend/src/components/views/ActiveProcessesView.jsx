@@ -76,7 +76,9 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
         } catch (e) {
           addToast(t("active_processes.kill_error", "Error killing {{name}}", { name: proc.name }), "error")
         }
-      }
+      },
+      /* [CN-FORK] v0.5.2.93 杀进程不可逆 → 危险档确认 */
+      true
     )
   }
 

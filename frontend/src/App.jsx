@@ -99,7 +99,7 @@ function App() {
   const [toasts, setToasts] = useState([])
   const [loadingPayloads, setLoadingPayloads] = useState(true)
   const [downloadModal, setDownloadModal] = useState({ show: false, name: '', progress: 0 })
-  const [confirmModal, setConfirmModal] = useState({ show: false, title: '', message: '', onConfirm: null })
+  const [confirmModal, setConfirmModal] = useState({ show: false, title: '', message: '', onConfirm: null, danger: false })
   const [moveFromUsbPath, setMoveFromUsbPath] = useState(null)
   const [storageScrollTarget, setStorageScrollTarget] = useState(null)
   const [showLogs, setShowLogs] = useState(false)
@@ -146,11 +146,12 @@ function App() {
 
 
 
-  const showConfirm = (title, message, onConfirm) => {
+  const showConfirm = (title, message, onConfirm, danger = false) => {
     setConfirmModal({
       show: true,
       title,
       message,
+      danger,
       onConfirm: () => {
         setConfirmModal({ show: false })
         onConfirm()
@@ -284,7 +285,9 @@ function App() {
         }
         refreshPayloads()
         addToast(t("app.toasts.payload_removed", "{{fileName}} removed", { fileName }))
-      }
+      },
+      /* [CN-FORK] v0.5.2.93 删除文件不可逆 → 危险档确认（实心红）；覆盖/重装这类可重做的确认走主色橙 */
+      true
     )
   }
 
@@ -495,7 +498,8 @@ function App() {
       </div>
 
       {/* Modals */}
-      <Modal show={downloadModal.show} title={t("app.modals.installing.title", "Installing Payload")} onClose={() => { }}>
+      {/* [CN-FORK] v0.5.2.93 安装/上传进行中是「不可打断」浮层：不给关闭入口，也不认返回键 */}
+      <Modal show={downloadModal.show} title={t("app.modals.installing.title", "Installing Payload")} dismissible={false}>
         <div className="space-y-6">
           <div className="flex justify-between items-end">
             <span className="text-ps-blue font-black uppercase italic tracking-tighter text-lg">{downloadModal.name}</span>
@@ -513,8 +517,10 @@ function App() {
         onClose={() => setConfirmModal({ show: false })}
         footer={
           <>
-            <button onClick={() => setConfirmModal({ show: false })} className="flex-1 px-8 py-5 rounded-2xl bg-white/5 hover:bg-white/10 text-white font-bold transition-all uppercase tracking-tight">{t("app.buttons.cancel", "Cancel")}</button>
-            <button onClick={confirmModal.onConfirm} className="flex-1 px-8 py-5 rounded-2xl bg-red-600 hover:bg-red-500 text-white font-bold transition-all uppercase tracking-tight">{t("app.buttons.confirm", "Confirm")}</button>
+            <button onClick={() => setConfirmModal({ show: false })} className="btn btn-outline flex-1 uppercase tracking-tight">{t("app.buttons.cancel", "Cancel")}</button>
+            {/* [CN-FORK] v0.5.2.93 确认按钮按可逆性分档：不可逆操作（删除、杀进程、移除来源）才是实心红，
+                可恢复的确认（覆盖/重装/更新）用主色橙。原来一律红底，等于每个弹窗都在喊「危险」。 */}
+            <button onClick={confirmModal.onConfirm} className={cn("btn flex-1 uppercase tracking-tight", confirmModal.danger ? "bg-red-600 hover:bg-red-500 text-white" : "btn-primary")}>{t("app.buttons.confirm", "Confirm")}</button>
           </>
         }
       >

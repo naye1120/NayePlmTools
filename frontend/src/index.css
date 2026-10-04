@@ -434,6 +434,20 @@ h1, h2, h3, h4 {
   .page-head > * + * { margin-top: 0; margin-left: 1rem; }
 }
 
+/* ── 横排控件组（弹窗按钮行、表单行）：窄屏竖堆、≥768px 横排 ──
+ * [CN-FORK] v0.5.2.93 间距一律用 * + * 外边距而不是 flex gap：PS5 老内核 WebKit 不支持
+ * flex 盒的 gap（grid gap 是支持的），原来 Modal 里的 `flex gap-4` 在电视端把两个按钮贴死。 */
+.stack-x {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.stack-x > * + * { margin-top: 0.6rem; }
+@media (min-width: 768px) {
+  .stack-x { flex-direction: row; align-items: center; }
+  .stack-x > * + * { margin-top: 0; margin-left: 0.75rem; }
+}
+
 /* ── 按钮：三档形态（实心 / 描边 / 幽灵）+ 危险语义配色，同一套尺寸与圆角 ──
  * [CN-FORK] v0.5.2.92 高度由 min-height: var(--ctl-h) 统一决定（原 padding 撑出的 ≈36px 达不到
  * 触屏/遥控器可用的尺寸）；字号保持 text-base 量级不变，只把可点区域做大。 */

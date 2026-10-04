@@ -1,3 +1,13 @@
+## v0.5.2.93 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **骨架重构第 2 批：打断式与反馈归一（弹窗 / 通知条 / 危险确认分级）**。仍然只动交互与盒模型，配色令牌不动：
+  * **弹窗（`ui/Modal.jsx`）四处硬伤**：① footer 用 `flex gap-4`，PS5 老内核不支持 flex gap，「取消 / 确认」两个按钮在电视上是贴死在一起的，改用 `.stack-x`（`* + *` 外边距实现，窄屏自动竖排、≥768px 横排）；② 只要传了 `onClose` 就完全不画关闭入口，也不认 Esc/返回键，电视端打开弹窗只能二选一，现在标题右侧恒有一个 `.icon-btn` 关闭钮 + Esc 关闭；③ 面板 `overflow-hidden`，内容一长被切掉且遥控器滚不出去，改 `max-h-full overflow-y-auto`；④ 打开后焦点仍在弹窗背后，遥控器第一次按方向键没有起点，现在打开即把焦点送进面板（`role="dialog" aria-modal`）。新增 `dismissible={false}` 给「安装/上传中」这种不可打断浮层用。
+  * **通知条（`ui/Toast.jsx`）重叠修复**：组件自己写死 `fixed top-8 right-8`，而 App 外层已经有一个 fixed 容器在排队，结果多条通知全落在同一坐标互相压字；现在条目本身走正常流，只由容器定位。驻留时长分级：成功 4s、错误 9s（原来一律 3 秒即逝，电视端来不及读完），并随时可用 OK/点击手动关闭。
+  * **危险确认按可逆性分档**：`showConfirm(title, message, onConfirm, danger)` 新增第四参。此前每个确认弹窗都是实心红底白字，等于每个弹窗都在喊「危险」；现在删除文件、杀进程这类不可逆操作保留红档，覆盖安装/重装/移除来源这类可以再来的走主色橙（`.btn-primary`）。
+  * **配套**：自动加载页「配置延时」弹窗的取消钮改 `.btn.btn-outline`，自定义延时那一行 `flex gap-3` 改 `.stack-x`、输入框改 `.field` 体系。
+  * 未动：`canvas/rail/inset/sel-bg` 各档色值、字号尺度、后端接口。
+
 ## v0.5.2.92 (CN-FORK)
 
 ### 🚀 Features & UX Improvements

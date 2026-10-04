@@ -287,7 +287,7 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
         footer={
           <button
             onClick={() => setShowDelayModal(false)}
-            className="w-full py-4 bg-white/5 hover:bg-white/10 text-white rounded-2xl font-bold uppercase tracking-tight transition-all"
+            className="btn btn-outline w-full uppercase tracking-tight"
           >
             {t("autoload.delay_modal.cancel", "Cancel")}
           </button>
@@ -308,13 +308,15 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
 
           <div className="space-y-3 md:space-y-4">
             <p className="label-caps !text-zinc-500 text-sm md:text-base">{t("autoload.delay_modal.custom_delay_label", "Custom Delay (ms)")}</p>
-            <div className="flex flex-col sm:flex-row gap-3">
+            {/* [CN-FORK] v0.5.2.93 用 .stack-x（margin 实现的一排）替代 flex gap：老内核不认 flex gap，
+                原来这一行在 PS5 上是输入框和「添加」贴在一起 */}
+            <div className="stack-x">
               <input
                 type="number"
                 placeholder={t("autoload.delay_modal.placeholder", "e.g. 2500")}
                 value={customDelay}
                 onChange={(e) => setCustomDelay(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-2xl p-4 md:p-5 text-white font-mono text-xl md:text-2xl focus:border-ps-blue outline-none transition-all"
+                className="flex-1 field text-white font-mono text-xl md:text-2xl rounded-2xl"
               />
               <button
                 onClick={() => customDelay && addDelay(parseInt(customDelay))}
