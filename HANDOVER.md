@@ -91,6 +91,11 @@ bash tools/build_tiles.sh   # 双磁贴变体一次出齐：-me(NAYE00001 媒体
 - 防缓存：`cache.appcache` 每次注入构建时间戳触发 AppCache 更新。
 - 主 ELF 内嵌版本签名 `PLDMGR_VER:<版本>`（`src/main.c`），可用于核对任意产物的实际版本。
 - 约定：界面/功能改动**定稿确认后**再出正式构建包；中途验证走 dev-server 预览。
+- **出包前必做（否则标题烙成 `DEV`）**：Makefile 用 `git diff --quiet || COMMIT="DEV"` 判脏树，而 WSL 里的 git 没继承 Windows 的 `core.autocrlf=true`，会把 78 个 CRLF 工作区文件看成已修改 —— 哪怕刚提交完、Windows 侧 `git status` 全干净，WSL 照样判脏。构建命令前加一次性归一化（**不要写进 git 配置**）：
+  ```bash
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true
+  ```
+  出包后从二进制核对：`grep -ao 'v<ver> by naye ([0-9a-f]*' xxx.elf | tr -cd '[:print:]\n'` 应为真实短哈希，出现 `DEV` 就得重出。
 - 预览电视端形态：`http://localhost:5173/?device=ps5`（`utils/helpers.js` 的 `isPS5` 认这个 query）。命中后与真机同一套分支 —— 侧栏常显、底部栏隐藏、`html[data-device="ps5"]` 抬命中区尺度、方向键空间导航接上。真机靠 UA 命中，不看该参数。
 - **前端改动的验收线是 `npm.cmd run lint` + 逐页实测，不是 `vite build`**：esbuild 不做作用域检查，漏 import / 残留已删 state / 引用越界变量在构建期全绿、运行期才炸（`v0.5.2.98` 修的四起整站死全是这类）。`mock-server.js` 里 Node `process` 的 `no-undef` 报错属 globals 配置的既有误报。
 
