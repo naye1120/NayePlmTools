@@ -237,7 +237,8 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
       <section className="panel-card">
         <header className="panel-head">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
+            {/* [CN-FORK] v0.5.2.89 图标盒只留间距，不要矩形底色；图标本身用动作橙（用户：截图这种地方不要图标的矩形背景颜色，图标本身颜色可以鲜艳一点） */}
+            <div className="p-2 rounded-lg shrink-0">
               <Database className="w-4 h-4 text-ps-blue" />
             </div>
             <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.installed_title", "Installed Payloads")}</h3>
@@ -265,8 +266,8 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                 <div key={path} onClick={() => loadPayload?.(path)} className="group flex flex-col justify-center p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors gap-2 relative overflow-hidden cursor-pointer">
                   <div className="flex flex-row items-center justify-between w-full gap-3">
                     <div className="flex items-center space-x-3 min-w-0 flex-1">
-                      <div className="p-2 bg-white/5 rounded-lg group-hover:bg-ps-blue/10 transition-colors shrink-0">
-                        <Package className="w-4 h-4 text-zinc-400 group-hover:text-ps-blue transition-colors" />
+                      <div className="p-2 rounded-lg shrink-0">
+                        <Package className="w-4 h-4 text-ps-blue" />
                       </div>
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <PayloadName path={fileName} className="text-white font-semibold" stacked />
@@ -320,7 +321,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
       <section id="cloud-repository" className="panel-card">
         <header className="panel-head">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
+            <div className="p-2 rounded-lg shrink-0">
               <CloudDownload className="w-4 h-4 text-ps-blue" />
             </div>
             <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.cloud_repo_title", "Cloud Repository")}</h3>
@@ -466,7 +467,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                       className="w-full flex items-center justify-between p-4 md:p-5 hover:bg-white/5 transition-colors"
                     >
                     <div className="flex items-center space-x-4">
-                      <div className="p-2.5 bg-ps-blue/10 rounded-xl">
+                      <div className="p-2.5 rounded-xl">
                         <Globe className="w-5 h-5 text-ps-blue" />
                       </div>
                       <div className="text-left">
@@ -555,7 +556,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
       <section id="usb-storage" className="panel-card">
         <header className="panel-head">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 bg-ps-blue/10 rounded-lg shrink-0">
+            <div className="p-2 rounded-lg shrink-0">
               <HardDrive className="w-4 h-4 text-ps-blue" />
             </div>
             <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.usb_storage_title", "USB Storage")}</h3>
@@ -591,8 +592,8 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               return (
                 <div key={path} className="group flex flex-row items-center justify-between p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors gap-3">
                   <div className="flex items-center space-x-3 min-w-0">
-                    <div className="p-2 bg-white/5 rounded-lg group-hover:bg-ps-blue/10 transition-colors shrink-0">
-                      <Usb className="w-4 h-4 text-zinc-400 group-hover:text-ps-blue transition-colors" />
+                    <div className="p-2 rounded-lg shrink-0">
+                      <Usb className="w-4 h-4 text-ps-blue" />
                     </div>
                     <div className="space-y-0.5 min-w-0 flex-1">
                       <PayloadName path={path} className="text-white font-semibold" stacked hideIcon={true} />

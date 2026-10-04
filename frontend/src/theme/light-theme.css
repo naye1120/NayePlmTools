@@ -10,10 +10,10 @@
  *   剩下留在本文件的只有两类：不读 CSS 变量的实心动作底（bg-ps-blue 系列），
  *   以及刻意保持深色的叠层豁免（封面叠层、模态遮罩、实心底上的白字）。
  *
- * 浅色色板（[CN-FORK] v0.5.2.87 「一档一色」浅色档）：
- *   画布   #ffffff   侧栏 #f6f8fc   卡片 #ffffff   内嵌件 #eef2f8   描线 #e7ebf3
+ * 浅色色板（[CN-FORK] v0.5.2.89 「一档一色」浅色档）：
+ *   画布   #ffffff   侧栏 #fbfcfe   卡片 #ffffff   内嵌件 ≈#fafbfd（半透）   描线 #e7ebf3
  *   主文字 #0c1220   次要 #3a4661   辅助 #5a677f   更淡 #6b7891   占位符 #8b95a8
- *   选中底/实心按钮 #f25c05 + 白字；动作色「文字」档用深阶橙 #b8410a 保对比度
+ *   选中底/实心按钮 #f25c05 + 白字；动作色「文字/图标」档同样用鲜橙 #f25c05
  *   状态色：成功 #12996b / 警示 #bd7f0f / 危险 #a91f22（与动作橙严格区隔）
  * ==========================================================================*/
 
@@ -21,14 +21,14 @@
 :root[data-theme="light"] {
   color-scheme: light;
   /* 中性底 4 档 + 发丝线
-   * [CN-FORK] v0.5.2.88 与深色档同步：只把 rail（侧栏）与 inset（内嵌件/行）调淡，
-   * 画布与卡片保持 .87 的纯白。rail 仍用实色（模态面板与粘顶条靠它挡内容），
-   * inset 用真半透明的深墨蓝 tint，压在白底上合成 ≈ #f5f7fb，比旧 #eef2f8 淡一档。 */
+   * [CN-FORK] v0.5.2.89 内嵌件再调透（用户：浅色所有地方透明度依然不够）：tint alpha 从
+   * .042 降到 .02，行/输入框压在白底上 ≈ #fafbfd，几乎只剩一根发丝线在分层；
+   * 画布与卡片仍是纯白，rail 仍用实色（模态面板与粘顶条靠它挡内容）。 */
   --color-canvas: #ffffff;
   --color-rail: #fbfcfe;
   --color-card: #ffffff;
-  --color-inset: rgba(12, 69, 155, 0.042);        /* 压在白画布上 ≈ #f5f7fb */
-  --color-inset-hover: rgba(12, 69, 155, 0.08);   /* 压在白画布上 ≈ #ecf0f7 */
+  --color-inset: rgba(12, 69, 155, 0.02);          /* 压在白画布/白卡片上 ≈ #fafbfd（.88 是 #f5f7fb） */
+  --color-inset-hover: rgba(12, 69, 155, 0.05);    /* 压在白画布上 ≈ #f3f6fa */
   --color-line: #e7ebf3;
   --color-line-hover: #ccd4e2;
   /* 选中底（S2）：实心橙在浅底压深一档，上面的字改白 */
@@ -40,8 +40,8 @@
   --color-on-action: #ffffff;
   --color-action-tint: rgba(242, 92, 5, 0.1);
   --color-action-line: rgba(242, 92, 5, 0.35);
-  --color-ps-blue: #b8410a;
-  --color-ps-blue-glow: rgba(184, 65, 10, 0.3);
+  --color-ps-blue: #f25c05;
+  --color-ps-blue-glow: rgba(242, 92, 5, 0.3);
   /* 文字阶：v0.5.2.87 按用户「字体太灰暗」整档提黑（次要 606a80 → 3a4661） */
   --color-ps-text: #0c1220;
   --color-ps-text-sub: #3a4661;
@@ -162,16 +162,17 @@
 
 /* Bug B：带 important 修饰符的变体是独立类名（!text-white → .\!text-white），需单独映射 */
 [data-theme="light"] .\!text-white { color: #0c1220 !important; }
-[data-theme="light"] .\!text-ps-blue { color: #b8410a !important; }
+[data-theme="light"] .\!text-ps-blue { color: #f25c05 !important; }
 
-/* Bug D：浅底上动作色小字加深保对比度（实心 bg-ps-blue 不受影响） */
+/* Bug D：动作色「文字与图标」档。[CN-FORK] v0.5.2.89 按用户「图标本身颜色可以鲜艳一点」
+   从深阶橙 #b8410a 提到与实心底同值的鲜橙 #f25c05（图标盒的矩形底取消后，橙色只剩图标本身）。 */
 [data-theme="light"] .text-ps-blue,
 [data-theme="light"] .hover\:text-ps-blue:hover,
 [data-theme="light"] .group-hover\:text-ps-blue,
 [data-theme="light"] .text-ps-blue\/60,
-[data-theme="light"] .text-ps-blue\/80 { color: #b8410a !important; }
+[data-theme="light"] .text-ps-blue\/80 { color: #f25c05 !important; }
 [data-theme="light"] .hover\:border-ps-blue:hover,
-[data-theme="light"] .border-ps-blue { border-color: #b8410a !important; }
+[data-theme="light"] .border-ps-blue { border-color: #f25c05 !important; }
 
 /* ============================================================================
  * [CN-FORK] v0.5.2.87 实心动作底上的字（必须放在文件最末尾）

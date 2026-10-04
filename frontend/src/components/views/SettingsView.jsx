@@ -24,8 +24,8 @@ const SettingRow = ({ title, description, children, icon: Icon, vertical }) => (
   )}>
     <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
       {Icon && (
-        <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
-          <Icon className="w-5 h-5 md:w-6 md:h-6 text-zinc-500 group-hover:text-ps-blue transition-colors" />
+        <div className="p-3 md:p-4 rounded-2xl shrink-0">
+          <Icon className="w-5 h-5 md:w-6 md:h-6 text-ps-blue" />
         </div>
       )}
       <div className="space-y-1 min-w-0">
@@ -306,8 +306,8 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
               className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
             >
               <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
-                <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
-                  <Globe className="w-5 h-5 md:w-6 md:h-6 text-zinc-500 group-hover:text-ps-blue transition-colors" />
+                <div className="p-3 md:p-4 rounded-2xl shrink-0">
+                  <Globe className="w-5 h-5 md:w-6 md:h-6 text-ps-blue" />
                 </div>
                 <div className="space-y-1 min-w-0">
                   <p className="font-bold text-white uppercase text-base md:text-lg tracking-tight leading-tight">{t("settings.manage_sources_title", "Manage Sources")}</p>
@@ -338,8 +338,8 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
           className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
         >
           <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
-            <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
-              <Terminal className="w-5 h-5 md:w-6 md:h-6 text-zinc-500 group-hover:text-ps-blue transition-colors" />
+            <div className="p-3 md:p-4 rounded-2xl shrink-0">
+              <Terminal className="w-5 h-5 md:w-6 md:h-6 text-ps-blue" />
             </div>
             <div className="space-y-1 min-w-0">
               <p className="font-bold text-white uppercase text-base md:text-lg tracking-tight leading-tight">{t("settings.log_viewer_title", "Open Log Viewer")}</p>
@@ -360,8 +360,8 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
           className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-ps-blue/50 hover:bg-ps-blue/5 transition-all gap-x-4 gap-y-3 md:gap-6"
         >
           <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
-            <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-ps-blue/10 transition-colors shrink-0">
-              <ScrollText className="w-5 h-5 md:w-6 md:h-6 text-zinc-500 group-hover:text-ps-blue transition-colors" />
+            <div className="p-3 md:p-4 rounded-2xl shrink-0">
+              <ScrollText className="w-5 h-5 md:w-6 md:h-6 text-ps-blue" />
             </div>
             <div className="space-y-1 min-w-0">
               <p className="font-bold text-white uppercase text-base md:text-lg tracking-tight leading-tight">{t("settings.changelog_title", "Changelog")}</p>
@@ -399,7 +399,7 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
           className="group w-full text-left grid grid-cols-[1fr_auto] md:flex md:items-center md:justify-between p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 hover:border-red-500/50 hover:bg-red-500/5 transition-all gap-x-4 gap-y-3 md:gap-6"
         >
           <div className="flex items-start md:items-center space-x-4 md:space-x-6 min-w-0 col-span-1">
-            <div className="p-3 md:p-4 bg-white/5 rounded-2xl group-hover:bg-red-500/10 transition-colors shrink-0">
+            <div className="p-3 md:p-4 rounded-2xl shrink-0">
               <Heart className="w-5 h-5 md:w-6 md:h-6 text-zinc-500 group-hover:text-red-500 transition-colors" />
             </div>
             <div className="space-y-1 min-w-0">

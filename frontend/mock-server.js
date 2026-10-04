@@ -128,7 +128,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.88'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.89'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */

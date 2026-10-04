@@ -70,7 +70,7 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
 
       <div className="glass-card p-5 md:p-6 rounded-ps-2xl border-white/10 bg-white/[0.02] space-y-5 md:space-y-6">
         <div className="flex flex-col sm:flex-row items-center sm:items-start space-y-4 sm:space-y-0 sm:space-x-8 text-center sm:text-left">
-          <div className="p-3 md:p-4 bg-ps-blue/20 rounded-2xl border border-ps-blue/30 shrink-0">
+          <div className="p-3 md:p-4 shrink-0">
             <Usb className="w-6 h-6 md:w-7 md:h-7 text-ps-blue" />
           </div>
           <div className="space-y-1 md:space-y-2 min-w-0 flex-1">

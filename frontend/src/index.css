@@ -20,7 +20,9 @@
 .text-zinc-300 { color: #aeb9d2 !important; }
 .text-zinc-400 { color: #96a1bd !important; }
 .text-zinc-500 { color: #7f8aa8 !important; }
-.text-ps-blue { color: #ff9152 !important; }
+/* [CN-FORK] v0.5.2.89 图标盒的矩形底取消后，橙色只剩图标本身：深色档的动作色文字/图标
+ * 从偏淡的 #ff9152 提到实心橙同值 #ff7a2e（在 #0a101d 卡片上对比约 7:1，读得清）。 */
+.text-ps-blue { color: #ff7a2e !important; }
 @media (min-width: 768px) {
   .md\:hidden { display: none !important; }
   .md\:flex { display: flex !important; }
@@ -83,16 +85,15 @@
    * ========================================================================*/
 
   /* ── 中性底 4 档 + 发丝线 ──
-   * [CN-FORK] v0.5.2.88 只调「侧栏 + 内嵌件」这两档，卡片与画布保持 .87 原值：
-   *   rail  淡到几乎与画布同色（侧栏的存在感改由右侧发丝线承担），但**必须保持实色**，
-   *         因为它是模态面板 .glass-panel 与粘顶条的浮层底，透明会透出下面滚过的内容；
-   *   inset 改真半透明蓝味 tint，压在卡片上只比卡片略亮一点（≈ #0d1525），
-   *         不再是 .87 那种明显的一块灰；tint 不用纯白，避免发灰。 */
+   * [CN-FORK] v0.5.2.89 内嵌件再收一档：.88 的 tint 压在卡片上仍有 #0c1322 这块灰，
+   *   「管理 Payload」三段卡片里的行看不出错差别，这里把 alpha 再降一半，
+   *   行/输入框几乎与卡片同色，层次只由发丝线承担；压在画布上更是接近画布。
+   *   rail 必须保持实色：它是模态面板 .glass-panel 与粘顶条的浮层底，透明会透出滚过的内容。 */
   --color-canvas: #04060b;
   --color-rail: #05080f;
   --color-card: #0a101d;
-  --color-inset: rgba(74, 106, 181, 0.035);       /* 压在卡片上 ≈ #0c1322，比 .87 的 #0f1728 明显收淡 */
-  --color-inset-hover: rgba(86, 120, 193, 0.08);  /* 压在卡片上 ≈ #0f1829 */
+  --color-inset: rgba(74, 106, 181, 0.018);        /* 压在卡片上 ≈ #0b1220（.88 是 #0c1322、.87 是 #0f1728） */
+  --color-inset-hover: rgba(86, 120, 193, 0.07);   /* 压在卡片上 ≈ #0e1727，悬停仍靠亮度反馈 */
   --color-line: #1b2438;
   --color-line-hover: #2b3550;
 
@@ -100,15 +101,17 @@
   --color-sel-bg: #ff7a2e;
   --color-sel-fg: #1b0e02;
 
-  /* ── 动作色：实心档 / 悬停 / 橙底上的字色 / 薄染（图标块）/ 文字档 ──
-   * --color-ps-blue 是「橙色的字」，浅底要翻成深阶橙才读得清；
-   * --color-action 是「橙色的底」，浅底反而要压深以保住上面的字。两个角色分开，别再混用。 */
+  /* ── 动作色：实心档 / 悬停 / 橙底上的字色 / 薄染 / 文字档 ──
+   * --color-ps-blue 是「橙色的字与图标」，浅底要翻成够深的橙才读得清；
+   * --color-action 是「橙色的底」，两个角色分开，别再混用。
+   * [CN-FORK] v0.5.2.89 图标盒的矩形底取消后，橙色只剩图标本身，深档文字档从 #ff9152
+   * 提到实心橙同值的 #ff7a2e（在 #0a101d 卡片上对比约 7:1，够读）。 */
   --color-action: #ff7a2e;
   --color-action-hover: #ff9152;
   --color-on-action: #1b0e02;
   --color-action-tint: rgba(255, 122, 46, 0.10);
   --color-action-line: rgba(255, 122, 46, 0.32);
-  --color-ps-blue: #ff9152;
+  --color-ps-blue: #ff7a2e;
   --color-ps-blue-glow: rgba(255, 122, 46, 0.4);
 
   /* ── 文字阶：主 / 次要 / 辅助 / 占位符 ── */

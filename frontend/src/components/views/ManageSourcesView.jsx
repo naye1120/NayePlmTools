@@ -168,7 +168,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
                   </div>
 
                   {/* Icon */}
-                  <div className="p-2 bg-white/5 rounded-xl shrink-0">
+                  <div className="p-2 rounded-xl shrink-0">
                     {src.removable
                       ? <Globe className="w-5 h-5 text-zinc-400 group-hover:text-ps-blue transition-colors" />
                       : <Lock className="w-5 h-5 text-ps-blue" />
