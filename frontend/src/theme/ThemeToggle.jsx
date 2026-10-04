@@ -6,7 +6,7 @@
 import React from 'react'
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '../utils/helpers'
+import Segmented from '../components/ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥三段改走共用分段控件 */
 import { useTheme } from './useTheme'
 
 const OPTIONS = [
@@ -19,42 +19,23 @@ const ThemeToggle = ({ compact = false }) => {
   const { t } = useTranslation()
   const [pref, setPref] = useTheme()
 
+  /* [CN-FORK] v0.5.2.97 这三段互斥选项此前自带一套轨道 + 一套「实心橙 + 白字 + 光晕」的选中表达，
+   * 与管理页排序、温控档位、自启延时三处各不相同；现统一 <Segmented>（选中档全站只有 .sel-chip 一档）。
+   * compact（侧栏收窄态）只留图标，整名转给 title 与读屏。 */
   return (
-    <div
-      role="radiogroup"
-      aria-label={t('settings.theme_title', 'Appearance')}
-      className={cn(
-        'flex rounded-xl bg-white/5 border border-white/10 p-1 space-x-1',
-        compact ? 'w-full justify-center' : 'w-full justify-start'
-      )}
-    >
-      {OPTIONS.map(({ value, icon: Icon, labelKey, labelDefault }) => {
-        const active = pref === value
-        const title = t(labelKey, labelDefault)
-        return (
-          <button
-            key={value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            title={title}
-            onClick={() => setPref(value)}
-            className={cn(
-              'flex items-center justify-center rounded-lg min-h-[var(--ctl-h)] flex-1 transition-colors',
-              compact ? 'p-2.5' : 'px-4 py-1',
-              active
-                ? 'bg-ps-blue text-white shadow-[0_0_12px_rgba(0,112,209,0.3)]'
-                : 'text-zinc-500 hover:text-white hover:bg-white/10'
-            )}
-          >
-            <Icon className='w-4 h-4 shrink-0' />
-            {!compact && (
-              <span className='font-bold text-sm tracking-tight whitespace-nowrap'>{title}</span>
-            )}
-          </button>
-        )
-      })}
-    </div>
+    <Segmented
+      className="w-full"
+      label={t('settings.theme_title', 'Appearance')}
+      value={pref}
+      onChange={setPref}
+      itemClassName={compact ? 'px-2' : undefined}
+      options={OPTIONS.map(({ value, icon, labelKey, labelDefault }) => ({
+        value,
+        icon,
+        title: t(labelKey, labelDefault),
+        label: compact ? null : t(labelKey, labelDefault),
+      }))}
+    />
   )
 }
 

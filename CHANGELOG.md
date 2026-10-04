@@ -1,3 +1,12 @@
+## v0.5.2.97 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **骨架重构第 6 批：互斥分段控件收成一个 `<Segmented>`**。同一角色「N 档里选 1 档，选中的就是当前值」此前有四份手写实现：外观三档（自带轨道 + 实心橙 + 白字 + 一圈蓝色光晕）、管理页排序三档（三枚裸 `.btn` + `space-x-2`）、温控档位三档（`.btn` + `.sel-chip`）、自启延时三档（`.btn` + `ml-2`）。轨道有无、圆角、间距、选中表达全不一样。现在一处定义：
+  * 新增 `ui/Segmented.jsx`：`role="radiogroup"` + 每档 `role="radio" aria-checked`（读屏会念「共 3 项，当前第 2 项」，遥控器方向键也照旧能走）；轨道一档 `inset` 底 + 一根发丝线，选中档仍是契约里唯一的实心选中 `.sel-chip`，**没有引入第 6 种底**。
+  * 轨道用 `grid` + `grid-auto-columns: 1fr` + `gap`，不用 flex `gap`（`.95` 刚清完的老内核坑，grid 的 gap 老内核支持）。
+  * 接入四处：`theme/ThemeToggle.jsx`（侧栏收窄态只留图标，整名转 `title` + 读屏）、`StorageHub` 云端排序、`ThermalSection` 风扇档位（整组未启用时改由 `<fieldset disabled>` 一起禁用，读屏能听出「这一组现在不可选」，此前只有三枚按钮各自灰着）、`SettingsView` 自启延时。外观档上那圈 `shadow-[0_0_12px_rgba(0,112,209,0.3)]` 蓝色光晕一并去掉（早于改色时代的遗留，与其他分段控件不一致）。
+  * 尺度仍然只在令牌层：每档 `min-height: var(--ctl-h)`（PC 44 / 电视 68px）。
+
 ## v0.5.2.96 (CN-FORK)
 
 ### 🚀 Features & UX Improvements

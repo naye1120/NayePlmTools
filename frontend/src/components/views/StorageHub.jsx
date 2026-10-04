@@ -9,6 +9,7 @@ import PageHead from '../ui/PageHead'
 import Section from '../ui/Section'
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
+import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥档位统一 */
 
 const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
   const { t } = useTranslation()
@@ -350,28 +351,22 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               className="bg-transparent border-none outline-none text-white w-full text-sm font-medium placeholder:text-zinc-600"
             />
           </div>
-          {/* [CN-FORK] v0.5.2.92 排序控件改版：此前是「隐形原生 select 盖在假控件上」（opacity-0），
-              鼠标点得中，遥控器和触屏都点不准，而且看不见当前项。改成三枚芯片按钮，
-              选中项用契约里唯一的实心选中档（.btn-primary），间隙用 space-x（margin 实现，老内核可用；
-              flex gap 在 PS5 上根本不生效）。 */}
-          <div className="flex items-center flex-none space-x-2 mt-3 md:mt-0 md:ml-3">
-            <span className="text-zinc-500 text-xs font-medium whitespace-nowrap">
+          {/* [CN-FORK] v0.5.2.92 排序从「隐形原生 select 盖在假按钮上」改成互斥档；
+              v0.5.2.97 再把这三枚档并进全站共用的 Segmented（轨道、圆角、命中高度、选中档一处定义）。 */}
+          <div className="flex items-center flex-none mt-3 md:mt-0 md:ml-3">
+            <span className="text-zinc-500 text-xs font-medium whitespace-nowrap mr-2">
               {t("storage_hub.sort_by", "Sort by:")}
             </span>
-            {[
-              ['category', t("storage_hub.sort_category", "Category")],
-              ['update_time', t("storage_hub.sort_time", "Update Time")],
-              ['name', t("storage_hub.sort_name", "Name")],
-            ].map(([mode, label]) => (
-              <button
-                key={mode}
-                onClick={() => handleSortChange(mode)}
-                aria-pressed={sortMode === mode}
-                className={cn("btn !px-3 text-xs", sortMode === mode ? "btn-primary" : "btn-ghost")}
-              >
-                {label}
-              </button>
-            ))}
+            <Segmented
+              label={t("storage_hub.sort_by", "Sort by:")}
+              value={sortMode}
+              onChange={handleSortChange}
+              options={[
+                { value: 'category', label: t("storage_hub.sort_category", "Category") },
+                { value: 'update_time', label: t("storage_hub.sort_time", "Update Time") },
+                { value: 'name', label: t("storage_hub.sort_name", "Name") },
+              ]}
+            />
           </div>
         </div>
         )}

@@ -534,6 +534,22 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 .switch-track { width: var(--switch-w); height: var(--switch-h); }
 .switch-knob { width: var(--knob-d); height: var(--knob-d); }
 
+/* 分段选择（ui/Segmented.jsx）：轨道一档底 + 一根线，内边距只留出「轨道与档」的间隙，
+ * 每档的高度仍由 --ctl-h 决定；选中档由组件上的 .sel-chip 给（那条规则在文件末尾）。
+ * 用 grid 等宽列而不是 flex + gap：老内核不支持 flex 盒的 gap，而 grid 的 gap 是支持的，
+ * 轨道宽度由内容决定时 grid-auto-columns: 1fr 也会让各档对齐成一样宽。 */
+.segmented-track {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--color-line);
+  border-radius: 0.75rem;
+  background-color: var(--color-inset);
+}
+.segmented-item { min-height: var(--ctl-h); padding: 0 0.6rem; }
+
 /* 实心：页面唯一的「亮点」，一个视图里最多一个主操作。
  * 与文件末尾的 .sel-chip 同档同色（选中态与主按钮共用 S2），这里只补盒模型 */
 .btn-primary {

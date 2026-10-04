@@ -9,6 +9,7 @@ import PkgManagerCard from './PkgManagerCard'
 import PageHead from '../ui/PageHead'
 import Section from '../ui/Section'
 import Switch from '../ui/Switch'
+import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥档位统一 */
 import Modal from '../ui/Modal'
 
 const FOLLOW_BROWSER_LANGUAGE = '__auto__'
@@ -236,22 +237,13 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
           stacked
         >
           <div className="flex items-center justify-between">
-            <div className="flex">
-              {[3, 5, 10].map(s => (
-                <button
-                  key={s}
-                  onClick={() => onSaveConfig({ AUTOLOAD_DELAY: s })}
-                  aria-pressed={autoloadDelay === s}
-                  className={cn(
-                    "btn text-sm",
-                    s !== 3 && "ml-2",
-                    autoloadDelay === s ? "btn-primary" : "btn-outline"
-                  )}
-                >
-                  {s}s
-                </button>
-              ))}
-            </div>
+            {/* [CN-FORK] v0.5.2.97 延时档位归到共用 <Segmented>（与管理页排序、温控档位、外观三档同一形状） */}
+            <Segmented
+              label={t("settings.autoload_delay_title", "Autoload Delay")}
+              value={autoloadDelay}
+              onChange={(v) => onSaveConfig({ AUTOLOAD_DELAY: v })}
+              options={[3, 5, 10].map((s) => ({ value: s, label: `${s}s` }))}
+            />
             <span className="text-ps-blue font-bold text-lg tabular-nums ml-4">{autoloadDelay}s</span>
           </div>
         </SettingRow>

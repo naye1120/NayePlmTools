@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { RefreshCw, Thermometer, Fan, Power } from 'lucide-react'
 import { cn } from '../../utils/helpers' /* [CN-FORK] v0.5.2.95 档位/开关钮归到 .btn 体系后需要拼类名 */
 import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
+import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥档位统一 */
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 
@@ -146,18 +147,16 @@ function FanControlCard() {
           </div>
           <div className="flex items-center flex-wrap">
             <span className="text-[12px] text-zinc-400 mr-2">{t('thermal.fan_presets', '档位')}</span>
-            {presets.map((p) => (
-              <button
-                key={p.v}
-                type="button"
-                disabled={!enabled}
-                onClick={() => setTarget(p.v)}
-                className={cn('btn text-xs ml-2',
-                  target === p.v ? 'sel-chip' : 'btn-outline')}
-              >
-                {p.label}
-              </button>
-            ))}
+            {/* [CN-FORK] v0.5.2.97 三枚档位归到共用 <Segmented>；未启用时整条轨道一起禁用，
+                原来只有三枚按钮各自 disabled，读屏听不出「这一组现在不可选」。 */}
+            <fieldset disabled={!enabled} className="flex disabled:opacity-60">
+              <Segmented
+                label={t('thermal.fan_presets', '档位')}
+                value={target}
+                onChange={(v) => setTarget(v)}
+                options={presets.map((p) => ({ value: p.v, label: p.label }))}
+              />
+            </fieldset>
             <button type="button" onClick={apply} disabled={busy || !enabled} className={`${BTN_PRIMARY} ml-auto`}>
               <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} />
               {t('thermal.fan_apply', '应用')}
