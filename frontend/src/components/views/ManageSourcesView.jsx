@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import {
   Plus, Trash2, ChevronUp, ChevronDown,
-  Lock, Globe, Loader2, AlertTriangle
+  Lock, Globe, Loader2, AlertTriangle, Smartphone
 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
@@ -94,33 +94,11 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
     setAdding(false)
   }
 
-  /* ---- PS5 Mode: QR + URL only ---- */
-  if (isPS5) {
-    return (
-      <div className="max-w-3xl mx-auto pb-12">
-        <PageHead
-          bleed={false}
-          title={<>{t("manage_sources.ps5_title_1", "Manage")} <span className="text-ps-blue">{t("manage_sources.ps5_title_2", "Sources")}</span></>}
-          back={onBack}
-          backLabel={t("manage_sources.back_btn", "Back")}
-        />
-        <Section className="mt-6" headless bodyClass="flex flex-col items-center space-y-6">
-          <div className="bg-white p-6 rounded-3xl">
-            <QRCodeSVG value={`http://${ip}:8911`} size={180} level="M" />
-          </div>
-          {/* [CN-FORK] 同上：IP 地址用主题变量色，浅色主题直接跟随翻转 */}
-          <code className="text-ps-text font-mono text-base font-black opacity-90 italic tracking-tight uppercase">
-            {ip}:8911
-          </code>
-          <p className="text-zinc-400 text-center text-sm leading-relaxed max-w-md">
-            {t("manage_sources.ps5_description", "Open this address on your phone or PC to manage payload sources.")}
-          </p>
-        </Section>
-      </div>
-    )
-  }
-
-  /* ---- Desktop Mode: full CRUD ---- */
+  /* [CN-FORK] v0.5.2.96 三端共用这一份 CRUD。
+   * 此前 PS5 进来只看得到一张二维码（「去电脑上管」），本机什么都能改不了 ——
+   * 那是「遥控器点不动 32px 小按钮 + 没有方向键导航」时代的妥协。现在行里的上移 / 下移 /
+   * 移除都是 .icon-btn（电视端 68px 命中区）且方向键走得到，电视端可以直接管理本机源列表；
+   * 只把「用手机或电脑打开本地址」留成一个次级板块（下面 isPS5 那段），因为遥控器敲长 URL 确实难受。 */
   return (
     <div className="w-full max-w-3xl mx-auto pb-12 min-w-0">
       <PageHead
@@ -292,6 +270,25 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
                 </p>
               )}
             </form>
+          </Section>
+        )}
+
+        {isPS5 && (
+          <Section
+            id="pc-shortcut"
+            icon={Smartphone}
+            title={t("manage_sources.pc_hint_title", "Or manage from another device")}
+            bodyClass="flex items-center"
+          >
+            <div className="bg-white p-3 rounded-xl shrink-0">
+              <QRCodeSVG value={`http://${ip}:8911`} size={110} level="M" />
+            </div>
+            <div className="ml-4 min-w-0">
+              <code className="text-ps-text font-mono text-base font-bold">{ip}:8911</code>
+              <p className="text-zinc-400 text-sm leading-relaxed mt-1">
+                {t("manage_sources.ps5_description", "Open this address on your phone or PC to manage payload sources.")}
+              </p>
+            </div>
           </Section>
         )}
       </div>

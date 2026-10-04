@@ -1,3 +1,12 @@
+## v0.5.2.96 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **骨架重构第 5 批：电视端补齐核心操作 + 死代码清账 + 导航收敛为一份菜单表**。配色契约仍然一行未动：
+  * **来源管理页在 PS5 上不再只有二维码**：原实现是 `if (isPS5)` 直接 return 一张「去电脑上管」的 QR 页，电视端连看都看不到自己配了哪些源，更不能排序/删除。`.92` 有了方向键导航、`.94` 有了 68px 命中区之后，这个妥协没有理由继续存在 —— 现在三端共用同一份 CRUD（上移 / 下移 / 移除都能用遥控器点到），QR 降级为页尾一个次级板块「也可以在电脑或手机上管理」（新词条 `manage_sources.pc_hint_title`）。顺带删掉了 `manage_sources.ps5_title_1/2` 这条只在电视分支用到的标题分叉。
+  * **导航一处定义、两处渲染**：新增 `NAV_ITEMS` / `NAV_GROUPS`（`App.jsx` 模块作用域），侧栏按分组渲染、手机底部栏平铺渲染。此前「有哪些页面」在代码里有两份真相（v0.5.1.64 删「主页」时是两处分别改的），加一页要同步两处；现在只改一处。侧栏折叠钮也归进 `.icon-btn`（原来固定 `p-3`，是整条侧栏里最小的一颗，电视端只有 48px）。
+  * **死代码清账**：删 `ui/PayloadButton.jsx`（仪表盘收藏时代遗留，`v0.5.1.64` 之后无人引用）；`App.jsx` 移除 `favoritePayloads` + `toggleFavorite` / `moveFavorite` + 写 localStorage 的副作用、`isFavoriteEditMode`、`launchHistory` / `refreshHistory`（每次进页和每次启动都白发一次 `/history_list`，拉回来没人消费），以及只出现在 import 行的 `Star` / `CloudDownload` / `isSystemPayload` 引用。
+  * 未动：色值与「4 档底 + 1 档选中」契约、后端接口与 `/sources_*` 语义（默认云端仓库的开关仍归 `DEFAULT_REPO_ENABLED`，在设置页改）。
+
 ## v0.5.2.95 (CN-FORK)
 
 ### 🐛 Bug Fixes

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
   Settings,
-  CloudDownload,
   Cpu,
   Database,
   RefreshCw,
@@ -9,7 +8,6 @@ import {
   Menu,
   Terminal,
   X,
-  Star,
   Link2,
   Gamepad2
 } from 'lucide-react'
@@ -18,13 +16,12 @@ import { useTranslation } from 'react-i18next'
 import './App.css'
 
 // Utilities
-import { cn, isPS5, isSystemPayload } from './utils/helpers'
+import { cn, isPS5 } from './utils/helpers'
 
 // UI Components
 import Toast from './components/ui/Toast'
 import Modal from './components/ui/Modal'
 import NavButton from './components/ui/NavButton'
-import PayloadButton from './components/ui/PayloadButton'
 import LogoIcon from './components/ui/LogoIcon'
 
 // Views
@@ -49,10 +46,27 @@ import { syncHtmlLang } from './theme/useTheme'
 // [CN-FORK] v0.5.2.92 遥控器空间导航（仅 PS5 端启用）
 import { enableSpatialNav } from './utils/spatialNav'
 
+/* [CN-FORK] v0.5.2.96 导航三形态共用一份菜单表。
+ * 病灶：PC 侧栏与手机底部栏各自手写一遍 NavButton（改一处忘一处，v0.5.1.64 删「主页」时就是两处分别动），
+ * 电视端又复用 PC 侧栏 —— 于是「有哪些页面」这件事在代码里有两份真相。
+ * 现在一处定义、两处渲染：字段里的 mobile* 是窄屏用的短标签（放不下整名时才露出）。 */
+const NAV_ITEMS = [
+  { id: 'storage', group: 'main', icon: Database, label: ['app.nav.storage', 'Manage Payloads'], mobile: ['app.nav.manage_mobile', 'Manage'] },
+  { id: 'autoload', group: 'main', icon: RefreshCw, label: ['app.nav.autoload', 'Autoload'], mobile: ['app.nav.auto_mobile', 'Auto'] },
+  { id: 'pkg', group: 'main', icon: Package, label: ['app.nav.pkg', 'PKG Manager'], mobile: ['app.nav.pkg_mobile', 'PKG'] },
+  { id: 'common_entries', group: 'main', icon: Link2, label: ['app.nav.common_entries', 'Quick Links'], mobile: ['app.nav.common_entries_mobile', 'Links'] },
+  { id: 'game_manage', group: 'main', icon: Gamepad2, label: ['app.nav.game_manage', 'Game Manager'], mobile: ['app.nav.game_manage_mobile', 'Games'] },
+  { id: 'processes', group: 'system', icon: Cpu, label: ['app.nav.processes', 'Active Processes'], mobile: ['app.nav.processes_mobile', 'Processes'] },
+  { id: 'settings', group: 'system', icon: Settings, label: ['app.nav.settings', 'Settings'], mobile: ['app.nav.settings', 'Settings'] },
+]
+const NAV_GROUPS = [
+  { id: 'main', label: ['app.nav.group_main', 'Main'] },
+  { id: 'system', label: ['app.nav.group_system', 'System'] },
+]
+
 function App() {
   const { t, i18n } = useTranslation();
   const [view, setView] = useState('storage') /* [CN-FORK] v0.5.1.64 默认页改 payload 管理页，主页已删除 */
-  const [isFavoriteEditMode, setIsFavoriteEditMode] = useState(false)
   const mainRef = useRef(null)
 
   useEffect(() => {
@@ -95,7 +109,6 @@ function App() {
   const [version, setVersion] = useState('Loading...')
   const [loading, setLoading] = useState(false)
   const [activeLoadingName, setActiveLoadingName] = useState('')
-  const [launchHistory, setLaunchHistory] = useState([])
   const [toasts, setToasts] = useState([])
   const [loadingPayloads, setLoadingPayloads] = useState(true)
   const [downloadModal, setDownloadModal] = useState({ show: false, name: '', progress: 0 })
@@ -104,34 +117,6 @@ function App() {
   const [storageScrollTarget, setStorageScrollTarget] = useState(null)
   const [showLogs, setShowLogs] = useState(false)
   const [payloadMeta, setPayloadMeta] = useState({})
-  const [favoritePayloads, setFavoritePayloads] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('favoritePayloads') || '[]')
-    } catch { return [] }
-  })
-
-  useEffect(() => {
-    localStorage.setItem('favoritePayloads', JSON.stringify(favoritePayloads))
-  }, [favoritePayloads])
-
-  const toggleFavorite = (path) => {
-    setFavoritePayloads(prev =>
-      prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path]
-    )
-  }
-
-  const moveFavorite = (path, direction) => {
-    setFavoritePayloads(prev => {
-      const idx = prev.indexOf(path)
-      if (idx === -1) return prev
-      const newIdx = idx + direction
-      if (newIdx < 0 || newIdx >= prev.length) return prev
-      const newFavorites = [...prev]
-      newFavorites[idx] = newFavorites[newIdx]
-      newFavorites[newIdx] = path
-      return newFavorites
-    })
-  }
 
   useEffect(() => {
     if (!showLogs) return
@@ -232,12 +217,8 @@ function App() {
     }
   }
 
-  const refreshHistory = async () => {
-    const data = await api('/history_list')
-    if (data?.history) {
-      setLaunchHistory(data.history)
-    }
-  }
+  /* [CN-FORK] v0.5.2.96 删掉 refreshHistory / launchHistory：拉回来的启动历史没有任何界面消费
+   * （消费方是已下线的仪表盘收藏区），但每次进页和每次启动都还在白发一次 /history_list。 */
 
   const refreshConfig = async () => {
     const data = await api('/get_config')
@@ -265,7 +246,6 @@ function App() {
       const res = await fetch(`/loadpayload:${safePath}`)
       if (!res.ok) throw new Error(`${t("app.toasts.launch_failed", "Launch failed")} (${res.status})`)
       addToast(t("app.toasts.payload_launched", "{{name}} launched", { name }))
-      refreshHistory()
     } catch (e) { addToast(e.message || t("app.toasts.launch_failed", "Launch failed"), "error") }
     setTimeout(() => {
       setLoading(false)
@@ -419,7 +399,6 @@ function App() {
       } else {
         refreshPayloads()
         refreshConfig()
-        refreshHistory()
       }
     }
     init()
@@ -538,7 +517,10 @@ function App() {
           <div className="flex items-center mb-12 h-10">
             <button
               onClick={() => setSidebarExpanded(!sidebarExpanded)}
-              className="p-3 bg-white/5 hover:bg-ps-blue hover:text-white rounded-xl transition-all mr-4 shrink-0"
+              /* [CN-FORK] v0.5.2.96 折叠钮归到 .icon-btn：命中区跟着 --ctl-h 走（PC 44 / 电视 68），
+                 原来固定 p-3 在电视上只有 48px，是全侧栏最小的一颗。悬停不再刷成整块实心橙，
+                 与全站图标钮同一档（浮出 inset 底 + 图标转动作色）。 */
+              className="icon-btn mr-4"
             >
               <Menu className="w-6 h-6" />
             </button>
@@ -549,23 +531,24 @@ function App() {
             </div>
           </div>
 
-          {/* [CN-FORK] 菜单按「常用功能 / 系统管理」分组，符合中文后台习惯；视图 id 与上游保持一致 */}
+          {/* 菜单按「常用功能 / 系统管理」分组，符合中文后台习惯；视图 id 与上游保持一致 */}
           <nav className="flex-1 space-y-2 overflow-y-auto custom-scrollbar">
-            {sidebarExpanded && (
-              <p className="nav-group-title">{t("app.nav.group_main", "Main")}</p>
-            )}
-            {/* [CN-FORK] v0.5.1.64 删侧栏「主页」入口（DashboardView 已下线），首项即「管理 Payload」 */}
-            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} />
-            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} />
-            {/* [CN-FORK] 常用功能组：PKG安装（内嵌 :8844 界面）/ 常用入口 / 游戏管理 */}
-            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'pkg'} onClick={() => setView('pkg')} icon={Package} label={t("app.nav.pkg", "PKG Manager")} />
-            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'common_entries'} onClick={() => setView('common_entries')} icon={Link2} label={t("app.nav.common_entries", "Quick Links")} />
-            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'game_manage'} onClick={() => setView('game_manage')} icon={Gamepad2} label={t("app.nav.game_manage", "Game Manager")} />
-            {sidebarExpanded && (
-              <p className="nav-group-title">{t("app.nav.group_system", "System")}</p>
-            )}
-            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} />
-            <NavButton sidebar sidebarExpanded={sidebarExpanded} active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} />
+            {NAV_GROUPS.map((g) => (
+              <div key={g.id}>
+                {sidebarExpanded && <p className="nav-group-title">{t(g.label[0], g.label[1])}</p>}
+                {NAV_ITEMS.filter((i) => i.group === g.id).map((i) => (
+                  <NavButton
+                    key={i.id}
+                    sidebar
+                    sidebarExpanded={sidebarExpanded}
+                    active={view === i.id}
+                    onClick={() => setView(i.id)}
+                    icon={i.icon}
+                    label={t(i.label[0], i.label[1])}
+                  />
+                ))}
+              </div>
+            ))}
           </nav>
           {/* [CN-FORK] 侧栏底部：fork 维护者 naye 常驻署名 + 当前版本 */}
           <div className="pt-4 mt-2 border-t border-white/5 shrink-0 text-center px-2">
@@ -587,16 +570,19 @@ function App() {
         "fixed bottom-0 inset-x-0 z-[100] bg-black/80 border-t border-white/5 h-[calc(5rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] flex items-center overflow-x-auto hide-scrollbar",
         isPS5 ? "hidden" : "md:hidden"
       )}>
-        {/* [CN-FORK] v0.5.1.64 删移动端「主页」标签，「管理 Payload」上为首项故不再需要分隔线 */}
-        <NavButton active={view === 'storage'} onClick={() => setView('storage')} icon={Database} label={t("app.nav.storage", "Manage Payloads")} mobileLabel={t("app.nav.manage_mobile", "Manage")} />
-        <NavButton showSeparator active={view === 'autoload'} onClick={() => setView('autoload')} icon={RefreshCw} label={t("app.nav.autoload", "Autoload")} mobileLabel={t("app.nav.auto_mobile", "Auto")} />
-        {/* [CN-FORK] 手机端任务栏加长：与桌面侧栏对齐，补入「PKG安装」「常用配置」「游戏管理」 */}
-        <NavButton showSeparator active={view === 'pkg'} onClick={() => setView('pkg')} icon={Package} label={t("app.nav.pkg", "PKG Manager")} mobileLabel={t("app.nav.pkg_mobile", "PKG")} />
-        <NavButton showSeparator active={view === 'common_entries'} onClick={() => setView('common_entries')} icon={Link2} label={t("app.nav.common_entries", "Quick Links")} mobileLabel={t("app.nav.common_entries_mobile", "Links")} />
-        <NavButton showSeparator active={view === 'game_manage'} onClick={() => setView('game_manage')} icon={Gamepad2} label={t("app.nav.game_manage", "Game Manager")} mobileLabel={t("app.nav.game_manage_mobile", "Games")} />
-        <NavButton showSeparator active={view === 'processes'} onClick={() => setView('processes')} icon={Cpu} label={t("app.nav.processes", "Active Processes")} mobileLabel={t("app.nav.processes_mobile", "Processes")} />
-        <NavButton showSeparator active={view === 'settings'} onClick={() => setView('settings')} icon={Settings} label={t("app.nav.settings", "Settings")} mobileLabel={t("app.nav.settings", "Settings")} />
-        {/* [CN-FORK] 捐赠不再占据移动端底部标签位，改由设置页「支持作者」入口进入 */}
+        {/* 手机端任务栏与侧栏同源（NAV_ITEMS）：手机端任务栏此前手动加长到与桌面侧栏同项，
+            现在不用再担心两边漂移；捐赠不占底部标签位，由设置页「支持作者」入口进入。 */}
+        {NAV_ITEMS.map((i, idx) => (
+          <NavButton
+            key={i.id}
+            showSeparator={idx > 0}
+            active={view === i.id}
+            onClick={() => setView(i.id)}
+            icon={i.icon}
+            label={t(i.label[0], i.label[1])}
+            mobileLabel={t(i.mobile[0], i.mobile[1])}
+          />
+        ))}
       </nav>
 
       {/* MAIN CONTENT AREA */}

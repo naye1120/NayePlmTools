@@ -69,7 +69,7 @@
   "settings.theme_title": "Appearance",
   "settings.theme_desc": "Choose dark or light interface; \"Auto\" follows your system preference.",
   "settings.donate_title": "Support the Project",
-  "settings.donate_desc": "This is a fork maintained by naye, based on the original Payload Manager by itsPLK (v0.5.2.95). If you like it, you can buy the original author a coffee.",
+  "settings.donate_desc": "This is a fork maintained by naye, based on the original Payload Manager by itsPLK (v0.5.2.96). If you like it, you can buy the original author a coffee.",
   "storage_hub.launch": "Launch",
   "donate.description": "If you like this project, you can support the original author. Thank you very much!",
   "donate.fork_title": "About This Fork",
@@ -108,5 +108,6 @@
   "settings.startup_title": "Startup & Interface",
   "autoload.move_up": "Move up",
   "autoload.move_down": "Move down",
-  "autoload.remove_item": "Remove from sequence"
+  "autoload.remove_item": "Remove from sequence",
+  "manage_sources.pc_hint_title": "Or manage from a phone or PC"
 }
