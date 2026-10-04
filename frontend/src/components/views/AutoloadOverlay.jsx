@@ -167,7 +167,8 @@ const AutoloadOverlay = ({ status, onCancel, onFinish, isPS5 }) => {
               isPS5 ? "h-[650px]" : "h-[400px] md:h-[650px]"
             )}
           >
-            <div className="flex items-center justify-between mb-6 px-2 sticky top-0 bg-black/20 py-4 z-10 rounded-2xl border-b border-white/5">
+            {/* [CN-FORK] v0.5.2.88 底色改半透明后，粘顶条必须用不透明的浮层底（rail），否则列表滚到它下面会透出来 */}
+            <div className="flex items-center justify-between mb-6 px-2 sticky top-0 bg-ps-surface py-4 z-10 rounded-2xl border-b border-white/5">
               <h3 className="label-caps !text-white !opacity-100 text-sm tracking-widest flex items-center space-x-3">
                 <span>{t("autoload_overlay.payload_list", "Payload List")}</span>
               </h3>
