@@ -26,12 +26,13 @@ const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
     </div>
     <button
       onClick={() => onInstall(p, srcId === 'legacy-repo' ? null : srcId, srcUrl)}
+      /* [CN-FORK] v0.5.2.92 安装/更新按钮收进 .btn 体系：命中高度由 --ctl-h 决定
+       *（PC 44px、电视 68px），不再靠 px/py 撑出 32px 的小条；间距改用 .btn 的 * + * 外边距
+       *（老内核不认 flex gap，原来的 gap-2 在 PS5 上本来就没生效）。 */
       className={cn(
-        "flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm transition-all shrink-0",
-        isPS5 ? "w-auto px-8" : "w-full md:w-auto",
-        p.isUpdate
-          ? "bg-emerald-600 hover:bg-emerald-500 text-white"
-          : "bg-ps-blue hover:bg-ps-blue/90 text-white"
+        "btn",
+        isPS5 ? "px-8" : "w-full md:w-auto",
+        p.isUpdate ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "btn-primary"
       )}
     >
       <CloudDownload className="w-4 h-4" />
@@ -47,7 +48,8 @@ const CategoryGroup = ({ category, payloads, multiSources, isPS5, onInstall, src
     <div className="border-b border-white/5 last:border-0">
       <button 
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors"
+        aria-expanded={expanded}
+        className="w-full flex items-center justify-between px-4 min-h-[var(--ctl-h)] hover:bg-white/5 transition-colors"
       >
         {/* [CN-FORK] 分类组头改用主题变量色：原 text-white/90 在 light-theme 重映射层无规则，浅色下白字不可读 */}
         <span className="font-semibold text-ps-text text-sm">{category} <span className="text-zinc-500">({payloads.length})</span></span>
@@ -263,7 +265,18 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               const remoteMatch = allRemote.find(rp => rp.filename === fileName || rp.installedFilename === fileName)
               const remoteVersion = remoteMatch?.version || (remoteMatch?.filename ? parsePayloadName(remoteMatch.filename).version : null)
               return (
-                <div key={path} onClick={() => loadPayload?.(path)} className="group flex flex-col justify-center p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors gap-2 relative overflow-hidden cursor-pointer">
+                <div
+                  key={path}
+                  onClick={() => loadPayload?.(path)}
+                  /* [CN-FORK] v0.5.2.92 整张卡就是「启动这个 payload」的唯一点击/聚焦单元：
+                   * 补 role+tabIndex 才能进遥控器导航的候选集（spatialNav 把 OK 键转成一次 click），
+                   * min-height 由 .row-link 的 --row-h 决定，电视端一行 88px 才点得着。
+                   * 原 gap-2 在 PS5 老内核上不生效，卡片内间距改由下面的 mt 承担。 */
+                  role="button"
+                  tabIndex={0}
+                  aria-label={t("storage_hub.launch", "Launch")}
+                  className="row-link group flex flex-col justify-center p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors relative overflow-hidden cursor-pointer"
+                >
                   <div className="flex flex-row items-center justify-between w-full gap-3">
                     <div className="flex items-center space-x-3 min-w-0 flex-1">
                       <div className="p-2 rounded-lg shrink-0">
@@ -279,18 +292,22 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="flex items-center shrink-0">
+                      {/* [CN-FORK] v0.5.2.92 图标钮统一走 .icon-btn：命中区与 .btn 同档（PC 44 / 电视 68），
+                          图标本身仍是小尺寸；title 在触屏与遥控器上都看不见，因此补 aria-label。 */}
                       <button
                         onClick={(e) => { e.stopPropagation(); loadPayload?.(path) }}
-                        className="p-2 rounded-lg bg-transparent text-zinc-500 border border-transparent hover:bg-ps-blue/15 hover:text-ps-blue hover:border-ps-blue/30 transition-all"
+                        className="icon-btn"
                         title={t("storage_hub.launch", "Launch")}
+                        aria-label={t("storage_hub.launch", "Launch")}
                       >
                         <Play className="w-4 h-4" />
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); onDelete(fileName) }}
-                        className="p-2 rounded-lg bg-transparent text-zinc-500 border border-transparent hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/30 transition-all"
+                        className="icon-btn hover:bg-red-500/10 hover:text-red-500"
                         title={t("storage_hub.remove_payload", "Remove Payload")}
+                        aria-label={t("storage_hub.remove_payload", "Remove Payload")}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -299,7 +316,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                   {remoteMatch?.isUpdate && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onInstall(remoteMatch, remoteMatch.source_id, legacyRepoUrl) }}
-                      className="w-full flex items-center justify-center gap-2 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold text-xs transition-all"
+                      className="btn mt-1 w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>
@@ -333,8 +350,8 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
           )}
           </div>
           {!cloudDisabled && (
-          <button onClick={() => fetchRemote(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-zinc-500 hover:text-ps-blue" title={t("storage_hub.retry_btn", "Retry Connection")}>
-            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+          <button onClick={() => fetchRemote(true)} className="icon-btn" title={t("storage_hub.retry_btn", "Retry Connection")} aria-label={t("storage_hub.retry_btn", "Retry Connection")}>
+            <RefreshCw className={cn(loading && "animate-spin")} />
           </button>
           )}
         </header>
@@ -342,8 +359,9 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
         <div className="p-4 space-y-4">
         {!cloudDisabled && (
         <div className="flex flex-col md:flex-row gap-3">
-          <div className="flex-1 flex items-center bg-black/40 border border-white/10 rounded-lg px-3.5 py-2 focus-within:border-ps-blue/50 transition-colors">
-            <Search className="w-4 h-4 text-zinc-500 mr-3" />
+          {/* [CN-FORK] v0.5.2.92 搜索条改用 .field：命中高度与输入框同档，浅色/深色都由 inset 档驱动 */}
+          <div className="field flex-1 flex items-center focus-within:border-ps-blue/50 transition-colors">
+            <Search className="w-4 h-4 text-zinc-500 mr-3 shrink-0" />
             <input
               type="text"
               placeholder={t("storage_hub.search_placeholder", "Search payloads by name or description...")}
@@ -352,27 +370,28 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               className="bg-transparent border-none outline-none text-white w-full text-sm font-medium placeholder:text-zinc-600"
             />
           </div>
-          <div className="relative flex-shrink-0 flex items-center bg-black/40 border border-white/10 rounded-lg pl-3.5 pr-9 py-2 focus-within:border-ps-blue/50 transition-colors cursor-pointer">
-            <span className="text-zinc-500 text-xs font-medium mr-2 whitespace-nowrap">
+          {/* [CN-FORK] v0.5.2.92 排序控件改版：此前是「隐形原生 select 盖在假控件上」（opacity-0），
+              鼠标点得中，遥控器和触屏都点不准，而且看不见当前项。改成三枚芯片按钮，
+              选中项用契约里唯一的实心选中档（.btn-primary），间隙用 space-x（margin 实现，老内核可用；
+              flex gap 在 PS5 上根本不生效）。 */}
+          <div className="flex items-center flex-none space-x-2">
+            <span className="text-zinc-500 text-xs font-medium whitespace-nowrap">
               {t("storage_hub.sort_by", "Sort by:")}
             </span>
-            <span className="text-white font-semibold text-xs md:text-sm">
-              {sortMode === 'category' && t("storage_hub.sort_category", "Category")}
-              {sortMode === 'update_time' && t("storage_hub.sort_time", "Update Time")}
-              {sortMode === 'name' && t("storage_hub.sort_name", "Name")}
-            </span>
-            <select 
-               value={sortMode}
-               onChange={e => handleSortChange(e.target.value)}
-               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-             >
-               <option value="category" className="bg-ps-surface">{t("storage_hub.sort_category", "Category")}</option>
-               <option value="update_time" className="bg-ps-surface">{t("storage_hub.sort_time", "Update Time")}</option>
-               <option value="name" className="bg-ps-surface">{t("storage_hub.sort_name", "Name")}</option>
-            </select>
-            <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-zinc-500">
-              <ChevronDown className="w-5 h-5" />
-            </div>
+            {[
+              ['category', t("storage_hub.sort_category", "Category")],
+              ['update_time', t("storage_hub.sort_time", "Update Time")],
+              ['name', t("storage_hub.sort_name", "Name")],
+            ].map(([mode, label]) => (
+              <button
+                key={mode}
+                onClick={() => handleSortChange(mode)}
+                aria-pressed={sortMode === mode}
+                className={cn("btn !px-3 text-xs", sortMode === mode ? "btn-primary" : "btn-ghost")}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
         )}
@@ -465,7 +484,8 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                   {multiSources && (
                     <button
                       onClick={() => setExpandedSource(isExpanded ? null : src.id)}
-                      className="w-full flex items-center justify-between p-4 md:p-5 hover:bg-white/5 transition-colors"
+                      aria-expanded={isExpanded}
+                      className="w-full flex items-center justify-between p-4 md:p-5 min-h-[var(--ctl-h)] hover:bg-white/5 transition-colors"
                     >
                     <div className="flex items-center space-x-4">
                       <div className="p-2.5 rounded-xl">
@@ -604,9 +624,9 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                   <div className="flex items-center shrink-0">
                     <button
                       onClick={() => onImportFromUsb(path)}
-                      className="flex items-center gap-2 px-3 py-2 bg-white/5 hover:bg-ps-blue text-white rounded-lg font-semibold text-xs transition-all border border-white/10 hover:border-ps-blue group/btn"
+                      className="btn btn-outline group/btn"
                     >
-                      <Database className="w-4 h-4 text-ps-blue group-hover/btn:text-white transition-colors" />
+                      <Database className="w-4 h-4 text-ps-blue group-hover/btn:text-current transition-colors" />
                       <span>{t("storage_hub.move_internal_btn", "Move to Internal")}</span>
                     </button>
                   </div>

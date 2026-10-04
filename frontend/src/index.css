@@ -134,6 +134,20 @@
   --radius-ps-xl: 1rem;
   --radius-ps-2xl: 1.5rem;
   --radius-ps-3xl: 2rem;
+
+  /* ── 尺度令牌（[CN-FORK] v0.5.2.92 骨架重构）──
+   * 命中区最小尺寸与整行行高。WCAG 2.2 底线是 24×24，业界实测标准是 iOS 44pt /
+   * Material 48dp；电视端隔着 3 米用遥控器看，要再放大一档才点得着。
+   * 只在这一处定义，端上的差异靠 html[data-device] 覆盖，别在组件里各写各的 padding。 */
+  --ctl-h: 2.75rem; /* 44px：按钮、输入框、图标钮的最小边长 */
+  --row-h: 3.5rem;  /* 56px：整行作为唯一点击/聚焦单元时的行高 */
+}
+
+/* PS5 浏览器（1920×1080 + 遥控器）：命中区整体上抬一档。
+ * 这个属性由 App.jsx 在挂载时按 UA 写入，与 isPS5 判定同源。 */
+html[data-device="ps5"] {
+  --ctl-h: 4.25rem; /* 68px */
+  --row-h: 5.5rem;  /* 88px */
 }
 
 /* @theme removed - Tailwind 4 only directive, using tailwind.config.js instead */
@@ -236,10 +250,30 @@ body {
   border-bottom: 1px solid var(--color-line);
 }
 
-/* Sidebar Item Focus */
-button:focus {
-  outline: none;
+/* ── 焦点可见（[CN-FORK] v0.5.2.92）──
+ * 原来这里是 `button:focus { outline: none }` 一行通杀，等于把键盘与遥控器的
+ * 「我现在在哪」整个抹掉了——PS5 端只有方向键能操作，看不见焦点就寸步难行。
+ * 现在改成：鼠标点按不给环（:focus-visible 之外一律去描边），键盘/遥控器给 2px 实心橙环。
+ * 老内核 WebKit 不认 :focus-visible，电视端由 utils/spatialNav.js 手动挂 .is-focus，
+ * 两条路都指向同一个动作色，不引入第 6 种底。 */
+button:focus,
+a:focus,
+select:focus,
+textarea:focus,
+[tabindex]:focus { outline: none; }
+
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
 }
+.is-focus {
+  outline: 2px solid var(--color-action) !important;
+  outline-offset: 2px;
+}
+/* 整行聚焦时把「行」当作一个控件：描边画在行上，而不是行里某个 32px 的小图标上 */
+.row-link { min-height: var(--row-h); }
+.row-link.is-focus,
+.row-link:focus-visible { outline-offset: -2px; }
 
 /* Neon Glows */
 .neon-text {
@@ -349,6 +383,7 @@ h1, h2, h3, h4 {
 .nav-item {
   display: flex;
   align-items: center;
+  min-height: var(--ctl-h);
   color: var(--color-ps-text-sub);
   cursor: pointer;
   transition: background-color 0.18s ease, color 0.18s ease;
@@ -399,12 +434,15 @@ h1, h2, h3, h4 {
   .page-head > * + * { margin-top: 0; margin-left: 1rem; }
 }
 
-/* ── 按钮：三档形态（实心 / 描边 / 幽灵）+ 危险语义配色，同一套尺寸与圆角 ── */
+/* ── 按钮：三档形态（实心 / 描边 / 幽灵）+ 危险语义配色，同一套尺寸与圆角 ──
+ * [CN-FORK] v0.5.2.92 高度由 min-height: var(--ctl-h) 统一决定（原 padding 撑出的 ≈36px 达不到
+ * 触屏/遥控器可用的尺寸）；字号保持 text-base 量级不变，只把可点区域做大。 */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0.45rem 0.9rem;
+  min-height: var(--ctl-h);
+  padding: 0.3rem 0.9rem;
   border: 1px solid transparent;
   border-radius: 0.5rem;
   font-family: inherit;
@@ -417,6 +455,30 @@ h1, h2, h3, h4 {
 }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn > * + * { margin-left: 0.3rem; }
+
+/* 图标钮：与 .btn 同一档命中区，但保持正方形（w=h=--ctl-h）。
+ * 全站所有「只有一个图标的按钮」都用它，不再手写 p-2 + w-4 h-4 的 32px 小块。 */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ctl-h);
+  height: var(--ctl-h);
+  flex: none;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background-color: transparent;
+  color: var(--color-ps-text-sub);
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+.icon-btn:hover:not(:disabled) { background-color: var(--color-inset-hover); color: var(--color-ps-blue); }
+.icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 图标本身保持原来的小尺寸，放大的是可点区域而不是图形 */
+.icon-btn > svg { width: 1.15rem; height: 1.15rem; }
+/* 电视端可点区域到了 68px，图形跟着放大一档才在沙发上看得到 */
+html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 
 /* 实心：页面唯一的「亮点」，一个视图里最多一个主操作。
  * 与文件末尾的 .sel-chip 同档同色（选中态与主按钮共用 S2），这里只补盒模型 */
@@ -447,10 +509,11 @@ h1, h2, h3, h4 {
 }
 .btn-danger:hover:not(:disabled) { background-color: var(--color-err-tint); border-color: var(--color-err); }
 
-/* ── 表单输入：与 .btn 同一套圆角/字号，底色用第 4 档中性底（inset）保持「凹进去」的输入感 ── */
+/* ── 表单输入：与 .btn 同一套圆角/字号与同一档命中区，底色用第 4 档中性底（inset）保持「凹进去」的输入感 ── */
 .field {
   width: 100%;
-  padding: 0.45rem 0.75rem;
+  min-height: var(--ctl-h);
+  padding: 0.3rem 0.75rem;
   border: 1px solid var(--color-line);
   border-radius: 0.5rem;
   background-color: var(--color-inset);

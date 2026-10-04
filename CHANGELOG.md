@@ -1,3 +1,14 @@
+## v0.5.2.92 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **骨架重构第 1 批：电视端可达性底座（焦点可见 + 遥控器方向键导航 + 命中区尺度）**。配色令牌与「4 档底 + 1 档选中」契约一行未动，本批只改盒模型与交互层：
+  * **焦点不再被抹掉**：`index.css` 原先是 `button:focus { outline: none }` 一行通杀，等于键盘与遥控器完全看不见「我现在在哪」。现改为鼠标点按无环、键盘/遥控器给 2px 实心橙环（`:focus-visible` + 老内核由 JS 手动挂 `.is-focus`，两条路都指向 `--color-action`，不引入第 5 种底）。
+  * **新增 `utils/spatialNav.js`**：PS5 浏览器只有方向键 + OK + 返回，此前全站零按键逻辑。做法是按**几何位置**在当前可见的可操作元素里找方向上最近的一个来聚焦（同列优先，垂距 3 倍惩罚），方向上屏内没有候选时滚动 0.7 屏再找；OK 落在 `div` 实现的可点击行上转成一次 `click()`；返回键派发 `ps5-back` 交外壳裁决（先关浮层再退视图，安装中不许退）。不按页面逐个写 roving tabindex，上游新增页面不用配合改造。仅在 `isPS5` 下挂载，PC/手机的方向键行为不变。
+  * **命中区尺度进令牌层**：`--ctl-h`（PC 44px / 电视 68px，由 `html[data-device]` 切换）与 `--row-h`（56px / 88px）。`.btn`、`.field`、`.nav-item` 改为 `min-height: var(--ctl-h)`（原 `.btn` 靠 padding 撑出的 ≈36px 达不到触屏/遥控器可用尺寸），新增 `.icon-btn`（正方形同档命中、图标本身仍是小尺寸，电视端图形同步放大到 1.75rem）与 `.row-link`（整行作为唯一点击/聚焦单元）。
+  * **管理 Payload 页接入**：已安装的 Payload 卡片补 `role="button" + tabIndex`（否则遥控器永远走不进去），启动/删除/刷新三个图标钮换 `.icon-btn`（原 `p-2` 只有 32px 且 `title` 提示在触屏与遥控器上均不可见，补 `aria-label`），安装/更新按钮换 `.btn` 体系，USB 行「移入本机」换 `.btn.btn-outline`，分类头与来源头给到 `--ctl-h` 行高。
+  * **排序控件改版**：原先是「隐形原生 `<select>`（opacity-0）盖在假控件上」，鼠标点得中、遥控器与触屏点不准，且看不见当前项；改为「分类 / 更新时间 / 名称」三枚芯片按钮，选中项用契约里唯一的实心选中档。搜索条改用 `.field`。
+  * 顺带去掉这一页几处在 PS5 老内核上根本不生效的 `flex gap`（改 `.btn` 内部 `* + *` 外边距或 `space-x`）。
+
 ## v0.5.2.91 (CN-FORK)
 
 ### 🚀 Features & UX Improvements

@@ -46,6 +46,8 @@ import PkgManagerFrame from './components/views/PkgManagerFrame'
 
 // [CN-FORK] 中文排版开关（语言同步）；外观切换控件仅保留在设置页，不常驻侧栏
 import { syncHtmlLang } from './theme/useTheme'
+// [CN-FORK] v0.5.2.92 遥控器空间导航（仅 PS5 端启用）
+import { enableSpatialNav } from './utils/spatialNav'
 
 function App() {
   const { t, i18n } = useTranslation();
@@ -64,6 +66,18 @@ function App() {
   useEffect(() => {
     syncHtmlLang(i18n.language)
   }, [i18n.language])
+
+  /* [CN-FORK] v0.5.2.92 设备档位写进 <html data-device>：index.css 里的命中区尺度
+   * （--ctl-h / --row-h）读它来整体上抬，别在组件里各写各的 padding */
+  useEffect(() => {
+    document.documentElement.setAttribute('data-device', isPS5 ? 'ps5' : 'screen')
+  }, [])
+
+  /* [CN-FORK] v0.5.2.92 电视端接上方向键导航；PC/手机不动，避免抢走列表滚动用的方向键 */
+  useEffect(() => {
+    if (!isPS5) return undefined
+    return enableSpatialNav()
+  }, [])
 
   const [sidebarExpanded, setSidebarExpanded] = useState(() => {
     const saved = localStorage.getItem('sidebarExpanded')
@@ -148,6 +162,33 @@ function App() {
     const id = Date.now()
     setToasts(prev => [...prev, { id, message, type }])
   }
+
+  /* [CN-FORK] v0.5.2.92 视图进入顺序记在 ref 栈里，供遥控器「返回」键回退
+   * （不写 URL/hash：PS5 老内核的 history 行为不可靠，栈在内存里最简单也够用）。 */
+  const viewStackRef = useRef([])
+  useEffect(() => {
+    const stack = viewStackRef.current
+    if (stack[stack.length - 1] !== view) {
+      stack.push(view)
+      if (stack.length > 12) stack.shift()
+    }
+  }, [view])
+
+  /* [CN-FORK] v0.5.2.92 遥控器「返回」：先关最上层的浮层，浮层都空了才退视图。
+   * 安装进行中不许退——那会儿退只会让用户以为没装上。 */
+  useEffect(() => {
+    const onBack = () => {
+      if (confirmModal.show) { setConfirmModal({ show: false }); return }
+      if (downloadModal.show) return
+      if (showLogs) { setShowLogs(false); return }
+      const stack = viewStackRef.current
+      if (stack.length < 2) return
+      stack.pop()
+      setView(stack[stack.length - 1] || 'storage')
+    }
+    window.addEventListener('ps5-back', onBack)
+    return () => window.removeEventListener('ps5-back', onBack)
+  }, [confirmModal.show, downloadModal.show, showLogs])
 
   const removeToast = (id) => {
     setToasts(prev => prev.filter(t => t.id !== id))
