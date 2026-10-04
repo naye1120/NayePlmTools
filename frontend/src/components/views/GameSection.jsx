@@ -69,7 +69,7 @@ function GameCard({ g, iconFailed, onIconError }) {
     { Icon: Tag, key: 'game.act_tags' },
   ]
   return (
-    <div className="bg-black/20 border border-white/10 rounded-xl p-1.5 flex flex-col gap-1.5">
+    <div className="bg-black/20 border border-white/10 rounded-xl p-1.5 flex flex-col space-y-1.5">
       {/* 大图标：宽铺满、1:1 正方形，徽标绝对定位叠右上角 */}
       <div className="relative w-full aspect-square rounded-lg overflow-hidden bg-white/5 border border-white/10 flex items-center justify-center">
         {iconFailed ? (
@@ -86,7 +86,7 @@ function GameCard({ g, iconFailed, onIconError }) {
         {/* [CN-FORK] 左上角竖排徒标：上=平台(PS4/PS5)、下=格式。两枚统一尺寸（固定宽高、居中），
          * 用内联 style 上彩色底 + 白字：既绕开 Tailwind JIT 可能没生成任意色类，也避开浅色主题
          * 把 .text-white 洗成近黑的问题（这里根本不用 text-white 类）。 */}
-        <div className="absolute top-1.5 left-1.5 flex flex-col items-start gap-1">
+        <div className="absolute top-1.5 left-1.5 flex flex-col items-start space-y-1">
           {platform && (
             <span
               className={BADGE}
@@ -132,11 +132,11 @@ function GameCard({ g, iconFailed, onIconError }) {
       {/* 名称 + TID（行末右侧标游戏体积） */}
       <div className="space-y-0.5 min-w-0">
         <p className="text-[14px] font-bold text-white truncate" title={g.name}>{g.name}</p>
-        <div className="flex items-baseline justify-between gap-2">
+        <div className="flex items-baseline justify-between">
           <span className="text-[11px] text-zinc-500 font-mono tracking-wider truncate">{g.tid}</span>
           {sizeLabel && (
             <span
-              className="shrink-0 text-[11px] font-semibold text-zinc-400 tabular-nums"
+              className="shrink-0 ml-2 text-[11px] font-semibold text-zinc-400 tabular-nums"
               title={`${t('game.size', '体积')}: ${sizeLabel}`}
             >
               {sizeLabel}

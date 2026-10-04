@@ -52,8 +52,8 @@ const DonateView = ({ version }) => {
   const donateUrl = 'https://github.com/itsPLK/ps5-payload-manager/blob/main/DONATE.md';
   const upstreamRepoUrl = 'https://github.com/itsPLK/ps5-payload-manager';
   return (
-    <div className="animate-fade-in max-w-6xl mx-auto py-10 xl:py-20 flex flex-col items-center gap-12 xl:gap-16">
-      <div className="flex flex-col xl:flex-row items-center justify-center w-full min-h-[40vh] gap-12 xl:gap-24">
+    <div className="animate-fade-in max-w-6xl mx-auto py-10 xl:py-20 flex flex-col items-center space-y-12 xl:space-y-16">
+      <div className="flex flex-col xl:flex-row items-center justify-center w-full min-h-[40vh] space-y-12 xl:space-y-0 xl:space-x-24">
         {/* Left Column */}
         <div className="flex flex-col items-center text-center space-y-8 md:space-y-10 flex-1 px-4">
           <div className="p-8 md:p-10 rounded-[2.5rem] md:rounded-[3.5rem] bg-red-600/10 border border-red-600/20 text-red-500 shadow-2xl inline-flex">
@@ -108,7 +108,7 @@ const DonateView = ({ version }) => {
           <dt className="text-zinc-500">{t("donate.fork_upstream_version", "Upstream version")}</dt>
           <dd className="text-white font-semibold">v0.5.2</dd>
           <dt className="text-zinc-500">{t("donate.fork_version", "This fork")}</dt>
-          <dd className="text-white font-semibold">v{version || '0.5.2.94'}</dd>
+          <dd className="text-white font-semibold">v{version || '0.5.2.95'}</dd>
         </dl>
         <p className="text-xs text-zinc-500 leading-relaxed">
           {t("donate.fork_donate_note", "Donations through the button above go to the original author (itsPLK), not this fork.")}
@@ -126,15 +126,15 @@ const DonateView = ({ version }) => {
         <ul className="space-y-3">
           {REFERENCES.map((r) => (
             <li key={`${r.author}-${r.where}`} className="text-sm leading-relaxed">
-              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                <a href={r.authorUrl} target="_blank" rel="noopener noreferrer" className="text-white font-semibold hover:underline">
+              <div className="flex flex-wrap items-baseline">
+                <a href={r.authorUrl} target="_blank" rel="noopener noreferrer" className="mr-2 text-white font-semibold hover:underline">
                   {r.author}
                 </a>
-                <span className="text-zinc-600">·</span>
-                <a href={r.projectUrl} target="_blank" rel="noopener noreferrer" className="text-ps-blue hover:underline break-all">
+                <span className="mx-1.5 text-zinc-600">·</span>
+                <a href={r.projectUrl} target="_blank" rel="noopener noreferrer" className="mr-2 text-ps-blue hover:underline break-all">
                   {r.project}
                 </a>
-                <span className="text-zinc-600">—</span>
+                <span className="mx-1.5 text-zinc-600">—</span>
                 <a href={r.whereUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:underline break-all font-mono text-xs">
                   {r.where}
                 </a>

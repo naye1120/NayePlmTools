@@ -50,7 +50,7 @@ export default function PkgManagerFrame() {
 
   if (phase === 'checking' || phase === 'starting') {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 py-32 text-zinc-400">
+      <div className="flex flex-col items-center justify-center space-y-4 py-32 text-zinc-400">
         <RefreshCw className="w-6 h-6 animate-spin text-ps-blue" />
         <p className="text-[14px] font-bold">
           {phase === 'checking' ? t('pkg.frame_checking', '检查 PKG Manager 状态…') : t('pkg.opening', '启动中…')}
@@ -62,7 +62,7 @@ export default function PkgManagerFrame() {
 
   if (phase === 'failed') {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 py-32">
+      <div className="flex flex-col items-center justify-center space-y-4 py-32">
         <p className="text-[14px] font-bold text-red-400">
           {t('pkg.open_fail', 'PKG Manager 启动失败')}
         </p>

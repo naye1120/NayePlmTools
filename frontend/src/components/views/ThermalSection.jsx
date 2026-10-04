@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw, Thermometer, Fan, Power } from 'lucide-react'
+import { cn } from '../../utils/helpers' /* [CN-FORK] v0.5.2.95 档位/开关钮归到 .btn 体系后需要拼类名 */
 import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
@@ -19,7 +20,7 @@ const BTN_PRIMARY = 'btn btn-primary'
 
 function MetricCard({ label, value, unit, warn }) {
   return (
-    <div className="bg-black/20 border border-white/10 rounded-xl p-4 flex flex-col gap-1">
+    <div className="bg-black/20 border border-white/10 rounded-xl p-4 flex flex-col space-y-1">
       <span className="text-[12px] text-zinc-400">{label}</span>
       <span className={`text-2xl font-bold tracking-tight ${warn ? 'text-red-400' : 'text-white'}`}>
         {value}
@@ -107,19 +108,17 @@ function FanControlCard() {
 
   return (
     <div className="bg-black/20 border border-white/10 rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[14px] font-bold text-white inline-flex items-center gap-2">
-          <Fan className="w-4 h-4 text-ps-blue" />
+      <div className="flex items-center justify-between">
+        <span className="text-[14px] font-bold text-white inline-flex items-center">
+          <Fan className="w-4 h-4 text-ps-blue mr-2" />
           {t('thermal.fan_ctrl_title', '风扇温控')}
-          <span className={`text-[12px] font-bold ${status.cls}`}>（{status.text}）</span>
+          <span className={`ml-2 text-[12px] font-bold ${status.cls}`}>（{status.text}）</span>
         </span>
         <button
           type="button"
           disabled={!supported || busy}
           onClick={toggleEnabled}
-          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] font-bold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
-            enabled ? 'sel-chip' : 'bg-white/5 border-white/10 text-zinc-400'
-          }`}
+          className={cn('btn ml-3', enabled ? 'sel-chip' : 'btn-outline')}
         >
           <Power className="w-4 h-4" />
           {enabled ? t('thermal.fan_on', '已启用') : t('thermal.fan_off', '未启用')}
@@ -132,8 +131,8 @@ function FanControlCard() {
         </p>
       ) : (
         <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <span className="text-[12px] text-zinc-400 shrink-0">{t('thermal.fan_target', '目标温度')}</span>
+          <div className="flex items-center">
+            <span className="text-[12px] text-zinc-400 shrink-0 mr-3">{t('thermal.fan_target', '目标温度')}</span>
             <input
               type="range"
               min={MIN}
@@ -143,19 +142,18 @@ function FanControlCard() {
               onChange={(e) => setTarget(Number(e.target.value))}
               className={`flex-1 accent-ps-blue disabled:opacity-40 ${enabled ? '' : 'cursor-not-allowed'}`}
             />
-            <span className="text-[14px] font-bold text-white w-12 text-right tabular-nums">{target}°C</span>
+            <span className="text-[14px] font-bold text-white w-12 text-right tabular-nums ml-3">{target}°C</span>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[12px] text-zinc-400">{t('thermal.fan_presets', '档位')}</span>
+          <div className="flex items-center flex-wrap">
+            <span className="text-[12px] text-zinc-400 mr-2">{t('thermal.fan_presets', '档位')}</span>
             {presets.map((p) => (
               <button
                 key={p.v}
                 type="button"
                 disabled={!enabled}
                 onClick={() => setTarget(p.v)}
-                className={`px-2.5 py-1 rounded-md text-[12px] font-bold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
-                  target === p.v ? 'sel-chip' : 'bg-white/5 border-white/10 text-zinc-300 hover:bg-white/10'
-                }`}
+                className={cn('btn text-xs ml-2',
+                  target === p.v ? 'sel-chip' : 'btn-outline')}
               >
                 {p.label}
               </button>

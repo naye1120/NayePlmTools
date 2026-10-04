@@ -16,7 +16,7 @@ const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
   <div
     className={cn(
       /* [CN-FORK] 风格统一：列表行紧凑内边距，与全局 text-sm 尺度对齐 */
-      "flex flex-col md:flex-row justify-between gap-3 md:gap-6 p-4 transition-all",
+      "flex flex-col md:flex-row justify-between p-4 transition-all",
       multiSources
         ? "hover:bg-white/[0.03]"
         : "bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40",
@@ -36,7 +36,7 @@ const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
        *（老内核不认 flex gap，原来的 gap-2 在 PS5 上本来就没生效）。 */
       className={cn(
         "btn",
-        isPS5 ? "px-8" : "w-full md:w-auto",
+        isPS5 ? "px-8 ml-6" : "w-full md:w-auto mt-3 md:mt-0 md:ml-6",
         p.isUpdate ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "btn-primary"
       )}
     >
@@ -270,7 +270,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                   aria-label={t("storage_hub.launch", "Launch")}
                   className="row-link group flex flex-col justify-center p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors relative overflow-hidden cursor-pointer"
                 >
-                  <div className="flex flex-row items-center justify-between w-full gap-3">
+                  <div className="flex flex-row items-center justify-between w-full">
                     <div className="flex items-center space-x-3 min-w-0 flex-1">
                       <div className="p-2 rounded-lg shrink-0">
                         <Package className="w-4 h-4 text-ps-blue" />
@@ -278,14 +278,14 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <PayloadName path={fileName} className="text-white font-semibold" stacked />
                         {sourceBadge && (
-                          <div className="flex items-center gap-1 text-zinc-500 text-[11px] select-none font-medium">
-                            <Globe className="w-3.5 h-3.5" />
+                          <div className="flex items-center text-zinc-500 text-[11px] select-none font-medium">
+                            <Globe className="w-3.5 h-3.5 mr-1" />
                             <span>{sourceBadge}</span>
                           </div>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center shrink-0">
+                    <div className="flex items-center shrink-0 ml-3">
                       {/* [CN-FORK] v0.5.2.92 图标钮统一走 .icon-btn：命中区与 .btn 同档（PC 44 / 电视 68），
                           图标本身仍是小尺寸；title 在触屏与遥控器上都看不见，因此补 aria-label。 */}
                       <button
@@ -338,7 +338,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
         )}
       >
         {!cloudDisabled && (
-        <div className="flex flex-col md:flex-row gap-3">
+        <div className="flex flex-col md:flex-row">
           {/* [CN-FORK] v0.5.2.92 搜索条改用 .field：命中高度与输入框同档，浅色/深色都由 inset 档驱动 */}
           <div className="field flex-1 flex items-center focus-within:border-ps-blue/50 transition-colors">
             <Search className="w-4 h-4 text-zinc-500 mr-3 shrink-0" />
@@ -354,7 +354,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               鼠标点得中，遥控器和触屏都点不准，而且看不见当前项。改成三枚芯片按钮，
               选中项用契约里唯一的实心选中档（.btn-primary），间隙用 space-x（margin 实现，老内核可用；
               flex gap 在 PS5 上根本不生效）。 */}
-          <div className="flex items-center flex-none space-x-2">
+          <div className="flex items-center flex-none space-x-2 mt-3 md:mt-0 md:ml-3">
             <span className="text-zinc-500 text-xs font-medium whitespace-nowrap">
               {t("storage_hub.sort_by", "Sort by:")}
             </span>
@@ -567,7 +567,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
           ) : (
             payloads.filter(p => p.includes('/mnt/usb')).map((path) => {
               return (
-                <div key={path} className="group flex flex-row items-center justify-between p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors gap-3">
+                <div key={path} className="group flex flex-row items-center justify-between p-3 bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40 transition-colors">
                   <div className="flex items-center space-x-3 min-w-0">
                     <div className="p-2 rounded-lg shrink-0">
                       <Usb className="w-4 h-4 text-ps-blue" />
@@ -577,7 +577,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                       <p className="text-[10px] text-zinc-600 font-mono truncate">{path}</p>
                     </div>
                   </div>
-                  <div className="flex items-center shrink-0">
+                  <div className="flex items-center shrink-0 ml-3">
                     <button
                       onClick={() => onImportFromUsb(path)}
                       className="btn btn-outline group/btn"
@@ -596,7 +596,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
       {isPS5 && (
         <div className={cn(
           /* [CN-FORK] 风格统一：QR 页脚改用 panel-card 体系，去掉 italic 装饰，与其他板块呼应 */
-          "panel-card p-5 flex items-center gap-6 bg-black/40",
+          "panel-card p-5 flex items-center bg-black/40",
           isPS5 ? "flex-row" : "flex-col md:flex-row"
         )}>
           <div className="flex flex-col items-center space-y-3 shrink-0">
@@ -606,9 +606,9 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
             {/* [CN-FORK] IP 地址改用主题变量色 text-ps-text：原先写死 text-white 靠 !important 重映射，PS5 老内核上失效导致浅色主题白字不可读 */}
             <code className="text-ps-text font-mono text-sm font-semibold opacity-90">{ip}:8911</code>
           </div>
-          <div className="flex-1 space-y-2 text-center md:text-left">
-            <h4 className="text-sm font-semibold text-white flex items-center justify-center md:justify-start gap-3">
-              <div className="w-1 h-4 bg-ps-blue rounded-full" />
+          <div className="flex-1 space-y-2 text-center md:text-left mt-6 md:mt-0 md:ml-6">
+            <h4 className="text-sm font-semibold text-white flex items-center justify-center md:justify-start">
+              <div className="w-1 h-4 bg-ps-blue rounded-full mr-3" />
               <span>{t("storage_hub.remote_management_title", "Remote Management")}</span>
             </h4>
             <p className="text-sm text-zinc-400 leading-relaxed font-medium max-w-3xl">

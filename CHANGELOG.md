@@ -1,3 +1,15 @@
+## v0.5.2.95 (CN-FORK)
+
+### 🐛 Bug Fixes
+* **骨架重构第 4 批：老内核 flex gap 清零**。PS5 浏览器内核不支持 flex 盒上的 `gap`（grid 的 `gap` 是支持的，所以网格的一律保留），这批把仍然生效的 flex gap 全部换成 `* + *` 外边距写法；这类地方在 PC 上看着正常，到电视上就是控件贴死、图标压字。逐处：
+  * `theme/ThemeToggle.jsx`：分段控件轨道 `gap-1` → `space-x-1`，三段按钮补 `min-h-[var(--ctl-h)]`（原来 `p-2.5` 撑出的高度够不到命中区尺度），`transition-all` 收窄成 `transition-colors`。
+  * `ThermalSection.jsx` 风扇卡：标题行、目标温度行、档位行的 gap 改边距；「已启用 / 未启用」那颗自写 `px-3 py-1.5 rounded-lg` 的按钮和三枚档位钮归进 `.btn` 体系（开启态仍是 `.sel-chip` 实心橙档，色值不动），图标与文字之间交给 `.btn > * + *`。
+  * `StorageHub.jsx`：云端安装行（窄屏竖排 `mt-3`、宽屏与电视横排 `ml-6`）、已安装卡片图标行、搜索 + 排序那一行、USB 行、QR 页脚与标题竖条，全部改边距。
+  * `GameSection.jsx`：游戏卡纵向堆叠与封面左上角徽标堆叠 `gap-*` → `space-y-*`；体积那格改 `ml-2`。
+  * `DonateView.jsx`：两栏 `gap-12 xl:gap-24` → `space-y-*/xl:space-x-24`，致谢行的 `gap-x-2 gap-y-1` 改成条目自身 `mr-2` + 分隔符 `mx-1.5`。
+  * `PkgManagerFrame.jsx`：两处启动/失败状态块 `gap-4` → `space-y-4`。
+  * 仍然留着 flex gap 的只剩 `ui/PayloadButton.jsx` —— 那是已经没人用的死文件，随下一批死代码清理一起删。
+
 ## v0.5.2.94 (CN-FORK)
 
 ### 🚀 Features & UX Improvements
