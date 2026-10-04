@@ -1,3 +1,8 @@
+## v0.5.2.91 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **补上 `.90` 板块并档漏掉的一块**：云端仓库「多来源」列表容器（`repo.xxx` 那一整块）原用字面类 `bg-ps-card`，仍读 card 档实色 `#0a101d`，在已经变平的板块里显得凸起一块；改用与其余板块同一条通道的 `bg-white/[0.03]`（收口后即 inset 档）。全站板块容器至此只剩一档底，`card` 档不再有组件引用。
+
 ## v0.5.2.90 (CN-FORK)
 
 ### 🚀 Features & UX Improvements

@@ -5,8 +5,8 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-- 版本：`MENU_VERSION = 0.5.2.90`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
-- 工作树：`.88`/`.89`/`.90` 都是 `.87` 契约内的观感微调，**只本地提交、未打包**。上一个也是唯一的现行正式包仍是 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（内嵌标题真实短哈希 `87e6ad3`，非 DEV），.87 的配色改动**尚未实机验收**；.85/.86 是中间态，从未单独出包。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
+- 版本：`MENU_VERSION = 0.5.2.91`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+- 工作树：`.88`–`.91` 都是 `.87` 契约内的观感微调，**只本地提交、未打包**。上一个也是唯一的现行正式包仍是 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（内嵌标题真实短哈希 `87e6ad3`，非 DEV），.87 的配色改动**尚未实机验收**；.85/.86 是中间态，从未单独出包。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
 - 近期定型（.64 → .90）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
   - `.65` 「默认云端仓库」总开关 `DEFAULT_REPO_ENABLED`（现默认关，可彻底停用内置官方源）
@@ -29,6 +29,7 @@
   - `.88` **只调淡 `rail` 与 `inset` 两档**（用户圈定「侧栏 + 已安装 Payload 那几行」，深浅两套主题同步；上一版把 card 也整站半透明、合成后与 .87 几乎无差别，方向错了已回退）。`inset` 改真半透明同色相 tint：深 `rgba(74,106,181,.035)`（压在卡片上 ≈ `#0C1322`，原 `#0F1728`）、浅 `rgba(12,69,155,.042)`（合成 ≈ `#F5F7FB`，原 `#EEF2F8`），悬停档同比例；`rail` 淡到几乎与画布同色（深 `#05080F`、浅 `#FBFCFE`），侧栏分界交给发丝描边。**`rail` 必须保持实色**——它兼任模态面板 `.glass-panel` 与粘顶条的浮层底，透明会让滚过的内容透出来（同理 overlay 粘顶条从 `bg-black/20` 改 `bg-ps-surface`）。`canvas` 与 `card` 不动。**要再调通透度就改这三个 alpha**：`index.css` 的 `:root` 与 `light-theme.css` 的 `:root[data-theme="light"]` 各一处。
   - `.89` **内嵌件再调透 + 图标盒去矩形底 + 图标颜色提鲜**（用户：「深色的管理 Payload 没改 / 浅色所有地方透明度依然不够 / 截图这种地方不要图标的矩形背景颜色，图标本身颜色可以鲜艳一点」）。`inset` alpha 再降一半：深 `.018`（压卡片 `#0B1220`，与卡片只差一档，「管理 Payload」里的行与计数徽章的灰块基本化掉，层次交给发丝线）、浅 `.02`（合成 `#FAFBFD`，接近纯白），悬停深 `.07` / 浅 `.05`。图标盒（板块头、条目、设置项、来源管理、从 USB 移动页）的 `bg-ps-blue/10`、`bg-white/5`、`bg-ps-blue/20+border` 矩形底全部去掉，只留 `p-*` 与圆角占位，盒上的 `group-hover:bg-*` 也一并删（否则悬停把矩形画回来）；原本靠悬停才变橙的图标改为恒常鲜橙。动作色「文字/图标」档提鲜：浅 `#B8410A`→`#F25C05`（`light-theme.css` 三处字面量 + 变量），深 `#FF9152`→`#FF7A2E`（注意 `index.css:23` 老内核兜底那条 `.text-ps-blue` 是写死的，改这里才生效）。**图标类部件的现行规矩：只上色不上底**——新加图标一律直接 `text-ps-blue`，不要再套 `bg-*/10 rounded-*` 的方块。
   - `.90` **板块容器并档：`.panel-card` 底色从 `card` 改读 `inset`**（用户拿两张截图反问「这两个背景一样吗」，并指定「`bg-white/[0.03]`、`panel-card` 改成和其他的相同」）。病灶：`.panel-card` 全站只有 `StorageHub.jsx` 那三个板块在用（深 `#0A101D`），其它页的板块——设置 9 块、温控、游戏管理、常用入口、PKG 卡——都是上游手写 `bg-white/[0.03]` + `rounded-2xl` + `p-5`，在 `.87` 收口层里被当成内嵌件档（深合成 ≈ `#05080E`、浅 `#FAFBFD`）：同一个「板块」角色两套底，相差 R5/G8/B15。**现在的角色表：板块容器 = `inset`（`card` 档实际退役，只剩 `bg-ps-card` 这类字面类还在读它），板块内的行/输入框/徽章同为 `inset`，靠双层叠加与描边区分。** 只改 `index.css` 的 `.panel-card` 一行；圆角、描边、结构与类名未动。
+  - `.91` 补 `.90` 漏掉的一块：云端仓库「多来源」列表容器（`StorageHub.jsx` 里 `multiSources ? …` 那一整块）原用字面类 `bg-ps-card`，还在读 card 档实色 `#0A101D`，在已经变平的板块里凸起一块；改成 `bg-white/[0.03]` 走同一条 inset 通道。**至此全站板块容器只剩一档底，`card` 档零组件引用**（`index.css` 里 `.bg-ps-card → var(--color-card)` 那条映射保留，只为上游若再写这个类名时仍跟主题）。
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |

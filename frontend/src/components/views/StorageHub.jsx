@@ -451,7 +451,8 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
 
               return (
                 <div key={src.id} className={cn(
-                  multiSources ? "bg-ps-card border border-ps-border rounded-ps-3xl overflow-hidden" : "flex flex-col space-y-4"
+                  /* [CN-FORK] v0.5.2.91 多来源列表容器原用 bg-ps-card（card 档实色），是 .90 板块并档后漏掉的一块，改走同一条 inset 通道 */
+                  multiSources ? "bg-white/[0.03] border border-ps-border rounded-ps-3xl overflow-hidden" : "flex flex-col space-y-4"
                 )}>
                   {/* Last Sync for single-source mode */}
                   {!multiSources && src.last_update > 0 && (
