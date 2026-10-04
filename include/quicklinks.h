@@ -14,7 +14,7 @@
 #define MAX_QUICKLINKS         32
 
 /* 输出 {"entries":[{"name":..,"url":..,"src":"auto|manual","alive":bool},...]}，含逐条 TCP 探活。
- * 进入时先做一次 app.db 磁贴同步（需落盘时同步写入，锁外探活）。
+ *  app.db 磁贴同步（需落盘时同步写入，锁外探活）。
  * 探活为同步串行（每条最多 ~400ms），条目数上限 32，最坏十几秒仅出现在整段
  * 局域网不可达时；返回 0。 */
 int quicklinks_list_json(char *buf, size_t size);
