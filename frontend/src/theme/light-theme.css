@@ -10,9 +10,8 @@
  *   剩下留在本文件的只有两类：不读 CSS 变量的实心动作底（bg-ps-blue 系列），
  *   以及刻意保持深色的叠层豁免（封面叠层、模态遮罩、实心底上的白字）。
  *
- * 浅色色板（[CN-FORK] v0.5.2.87 「一档一色」浅色档，v0.5.2.88 起 card/inset 改半透明）：
- *   画布   #ffffff   侧栏 #f6f8fc   卡片 白 75%   内嵌件 深墨蓝 7%   描线 #e7ebf3
- *   （卡片与内嵌件压在白画布上的合成结果仍等于 #ffffff / #eef2f8，叠在彼此上面才自然加深）
+ * 浅色色板（[CN-FORK] v0.5.2.87 「一档一色」浅色档）：
+ *   画布   #ffffff   侧栏 #f6f8fc   卡片 #ffffff   内嵌件 #eef2f8   描线 #e7ebf3
  *   主文字 #0c1220   次要 #3a4661   辅助 #5a677f   更淡 #6b7891   占位符 #8b95a8
  *   选中底/实心按钮 #f25c05 + 白字；动作色「文字」档用深阶橙 #b8410a 保对比度
  *   状态色：成功 #12996b / 警示 #bd7f0f / 危险 #a91f22（与动作橙严格区隔）
@@ -21,14 +20,15 @@
 /* ── 1. 变量档翻转：index.css 的收口层与骨架层全部只读这些变量，翻一次即全站跟随 ── */
 :root[data-theme="light"] {
   color-scheme: light;
-  /* 中性底 4 档 + 发丝线：canvas/rail 实色当桌面，card/inset 走真半透明
-   * （v0.5.2.88 与深色档同步）——inset 的 tint 用同色相深墨蓝，按目标色反推 alpha，
-   * 单独铺在白画布上合成结果与旧实色一致，叠在卡片里会自然再深一点。 */
+  /* 中性底 4 档 + 发丝线
+   * [CN-FORK] v0.5.2.88 与深色档同步：只把 rail（侧栏）与 inset（内嵌件/行）调淡，
+   * 画布与卡片保持 .87 的纯白。rail 仍用实色（模态面板与粘顶条靠它挡内容），
+   * inset 用真半透明的深墨蓝 tint，压在白底上合成 ≈ #f5f7fb，比旧 #eef2f8 淡一档。 */
   --color-canvas: #ffffff;
-  --color-rail: #f6f8fc;
-  --color-card: rgba(255, 255, 255, 0.75);   /* 压在白画布上仍是 #ffffff */
-  --color-inset: rgba(12, 69, 155, 0.07);    /* 压在白画布上 ≈ #eef2f8 */
-  --color-inset-hover: rgba(10, 55, 146, 0.11); /* 压在白画布上 ≈ #e4e9f3 */
+  --color-rail: #fbfcfe;
+  --color-card: #ffffff;
+  --color-inset: rgba(12, 69, 155, 0.042);        /* 压在白画布上 ≈ #f5f7fb */
+  --color-inset-hover: rgba(12, 69, 155, 0.08);   /* 压在白画布上 ≈ #ecf0f7 */
   --color-line: #e7ebf3;
   --color-line-hover: #ccd4e2;
   /* 选中底（S2）：实心橙在浅底压深一档，上面的字改白 */
