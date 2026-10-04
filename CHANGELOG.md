@@ -1,3 +1,16 @@
+## v0.5.2.94 (CN-FORK)
+
+### 🚀 Features & UX Improvements
+* **骨架重构第 3 批：板块 / 页头 / 空态 / 加载态归一 + 开关与选择器收口**。配色契约（canvas/rail/card/inset 四档底 + 一档选中）与色值一行未动，本批只动结构与交互：
+  * **新增四个共用件**：`ui/Section.jsx`（板块 = `.panel-card` + 板块头（图标 / 标题 / 计数徽章 / 右侧操作）+ 统一 body，`headless`/`bodyPad` 供卡中卡与自带头的卡片复用）、`ui/PageHead.jsx`（页头 + 粘顶）、`ui/EmptyState.jsx`、`ui/LoadingState.jsx`。病灶是同一个「板块」角色全站三套写法（`.panel-card`、手写 `bg-white/5 … rounded-2xl p-5 md:p-6`、`bg-white/[0.03] … rounded-ps-3xl`），空态九处各写一遍，spinner 四套。
+  * **页头粘顶（`.head-bar`）**：以前列表一长，「这一页是什么、主操作在哪」立刻滚出视野，电视端和手机端要来回滚找按钮。底色用实色 rail 档，负外边距吃掉 `<main>` 的左右内边距让分界线铺满；限了列宽的页面（`max-w-5xl mx-auto` 这类）传 `bleed={false}`，否则粘顶条会横向伸出内容列去啃 main 的内边距。
+  * **`ui/Switch.jsx`（全站唯一开关）**：设置页五个开关各自抄一份 `w-14 h-7 md:w-20 md:h-10` + `translate-x-7 md:translate-x-10` 的滑块（两份尺寸、五个副本），活动进程页又是另一套 `h-6 w-11`。改为轨道/旋钮尺寸只由尺度令牌给（新增 `--switch-w/--switch-h/--knob-d`，PS5 档整体抬大），旋钮靠 `ml-auto` 推到轨道右端，不再跟着尺寸改要同步两处。
+  * **语言选择器不再「假按钮 + 隐形原生 select」**：原实现是 `opacity-0` 的原生 `<select>` 盖在一个假的 div 上，鼠标点得中但遥控器看不出自己站在什么控件上、聚焦环也画在隐形体上；改成真正的 `<select class="field">`。
+  * **设置页结构整理**：`SettingRow` 只剩一种形状（图标 + 标题/说明 + 右侧控件，说明文字不再靠 `hidden md:!block` 写两份）；「点整行去别处」的四份副本（管理来源 / 日志查看器 / 更新日志 / 支持作者）收成 `NavRow`，整行即按钮、命中区从 24px 图标变成整行；分组标题走 `<Section>`；「更新日志」那段写死在 JSX 里的 45 条副本改为 `CHANGELOG` 数据数组 + 共用 `<Modal>`（原自制浮层不认 Esc/返回键、打开后焦点还在弹窗背后，且 `bg-[#1a1a1e]` 是脱离契约的第 6 种底色）。
+  * **各视图接入**：常用入口（含二级页头返回钮 `back` 统一进页头，删除确认改走全站危险弹窗、操作结果改写进 Toast——原来那行状态小字在卡片网格一长就被顶到首屏之外）、游戏管理（页级标题上移到 `GameManageView`，板块只留小标题）、温控（从「自己写大页头」降为页内板块，避免同屏两个 24px 标题）、活动进程（筛选开关进粘顶页头、搜索条与管理页同形、Kill 按钮从 `opacity-50` 仅悬停显现改常显）、来源管理（删掉「手机一套 + 桌面一套」两份完全重复的行操作按钮，改一套响应式行）、从 USB 导入（按钮全量换 `.btn` 三档形态、按钮行改 `.stack-x`）、自动加载（序列行三个 32px 小方钮换 `.icon-btn`，空态换 `EmptyState`）、PKG Manager 卡片（自带板块头，设置页不再套一层卡中卡）。
+  * **`.panel-head` 去掉 `gap: 0.75rem`**：flex 盒的 gap 在 PS5 老内核根本不生效（grid gap 生效），板块头的间距本来已由组件上的 `ml-3` 给，留着只会让人误以为它在电视上也起作用。
+  * 新词条按 fork 规则只进 `locales-overlay/`（`common.refresh`、`app.buttons.close`、`entries.*`、`game.*`、`thermal.loading`、`manage_sources.*`、`settings.startup_title`、`autoload.move_up/move_down/remove_item` 共 16 条 ×2 语言），上游 locales 子模块未动。
+
 ## v0.5.2.93 (CN-FORK)
 
 ### 🚀 Features & UX Improvements

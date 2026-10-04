@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Play, Power, Upload, RefreshCw } from 'lucide-react'
+import { Play, Power, Upload, RefreshCw, Package } from 'lucide-react'
+import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
 
 /* [CN-FORK] 设置页的 PKG Manager 管理卡片。侧栏「PKG安装」菜单已改为自动拉起并铺满
  * 右侧内容区直接跑它自带界面（:8844），本卡片保留低频管理功能：查看状态/版本、
@@ -85,14 +86,14 @@ export default function PkgManagerCard() {
   const running = !!(status && status.running)
 
   return (
-    <section className="p-4 md:p-5 bg-white/[0.03] rounded-2xl border border-white/10 space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
+    <Section id="pkg-manager" icon={Package} title={t("settings.pkg_title", "PKG Manager")} bodyClass="space-y-4">
+      <div className="flex flex-wrap items-center min-h-[var(--ctl-h)]">
         <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${running ? 'bg-green-400' : 'bg-zinc-600'}`} />
-        <span className="text-[15px] font-bold text-white">
+        <span className="ml-2.5 text-[15px] font-bold text-white">
           {running ? t('pkg.running', '运行中') : t('pkg.stopped', '未运行')}
         </span>
         {status && (
-          <span className="text-[12px] text-zinc-500 tabular-nums">
+          <span className="ml-3 text-[12px] text-zinc-500 tabular-nums">
             {t('pkg.versions', '当前 v{{installed}} · 内置基线 v{{embedded}}', {
               installed: status.installed_version,
               embedded: status.embedded_version
@@ -101,23 +102,23 @@ export default function PkgManagerCard() {
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center">
         <button onClick={launch} disabled={busy === 'launch'} className={BTN_GHOST}>
           <Play className="w-4 h-4" />
           {busy === 'launch' ? t('pkg.launching', '启动中…') : t('pkg.launch_restart', '启动 / 重启')}
         </button>
-        <button onClick={stop} disabled={!running || busy === 'stop'} className={BTN_DANGER}
+        <button onClick={stop} disabled={!running || busy === 'stop'} className={cn(BTN_DANGER, 'ml-2')}
           title={running ? t('pkg.stop_hint', '停止 PKG Manager 守护进程（随时可重新启动）') : t('pkg.stopped', '未运行')}>
           {busy === 'stop' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
           {busy === 'stop' ? t('pkg.stopping', '关闭中…') : t('pkg.stop', '关闭')}
         </button>
-        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy === 'upload'} className={BTN_GHOST}>
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy === 'upload'} className={cn(BTN_GHOST, 'ml-2')}>
           {busy === 'upload' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
           {busy === 'upload' ? t('pkg.uploading', '上传中…') : t('pkg.upload', '上传更新')}
         </button>
         <input ref={fileRef} type="file" accept=".elf,.bin" onChange={upload} className="hidden" />
-        <button onClick={load} title={t('common.refresh', '刷新')} className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition">
-          <RefreshCw className="w-4 h-4" />
+        <button onClick={load} title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} className="icon-btn ml-2">
+          <RefreshCw />
         </button>
       </div>
 
@@ -130,6 +131,6 @@ export default function PkgManagerCard() {
           {msg.text}
         </p>
       )}
-    </section>
+    </Section>
   )
 }

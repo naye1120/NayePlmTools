@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, X, RefreshCw, ExternalLink, Check } from 'lucide-react'
+import { Plus, X, RefreshCw, ExternalLink, Check, Link2 } from 'lucide-react'
+import { cn } from '../../utils/helpers' /* [CN-FORK] v0.5.2.94 板块/页头/空态归一 */
+import PageHead from '../ui/PageHead'
+import Section from '../ui/Section'
+import EmptyState from '../ui/EmptyState'
+import LoadingState from '../ui/LoadingState'
 import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
 
 /* [CN-FORK] 「常用入口」页：手动维护的快捷访问清单（IP:port 类服务导航）。
@@ -99,15 +104,17 @@ const shouldTakeOver = (entry) => {
   return !!findLaunchTarget(launchIndexCache, entry.name)
 }
 
-export default function CommonEntriesView() {
+export default function CommonEntriesView({ showConfirm, addToast }) {
   const { t } = useTranslation()
   const [entries, setEntries] = useState(null) // null=未加载
   const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState(null) // { ok, text }
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ name: '', url: '' })
-  const [confirmIdx, setConfirmIdx] = useState(-1)
   const [startingIdx, setStartingIdx] = useState(-1) // [CN-FORK] 程序类入口正在启动的卡片下标
+
+  /* [CN-FORK] v0.5.2.94 操作反馈统一走全站 Toast。病灶是原来那行写在板块底部的状态小字：
+   * 卡片网格一长，它就被顶到首屏之外，用户看不到「已添加 / 删除失败」以为没生效。 */
+  const notify = (text, type = 'success') => addToast(text, type)
 
   const load = useCallback(async () => {
     try {
@@ -127,7 +134,6 @@ export default function CommonEntriesView() {
     if (url && !/^https?:\/\//i.test(url)) url = `http://${url}`
     if (!form.name.trim() || !url) return
     setBusy(true)
-    setMsg(null)
     try {
       const res = await fetch(
         `/quicklinks_add?name=${encodeURIComponent(form.name.trim())}&url=${encodeURIComponent(url)}&_=${Date.now()}`,
@@ -136,29 +142,39 @@ export default function CommonEntriesView() {
       if (data?.ok) {
         setForm({ name: '', url: '' })
         setAdding(false)
-        setMsg({ ok: true, text: t('entries.saved', '已添加') })
+        notify(t('entries.saved', '已添加'))
       } else {
-        setMsg({ ok: false, text: data?.message || t('entries.save_fail', '添加失败') })
+        notify(data?.message || t('entries.save_fail', '添加失败'), 'error')
       }
     } catch {
-      setMsg({ ok: false, text: t('entries.save_fail', '添加失败') })
+      notify(t('entries.save_fail', '添加失败'), 'error')
     }
     setBusy(false)
     load()
   }
 
+  /* [CN-FORK] v0.5.2.94 删除走全站统一的危险确认弹窗，不再在卡片里叠一层黑底小确认条：
+   * 那两条 13px 小按钮遥控器点不到，而且每个视图各自发明一套确认样式。 */
+  const askRemove = (entry, index) => {
+    showConfirm(
+      t('entries.delete', '删除'),
+      t('entries.confirm_delete', '删除「{{name}}」？', { name: entry.name }),
+      () => remove(index),
+      true /* 删除条目不可逆 → 危险档 */
+    )
+  }
+
   const remove = async (index) => {
-    setConfirmIdx(-1)
     setBusy(true)
-    setMsg(null)
     try {
       const res = await fetch(`/quicklinks_remove?index=${index}&_=${Date.now()}`, { cache: 'no-store' })
       const data = await res.json().catch(() => null)
-      setMsg(data?.ok
-        ? { ok: true, text: t('entries.deleted', '已删除') }
-        : { ok: false, text: data?.message || t('entries.delete_fail', '删除失败') })
+      notify(data?.ok
+        ? t('entries.deleted', '已删除')
+        : data?.message || t('entries.delete_fail', '删除失败'),
+        data?.ok ? 'success' : 'error')
     } catch {
-      setMsg({ ok: false, text: t('entries.delete_fail', '删除失败') })
+      notify(t('entries.delete_fail', '删除失败'), 'error')
     }
     setBusy(false)
     load()
@@ -176,7 +192,6 @@ export default function CommonEntriesView() {
       return
     }
     setStartingIdx(index)
-    setMsg(null)
     let go = false
     try {
       if (await probeEntry(entry)) {
@@ -194,11 +209,8 @@ export default function CommonEntriesView() {
         if (!path) {
           go = true /* 索引失效等边缘情况：不猜程序，直接按普通链接打开 */
         } else if (await isAlreadyRunning(path)) {
-          setMsg({
-            ok: false,
-            text: t('entries.already_running',
-              '该程序看起来已经在运行，但这个地址从本机连不通（可能只监听了 127.0.0.1）'),
-          })
+          notify(t('entries.already_running',
+            '该程序看起来已经在运行，但这个地址从本机连不通（可能只监听了 127.0.0.1）'), 'error')
         } else {
           const res = await fetch(`/loadpayload:${encodeURI(path)}`).catch(() => null)
           if (!res || !res.ok) throw new Error(t('entries.start_fail', '启动失败'))
@@ -208,7 +220,7 @@ export default function CommonEntriesView() {
         }
       }
     } catch (err) {
-      setMsg({ ok: false, text: (err && err.message) || t('entries.start_fail', '启动失败') })
+      notify((err && err.message) || t('entries.start_fail', '启动失败'), 'error')
     }
     setStartingIdx(-1)
     if (go) {
@@ -216,8 +228,8 @@ export default function CommonEntriesView() {
         /* assign 而非写 location.href：后者会被 react-hooks 编译规则判成「渲染内修改不可变值」 */
         tab.location.assign(entry.url)
       } else {
-        setMsg({ ok: false, text: t('entries.tab_blocked',
-          '程序已经起来了，但浏览器拦住了新标签，请再点一次该条目打开') })
+        notify(t('entries.tab_blocked',
+          '程序已经起来了，但浏览器拦住了新标签，请再点一次该条目打开'), 'error')
       }
     } else if (tab) {
       tab.close()
@@ -228,35 +240,38 @@ export default function CommonEntriesView() {
   const list = entries || []
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8 pb-12">
+    <div className="max-w-5xl mx-auto pb-12">
+      {/* [CN-FORK] v0.5.2.94 页头从卡片里挪到页面级并粘顶：主操作（添加入口）常驻可见，
+          不必先滚到页首才能点。卡片式板块头则交给 Section 统一形状。 */}
+      <PageHead
+        bleed={false}
+        title={t('entries.title', '常用入口')}
+        desc={t('entries.desc', '常用插件与局域网服务的快捷访问清单（如 http://192.168.1.214:8844）。条目保存在主机上，手机、电脑、PS5 打开本页看到的都是同一份；绿点表示当前可连通。')}
+        actions={!adding && (
+          <button onClick={() => setAdding(true)} className={BTN_PRIMARY}>
+            <Plus className="w-4 h-4" />
+            {t('entries.add', '添加入口')}
+          </button>
+        )}
+      />
+
+      <div className="mt-6 space-y-8">
       {/* [CN-FORK] 布局：板块一 常用入口（沿用原 quicklinks 全部功能）；板块二 温控管理。
           游戏管理板块已抽出为独立页（侧栏「游戏管理」），不再挂在本页。 */}
-      <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-6">
-      <div className="page-head">
-        <div>
-          {/* [CN-FORK] 大标题文案独立于侧栏：侧栏保持「常用配置」，本页标题用「常用入口」 */}
-          <h2 className="text-2xl font-bold text-white tracking-tight">
-            {t('entries.title', '常用入口')}
-          </h2>
-          <p className="page-desc max-w-2xl">
-            {t('entries.desc', '常用插件与局域网服务的快捷访问清单（如 http://192.168.1.214:8844）。条目保存在主机上，手机、电脑、PS5 打开本页看到的都是同一份；绿点表示当前可连通。')}
-          </p>
-        </div>
-        <div className="page-actions">
-          {!adding && (
-            <button onClick={() => { setAdding(true); setMsg(null) }} className={BTN_PRIMARY}>
-              <Plus className="w-4 h-4" />
-              {t('entries.add', '添加入口')}
-            </button>
-          )}
-          <button onClick={load} title={t('common.refresh', '刷新')} className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition">
-            <RefreshCw className="w-4 h-4" />
+      <Section
+        id="quicklinks"
+        icon={Link2}
+        title={t('entries.list_title', '入口清单')}
+        actions={(
+          <button onClick={load} disabled={busy} title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} className="icon-btn">
+            <RefreshCw className={cn(busy && "animate-spin")} />
           </button>
-        </div>
-      </div>
+        )}
+        bodyClass="space-y-4"
+      >
 
       {adding && (
-        <section className="bg-white/5 border border-ps-blue/40 rounded-2xl p-5">
+        <div className="p-4 bg-white/5 border border-ps-blue/40 rounded-xl">
           <div className="grid grid-cols-1 md:grid-cols-[200px_1fr_auto] gap-3 items-end">
             <div className="space-y-1.5">
               <label className="text-[12px] text-zinc-400">{t('entries.name', '名称')}</label>
@@ -279,12 +294,12 @@ export default function CommonEntriesView() {
                 onKeyDown={(e) => { if (e.key === 'Enter') save() }}
               />
             </div>
-            <div className="flex items-center gap-2 pb-0.5">
+            <div className="flex items-center pb-0.5">
               <button onClick={save} disabled={busy || !form.name.trim() || !form.url.trim()} className={BTN_PRIMARY}>
                 <Check className="w-4 h-4" />
                 {t('entries.save', '保存')}
               </button>
-              <button onClick={() => { setAdding(false); setMsg(null) }} className={BTN_GHOST}>
+              <button onClick={() => { setAdding(false); setMsg(null) }} className={cn(BTN_GHOST, 'ml-2')}>
                 {t('entries.cancel', '取消')}
               </button>
             </div>
@@ -292,26 +307,26 @@ export default function CommonEntriesView() {
           <p className="text-[12px] text-zinc-500 mt-3">
             {t('entries.url_hint', '协议前缀可省略，默认按 http:// 处理；https 请完整书写。')}
           </p>
-        </section>
+        </div>
       )}
 
       {entries === null ? (
-        <div className="flex justify-center py-16">
-          <RefreshCw className="w-5 h-5 text-zinc-500 animate-spin" />
-        </div>
-      ) : list.length === 0 && !adding ? (
-        <p className="text-[14px] text-zinc-500 py-10 text-center border border-dashed border-white/10 rounded-2xl">
-          {t('entries.empty', '还没有入口，点右上角「添加入口」开始')}
-        </p>
+        <LoadingState label={t('entries.loading', '正在读取入口清单…')} />
+      ) : list.length === 0 ? (
+        <EmptyState
+          icon={Link2}
+          title={t('entries.empty_title', '还没有入口')}
+          desc={t('entries.empty', '还没有入口，点右上角「添加入口」开始')}
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {list.map((e, i) => (
-            <div key={`${e.url}-${i}`} className="relative group bg-white/5 border border-white/10 rounded-2xl hover:border-ps-blue/50 transition">
+            <div key={`${e.url}-${i}`} className="relative group bg-white/5 border border-white/10 rounded-xl overflow-hidden">
               <a
                 href={e.url}
                 target="_blank"
                 rel="noreferrer"
-                className="block p-4 space-y-2"
+                className="block p-4 space-y-2 row-link"
                 onClick={(ev) => {
                   /* [CN-FORK] 灰点（探活不通）且本机有对应程序的条目才接管点击去拉起；绿点、以及
                      本机没有对应程序的外网链接一律保持默认新标签打开。拉起对象按名称匹配，不写死
@@ -324,14 +339,16 @@ export default function CommonEntriesView() {
                   }
                 }}
               >
-                <div className="flex items-center gap-2.5 pr-8">
-                  {/* pr-8 是给右上角的删除按钮留位：它 absolute top-2 right-2，不预留就会和
-                      本行末尾的外链图标叠在一起（实机反馈：链接与关闭按钮重合）。
-                      name 上的 min-w-0 是 truncate 在 flex 子里真正生效的前提。 */}
+                {/* [CN-FORK] v0.5.2.94 删除从「右上角 24px 悬浮 ×」改成卡片底部的整行按钮：
+                    小块只在鼠标悬停时才看得出可点，遥控器与触屏基本点不中，而且它压着
+                    外链图标（实机反馈的「链接与关闭按钮重合」就是这里）。整行了还有第三个
+                    好处：焦点能停在行上，删除路径不再需要先「猜」出角落有个按钮。 */}
+                <div className="flex items-center">
+                  {/* name 上的 min-w-0 是 truncate 在 flex 子里真正生效的前提。 */}
                   <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${e.alive ? 'bg-green-400' : 'bg-zinc-600'}`} title={e.alive ? t('entries.alive', '可连通') : t('entries.dead', '当前不可达')} />
-                  <span className="text-[15px] font-bold text-white truncate min-w-0">{e.name}</span>
+                  <span className="ml-2.5 text-[15px] font-bold text-white truncate min-w-0">{e.name}</span>
                   {e.src === 'auto' && (
-                    <span className="shrink-0 px-1.5 py-0.5 rounded bg-ps-blue/15 text-ps-blue text-[11px] font-bold leading-none">
+                    <span className="ml-1.5 shrink-0 px-1.5 py-0.5 rounded bg-ps-blue/15 text-ps-blue text-[11px] font-bold leading-none">
                       {t('entries.auto_tag', '自动')}
                     </span>
                   )}
@@ -340,50 +357,31 @@ export default function CommonEntriesView() {
                 <p className="text-[12px] text-zinc-500 break-all leading-relaxed">{e.url}</p>
               </a>
               {startingIdx === i ? (
-                <div className="absolute inset-0 bg-black/80 rounded-2xl flex flex-col items-center justify-center gap-2.5 px-4">
+                <div className="absolute inset-0 bg-black/80 rounded-xl flex flex-col items-center justify-center space-y-2.5 px-4">
                   <RefreshCw className="w-5 h-5 text-ps-blue animate-spin" />
                   <p className="text-[13px] text-white text-center">
                     {t('entries.starting_prog', '正在启动 {{name}}…', { name: e.name })}
                   </p>
                 </div>
-              ) : confirmIdx === i ? (
-                <div className="absolute inset-0 bg-black/80 rounded-2xl flex flex-col items-center justify-center gap-3 px-4">
-                  <p className="text-[13px] text-white text-center">
-                    {t('entries.confirm_delete', '删除「{{name}}」？', { name: e.name })}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => remove(i)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/80 text-white text-[13px] font-bold hover:bg-red-500 transition">
-                      <X className="w-3.5 h-3.5" />
-                      {t('entries.confirm_yes', '删除')}
-                    </button>
-                    <button onClick={() => setConfirmIdx(-1)} className={BTN_GHOST}>
-                      {t('entries.confirm_no', '取消')}
-                    </button>
-                  </div>
-                </div>
               ) : (
                 <button
-                  onClick={() => setConfirmIdx(i)}
+                  onClick={() => askRemove(e, i)}
                   title={t('entries.delete', '删除')}
-                  className="absolute top-2 right-2 p-1.5 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-white/10 transition"
+                  className="w-full min-h-[var(--ctl-h)] flex items-center border-t border-white/5 px-4 text-[12px] font-bold uppercase tracking-tight text-zinc-500 hover:text-red-400 transition-colors"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-3.5 h-3.5 mr-1.5" />
+                  {t('entries.delete', '删除')}
                 </button>
               )}
             </div>
           ))}
         </div>
       )}
-
-      {msg && (
-        <p className={`text-[14px] font-bold ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>
-          {msg.text}
-        </p>
-      )}
-      </section>
+      </Section>
 
       {/* [CN-FORK] 板块二 温控管理：读 /thermal_stats 展示 CPU/GPU/SSD 温度 + 风扇 */}
       <ThermalSection />
+      </div>
     </div>
   )
 }

@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Gamepad2, RefreshCw, Download, Camera, Pencil, Tag } from 'lucide-react'
+import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
+import EmptyState from '../ui/EmptyState'
+import LoadingState from '../ui/LoadingState'
+import { cn } from '../../utils/helpers'
 
 /* [CN-FORK] 游戏管理板块：读 /game_list 展示「已安装（app.db）+ 已存在（扫描 dump）」游戏。
  * 进页面拉一次 + 手动刷新，不轮询——app.db 全库读 + 目录扫描是有成本的 IO，后端已用
  * mutex + 60s 快照压住频率，这里再叠轮询只会放大风险（参考 /system_stats 死机教训）。
  * 图标走独立 /game_icon?tid= 端点读 icon0.png；读不到（onError）回退占位图。
  * 导出存档 / 导出截图 / 改名 / 多标签 均为后续功能，先以禁用按钮占位（不接后端）。 */
-
-/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层（描边档） */
-const BTN_GHOST = 'btn btn-outline'
 
 /* [CN-FORK] 由 TITLE_ID 前缀判断主机平台（后端 gm_tid_is_game 白名单即这几类前缀）。 */
 function gamePlatform(tid) {
@@ -181,55 +182,41 @@ export default function GameSection() {
   const list = games || []
 
   return (
-    <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="space-y-1.5">
-          <h3 className="text-2xl font-bold text-white tracking-tight">
-            <Gamepad2 className="inline w-6 h-6 mr-2 -mt-1 text-ps-blue" />
-            {t('game.title', '游戏管理')}
-          </h3>
-          <p className="text-[14px] text-zinc-400 max-w-2xl">
-            {t('game.desc', '读取已安装（app.db）与已存在（扫描挂载路径）的游戏；导出存档/截图、改名、多标签后续开放。')}
-          </p>
-        </div>
-        <button onClick={load} disabled={loading} className={BTN_GHOST}>
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          {t('common.refresh', '刷新')}
+    <Section
+      id="game-list"
+      icon={Gamepad2}
+      title={t('game.list_title', '游戏列表')}
+      count={games ? t('game.total', '共 {{n}} 款', { n: count }) : undefined}
+      bodyClass="space-y-4"
+      actions={
+        <button onClick={load} disabled={loading} title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} className="icon-btn">
+          <RefreshCw className={cn(loading && 'animate-spin')} />
         </button>
-      </div>
-
+      }
+    >
+      {/* [CN-FORK] v0.5.2.94 页级大标题与说明上移到 <PageHead>（GameManageView），本块降为页内板块：
+          原来这里既是页头又是板块，同一屏出现两个 24px 标题，且页头不粘顶。 */}
+      {truncated && (
+        <p className="text-[12px] text-amber-400">{t('game.truncated', '列表过大，已截断显示')}</p>
+      )}
       {err && <p className="text-[13px] text-red-400">{err}</p>}
 
       {games === null && !err ? (
-        <div className="flex justify-center py-12">
-          <RefreshCw className="w-5 h-5 text-zinc-500 animate-spin" />
-        </div>
+        <LoadingState label={t('game.loading', '正在读取游戏列表…')} />
       ) : list.length === 0 ? (
-        <p className="text-[14px] text-zinc-500 py-10 text-center border border-dashed border-white/10 rounded-2xl">
-          {t('game.empty', '未发现已安装或已存在的游戏')}
-        </p>
+        <EmptyState icon={Gamepad2} title={t('game.empty', '未发现已安装或已存在的游戏')} />
       ) : (
-        <>
-          <div className="flex items-center justify-between">
-            <span className="text-[13px] text-zinc-400">
-              {t('game.total', '共 {{n}} 款', { n: count })}
-            </span>
-            {truncated && (
-              <span className="text-[12px] text-amber-400">{t('game.truncated', '列表过大，已截断显示')}</span>
-            )}
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {list.map((g) => (
-              <GameCard
-                key={g.tid}
-                g={g}
-                iconFailed={!!failedIcons[g.tid]}
-                onIconError={() => setFailedIcons((m) => ({ ...m, [g.tid]: true }))}
-              />
-            ))}
-          </div>
-        </>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {list.map((g) => (
+            <GameCard
+              key={g.tid}
+              g={g}
+              iconFailed={!!failedIcons[g.tid]}
+              onIconError={() => setFailedIcons((m) => ({ ...m, [g.tid]: true }))}
+            />
+          ))}
+        </div>
       )}
-    </section>
+    </Section>
   )
 }

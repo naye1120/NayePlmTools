@@ -4,6 +4,11 @@ import { useTranslation } from 'react-i18next'
 import { QRCodeSVG } from 'qrcode.react'
 import { cn, isPS5, isIOS, parsePayloadName } from '../../utils/helpers'
 import PayloadName from '../ui/PayloadName'
+// [CN-FORK] v0.5.2.94 骨架归一：页头/板块/空态/加载态改用共用部件，不再在本页手写
+import PageHead from '../ui/PageHead'
+import Section from '../ui/Section'
+import EmptyState from '../ui/EmptyState'
+import LoadingState from '../ui/LoadingState'
 
 const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
   const { t } = useTranslation()
@@ -214,15 +219,12 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
 
   return (
     <div className="space-y-6">
-      {/* [CN-FORK] v0.5.2.85 页头改用骨架层 .page-head（窄屏堆叠 / ≥768px 标题左、操作右），
-          上传按钮统一为 .btn.btn-primary：主色实心是唯一「亮点」，浅色主题下由变量自动加深 */}
-      <div className="page-head">
-        <h2 className="text-2xl font-bold text-white tracking-tight">
-          {t("storage_hub.title_1", "Payload")} <span className="text-ps-blue">{t("storage_hub.title_2", "Management")}</span>
-        </h2>
-
-        {!isPS5 && (
-          <div className="page-actions">
+      {/* [CN-FORK] v0.5.2.94 页头改用共用的 <PageHead>：粘顶（实色 rail 底 + 发丝线），
+          列表再长也能看见「这一页是什么、主操作在哪」；上传仍是本页唯一实心主按钮 */}
+      <PageHead
+        title={<>{t("storage_hub.title_1", "Payload")} <span className="text-ps-blue">{t("storage_hub.title_2", "Management")}</span></>}
+        actions={!isPS5 && (
+          <>
             {/* [CN-FORK] 上传按钮前显示服务器 IP:端口 */}
             <span className="text-xs font-mono text-zinc-500 tracking-tight">{ip}:8911</span>
             <label className="btn btn-primary">
@@ -230,32 +232,23 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               <span>{t("storage_hub.upload_btn", "Upload ELF Payload")}</span>
               <input type="file" className="hidden" onChange={onUpload} accept={isIOS ? undefined : ".elf,.bin"} />
             </label>
-          </div>
+          </>
         )}
-      </div>
+      />
 
       {/* Installed Payloads Section */}
-      {/* [CN-FORK] 风格统一：板块改用 panel-card 容器 + 标准板块头（图标盒/标题/计数/操作右侧），三板块结构一致 */}
-      <section className="panel-card">
-        <header className="panel-head">
-          <div className="flex items-center gap-3 min-w-0">
-            {/* [CN-FORK] v0.5.2.89 图标盒只留间距，不要矩形底色；图标本身用动作橙（用户：截图这种地方不要图标的矩形背景颜色，图标本身颜色可以鲜艳一点） */}
-            <div className="p-2 rounded-lg shrink-0">
-              <Database className="w-4 h-4 text-ps-blue" />
-            </div>
-            <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.installed_title", "Installed Payloads")}</h3>
-          </div>
-          <span className="bg-white/5 px-2.5 py-0.5 rounded-full text-zinc-500 font-medium text-xs shrink-0">
-            {t("storage_hub.files_count", "{{count}} File", { count: internalPayloads.length })}
-          </span>
-        </header>
-
-        <div className={cn("p-4 grid gap-3", isPS5 ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3")}>
+      <Section
+        icon={Database}
+        title={t("storage_hub.installed_title", "Installed Payloads")}
+        count={t("storage_hub.files_count", "{{count}} File", { count: internalPayloads.length })}
+        bodyClass={cn("grid gap-3", isPS5 ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3")}
+      >
           {internalPayloads.length === 0 ? (
-            <div className="col-span-full py-12 border-2 border-dashed border-white/10 rounded-xl flex flex-col items-center justify-center space-y-3">
-              <Package className="w-10 h-10 text-white/10" />
-              <p className="text-zinc-500 font-medium text-sm">{t("storage_hub.library_empty", "Library Empty")}</p>
-            </div>
+            <EmptyState
+              className="col-span-full"
+              icon={Package}
+              title={t("storage_hub.library_empty", "Library Empty")}
+            />
           ) : (
             internalPayloads.map((path) => {
               const fileName = path.split('/').pop()
@@ -330,33 +323,20 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               )
             })
           )}
-        </div>
-      </section>
+      </Section>
 
       {/* Cloud Repository Section */}
-      {/* [CN-FORK] 风格统一：同样改用 panel-card + 标准板块头，刷新按钮收进头部右侧 */}
-      <section id="cloud-repository" className="panel-card">
-        <header className="panel-head">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 rounded-lg shrink-0">
-              <CloudDownload className="w-4 h-4 text-ps-blue" />
-            </div>
-            <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.cloud_repo_title", "Cloud Repository")}</h3>
-          {/* [CN-FORK] v0.5.1.65 默认仓库关闭时在标题位直接说明原因 */}
-          {cloudDisabled && (
-            <span className="text-xs text-zinc-500 normal-case tracking-normal font-medium shrink-0">
-              {t("storage_hub.cloud_repo_disabled_tag", "Disabled in settings")}
-            </span>
-          )}
-          </div>
-          {!cloudDisabled && (
+      <Section
+        id="cloud-repository"
+        icon={CloudDownload}
+        title={t("storage_hub.cloud_repo_title", "Cloud Repository")}
+        bodyClass="space-y-4"
+        actions={!cloudDisabled && (
           <button onClick={() => fetchRemote(true)} className="icon-btn" title={t("storage_hub.retry_btn", "Retry Connection")} aria-label={t("storage_hub.retry_btn", "Retry Connection")}>
             <RefreshCw className={cn(loading && "animate-spin")} />
           </button>
-          )}
-        </header>
-
-        <div className="p-4 space-y-4">
+        )}
+      >
         {!cloudDisabled && (
         <div className="flex flex-col md:flex-row gap-3">
           {/* [CN-FORK] v0.5.2.92 搜索条改用 .field：命中高度与输入框同档，浅色/深色都由 inset 档驱动 */}
@@ -398,27 +378,27 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
 
         {cloudDisabled ? (
           /* [CN-FORK] v0.5.1.65 默认云端仓库关闭态：明确告知是用户自己关的，不是网络问题 */
-          <div className="py-12 rounded-xl border border-white/10 flex flex-col items-center justify-center space-y-4 bg-white/[0.02]">
-            <CloudOff className="w-10 h-10 text-white/15" />
-            <div className="text-center space-y-1">
-              <p className="text-sm font-semibold text-white">{t("storage_hub.repo_disabled", "Cloud Repository Disabled")}</p>
-              <p className="text-zinc-500 text-xs max-w-md leading-relaxed">{t("storage_hub.repo_disabled_desc", "The default cloud repository is turned off in Settings, so no online payload catalog is fetched. Turn it back on to browse and install online payloads.")}</p>
-            </div>
-          </div>
+          <EmptyState
+            dashed={false}
+            className="border border-white/10 rounded-xl bg-white/[0.02]"
+            icon={CloudOff}
+            title={t("storage_hub.repo_disabled", "Cloud Repository Disabled")}
+            desc={t("storage_hub.repo_disabled_desc", "The default cloud repository is turned off in Settings, so no online payload catalog is fetched. Turn it back on to browse and install online payloads.")}
+          />
         ) : loading && !repoData ? (
-          <div className="py-16 flex flex-col items-center justify-center space-y-4">
-            <Loader2 className="w-8 h-8 text-ps-blue animate-spin" />
-            <p className="text-zinc-500 text-sm">{t("storage_hub.syncing", "Syncing with Repository...")}</p>
-          </div>
+          <LoadingState label={t("storage_hub.syncing", "Syncing with Repository...")} />
         ) : error ? (
-          <div className="py-12 rounded-xl border border-red-500/20 flex flex-col items-center justify-center space-y-4 bg-red-950/5">
-            <AlertTriangle className="w-10 h-10 text-red-500 opacity-60" />
-            <div className="text-center">
-              <p className="text-sm font-semibold text-white">{t("storage_hub.repo_unavailable", "Repository Unavailable")}</p>
-              <p className="text-zinc-500 text-xs mt-1">{t("storage_hub.repo_unavailable_desc", "Check your internet connection and try again.")}</p>
-            </div>
-            <button onClick={() => fetchRemote(true)} className="px-5 py-2 bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg font-semibold text-xs transition-all">{t("storage_hub.retry_btn", "Retry Connection")}</button>
-          </div>
+          <EmptyState
+            dashed={false}
+            className="border border-red-500/20 rounded-xl bg-red-950/5"
+            icon={AlertTriangle}
+            iconClassName="text-red-500 opacity-60"
+            title={t("storage_hub.repo_unavailable", "Repository Unavailable")}
+            desc={t("storage_hub.repo_unavailable_desc", "Check your internet connection and try again.")}
+            action={
+              <button onClick={() => fetchRemote(true)} className="btn btn-outline text-xs">{t("storage_hub.retry_btn", "Retry Connection")}</button>
+            }
+          />
         ) : enrichedSources.length > 0 ? (
           /* ===== REPOSITORY CATALOGS ===== */
           <div className="space-y-4">
@@ -523,13 +503,9 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                       multiSources ? "border-t border-white/5 divide-y divide-white/5" : "grid grid-cols-1 gap-4"
                     )}>
                       {src.payloads.length === 0 ? (
-                        <div className="py-12 flex flex-col items-center justify-center space-y-3 text-zinc-600">
-                          <p className="text-sm font-bold uppercase tracking-widest italic">{t("storage_hub.source_empty", "Source is empty")}</p>
-                        </div>
+                        <EmptyState dashed={false} title={t("storage_hub.source_empty", "Source is empty")} />
                       ) : availablePayloads.length === 0 ? (
-                        <div className="py-12 flex flex-col items-center justify-center space-y-3 text-zinc-600">
-                          <p className="text-sm font-bold uppercase tracking-widest italic">{t("storage_hub.all_installed", "All payloads installed")}</p>
-                        </div>
+                        <EmptyState dashed={false} title={t("storage_hub.all_installed", "All payloads installed")} />
                       ) : hasMultipleCategories ? (
                         categories.map(cat => (
                           <CategoryGroup
@@ -564,50 +540,30 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
             })}
           </div>
         ) : (
-          <div className="py-12 border-2 border-dashed border-white/10 rounded-xl flex flex-col items-center justify-center space-y-3">
-            <CloudDownload className="w-10 h-10 text-white/10" />
-            <p className="text-zinc-500 font-medium text-sm">{t("storage_hub.repo_empty", "Repository is empty")}</p>
-          </div>
+          <EmptyState icon={CloudDownload} title={t("storage_hub.repo_empty", "Repository is empty")} />
         )}
-        </div>
-      </section>
+      </Section>
 
       {/* USB Storage Section */}
-      {/* [CN-FORK] 风格统一：USB 板块同样 panel-card + 标准板块头，计数 badge 与另两板块同款式 */}
-      <section id="usb-storage" className="panel-card">
-        <header className="panel-head">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 rounded-lg shrink-0">
-              <HardDrive className="w-4 h-4 text-ps-blue" />
-            </div>
-            <h3 className="text-sm font-semibold text-white truncate">{t("storage_hub.usb_storage_title", "USB Storage")}</h3>
-          </div>
-          <span className="bg-white/5 px-2.5 py-0.5 rounded-full text-zinc-500 font-medium text-xs shrink-0">
-            {t("storage_hub.files_count", "{{count}} File", { count: payloads.filter(p => p.includes('/mnt/usb')).length })}
-          </span>
-        </header>
-
-        <div className={cn("p-4 grid gap-3", isPS5 ? "grid-cols-2" : "grid-cols-1 lg:grid-cols-2")}>
+      <Section
+        id="usb-storage"
+        icon={HardDrive}
+        title={t("storage_hub.usb_storage_title", "USB Storage")}
+        count={t("storage_hub.files_count", "{{count}} File", { count: payloads.filter(p => p.includes('/mnt/usb')).length })}
+        bodyClass={cn("grid gap-3", isPS5 ? "grid-cols-2" : "grid-cols-1 lg:grid-cols-2")}
+      >
           {payloads.filter(p => p.includes('/mnt/usb')).length === 0 ? (
-            <div className="col-span-full py-12 border-2 border-dashed border-white/10 rounded-xl flex flex-col items-center justify-center space-y-4">
-              <div className="relative">
-                <HardDrive className="w-10 h-10 text-white/10" />
-                {!config.SCAN_USB_PAYLOADS && (
-                  <div className="absolute -top-1 -right-1 bg-amber-500/20 rounded-full p-1 border border-amber-500/50">
-                    <AlertTriangle className="w-4 h-4 text-amber-500" />
-                  </div>
-                )}
-              </div>
-              <div className="text-center space-y-2">
-                <p className="text-zinc-500 font-medium text-sm">{t("storage_hub.no_usb_payloads", "No USB Payloads Found")}</p>
-                {!config.SCAN_USB_PAYLOADS && (
-                  <p className="text-xs text-zinc-600 max-w-xs mx-auto leading-relaxed">
-                    {t("storage_hub.usb_scan_disabled_1", "Extended USB scanning is currently disabled.")} <br /> 
-                    <span dangerouslySetInnerHTML={{ __html: t("storage_hub.usb_scan_disabled_2", "Enable <strong>\"Scan USB Payloads\"</strong> in settings to search for payloads on connected drives.") }} />
-                  </p>
-                )}
-              </div>
-            </div>
+            <EmptyState
+              className="col-span-full"
+              icon={HardDrive}
+              title={t("storage_hub.no_usb_payloads", "No USB Payloads Found")}
+              desc={!config.SCAN_USB_PAYLOADS && (
+                <>
+                  {t("storage_hub.usb_scan_disabled_1", "Extended USB scanning is currently disabled.")}{' '}
+                  <span dangerouslySetInnerHTML={{ __html: t("storage_hub.usb_scan_disabled_2", "Enable <strong>\"Scan USB Payloads\"</strong> in settings to search for payloads on connected drives.") }} />
+                </>
+              )}
+            />
           ) : (
             payloads.filter(p => p.includes('/mnt/usb')).map((path) => {
               return (
@@ -634,8 +590,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
               )
             })
           )}
-        </div>
-      </section>
+      </Section>
 
       {/* Footer Info for PS5 */}
       {isPS5 && (

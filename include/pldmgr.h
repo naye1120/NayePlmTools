@@ -56,7 +56,7 @@
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
 
-#define MENU_VERSION "0.5.2.93" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.93，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.94" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.94，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"

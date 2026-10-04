@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { Cpu, RefreshCw, XCircle, Search, AlertTriangle, Activity, Loader2, Info, Trash2 } from 'lucide-react'
+import { Cpu, RefreshCw, XCircle, Search, AlertTriangle, Activity, Info, Trash2 } from 'lucide-react'
 import { useTranslation, Trans } from 'react-i18next'
 import { cn, isPS5 } from '../../utils/helpers'
+import PageHead from '../ui/PageHead' /* [CN-FORK] v0.5.2.94 页头/板块/空态/加载归一 */
+import Section from '../ui/Section'
+import EmptyState from '../ui/EmptyState'
+import LoadingState from '../ui/LoadingState'
+import Switch from '../ui/Switch'
 
 const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
   const { t } = useTranslation()
@@ -83,101 +88,103 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
   }
 
   return (
-    <div className="space-y-8">
-      {/* [CN-FORK] v0.5.2.85 页头接入骨架层 .page-head，与「管理 Payload」同一套布局语义 */}
-      <div className="page-head">
-        <h2 className="text-2xl font-bold text-white tracking-tight">
-          {t("active_processes.title_active", "Active")} <span className="text-ps-blue">{t("active_processes.title_processes", "Processes")}</span>
-        </h2>
-        <div className="page-actions">
-          <label className="flex items-center space-x-3 cursor-pointer group">
-            {/* [CN-FORK] v0.5.2.87 开关收口到契约的第 5 档：关闭态用内嵌件底（inset），开启态整条槽变实心橙芯片，
-                旋钮恒为白——此前是「槽不变、旋钮从白变橙」，选中信号弱 */}
-            <div className={cn(
-              "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
-              showAll ? "sel-chip" : "bg-white/10 group-hover:bg-white/20"
-            )}>
-              <input
-                type="checkbox"
-                className="sr-only"
-                checked={showAll}
-                onChange={(e) => setShowAll(e.target.checked)}
-              />
-              <span
-                className={cn(
-                  "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
-                  showAll ? "translate-x-6" : "translate-x-1"
-                )}
-              />
-            </div>
-            <span className="text-sm font-bold text-zinc-300 select-none cursor-pointer">
+    <div className="space-y-6">
+      {/* [CN-FORK] v0.5.2.94 页头改用共用 <PageHead>（粘顶 + 实色 rail 底）：「显示全部进程」
+          这个开关原来跟着页头滚走，列表一长就得先滚回顶部才能改筛选。 */}
+      <PageHead
+        title={<>{t("active_processes.title_active", "Active")} <span className="text-ps-blue">{t("active_processes.title_processes", "Processes")}</span></>}
+        actions={
+          /* [CN-FORK] v0.5.2.94 这一处原来是全站第 4 种开关写法（h-6 w-11 + translate-x-6），
+              现在与设置页共用 <Switch>，电视端同步抬大到 --switch-* 档。 */
+          <div className="flex items-center">
+            <span className="text-sm font-bold text-zinc-300 mr-3">
               {t("active_processes.show_all", "Show All System Processes")}
             </span>
-          </label>
-        </div>
-      </div>
+            <Switch checked={showAll} onChange={setShowAll} label={t("active_processes.show_all", "Show All System Processes")} />
+          </div>
+        }
+      />
 
-      <section className="space-y-6">
-        <div className="flex items-center bg-black/40 border border-white/10 rounded-2xl px-4 py-3 focus-within:border-ps-blue/50 transition-colors">
-          <Search className="w-5 h-5 text-zinc-500 mr-3" />
+      <Section
+        id="process-list"
+        icon={Cpu}
+        title={t("active_processes.title_processes", "Processes")}
+        count={loading && processes.length === 0 ? null : filteredProcesses.length}
+        bodyClass="space-y-4"
+        actions={
+          <button
+            onClick={() => fetchProcesses()}
+            title={t("common.refresh", "刷新")}
+            aria-label={t("common.refresh", "刷新")}
+            className="icon-btn"
+          >
+            <RefreshCw className={cn(loading && "animate-spin")} />
+          </button>
+        }
+      >
+        {/* [CN-FORK] v0.5.2.94 搜索框与管理 Payload 页同一形状：.field 内嵌件底 + 就地图标 */}
+        <div className="field flex items-center focus-within:border-ps-blue/50">
+          <Search className="w-4 h-4 text-zinc-500 mr-2 shrink-0" />
           <input
             type="text"
             placeholder={t("active_processes.search_placeholder", "Search processes by name...")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="bg-transparent border-none outline-none text-white w-full font-medium placeholder:text-zinc-600"
+            className="flex-1 min-w-0 bg-transparent border-none outline-none text-white font-medium placeholder:text-zinc-600 !p-0"
           />
         </div>
 
         {loading && processes.length === 0 ? (
-          <div className="py-20 flex flex-col items-center justify-center space-y-6">
-            <Loader2 className="w-12 h-12 text-ps-blue animate-spin" />
-            <p className="label-caps animate-pulse text-zinc-500">{t("active_processes.fetching", "Fetching process list...")}</p>
-          </div>
+          <LoadingState label={t("active_processes.fetching", "Fetching process list...")} />
         ) : error ? (
-          <div className="py-12 bg-red-500/10 border border-red-500/20 rounded-2xl flex flex-col items-center justify-center space-y-4">
-            <AlertTriangle className="w-10 h-10 text-red-500" />
-            <p className="text-red-400 font-bold">{t("active_processes.error_loading", "Failed to load processes")}</p>
-            <button onClick={fetchProcesses} className="px-6 py-2 bg-red-500 hover:bg-red-400 text-white rounded-xl font-bold transition-colors">
-              {t("active_processes.retry", "Retry")}
-            </button>
-          </div>
+          <EmptyState
+            icon={AlertTriangle}
+            iconClassName="text-red-500 opacity-60"
+            title={t("active_processes.error_loading", "Failed to load processes")}
+            className="border border-red-500/20 rounded-xl bg-red-950/5"
+            action={
+              <button onClick={() => fetchProcesses()} className="btn btn-danger">
+                <RefreshCw className="w-4 h-4" />
+                <span>{t("active_processes.retry", "Retry")}</span>
+              </button>
+            }
+          />
         ) : filteredProcesses.length === 0 ? (
-          <div className="py-20 flex flex-col items-center justify-center space-y-6 bg-white/[0.02] border-2 border-dashed border-white/5 rounded-2xl">
-            <Cpu className="w-12 h-12 text-zinc-600" />
-            <p className="text-zinc-500 font-bold text-lg">{t("active_processes.no_processes", "No processes found")}</p>
-          </div>
+          <EmptyState icon={Cpu} title={t("active_processes.no_processes", "No processes found")} />
         ) : (
-          <div className="grid grid-cols-1 gap-4">
+          <div className="space-y-3">
             {filteredProcesses.map((p) => {
               const critical = p.name.startsWith('NayePlmTools') || p.name === 'elfldr.elf';
               return (
                 <div key={p.pid} className={cn(
-                  "glass-card p-3 rounded-2xl flex flex-row items-center justify-between gap-3 border-white/10 hover:border-ps-blue/20 transition-all bg-white/[0.01]"
+                  "row-link flex flex-row items-center justify-between p-3 rounded-xl border border-white/10 bg-white/[0.02] hover:border-ps-blue/30 transition-colors"
                 )}>
-                  <div className="flex items-center space-x-4 min-w-0 flex-1">
+                  {/* [CN-FORK] v0.5.2.94 行去掉 .glass-card 的 hover 抬升：整行不是可点对象，
+                      抬起来会误导「这行能点」；Kill 按钮也从 opacity-50 + 仅悬停显现改成常显，
+                      触屏和遥控器没有 hover 态。 */}
+                  <div className="flex items-center min-w-0 flex-1">
                     <div className={cn(
                       "p-3 rounded-xl flex-shrink-0",
                       p.is_daemon ? "bg-ps-blue/10 text-ps-blue" : "bg-white/5 text-zinc-400"
                     )}>
                       <Cpu className="w-5 h-5" />
                     </div>
-                    <div className="min-w-0 flex-1 space-y-1">
+                    <div className="min-w-0 flex-1 ml-3">
                       <h3 className="text-xl font-bold text-white truncate">{p.name}</h3>
-                      <div className="flex items-center space-x-4 text-xs font-mono text-zinc-500 uppercase tracking-wider">
+                      <div className="flex items-center text-xs font-mono text-zinc-500 uppercase tracking-wider mt-1">
                         <span>PID: <span className="text-zinc-300">{p.pid}</span></span>
-                        <span>MEM: <span className="text-zinc-300">{p.memory.toFixed(1)} MiB</span></span>
+                        <span className="ml-4">MEM: <span className="text-zinc-300">{p.memory.toFixed(1)} MiB</span></span>
                       </div>
                     </div>
                   </div>
                   <button
                     onClick={() => handleKill(p)}
                     disabled={critical}
-                    className="px-4 py-2 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-xl font-bold text-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed group-hover:opacity-100 opacity-50 flex items-center space-x-2"
+                    className="btn btn-danger ml-3 shrink-0"
                     title={critical ? t("active_processes.cannot_kill_tooltip", "Cannot kill critical process") : t("active_processes.kill_button", "Kill")}
                   >
                     <Trash2 className="w-4 h-4" />
-                    <span className="hidden sm:inline">{t("active_processes.kill_button", "Kill")}</span>
+                    <span>{t("active_processes.kill_button", "Kill")}</span>
                   </button>
                 </div>
               )
@@ -185,9 +192,9 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
           </div>
         )}
 
-        <div className="flex items-start space-x-3 text-zinc-500 text-sm p-4 glass-card rounded-2xl border-white/5 bg-white/[0.01]">
+        <div className="flex items-start p-4 rounded-xl border border-white/5 bg-white/[0.01]">
           <Info className="w-5 h-5 shrink-0 text-ps-blue" />
-          <div>
+          <div className="ml-3">
             <p className="font-bold text-white mb-1">{t("active_processes.note_title", "Note:")}</p>
             <p className="leading-relaxed">
               <Trans
@@ -198,7 +205,7 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
             </p>
           </div>
         </div>
-      </section>
+      </Section>
     </div>
   )
 }

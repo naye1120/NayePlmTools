@@ -141,6 +141,10 @@
    * 只在这一处定义，端上的差异靠 html[data-device] 覆盖，别在组件里各写各的 padding。 */
   --ctl-h: 2.75rem; /* 44px：按钮、输入框、图标钮的最小边长 */
   --row-h: 3.5rem;  /* 56px：整行作为唯一点击/聚焦单元时的行高 */
+  /* 开关轨道：整站唯一一档尺寸（原来是五个副本各写 w-14 h-7 + md:w-20 h-10 两档） */
+  --switch-w: 3.5rem;
+  --switch-h: 1.75rem;
+  --knob-d: 1.25rem;
 }
 
 /* PS5 浏览器（1920×1080 + 遥控器）：命中区整体上抬一档。
@@ -148,6 +152,9 @@
 html[data-device="ps5"] {
   --ctl-h: 4.25rem; /* 68px */
   --row-h: 5.5rem;  /* 88px */
+  --switch-w: 5.5rem;
+  --switch-h: 2.75rem;
+  --knob-d: 2.125rem;
 }
 
 /* @theme removed - Tailwind 4 only directive, using tailwind.config.js instead */
@@ -245,7 +252,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
   padding: 0.875rem 1.25rem;
   border-bottom: 1px solid var(--color-line);
 }
@@ -434,6 +440,35 @@ h1, h2, h3, h4 {
   .page-head > * + * { margin-top: 0; margin-left: 1rem; }
 }
 
+/* ── 页头粘顶（[CN-FORK] v0.5.2.94）──
+ * sticky 的偏移量相对滚动容器（<main>）的内边距框，所以 top:0 就是贴住 main 的顶边，
+ * 上面那 4rem 的 pt 会随内容滚走、不会露缝。底必须是实色 rail 档：半透明会让滚过的行透出来。
+ * 负外边距是为了吃掉 main 的左右内边距（窄屏 px-6 / ≥768px px-16），让分界线铺满整宽。 */
+.head-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background-color: var(--color-rail);
+  margin: 0 -1.5rem;
+  padding: 0.7rem 1.5rem 0.8rem;
+  border-bottom: 1px solid var(--color-line);
+}
+@media (min-width: 768px) {
+  .head-bar {
+    margin: 0 -4rem;
+    padding: 1rem 4rem 1.1rem;
+  }
+}
+
+/* 限了列宽的页面（max-w-5xl mx-auto 这类）不吃这份负外边距：bleed=false 时回到零出血，
+ * 否则粘顶条会横向伸出内容列去啃 main 的内边距，分界线左右留白、看着像没做完。 */
+.head-bar--flush {
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
 /* ── 横排控件组（弹窗按钮行、表单行）：窄屏竖堆、≥768px 横排 ──
  * [CN-FORK] v0.5.2.93 间距一律用 * + * 外边距而不是 flex gap：PS5 老内核 WebKit 不支持
  * flex 盒的 gap（grid gap 是支持的），原来 Modal 里的 `flex gap-4` 在电视端把两个按钮贴死。 */
@@ -493,6 +528,11 @@ h1, h2, h3, h4 {
 .icon-btn > svg { width: 1.15rem; height: 1.15rem; }
 /* 电视端可点区域到了 68px，图形跟着放大一档才在沙发上看得到 */
 html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
+
+/* 开关（ui/Switch.jsx）：轨道和旋钮的尺寸只在这一处定义，组件里不写死宽高，
+ * 免得再出现「窄屏一档、宽屏一档、电视端没人管」的三份副本。 */
+.switch-track { width: var(--switch-w); height: var(--switch-h); }
+.switch-knob { width: var(--knob-d); height: var(--knob-d); }
 
 /* 实心：页面唯一的「亮点」，一个视图里最多一个主操作。
  * 与文件末尾的 .sel-chip 同档同色（选中态与主按钮共用 S2），这里只补盒模型 */

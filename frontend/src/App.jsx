@@ -696,7 +696,7 @@ function App() {
           {view === 'donate' && <DonateView version={version} />}
 
           {/* [CN-FORK] 常用入口 / 游戏管理 / PKG安装（内嵌 PKG Manager 界面） */}
-          {view === 'common_entries' && <CommonEntriesView />}
+          {view === 'common_entries' && <CommonEntriesView showConfirm={showConfirm} addToast={addToast} />}
           {view === 'game_manage' && <GameManageView />}
           {view === 'pkg' && <PkgManagerFrame />}
         </main>

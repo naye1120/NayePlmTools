@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw, Thermometer, Fan, Power } from 'lucide-react'
+import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
+import EmptyState from '../ui/EmptyState'
+import LoadingState from '../ui/LoadingState'
 
 /* [CN-FORK] 温控管理板块：读 /thermal_stats 展示 CPU / GPU / SSD 温度与风扇占空比，
  * 并提供风扇温控（按温度设定调速目标，见 FanControlCard）。
@@ -225,34 +228,35 @@ export default function ThermalSection() {
   const fan = d && typeof d.fan?.duty === 'number' ? `${d.fan.duty}%` : '—'
 
   return (
-    <section className="bg-white/5 border border-white/10 rounded-2xl p-5 md:p-6 space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="space-y-1.5">
-          <h3 className="text-2xl font-bold text-white tracking-tight">
-            <Thermometer className="inline w-6 h-6 mr-2 -mt-1 text-ps-blue" />
-            {t('thermal.title', '温控管理')}
-          </h3>
-          <p className="text-[14px] text-zinc-400 max-w-2xl">
-            {t('thermal.desc', 'CPU / GPU / SSD 实时温度与风扇转速，并可设定按温度调速的目标阈值。')}
-          </p>
-        </div>
-        <div className="flex items-center gap-4">
-          <label className="inline-flex items-center gap-2 text-[13px] text-zinc-400 cursor-pointer select-none">
+    <Section
+      id="thermal"
+      icon={Thermometer}
+      title={t('thermal.title', '温控管理')}
+      bodyClass="space-y-4"
+      actions={
+        <>
+          <label className="inline-flex items-center mr-3 text-[13px] text-zinc-400 cursor-pointer select-none">
             <input
               type="checkbox"
-              className="accent-ps-blue w-4 h-4"
+              className="accent-ps-blue w-4 h-4 mr-1.5"
               checked={auto}
               onChange={(e) => setAuto(e.target.checked)}
             />
             {t('thermal.auto_refresh', '自动刷新')}
-            <span className="text-zinc-600 tabular-nums">·{AUTO_REFRESH_MS / 1000}s</span>
+            <span className="text-zinc-600 tabular-nums ml-1">·{AUTO_REFRESH_MS / 1000}s</span>
           </label>
           <button onClick={() => load(false)} disabled={loading} className={BTN_GHOST}>
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {t('common.refresh', '刷新')}
           </button>
-        </div>
-      </div>
+        </>
+      }
+    >
+      {/* [CN-FORK] v0.5.2.94 本块从「自己写一个大页头」降为页内板块：主标题已经交给页面级的
+          粘顶 <PageHead>，这里只留一行说明，避免同一屏出现两个 24px 级标题。 */}
+      <p className="text-[14px] text-zinc-400 max-w-2xl">
+        {t('thermal.desc', 'CPU / GPU / SSD 实时温度与风扇转速，并可设定按温度调速的目标阈值。')}
+      </p>
 
       {disabled && (
         <p className="text-[13px] text-amber-400">
@@ -261,20 +265,20 @@ export default function ThermalSection() {
       )}
       {err && <p className="text-[13px] text-red-400">{err}</p>}
 
-      {d && !disabled ? (
+      {!d && loading ? (
+        <LoadingState label={t('thermal.loading', '正在读取温度…')} />
+      ) : d && !disabled ? (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <MetricCard label="CPU" value={temp(d.cpu?.temp)} unit="°C" warn={typeof d.cpu?.temp === 'number' && d.cpu.temp >= 80} />
           <MetricCard label="GPU" value={temp(d.gpu?.temp)} unit="°C" warn={typeof d.gpu?.temp === 'number' && d.gpu.temp >= 80} />
           <MetricCard label="SSD" value={temp(d.ssd?.temp)} unit="°C" warn={typeof d.ssd?.temp === 'number' && d.ssd.temp >= 65} />
           <MetricCard label={t('thermal.fan', '风扇')} value={fan} unit="" warn={false} />
         </div>
-      ) : d || loading || err ? null : (
-        <div className="border border-dashed border-white/10 rounded-xl py-8 text-center text-[14px] text-zinc-500">
-          {t('thermal.pending', '温控数据待接入')}
-        </div>
+      ) : d ? null : (
+        <EmptyState dashed={false} title={t('thermal.pending', '温控数据待接入')} />
       )}
 
       {!disabled && <FanControlCard />}
-    </section>
+    </Section>
   )
 }

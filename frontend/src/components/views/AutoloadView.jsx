@@ -4,6 +4,8 @@ import { cn, isPS5, isSystemPayload } from '../../utils/helpers'
 import { useTranslation } from 'react-i18next'
 import PayloadName from '../ui/PayloadName'
 import Modal from '../ui/Modal'
+import PageHead from '../ui/PageHead' /* [CN-FORK] v0.5.2.94 页头粘顶 + 空态归一 */
+import EmptyState from '../ui/EmptyState'
 
 const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) => {
   const { t } = useTranslation()
@@ -163,62 +165,59 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
 
   const renderSequence = () => (
     <div className="space-y-8 flex flex-col h-full min-h-0">
-      {/* [CN-FORK] v0.5.2.85 页头接入骨架层 .page-head；「停用自启」归到 .btn.btn-danger（淡红芯片，悬停浮红底） */}
-      <div className="page-head shrink-0">
-        <div>
-          <h2 className="text-2xl font-bold text-white tracking-tight">
-            {t("autoload.sequence_title_1", "Autoload")} <span className="text-ps-blue">{t("autoload.sequence_title_2", "Sequence")}</span>
-          </h2>
+      {/* [CN-FORK] v0.5.2.94 页头改走共用 <PageHead>：粘顶，长序列滚到底也看得到「停用自启」；
+          保存状态那条一行留在 desc 位置（高度固定，不会因出现/消失把列表顶得跳一下）。 */}
+      <PageHead
+        title={<>{t("autoload.sequence_title_1", "Autoload")} <span className="text-ps-blue">{t("autoload.sequence_title_2", "Sequence")}</span></>}
+        desc={
           <div className="h-6 mt-1 overflow-hidden">
             {saving ? (
-              <div className="flex items-center space-x-2 text-ps-blue/60 text-xs font-bold uppercase tracking-widest">
-                <RefreshCw className="w-3 h-3 animate-spin" />
+              <div className="flex items-center text-ps-blue/60 text-xs font-bold uppercase tracking-widest">
+                <RefreshCw className="w-3 h-3 mr-2" />
                 <span>{t("autoload.saving", "Saving Changes...")}</span>
               </div>
             ) : saved ? (
-              <div className="flex items-center space-x-2 text-emerald-500 text-xs font-bold uppercase tracking-widest animate-in slide-in-from-bottom-2">
-                <CheckCircle2 className="w-3 h-3" />
+              <div className="flex items-center text-emerald-500 text-xs font-bold uppercase tracking-widest">
+                <CheckCircle2 className="w-3 h-3 mr-2" />
                 <span>{t("autoload.saved", "All Changes Saved")}</span>
               </div>
             ) : null}
           </div>
-        </div>
-        <button
-          onClick={() => handleToggle(false)}
-          className="btn btn-danger"
-        >
-          {t("autoload.disable_btn", "Disable Autoload")}
-        </button>
-      </div>
+        }
+        actions={
+          <button onClick={() => handleToggle(false)} className="btn btn-danger">
+            {t("autoload.disable_btn", "Disable Autoload")}
+          </button>
+        }
+      />
 
       <div className="glass-panel p-4 rounded-ps-2xl border-white/10 flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-2 mb-2 pb-6">
           {autoloadList.map((p, i) => (
-            <div key={`${p}-${i}`} className="relative flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10 animate-in slide-in-from-left duration-200">
+            <div key={`${p}-${i}`} className="relative row-link flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
               <div className="absolute top-0 left-0 w-6 h-6 rounded-full bg-dark flex items-center justify-center z-20">
                 <span className="text-gray-500 text-[12px] font-black">{i + 1}</span>
               </div>
               <div className="flex items-center min-w-0 pl-2">
                 <PayloadName path={p} className="text-white" stacked />
               </div>
-              <div className="flex items-center space-x-2">
-                <button onClick={() => moveUp(i)} disabled={i === 0} className="p-2 bg-white/10 text-zinc-400 hover:bg-ps-blue hover:text-white rounded-xl disabled:opacity-20">
-                  <ChevronUp className="w-5 h-5" />
+              {/* [CN-FORK] v0.5.2.94 三个 32px 小方钮换成共用 .icon-btn（与 PC 44px / 电视 68px 同一档命中区）；
+                  原来 hover 才变实心橙，电视端没有 hover，看着像三块不能按的灰片。 */}
+              <div className="flex items-center">
+                <button onClick={() => moveUp(i)} disabled={i === 0} title={t("autoload.move_up", "上移")} className="icon-btn">
+                  <ChevronUp />
                 </button>
-                <button onClick={() => moveDown(i)} disabled={i === autoloadList.length - 1} className="p-2 bg-white/10 text-zinc-400 hover:bg-ps-blue hover:text-white rounded-xl disabled:opacity-20">
-                  <ChevronDown className="w-5 h-5" />
+                <button onClick={() => moveDown(i)} disabled={i === autoloadList.length - 1} title={t("autoload.move_down", "下移")} className="icon-btn">
+                  <ChevronDown />
                 </button>
-                <button onClick={() => setAutoloadList(autoloadList.filter((_, idx) => idx !== i))} className="p-2 bg-white/10 text-zinc-400 hover:bg-red-600 hover:text-white rounded-xl">
-                  <Trash2 className="w-5 h-5" />
+                <button onClick={() => setAutoloadList(autoloadList.filter((_, idx) => idx !== i))} title={t("autoload.remove_item", "移出序列")} className="icon-btn hover:bg-red-500/10 hover:text-red-500">
+                  <Trash2 />
                 </button>
               </div>
             </div>
           ))}
           {autoloadList.length === 0 && (
-            <div className="flex-1 flex flex-col items-center justify-center opacity-10 italic py-20">
-              <RefreshCw className="w-16 h-16 mb-4" />
-              <p className="text-2xl font-bold">{t("autoload.sequence_empty", "Sequence Empty")}</p>
-            </div>
+            <EmptyState icon={Activity} title={t("autoload.sequence_empty", "Sequence Empty")} dashed={false} className="py-16" />
           )}
 
           <div className={cn("pt-4 mt-2", isPS5 ? "hidden" : "lg:hidden")}>
