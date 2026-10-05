@@ -702,15 +702,18 @@ export default function AccountToolsSection({ addToast }) {
     })()
   }
 
-  /* [CN-FORK] v0.5.2.107 「登出」改成**只退登录态**，离线激活留着 —— 用户口径：
-   * 「为什么登出以后自动反激活了，这个逻辑是不是有问题」。根因在服务端：登出走的是
-   * 按 uid 整段回滚，激活写的那 3 个键和登录态的 22 个键记在同一个 uid 名下，被一起
-   * 退了回去。现在服务端按**来源**再筛一层，这里是配合的两条路：
-   *   登出（signout）      → 只退 SIGNIN + 未标注的老记录，账号仍是「已激活、未登录」，
-   *                          下次点「登入」即可，不用重新激活；
-   *   登出并反激活（signout-full）→ 不分来源全退，回到未激活 —— 也就是原来「登出」的行为。
-   * 已登录时「反激活」单独做会产生不一致状态（未激活但仍登录着，再点登入会被服务端
-   * 以「not activated」拒掉），所以这个位置上换成「登出并反激活」。 */
+  /* [CN-FORK] v0.5.2.107 用户口径（定稿）：「登出 就是只登出，反激活 即 登出并反激活，
+   * 但是按钮文字不要改。」根因在服务端：原来的登出走 `safety_restore_scope(uid)`，
+   * **按 uid 整段回滚**，而激活写的那 3 个键和登录态的 22 个键记在同一个 uid 名下，
+   * 于是一起被退了回去 —— 这就是「登出以后自动反激活」。现在服务端按**来源**再筛一层，
+   * 网页侧两条路一一对应：
+   *   登出（signout）        → 只退 SIGNIN + 未标注的老记录。账号停在「已激活、未登录」，
+   *                            下次点「登入」即可，**不用重新激活**；
+   *   反激活（signout-full）→ 不分来源全退，回到未激活。已登录时它天然等于「登出 + 反激活」
+   *                            （会话先收掉、激活再退掉），所以这一个按钮就同时干两件事。
+   * 界面文字按用户要求**保持「登出」/「反激活」两个词不变**，不出现「登出并反激活」。
+   * 已登录时不再单独提供「只反激活」——那会产生不一致状态（未激活但仍登录着，
+   * 再点登入会被服务端以「not activated」拒掉）。 */
   const doSignout = () => {
     if (!acc) return
     setBusy('signout')
@@ -1076,22 +1079,25 @@ export default function AccountToolsSection({ addToast }) {
                       /* [CN-FORK] v0.5.2.104 用户口径：「登入 和激活 是绿档，登出 是红档，反激活是灰档」。
                           所以撤销类里只有「登出」吃红档，这一格回中性档 —— 它份量低于登出，
                           不该跟它抢同一档红。
-                         [CN-FORK] v0.5.2.107 已登录时这一格是「登出并反激活」（原来「登出」的行为），
-                          未登录时仍是「反激活」。两者都是「把账号还原到更原始的状态」，语义连续。 */
+                         [CN-FORK] v0.5.2.107 用户口径：「登出 就是只登出，反激活 即 登出并反激活，
+                          但是按钮文字不要改」。所以：
+                            · 已登录时这一格 = 「反激活」，点下去走 signout-full（登出 + 反激活一步到位）；
+                            · 未登录时这一格 = 「反激活」，点下去走 deactivate。
+                          两种情况**文字一样**（都叫「反激活」），只是已登录时多带一步退登录。 */
                       className={acc.activated || acc.signedIn ? BTN_GHOST : BTN_GRANT}
                       onClick={acc.signedIn ? doSignoutFull : toggleActivation}
                       disabled={disabled}
                       title={acc.signedIn
-                        ? t('acctools.signout_full_tip', '退出登录，并把账号还原成未激活（原来「登出」的行为）')
+                        ? t('acctools.signout_full_tip', '退出登录并清掉离线激活 —— 已登录时「反激活」就是这两步一起做')
                         : acc.activated
                           ? t('acctools.deactivate_tip', '清掉离线激活，账号回到未激活')
                           : t('acctools.activate_tip', '写入离线激活信息，之后才能登入')}
                     >
                       {busy === 'activate' || busy === 'deactivate' || busy === 'signout-full'
                         ? t('acctools.working', '处理中…')
-                        : acc.signedIn
-                          ? t('acctools.signout_full', '登出并反激活')
-                          : acc.activated ? t('acctools.deactivate', '反激活') : t('acctools.activate', '激活')}
+                        : (acc.activated || acc.signedIn)
+                          ? t('acctools.deactivate', '反激活')
+                          : t('acctools.activate', '激活')}
                     </button>
                   </span>
                 </div>
