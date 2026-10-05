@@ -69,7 +69,7 @@ static enum MHD_Result
 accounts_endpoint(struct MHD_Connection *conn, const char *url) {
   if(!strcmp(url, "/api/accounts")) {
     char *body = accounts_list_json();
-    if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "out of memory");
+    if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "内存不足");
     return serve_json_text(conn, MHD_HTTP_OK, body, strlen(body), 1);
   }
 
@@ -79,13 +79,13 @@ accounts_endpoint(struct MHD_Connection *conn, const char *url) {
     const char *user = MHD_lookup_connection_value(conn,
                           MHD_GET_ARGUMENT_KIND, "user");
     if(!user || !*user)
-      return serve_error(conn, MHD_HTTP_BAD_REQUEST, "missing user");
+      return serve_error(conn, MHD_HTTP_BAD_REQUEST, "缺少 user 参数");
     uint32_t uid = (uint32_t)strtoul(user, NULL, 0);
 
     /* 只读预览：把 signin 真会写的键清单算出来给界面看，一个字节都不写。 */
     if(!strcmp(action, "preview")) {
       char *body = accounts_preview_json(uid);
-      if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "out of memory");
+      if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "内存不足");
       return serve_json_text(conn, MHD_HTTP_OK, body, strlen(body), 1);
     }
 
@@ -99,9 +99,8 @@ accounts_endpoint(struct MHD_Connection *conn, const char *url) {
       if(!cf || strcmp(cf, "online")) {
         static const char n[] =
           "{\"ok\":false,\"needConfirm\":\"online\","
-          "\"message\":\"signin requires confirm=online: it writes auth.dat "
-          "and config.dat, which the shell presents as a signed-in NP "
-          "account. Restore first if you are not sure.\"}";
+          "\"message\":\"登入需要带上 confirm=online：这一步会写 auth.dat 与 "
+          "config.dat，壳层会把它当成一个已登录的 NP 账号。不确定就先执行「还原」。\"}";
         return serve_json_text(conn, MHD_HTTP_CONFLICT, n, sizeof(n)-1, 0);
       }
     }
@@ -114,11 +113,11 @@ accounts_endpoint(struct MHD_Connection *conn, const char *url) {
     if(aid && *aid)
       custom_id = (uint64_t)strtoull(aid, NULL, 0);
     char *body = accounts_action(action, uid, custom_id, to);
-    if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "out of memory");
+    if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "内存不足");
     return serve_json_text(conn, MHD_HTTP_OK, body, strlen(body), 1);
   }
 
-  return serve_error(conn, MHD_HTTP_NOT_FOUND, "no such endpoint");
+  return serve_error(conn, MHD_HTTP_NOT_FOUND, "无此接口");
 }
 
 
@@ -136,7 +135,7 @@ safety_endpoint(struct MHD_Connection *conn, const char *url) {
   else return serve_error(conn, MHD_HTTP_NOT_FOUND, "no such endpoint");
 
   body = accounts_safety_json(mode);
-  if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "out of memory");
+  if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "内存不足");
   return serve_json_text(conn, MHD_HTTP_OK, body, strlen(body), 1);
 }
 
@@ -148,7 +147,7 @@ safety_endpoint(struct MHD_Connection *conn, const char *url) {
 static enum MHD_Result
 pin_endpoint(struct MHD_Connection *conn) {
   char *body = accounts_pin_json();
-  if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "out of memory");
+  if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "内存不足");
   return serve_json_text(conn, MHD_HTTP_OK, body, strlen(body), 1);
 }
 
@@ -156,7 +155,7 @@ pin_endpoint(struct MHD_Connection *conn) {
 static enum MHD_Result
 pin_status_endpoint(struct MHD_Connection *conn) {
   char *body = accounts_pin_status_json();
-  if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "out of memory");
+  if(!body) return serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "内存不足");
   return serve_json_text(conn, MHD_HTTP_OK, body, strlen(body), 1);
 }
 
@@ -179,14 +178,14 @@ psaccounts_handle(struct MHD_Connection *conn, const char *url,
   if(strcmp(method, MHD_HTTP_METHOD_GET) &&
      strcmp(method, MHD_HTTP_METHOD_POST) &&
      strcmp(method, MHD_HTTP_METHOD_HEAD))
-    return serve_error(conn, MHD_HTTP_METHOD_NOT_ALLOWED, "method not allowed");
+    return serve_error(conn, MHD_HTTP_METHOD_NOT_ALLOWED, "不支持的请求方法");
 
   pthread_mutex_lock(&acct_api_mu);
 
   if(!st) {
     st = *con_cls = calloc(1, sizeof(acct_conn_t));
     if(!st) {
-      ret = serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "out of memory");
+      ret = serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "内存不足");
       goto done;
     }
     st->magic = ACCT_CONN_MAGIC;
@@ -196,7 +195,7 @@ psaccounts_handle(struct MHD_Connection *conn, const char *url,
 
   /* 非本模块分配的连接状态（理论上不会走到这里）：不接管，免得把别人的内存搞坏 */
   if(st->magic != ACCT_CONN_MAGIC) {
-    ret = serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "bad connection state");
+    ret = serve_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "连接状态异常");
     goto done;
   }
 
@@ -232,7 +231,7 @@ psaccounts_handle(struct MHD_Connection *conn, const char *url,
   else if(!strncmp("/api/avatar", url, 11))     ret = avatar_request(conn, url);
   else if(!strcmp(url, "/api/remoteplay/pin"))  ret = pin_endpoint(conn);
   else if(!strcmp(url, "/api/remoteplay/pin/status")) ret = pin_status_endpoint(conn);
-  else ret = serve_error(conn, MHD_HTTP_NOT_FOUND, "not found");
+  else ret = serve_error(conn, MHD_HTTP_NOT_FOUND, "未找到该接口");
 
   /* 非流式请求到这里就已经答完了；状态留在原地，由完成回调统一回收 */
 

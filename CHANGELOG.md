@@ -1,3 +1,49 @@
+## v0.5.2.111 (CN-FORK)
+
+> 用户口径（两条，分两轮给）：
+> ① 「现在是按确定确实是点击焦点的那个位置，但是鼠标箭头还是在原来的位置，很违和。第二就是排查一下修改用户名为什么会影响用户ID，正常逻辑是用户ID生成后，只有修改账号ID才修改，改名是不修改ID的。」
+> ② 「在调整一下，所有登入 登出 激活动作要，给中文提示，别报代码了，另外去掉反激活功能，激活几次就不允许反激活了，激活成功，按钮隐藏或者禁用。第一次登出会报这个，并且登出失败，第二次才能登出。」
+
+### 🐛 Bug Fixes
+
+* **① 遥控器模式下系统鼠标箭头还杵在原地（「两套我在哪」）。**
+  * 现象：按 OK 已经正确落在彩色光圈上了，但系统指针纹丝不动，屏幕上同时存在两个「我在哪」。
+  * **前提**：网页**没有任何 API 能移动系统/浏览器指针**（Pointer Lock 只能锁不能搬，合成 `mousemove` 也推不动真光标）。所以「让箭头跟着走」做不到，只能**让箭头消失**。
+  * 实现：`spatialNav.js` 加 `setRemote(on)` —— 按方向键进入遥控器模式时给 `<html>` 挂 `nav-remote` 类，`index.css` 里 `html.nav-remote, html.nav-remote * { cursor: none !important }`；真·指针一动（过了位移判据）立刻摘掉这个类，USB 鼠标路径完全不受影响。卸载时也复位。
+  * 选这个方案而不是「藏光标 + 自己画一个」，是因为**光标本来就是浏览器画的，藏掉即止**，不需要再维护一套假的指针坐标。
+
+* **② 改名会连带改掉「账号 ID」——ID 的来源本来就选错了。**
+  * 现象：界面上那一格 ID 在改过用户名之后会换值，而按用户口径「用户ID生成后，只有修改账号ID才修改，改名是不修改ID的」。
+  * 根因链路：`account_obj()` 里未激活账号显示的是 `derivedId`，而它是 `offact_gen_id(name)` —— **按名字算 FNV-1a 哈希**。名字一变，这个值必然变。同时 `fill_status()` 用 `find_slot(name)` 定槽，改名后调用方拿到的可能仍是旧名 → `slot_for_name(旧名) = 0` → 走 `derived` 分支，正好把「按名字派生」这条路暴露到界面上。
+  * 修法：新增 `offact_gen_id_for_user(uint32_t uid)` —— 按**本地用户 id** 派生（uid 是这个账号在系统里的稳定身份，改名只写注册表 `+0x200` 的 name，`+0x100` 的 uid 一个字节都不动）。`offact_activate()` 不再自己按名字派生（`if(!id) id = offact_gen_id(name)` 删除，改成 `if(!id) return -1`），默认值一律由 `accounts_action` 显式算好传下去 —— 于是「界面上预览的 `derivedId`」与「激活时真写进注册表的 id」用的是**同一个函数、同一个 uid**，永远一致。
+
+* **③ 第一次点「登出」会报错并失败，第二次才行。**
+  * 根因：`fill_status()` 原来**只按名字**找槽位，而名字来自 `sceUserServiceGetUserName()`。UserService 对一个**刚激活、还没进过壳层用户列表**的账号会滞后一帧（首帧取到空串或旧名）→ `find_slot()` 返回 0 → `out->slot = 0` → 登出走进「没有对应的注册表槽位，无法登出」直接失败。第二次点击时 UserService 已经跟上，于是成功。
+  * 修法：`fill_status()` 改成 **uid 优先、名字兜底**（新增 `find_slot_by_uid()`，读槽基址 `+0x100`）。选 uid 优先而不是「名字优先、uid 兜底」，是因为**名字是全局唯一的** —— 万一 UserService 返回的是**另一个槽**的名字，名字路径会理直气壮地指向那一格，那比「找不到槽位」更糟（会去动别人的身份）。uid 只可能命中它自己那一格。
+  * 顺带把槽里的真名回填进 `out->user_name`：调用方传进来的那个可能滞后或为空，而后面所有提示语、以及登入时写进 `auth.dat`/`config.dat` 的身份都用它。
+
+### ✨ Features / 口径变更
+
+* **④ 所有登入 / 登出 / 激活（以及改名、接口错误）的提示一律改中文，不再报英文诊断串。**
+  * `npsignin.c` 的 `out->message`、`npsignin.c` 改名四层诊断（profile 缓存 / user home / user_list.dat 探针）、`accounts.c` 的 `message`、`api.c` 的 `serve_error` 文案、以及 `confirm=online` 那道 409 的说明，全部换成中文。
+  * 技术标识保留原样（`auth.dat` / `config.dat` / `online.json` / `user_list.dat` / `login_flag` / 十六进制错误码），因为它们是要拿去核对文件的，不算「报代码」。
+  * 顺带受益：`esc_json()` 原样透传 ≥ 0x20 的字节，UTF-8 中文进出无碍；`message` 缓冲 768 字节、JSON 体 4096 字节，中文串远未触顶。
+
+* **⑤ 去掉「反激活」；激活成功后按钮整颗收起。**
+  * 界面：原来那颗按钮同时兼任「激活」与「反激活」。现在只剩「激活」一件事 —— `acc.activated` 为真时**整颗不渲染**。选「隐藏」而不是「变灰禁用」，是因为电视端方向键会把灰按钮也算作一个落点：一颗永远点不动的按钮只会让人以为坏了，还白占一次按键。`doSignoutFull()` 随之删除。
+  * 服务端 `accounts_action` 的 `deactivate` / `signout-full` 两个动作**保留**，只作为 HTTP 层的退路（它们是单账号退回未激活的唯一手段；删掉就只剩 `/api/safety/restore` 的全量还原）。界面已不再引用。
+  * 词条 `acctools.deactivate` / `acctools.deactivate_tip` / `acctools.signout_full_tip` 从两份 overlay 里移除。
+
+### ✅ Verification
+
+* **主机端单测（WSL clang `-Wall -Wextra`，零告警）**：
+  * **新增 `test/slot_resolve_test.c` —— 23 / 23 全绿**，专打 ③：名字滞后成空串 / 旧名 / **别人的名字**三种情况下都按 uid 解到正确的槽；`npsignin_signout` 在名字为空时**第一次点就成功**、且不再出现「没有对应的注册表槽位」；未知 uid 仍如实报错（不许假装成功）。C 组是「uid 优先」这条设计的关键性质：传入槽 3 的名字（Bob）配槽 1 的 uid，必须仍解到槽 1。
+  * `test/offact_genid_test.c` **13 / 13**（含「预览 == 实际写入」「改名后 derivedId 一字不变」两条硬判据）；`test/safety_origin_test.c` **39 / 39**。
+* **浏览器回归（Playwright + 本地 `vite preview`，`**/api/**` 全打桩）**：
+  * **新增 `acct111.mjs` —— 23 / 23 全绿**，取代被本轮口径推翻的 `acct107.mjs`（已删除）。断言：未激活=「登入 + 激活」两颗；**已激活未登录 / 已登录都只剩一颗**；板块内不出现「反激活」「登出并反激活」字样；全程**不发出** `/accounts/deactivate` 或 `signout-full`；「登出」仍打 `/accounts/signout`（不带 `-full`）；英文包同样只剩一颗且已译。
+  * `nav110.mjs` **16 / 16**（含新增的 ⑦ 藏光标三连：未按方向键不藏 / 按方向键藏 / 真指针一动立刻恢复）、`cropfix.mjs` **75 / 75**、`avatar109.mjs` **19 / 19**。
+* `npx eslint src/components/views/AccountToolsSection.jsx`：干净；两份 overlay JSON 解析通过。
+
 ## v0.5.2.110 (CN-FORK)
 
 > 用户口径：「修一个 ps5 端的 BUG，ps5 端按上下按钮的时候会有一个彩色光圈，但是点击确定的时候依然是鼠标焦点生效，所以，这个功能可以考虑，鼠标也要跟着移动。」

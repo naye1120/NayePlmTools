@@ -43,7 +43,17 @@
  *
  * **排障开关**：URL 带 `?navdebug=1` 时右上角挂一个只读小面板，实时显示最近一次
  * keydown / click 的处理结果（放行、吞掉、改投、以及改投到了谁）。实机复现不了、
- * 又没有控制台，这个小面板就是唯一的取证手段。 */
+ * 又没有控制台，这个小面板就是唯一的取证手段。
+ *
+ * ────────────────────────────────────────────────────────────────────
+ * [CN-FORK] v0.5.2.111 遥控器模式下藏掉系统光标
+ * ────────────────────────────────────────────────────────────────────
+ * 用户口径：「按确定确实是点击焦点的那个位置，但是鼠标箭头还是在原来的位置，很违和。」
+ *
+ * 系统光标**没法被网页搬走**（Pointer Lock 只能锁不能移），所以正解不是「让箭头跟着走」，
+ * 而是**把它藏起来**：遥控器模式下只留光圈一套视觉，光圈就是光标。类挂在 <html> 上
+ * （`html.nav-remote`，CSS 在 index.css），真·指针一动立刻摘掉、光标恢复。
+ * 只在按过方向键之后才藏 —— 进页面还没按过方向键时、以及电脑端预览，光标照常可见。 */
 const FOCUSABLE = [
   'a[href]',
   'button:not([disabled])',
@@ -159,9 +169,26 @@ export function enableSpatialNav() {
   let pointerAnchor = null;  // 位移判据的基准坐标 {x,y}；null = 还没有基准
   let okArmedAt = 0;         // 刚由 OK 键亲自激活过，等吞掉随后那一发合成 click
 
+  /* ── v0.5.2.111 遥控器模式藏掉系统光标 ──
+   * 系统光标没法被网页搬走，而它停在原地会与光圈形成两个焦点（用户：「鼠标箭头还是在原来的
+   * 位置，很违和」）。所以遥控器模式下把它藏起来，让光圈成为唯一光标。CSS 见 index.css 的
+   * html.nav-remote。注意与 pointerMode 的区别：pointerMode 是「这一发 click 要不要放行」，
+   * 本标记是「光标要不要显示」——初始都是 false，但只有**按过方向键**才藏（进页面还没按过时
+   * 光标该看得见就看得见，电脑端预览也因此不受影响）。 */
+  let remoteActive = false;
+
   const ARROW_GRACE_MS = 400;
   const POINTER_MOVE_PX = 12; // 位移超过这个距离才算「用户真的在动鼠标」（不是光标抖动）
   const OK_SWALLOW_MS = 800;
+
+  function setRemote(on) {
+    if (remoteActive === on) return;
+    remoteActive = on;
+    const root = document.documentElement;
+    if (!root || !root.classList) return;
+    if (on) root.classList.add('nav-remote');
+    else root.classList.remove('nav-remote');
+  }
 
   /* 排障面板：只在 ?navdebug=1 时建，平时零开销 */
   let hudEl = null;
@@ -241,6 +268,8 @@ export function enableSpatialNav() {
     }
     if (!pointerMode) hud('pointer moved → 鼠标模式（click 放行）');
     pointerMode = true;
+    /* [CN-FORK] v0.5.2.111 真·指针在动 = 用户回到鼠标，立刻把系统光标放出来 */
+    setRemote(false);
   };
 
   /* [CN-FORK] v0.5.2.110 捕获阶段拦 click：让「确定」落在光圈上，而不是指针位置。 */
@@ -284,6 +313,8 @@ export function enableSpatialNav() {
       arrowGraceUntil = Date.now() + ARROW_GRACE_MS;
       pendingAnchor = true;
       pointerAnchor = null;
+      /* [CN-FORK] v0.5.2.111 既然是遥控器在操作，就把系统光标藏掉 —— 只剩光圈一套视觉 */
+      setRemote(true);
       const list = collect();
       if (!list.length) return;
       /* [CN-FORK] v0.5.2.98 起点取「候选集合里的那一项」而不是裸元素：pickNext 读的是
@@ -366,5 +397,7 @@ export function enableSpatialNav() {
     window.removeEventListener('pointermove', onPointerMove, true);
     if (hudEl && hudEl.parentNode) hudEl.parentNode.removeChild(hudEl);
     navTarget = null;
+    /* [CN-FORK] v0.5.2.111 卸载时把遥控器模式的类摘掉，别把系统光标留在隐藏状态 */
+    setRemote(false);
   };
 }

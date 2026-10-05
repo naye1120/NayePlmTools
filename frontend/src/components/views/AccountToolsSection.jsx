@@ -497,7 +497,8 @@ export default function AccountToolsSection({ addToast }) {
   const [b64Id, setB64Id] = useState('')
   const [decId, setDecId] = useState('')
   const [renameVal, setRenameVal] = useState('')
-  const [busy, setBusy] = useState('') // '' | signin | signout | activate | deactivate | rename | sync | pin
+  /* [CN-FORK] v0.5.2.111 「反激活」已从界面撤掉，busy 不再有 deactivate / signout-full 两档 */
+  const [busy, setBusy] = useState('') // '' | signin | signout | activate | rename | sync | pin
   const [avatarSrc, setAvatarSrc] = useState('')
   const [avatarFailed, setAvatarFailed] = useState(false)
   const [crop, setCrop] = useState({ show: false, src: '' })
@@ -681,21 +682,29 @@ export default function AccountToolsSection({ addToast }) {
     await refreshAccount()
   }
 
-  const toggleActivation = () => {
-    if (!acc) return
+  /* [CN-FORK] v0.5.2.111 用户口径：「去掉反激活功能，激活几次就不允许反激活了，激活成功，
+   * 按钮隐藏或者禁用。」
+   *
+   * 这一格从此只剩「激活」一件事：
+   *   · 账号未激活 → 显示「激活」（绿档），点下去写入离线激活信息；
+   *   · 账号已激活 → 按钮**整颗不渲染**（acc.activated 为真直接收起）。
+   *     选「隐藏」而不是「变灰禁用」，是因为电视端方向键会把灰按钮也当成一个落点 ——
+   *     一颗永远点不动的按钮只会让人以为坏了，还多占一次按键。
+   *
+   * 想回到未激活只剩服务端 /api/safety/restore 的全量还原一条路（那是「一键清账」的
+   * 入口，不按账号走）。后端 accounts_action 的 deactivate / signout-full 两个动作**保留**
+   * 不动，只作为 HTTP 层的退路，界面不再引用。 */
+  const doActivate = () => {
+    if (!acc || acc.activated) return
     setBusy('activate')
     ;(async () => {
-      let url = acc.activated
-        ? `/api/accounts/deactivate?user=${acc.userId}`
-        : `/api/accounts/activate?user=${acc.userId}`
-      if (!acc.activated) {
-        /* 未激活：框里编辑过的 ID 就是要写进去的；空/不合法/与自动值相同则交给服务端生成 */
-        const v = hexId.trim()
-        if (/^0x[0-9a-fA-F]{16}$/.test(v) && v.toLowerCase() !== String(acc.derivedId || '').toLowerCase()) {
-          url += `&accountId=${encodeURIComponent(v)}`
-        } else if (acc.derivedId) {
-          notify(t('acctools.will_generate', '将自动生成：{{id}}', { id: acc.derivedId }))
-        }
+      /* 框里编辑过的 ID 就是要写进去的；空/不合法/与自动值相同则交给服务端生成 */
+      let url = `/api/accounts/activate?user=${acc.userId}`
+      const v = hexId.trim()
+      if (/^0x[0-9a-fA-F]{16}$/.test(v) && v.toLowerCase() !== String(acc.derivedId || '').toLowerCase()) {
+        url += `&accountId=${encodeURIComponent(v)}`
+      } else if (acc.derivedId) {
+        notify(t('acctools.will_generate', '将自动生成：{{id}}', { id: acc.derivedId }))
       }
       await runAction(url, t('acctools.action_fail', '操作失败'))
       setBusy('')
@@ -703,31 +712,18 @@ export default function AccountToolsSection({ addToast }) {
   }
 
   /* [CN-FORK] v0.5.2.107 用户口径（定稿）：「登出 就是只登出，反激活 即 登出并反激活，
-   * 但是按钮文字不要改。」根因在服务端：原来的登出走 `safety_restore_scope(uid)`，
-   * **按 uid 整段回滚**，而激活写的那 3 个键和登录态的 22 个键记在同一个 uid 名下，
-   * 于是一起被退了回去 —— 这就是「登出以后自动反激活」。现在服务端按**来源**再筛一层，
-   * 网页侧两条路一一对应：
-   *   登出（signout）        → 只退 SIGNIN + 未标注的老记录。账号停在「已激活、未登录」，
-   *                            下次点「登入」即可，**不用重新激活**；
-   *   反激活（signout-full）→ 不分来源全退，回到未激活。已登录时它天然等于「登出 + 反激活」
-   *                            （会话先收掉、激活再退掉），所以这一个按钮就同时干两件事。
-   * 界面文字按用户要求**保持「登出」/「反激活」两个词不变**，不出现「登出并反激活」。
-   * 已登录时不再单独提供「只反激活」——那会产生不一致状态（未激活但仍登录着，
-   * 再点登入会被服务端以「not activated」拒掉）。 */
+   * 但是按钮文字不要改。」
+   * [CN-FORK] v0.5.2.111 用户口径更新：「去掉反激活功能」—— 于是「反激活」这个入口
+   * 整个从界面撤掉了，doSignoutFull()（signout-full = 登出 + 反激活）随之删除。
+   * 剩下的「登出」只有一条语义：
+   *   登出（signout）→ 只退 SIGNIN + 未标注的老记录。账号停在「已激活、未登录」，
+   *                    下次点「登入」即可，**不用重新激活**。
+   * 服务端 npsignin_signout(..., keep_activation=1) 的按来源筛选逻辑保持不变。 */
   const doSignout = () => {
     if (!acc) return
     setBusy('signout')
     ;(async () => {
       await runAction(`/api/accounts/signout?user=${acc.userId}`, t('acctools.signout_fail', '登出失败'))
-      setBusy('')
-    })()
-  }
-
-  const doSignoutFull = () => {
-    if (!acc) return
-    setBusy('signout-full')
-    ;(async () => {
-      await runAction(`/api/accounts/signout-full?user=${acc.userId}`, t('acctools.signout_fail', '登出失败'))
       setBusy('')
     })()
   }
@@ -1090,31 +1086,23 @@ export default function AccountToolsSection({ addToast }) {
                         ? t('acctools.working', '处理中…')
                         : acc.signedIn ? t('acctools.signout', '登出') : t('acctools.signin', '登入')}
                     </button>
-                    <button
-                      type="button"
-                      /* [CN-FORK] v0.5.2.104 用户口径：「登入 和激活 是绿档，登出 是红档，反激活是灰档」。
-                          所以撤销类里只有「登出」吃红档，这一格回中性档 —— 它份量低于登出，
-                          不该跟它抢同一档红。
-                         [CN-FORK] v0.5.2.107 用户口径：「登出 就是只登出，反激活 即 登出并反激活，
-                          但是按钮文字不要改」。所以：
-                            · 已登录时这一格 = 「反激活」，点下去走 signout-full（登出 + 反激活一步到位）；
-                            · 未登录时这一格 = 「反激活」，点下去走 deactivate。
-                          两种情况**文字一样**（都叫「反激活」），只是已登录时多带一步退登录。 */
-                      className={acc.activated || acc.signedIn ? BTN_GHOST : BTN_GRANT}
-                      onClick={acc.signedIn ? doSignoutFull : toggleActivation}
-                      disabled={disabled}
-                      title={acc.signedIn
-                        ? t('acctools.signout_full_tip', '退出登录并清掉离线激活 —— 已登录时「反激活」就是这两步一起做')
-                        : acc.activated
-                          ? t('acctools.deactivate_tip', '清掉离线激活，账号回到未激活')
-                          : t('acctools.activate_tip', '写入离线激活信息，之后才能登入')}
-                    >
-                      {busy === 'activate' || busy === 'deactivate' || busy === 'signout-full'
-                        ? t('acctools.working', '处理中…')
-                        : (acc.activated || acc.signedIn)
-                          ? t('acctools.deactivate', '反激活')
+                    {/* [CN-FORK] v0.5.2.111 用户口径：「去掉反激活功能 …… 激活成功，按钮
+                        隐藏或者禁用」。这一格原来同时兼任「激活」与「反激活」，现在只剩
+                        「激活」：一旦 acc.activated 为真，整颗按钮就不渲染了。
+                        不留在那里变灰 —— 电视端灰按钮仍占一个方向键落点。 */}
+                    {!acc.activated && (
+                      <button
+                        type="button"
+                        className={BTN_GRANT}
+                        onClick={doActivate}
+                        disabled={disabled}
+                        title={t('acctools.activate_tip', '写入离线激活信息，之后才能登入')}
+                      >
+                        {busy === 'activate'
+                          ? t('acctools.working', '处理中…')
                           : t('acctools.activate', '激活')}
-                    </button>
+                      </button>
+                    )}
                   </span>
                 </div>
               </div>

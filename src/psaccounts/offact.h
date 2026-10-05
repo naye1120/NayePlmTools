@@ -24,6 +24,17 @@ int      offact_get_flags(int slot, int *out);
 int      offact_set_flags(int slot, int flags);
 uint64_t offact_gen_id(const char *name);
 
+/* [CN-FORK] v0.5.2.111 未激活账号「激活时将生成」的那个 id。
+ *
+ * 上游是 offact_gen_id(名字) —— 于是**改个名这个 id 就跟着变**：用户在界面上看到的
+ * 「账号 ID」会在点完「修改」之后自己换一个值，而按常识账号 ID 一旦生成就不该被改名
+ * 影响（只有显式改 ID 才该变）。所以这里改成按**本地用户 id** 派生：uid 是这个账号在
+ * 系统里的稳定身份（改名只写注册表 0x200 的 name 字段，0x100 的 uid 一个字节都不动），
+ * 拿它当种子才谈得上「生成后就不再变」。
+ *
+ * 派生算法与 offact_gen_id() 同一套 FNV-1a，只是种子换成 uid 的 4 个小端字节。 */
+uint64_t offact_gen_id_for_user(uint32_t uid);
+
 int offact_activate(int slot, uint64_t id);
 
 /* Zero out id+flags (leaves the name and type untouched so the slot

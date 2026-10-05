@@ -161,10 +161,13 @@ account_obj(char *buf, size_t cap, uint32_t uid, const char *name) {
     snprintf(iddec, sizeof(iddec), "%llu", (unsigned long long)st.account_id);
   }
 
-  /* The id that "Activate" would assign if none is set yet. */
+  /* The id that "Activate" would assign if none is set yet.
+   * [CN-FORK] v0.5.2.111 按**本地用户 id** 派生，不按名字 —— 按名字的话用户点一下
+   * 「修改」改名，这一格显示的 ID 就跟着换一个值（用户口径：「改名是不修改ID的」）。
+   * uid 改名不动，拿它当种子才是「生成后就不再变」。 */
   char derived[24] = "";
-  if(!st.account_id && name[0]) {
-    uint64_t d = offact_gen_id(name);
+  if(!st.account_id && uid) {
+    uint64_t d = offact_gen_id_for_user(uid);
     snprintf(derived, sizeof(derived), "0x%016llx", (unsigned long long)d);
   }
 
@@ -252,27 +255,34 @@ accounts_action(const char *action, uint32_t user_id, uint64_t custom_id,
      一视同仁，不再有"某个账号是禁区"。 */
   if(safety_init() != 0) {
     snprintf(message, sizeof(message),
-             "ABORTED: cannot write backup log under %s — refusing an "
-             "irreversible change", SAFETY_DIR);
+             "已中止：备份目录 %s 不可写，无法保证可还原，拒绝执行不可逆的写入",
+             SAFETY_DIR);
   } else if(!strcmp(action, "activate")) {
     int slot = slot_for_name(name);
+    /* [CN-FORK] v0.5.2.111 默认 id 在这里算好再显式传下去（offact_activate 不再自己按名字
+     * 派生）。界面预览的 derivedId 用的是同一个函数、同一个 uid，所以「将自动生成：0x…」
+     * 显示什么，写进注册表的就是什么；改名也不会再让这两者错位。 */
+    uint64_t want_id = custom_id ? custom_id : offact_gen_id_for_user(user_id);
     if(slot <= 0) {
-      snprintf(message, sizeof(message), "no registry slot for this user");
-    } else if(offact_activate(slot, custom_id) == 0) {
+      snprintf(message, sizeof(message), "找不到该账号的注册表槽位，无法激活");
+    } else if(offact_activate(slot, want_id) == 0) {
       ok = 1;
       snprintf(message, sizeof(message),
-               "activated %s — you can sign in now", name);
+               "已激活 %s，现在可以登入了", name);
     } else {
-      snprintf(message, sizeof(message), "activation failed");
+      snprintf(message, sizeof(message), "激活失败");
     }
     npsignin_status(user_id, name, &st);
   } else if(!strcmp(action, "deactivate")) {
+    /* [CN-FORK] v0.5.2.111 界面上的「反激活」入口已按用户要求撤掉（激活成功后按钮
+     * 整颗收起）。这个接口保留下来只作为 HTTP 层的退路：它是把一个账号从「已激活」
+     * 退回「未激活」的唯一单账号手段，删掉就只剩 /api/safety/restore 的全量还原。 */
     int slot = slot_for_name(name);
     if(slot > 0 && offact_clear(slot) == 0) {
       ok = 1;
-      snprintf(message, sizeof(message), "deactivated %s", name);
+      snprintf(message, sizeof(message), "已反激活 %s", name);
     } else {
-      snprintf(message, sizeof(message), "deactivate failed");
+      snprintf(message, sizeof(message), "反激活失败");
     }
     npsignin_status(user_id, name, &st);
   } else if(!strcmp(action, "signin")) {
@@ -294,7 +304,7 @@ accounts_action(const char *action, uint32_t user_id, uint64_t custom_id,
   } else if(!strcmp(action, "rename")) {
     if(!arg || !*arg) {
       snprintf(message, sizeof(message),
-               "rejected: rename needs a new name (?user=&to=)");
+               "已拒绝：改名需要提供新名字（?user=&to=）");
     } else {
       npsignin_rename(user_id, name, arg, &st);
       ok = st.ok;
@@ -304,7 +314,7 @@ accounts_action(const char *action, uint32_t user_id, uint64_t custom_id,
     }
   } else {
     npsignin_status(user_id, name, &st);
-    snprintf(message, sizeof(message), "unknown action");
+    snprintf(message, sizeof(message), "未知操作：%s", action);
   }
 
   char obj[1024];
@@ -437,8 +447,8 @@ accounts_preview_json(uint32_t user_id) {
 
   if(slot <= 0) {
     snprintf(buf, cap, "{\"ok\":false,\"action\":\"signin\",\"regKeys\":0,"
-             "\"message\":\"nothing to preview: no registry slot or not "
-             "activated — signin would be refused anyway\"}");
+             "\"message\":\"没有可预览的内容：找不到槽位或账号未激活 —— "
+             "就算登入也会被拒\"}");
     return buf;
   }
 

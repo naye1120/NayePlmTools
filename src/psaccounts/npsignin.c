@@ -102,6 +102,9 @@ wset_str(uint32_t ent, const char *s, int size) {
 
 
 /* Registry keys (base, slot 1). Per-slot = key + (slot-1)*65536. */
+/* [CN-FORK] v0.5.2.111 槽里那个「本地用户 id」（offset 0x00）。名字会变（改名）、
+ * 会滞后（刚激活时 UserService 还没加载这个名字），这一格才是账号的稳定身份。 */
+#define REG_KEY_USER_ID       125829376   /* 槽基址 +0x100, int */
 #define REG_KEY_USERNAME      125829632   /* offset 0x04, str 17 */
 #define REG_KEY_ACCOUNT_ID    125830400   /* offset 0x100, bin 8 */
 #define REG_KEY_EMAIL         125830656   /* offset 0x108, str 65 */
@@ -281,9 +284,50 @@ find_slot(const char *name) {
   return 0;
 }
 
+/* [CN-FORK] v0.5.2.111 按本地用户 id 查槽位。
+ *
+ * 名字不是身份，uid 才是 —— 这一点在改名那条链路上已经吃过一次亏（改名后
+ * `offact_gen_id(name)` 派生的 id 跟着变），这里又栽了第二次：
+ *
+ * 调用方传进来的 `name` 来自 `sceUserServiceGetUserName()`，而 UserService 对**刚
+ * 激活、还没进过壳层用户列表**的账号会滞后（首帧取到空串或旧名）。只按名字找的
+ * `find_slot()` 于是返回 0 → `out->slot = 0` → 登出走到「没有对应的注册表槽位，
+ * 无法登出」直接失败。用户再点第二次时 UserService 已经跟上，就成功了 —— 这就是
+ * 「第一次登出报错、第二次才能登出」的成因。
+ *
+ * 槽基址 +0x100 那一格是 uid，改名只写 +0x200 的 name，uid 一个字节都不动它。
+ * 所以 uid 比名字权威，而且比名字更早可用。 */
+static int
+find_slot_by_uid(uint32_t uid) {
+  if(!uid) return 0;
+  for(int n = 1; n <= 16; n++) {
+    uint32_t off = (uint32_t)(n - 1) * 65536u;
+    int32_t u = 0;
+    if(sceRegMgrGetInt(REG_KEY_USER_ID + off, &u) != 0) continue;
+    if((uint32_t)u == uid) return n;
+  }
+  return 0;
+}
+
 static void
 fill_status(npsignin_result_t *out) {
-  out->slot = find_slot(out->user_name);
+  /* [CN-FORK] v0.5.2.111 uid 优先，名字只作兜底。
+   *
+   * 反过来（名字优先、uid 兜底）会把「UserService 返回的是**另一个槽**的名字」这种
+   * 情况解错槽 —— 名字是全局唯一的，一旦拿到的名字属于别的账号，名字路径会理直气壮
+   * 地指向那一格。按 uid 解就不会有这个问题：uid 只可能命中它自己那一格。 */
+  out->slot = find_slot_by_uid(out->user_id);
+  if(out->slot <= 0) out->slot = find_slot(out->user_name);
+
+  /* 槽里的名字回填进 out->user_name：调用方传进来的那个可能滞后（旧名）或为空，
+   * 而后面所有提示语、以及登入时写进 auth.dat/config.dat 的身份都用它。 */
+  if(out->slot > 0) {
+    uint32_t off = (uint32_t)(out->slot - 1) * 65536u;
+    char nm[32] = {0};
+    if(sceRegMgrGetStr(REG_KEY_USERNAME + off, nm, sizeof(nm)) == 0 && nm[0])
+      snprintf(out->user_name, sizeof(out->user_name), "%s", nm);
+  }
+
   out->account_id = 0;
   out->activated = 0;
   out->signed_in = 0;
@@ -325,12 +369,12 @@ npsignin_status(uint32_t uid, const char *name, npsignin_result_t *out) {
   fill_status(out);
   out->ok = 1;
   if(out->slot == 0)
-    snprintf(out->message, sizeof(out->message), "no registry slot");
+    snprintf(out->message, sizeof(out->message), "未找到该账号的注册表槽位");
   else if(!out->activated)
-    snprintf(out->message, sizeof(out->message), "not activated");
+    snprintf(out->message, sizeof(out->message), "未激活");
   else
     snprintf(out->message, sizeof(out->message),
-             out->signed_in ? "signed in" : "signed out");
+             out->signed_in ? "已登录" : "已激活，未登录");
   return 0;
 }
 
@@ -342,7 +386,7 @@ npsignin_signin(uint32_t uid, const char *name, npsignin_result_t *out) {
   if(out->slot == 0 || out->account_id == 0) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
-             "not activated — activate this account first");
+             "该账号还没有激活，请先点「激活」再登入");
     return -1;
   }
 
@@ -350,8 +394,8 @@ npsignin_signin(uint32_t uid, const char *name, npsignin_result_t *out) {
   if(safety_init() != 0) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
-             "ABORTED: cannot write backup log under %s — refusing an "
-             "irreversible change", SAFETY_DIR);
+             "已中止：备份目录 %s 不可写，无法保证可还原，拒绝执行不可逆的写入",
+             SAFETY_DIR);
     return -1;
   }
 
@@ -366,7 +410,7 @@ npsignin_signin(uint32_t uid, const char *name, npsignin_result_t *out) {
   if(write_np_files(cfg, out->user_id) != 0) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
-             "ABORTED while writing NP files — run Restore before retrying");
+             "已中止：写入 NP 会话文件失败，请先执行「还原」再重试");
     return -1;
   }
 
@@ -378,8 +422,8 @@ npsignin_signin(uint32_t uid, const char *name, npsignin_result_t *out) {
   out->ok = 1;
   out->signed_in = 1;
   snprintf(out->message, sizeof(out->message),
-           "signed in as %s (slot %d) — reboot to apply. %d key(s) backed up "
-           "under this uid; Sign out rolls exactly those back.",
+           "已登入 %s（槽位 %d），重启主机后生效。本次已备份 %d 条原值，"
+           "点「登出」会原样退掉。",
            out->user_name, out->slot, safety_reg_count_scope(out->user_id));
   return 0;
 }
@@ -426,8 +470,8 @@ npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out,
     out->ok = 0;
     out->signed_in = (out->slot > 0);
     snprintf(out->message, sizeof(out->message),
-             "RESTORE INCOMPLETE: %d record(s) failed readback — fix them "
-             "manually from %s (%d record(s) still pending)",
+             "还原未完成：%d 条原值回读校验没过，请手工核对 %s"
+             "（仍有 %d 条待还原）",
              -restored, SAFETY_DIR, left);
     return -1;
   }
@@ -450,8 +494,8 @@ npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out,
     if(fbad) {
       out->ok = 0;
       snprintf(out->message, sizeof(out->message),
-               "registry restored, but %d NP file(s) could not be restored "
-               "(no backup record) — verify /system_data/priv/home/%x manually",
+               "注册表已还原，但有 %d 个 NP 会话文件没有备份记录、放不回去，"
+               "请手工核对 /system_data/priv/home/%x",
                fbad, out->user_id);
       return -1;
     }
@@ -470,22 +514,21 @@ npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out,
     if(out->slot == 0) {
       out->ok = 0;
       snprintf(out->message, sizeof(out->message),
-               "%s has no registry slot — nothing to sign out", out->user_name);
+               "%s 没有对应的注册表槽位，无法登出", out->user_name);
       return -1;
     }
     if(!out->signed_in) {
       out->ok = 1;
       snprintf(out->message, sizeof(out->message),
-               "%s was already signed out — nothing to roll back",
-               out->user_name);
+               "%s 本来就是未登录状态，不需要回退", out->user_name);
       return 0;
     }
 
     if(safety_init() != 0) {
       out->ok = 0;
       snprintf(out->message, sizeof(out->message),
-               "ABORTED: cannot write backup log under %s — refusing an "
-               "irreversible change", SAFETY_DIR);
+               "已中止：备份目录 %s 不可写，无法保证可还原，拒绝执行不可逆的写入",
+               SAFETY_DIR);
       return -1;
     }
 
@@ -508,19 +551,18 @@ npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out,
       out->ok = 0;
       out->signed_in = 1;
       snprintf(out->message, sizeof(out->message),
-               "BASELINE SIGN-OUT INCOMPLETE: %d write(s) refused (backup or "
-               "Set failed) — %d record(s) are still pending under uid %u, run "
-               "Restore before retrying", bad, safety_reg_count_scope(uid), uid);
+               "基线登出未完成：%d 项写入被拒（备份或写入失败），"
+               "uid %u 名下仍有 %d 条待还原，请先执行「还原」再重试",
+               bad, uid, safety_reg_count_scope(uid));
       return -1;
     }
 
     out->ok = 1;
     out->signed_in = 0;
     snprintf(out->message, sizeof(out->message),
-             "signed out %s (slot %d) — this sign-in was not written by this "
-             "tool, so it was reset to the measured baseline: signin_flag=0, "
-             "login_flag=0x1002, %d NP file(s) moved to backup. Restore puts "
-             "them back; reboot to apply",
+             "已登出 %s（槽位 %d）。这个登录状态不是本工具写入的，已按实测基线复位："
+             "登录标志清零、login_flag 置为「已激活未登录」，%d 个 NP 会话文件已移入备份。"
+             "执行「还原」可以放回去，重启主机后生效。",
              out->user_name, out->slot, dropped);
     return 0;
   }
@@ -533,16 +575,14 @@ npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out,
   if(keep_activation) {
     int still = safety_reg_count_scope_mask(uid, SAFETY_ORIGIN_M_ACTIVATE);
     snprintf(out->message, sizeof(out->message),
-             "signed out %s — restored %d sign-in value(s); the offline "
-             "activation is kept (%d record(s) still pending, clear them with "
-             "a full restore); %d other pending record(s) untouched; reboot to "
-             "apply",
+             "已登出 %s：回退 %d 条登录相关原值；离线激活状态保留"
+             "（还有 %d 条激活记录待清理，需要「完全还原」才会清）；"
+             "其余 %d 条待还原记录未改动。重启主机后生效。",
              out->user_name, restored, still, left);
   } else {
     snprintf(out->message, sizeof(out->message),
-             "signed out %s and cleared its offline activation — restored %d "
-             "of its own value(s), %d other pending record(s) untouched; "
-             "reboot to apply",
+             "已登出 %s，并清除了它的离线激活：回退 %d 条原值；"
+             "其余 %d 条待还原记录未改动。重启主机后生效。",
              out->user_name, restored, left);
   }
   return 0;
@@ -653,12 +693,11 @@ rename_profile_cache(uint32_t uid, const char *new_name, char *note, size_t n) {
            "/system_data/priv/cache/profile/0x%08X/online.json", uid);
   raw = read_small_file(path, &len, PROFILE_JSON_MAX);
   if(!raw) {
-    snprintf(note, n, "profile cache: no readable online.json for 0x%08X", uid);
+    snprintf(note, n, "profile 缓存：读不到 0x%08X 的 online.json", uid);
     return;
   }
   if(!json_first_name_span(raw, &vs, &ve)) {
-    snprintf(note, n, "profile cache: online.json has no plain \"firstName\" "
-                      "value — left alone");
+    snprintf(note, n, "profile 缓存：online.json 里没有格式干净的 firstName，未改动");
     free(raw);
     return;
   }
@@ -670,7 +709,7 @@ rename_profile_cache(uint32_t uid, const char *new_name, char *note, size_t n) {
   old[cplen] = 0;
 
   if(vlen == nlen && !memcmp(vs, new_name, (size_t)nlen)) {
-    snprintf(note, n, "profile cache: already \"%s\"", new_name);
+    snprintf(note, n, "profile 缓存：本来就是「%s」", new_name);
     free(raw);
     return;
   }
@@ -683,7 +722,7 @@ rename_profile_cache(uint32_t uid, const char *new_name, char *note, size_t n) {
   blen = pre + nlen + suf;
   body = malloc((size_t)blen + 1);
   if(!body) {
-    snprintf(note, n, "profile cache: out of memory");
+    snprintf(note, n, "profile 缓存：内存不足");
     free(raw);
     return;
   }
@@ -695,13 +734,12 @@ rename_profile_cache(uint32_t uid, const char *new_name, char *note, size_t n) {
   /* 只在「这条路径还没进过备份日志」时登记：safety_backup_file() 每次调用都会
    * 用当前内容覆盖已存的 blob，改过之后再登记就会把新名当成原值。 */
   if(safety_file_was_absent(path) < 0 && safety_backup_file(path) != 0) {
-    snprintf(note, n, "profile cache: backup refused — left alone");
+    snprintf(note, n, "profile 缓存：备份被拒，未改动");
     free(body);
     return;
   }
   if(write_file(path, (unsigned char *)body, (size_t)blen) != 0) {
-    snprintf(note, n, "profile cache \"%s\" -> \"%s\": write refused",
-             old, new_name);
+    snprintf(note, n, "profile 缓存「%s」→「%s」：写入被拒", old, new_name);
     free(body);
     return;
   }
@@ -710,10 +748,9 @@ rename_profile_cache(uint32_t uid, const char *new_name, char *note, size_t n) {
   raw = read_small_file(path, &len, PROFILE_JSON_MAX);
   if(raw && json_first_name_span(raw, &vs, &ve) &&
      ve - vs == nlen && !memcmp(vs, new_name, (size_t)nlen))
-    snprintf(note, n, "profile cache \"%s\" -> \"%s\" verified", old, new_name);
+    snprintf(note, n, "profile 缓存「%s」→「%s」：已写入并回读一致", old, new_name);
   else
-    snprintf(note, n, "profile cache: wrote \"%s\" but readback disagrees",
-             new_name);
+    snprintf(note, n, "profile 缓存：写入了「%s」但回读不一致", new_name);
   free(raw);
 }
 
@@ -732,7 +769,7 @@ rename_username_dat(const char *old_name, const char *new_name,
 
   d = opendir("/user/home");
   if(!d) {
-    snprintf(note, n, "user home: /user/home unreadable");
+    snprintf(note, n, "user home：/user/home 读不到");
     return;
   }
 
@@ -764,14 +801,14 @@ rename_username_dat(const char *old_name, const char *new_name,
     free(raw);
 
     if(safety_file_was_absent(path) < 0 && safety_backup_file(path) != 0) {
-      snprintf(note, n, "user home: %s/username.dat found but backup refused "
-                        "— left alone", where);
+      snprintf(note, n, "user home：找到 %s/username.dat 但备份被拒，未改动",
+               where);
       hit = -1;
     } else if(write_file(path, (unsigned char *)body,
                          (size_t)(nlen + tail)) == 0) {
       hit = 1;
     } else {
-      snprintf(note, n, "user home: %s/username.dat write refused", where);
+      snprintf(note, n, "user home：%s/username.dat 写入被拒", where);
       hit = -1;
     }
     free(body);
@@ -780,9 +817,9 @@ rename_username_dat(const char *old_name, const char *new_name,
   closedir(d);
 
   if(hit > 0)
-    snprintf(note, n, "user home: %s/username.dat -> \"%s\"", where, new_name);
+    snprintf(note, n, "user home：%s/username.dat 已改为「%s」", where, new_name);
   else if(hit == 0)
-    snprintf(note, n, "user home: scanned %d dir(s), none holds \"%s\"",
+    snprintf(note, n, "user home：扫了 %d 个目录，没有一份内容是「%s」",
              scanned, old_name);
 }
 
@@ -809,18 +846,18 @@ probe_user_list_dat(const char *old_name, const char *new_name,
 
   raw = read_small_file(path, &len, PROFILE_JSON_MAX);
   if(!raw) {
-    snprintf(note, n, "user_list.dat: absent or unreadable");
+    snprintf(note, n, "user_list.dat：不存在或读不到");
     return;
   }
   oidx = mem_find(raw, len, old_name);
   nidx = mem_find(raw, len, new_name);
   free(raw);
 
-  if(oidx >= 0) snprintf(oa, sizeof(oa), "at 0x%lx", (unsigned long)oidx);
-  else          snprintf(oa, sizeof(oa), "not found");
-  if(nidx >= 0) snprintf(na, sizeof(na), "at 0x%lx", (unsigned long)nidx);
-  else          snprintf(na, sizeof(na), "not found");
-  snprintf(note, n, "user_list.dat %ld B: old %s / new %s (read-only probe)",
+  if(oidx >= 0) snprintf(oa, sizeof(oa), "在 0x%lx", (unsigned long)oidx);
+  else          snprintf(oa, sizeof(oa), "没找到");
+  if(nidx >= 0) snprintf(na, sizeof(na), "在 0x%lx", (unsigned long)nidx);
+  else          snprintf(na, sizeof(na), "没找到");
+  snprintf(note, n, "user_list.dat %ld 字节：旧名 %s / 新名 %s（只读探针）",
            len, oa, na);
 }
 
@@ -837,21 +874,19 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
   if(!name_is_sane(new_name)) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
-             "rejected: new name must be 1..%d bytes, no control chars",
+             "已拒绝：新名字长度需为 1~%d 字节，且不能含控制字符",
              RENAME_NAME_BYTES - 1);
     return -1;
   }
   if(out->slot == 0) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
-             "rejected: no registry slot for \"%s\" — renaming would have "
-             "nowhere to write", old_name);
+             "已拒绝：找不到「%s」的注册表槽位，改了也没地方写", old_name);
     return -1;
   }
   if(!strcmp(old_name, new_name)) {
     out->ok = 0;
-    snprintf(out->message, sizeof(out->message), "already named \"%s\"",
-             new_name);
+    snprintf(out->message, sizeof(out->message), "名字本来就是「%s」", new_name);
     return -1;
   }
 
@@ -865,7 +900,7 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
   if(taken != 0) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
-             "rejected: \"%s\" already occupies slot %d", new_name, taken);
+             "已拒绝：槽位 %d 已经有一个叫「%s」的账号了", taken, new_name);
     return -1;
   }
 
@@ -873,8 +908,7 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
   if(wset_str(REG_KEY_USERNAME + off, new_name, RENAME_NAME_BYTES) != 0) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
-             "rename failed: backup or registry write refused (slot %d)",
-             out->slot);
+             "改名失败：备份或注册表写入被拒（槽位 %d）", out->slot);
     return -1;
   }
 
@@ -884,8 +918,8 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
      strcmp(now, new_name) != 0) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
-             "written but NOT verified: slot %d reads back \"%s\" — "
-             "use Restore", out->slot, now[0] ? now : "(empty)");
+             "已写入但校验没过：槽位 %d 回读出来是「%s」，请执行「还原」",
+             out->slot, now[0] ? now : "（空）");
     return -1;
   }
 
@@ -907,21 +941,19 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
 
     if(set_rc == 0 && get_rc == 0 && !strcmp(shell, new_name))
       snprintf(base, sizeof(base),
-               "slot %d renamed %s -> %s (registry + UserService both verified)",
+               "槽位 %d：%s → %s（注册表与 UserService 都已验证）",
                out->slot, old_name, new_name);
     else if(set_rc != 0)
       snprintf(base, sizeof(base),
-               "slot %d renamed %s -> %s in registry (verified), but UserService "
-               "Set refused (0x%x) — the shell user list may keep the old name; "
-               "original value is in the backup log",
+               "槽位 %d：%s → %s 已写进注册表并验证，但 UserService 写入被拒"
+               "（0x%x）—— 壳层的用户列表可能仍显示旧名；原值已存进备份日志",
                out->slot, old_name, new_name, (unsigned)set_rc);
     else
       snprintf(base, sizeof(base),
-               "slot %d renamed %s -> %s in registry (verified); UserService "
-               "reads \"%s\" (get 0x%x) — shell layer NOT confirmed, use Restore "
-               "if it looks wrong",
+               "槽位 %d：%s → %s 已写进注册表并验证；UserService 回读是「%s」"
+               "（0x%x）—— 壳层这一层没能确认，看着不对就执行「还原」",
                out->slot, old_name, new_name,
-               (get_rc == 0 && shell[0]) ? shell : "(unreadable)",
+               (get_rc == 0 && shell[0]) ? shell : "（读不出）",
                (unsigned)get_rc);
 
     /* 第三、四层：写不写得动都只报一句话，绝不因此判失败。这两条加上末尾那条

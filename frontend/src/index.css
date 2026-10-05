@@ -366,6 +366,21 @@ textarea:focus,
 .row-link.is-focus,
 .row-link:focus-visible { outline-offset: -2px; }
 
+/* ── 遥控器模式藏掉系统光标（[CN-FORK] v0.5.2.111）──
+ * 电视端遥控器走的是我们自己画的彩色光圈（上面的 .is-focus），而系统光标会**停在原地不动**
+ * —— 两个「我现在在哪」同时出现，用户看到的就是「箭头还在老地方，很违和」。
+ * 网页里没有任何 API 能把系统光标搬走（Pointer Lock 只能锁不能移，合成 mousemove 也移动不了
+ * 真光标），所以正解不是「移动光标」而是**把它藏起来**：一旦用户用方向键，就只剩光圈一套视觉，
+ * 光圈就是光标。
+ *
+ * 类挂在 <html> 上、由 spatialNav.js 的 setRemote() 加/去：
+ *   · 按方向键 → 加（进入遥控器模式，藏光标）
+ *   · 真·指针移动 → 去（立刻恢复光标，插了 USB 鼠标的人照旧用鼠标）
+ * 只在 isPS5 时才挂得上（spatialNav 本身只在电视端挂载），所以电脑端预览完全不受影响；
+ * 进页面还没按过方向键时也不加类 —— 光标该看得见就看得见。 */
+html.nav-remote,
+html.nav-remote * { cursor: none !important; }
+
 /* Neon Glows */
 .neon-text {
 /* text-shadow: 0 0 10px var(--color-ps-blue-glow); */
