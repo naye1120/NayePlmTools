@@ -44,6 +44,21 @@
   * `nav110.mjs` **16 / 16**（含新增的 ⑦ 藏光标三连：未按方向键不藏 / 按方向键藏 / 真指针一动立刻恢复）、`cropfix.mjs` **75 / 75**、`avatar109.mjs` **19 / 19**。
 * `npx eslint src/components/views/AccountToolsSection.jsx`：干净；两份 overlay JSON 解析通过。
 
+### 📦 Release
+
+* **正式出包**：`NayePlmTools_0.5.2.111-me.elf`（NAYE00001 媒体栏）· `NayePlmTools_0.5.2.111-ga.elf`（NAYE00004 游戏栏）。
+* 两包各 **9,875,208 字节**；内嵌标题 `NayePlmTools v0.5.2.111 by naye (e908ef5, built at 2026-10-05 09:41:14 UTC)`（**非 DEV**）、`PLDMGR_VER:0.5.2.111`；`0.5.2.110` 残留 0 处。
+* sha256：`-me` = `8ddcfde58bda4dea72e7f75c2b51462b19063b9270696e97a81742e7dbfb4682`；`-ga` = `47b2bbc3e29f11278c906e4c8241965e0cb43925a0f5873e320c67d8d5738711`。
+* **包内逐条核对**（不看日志，只看二进制内容）：
+  * 新增中文串全部在包里且各 1 处 —— `已按实测基线复位` / `该账号还没有激活，请先点「激活」再登入` / `没有对应的注册表槽位` / `本来就是未登录状态` / `未找到该账号的注册表槽位` / `已激活，未登录` / `已还原 %d 条注册表原值`。
+  * 旧英文诊断串 **0 处**：`RESTORE INCOMPLETE` / `signed out %s` / `already signed out` / `not activated — activate` / `no registry slot` / `nothing to preview` / `unknown action` / `rejected: new name`。
+  * 反向断言 **0 处**：`登出并反激活`（`.108` 起的老判据，继续守住）。
+  * **`反激活` 恰好 2 处，是刻意留的**：`已反激活 %s` 与 `反激活失败` —— 服务端 `deactivate` 动作的提示语。该动作按用户口径已从界面撤掉，只作 HTTP 层退路保留；界面路径永远碰不到这两句。
+  * 前端产物 `frontend/dist/index.html` 里 `反激活` **0 处**（按钮与词条都已删除）。
+  * `ABORTED` 剩 5 处**均非账号提示**：前端 PKG 管理器的状态标签 `ABORTED: "已中断"`、SMB2 系统常量 `SMB2_STATUS_*_ABORTED`、以及自动加载的一行日志 `[Autoload] ABORTED via PS Button.`。
+* **坑 #4 再次实拍**：日志里 `-ga` 那趟写 `09:35:58`（第一版）/ 本次 `09:45:xx`，但两包内实际都是 **`-me` 那趟的标题**（`-me` 写 09:41:14）。两个包内容一致、无副作用，**核对永远只看包内实际内容**。
+* **`.110` 的包（`dcfb48b`）已过期。**
+
 ## v0.5.2.110 (CN-FORK)
 
 > 用户口径：「修一个 ps5 端的 BUG，ps5 端按上下按钮的时候会有一个彩色光圈，但是点击确定的时候依然是鼠标焦点生效，所以，这个功能可以考虑，鼠标也要跟着移动。」
