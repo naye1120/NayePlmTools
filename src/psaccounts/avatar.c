@@ -755,8 +755,8 @@ apply_to_dir(struct MHD_Connection *conn,
   /* 备份目录不可写 = 这一步完全不可逆，直接拒绝，一个字节都不写。 */
   if(safety_init() != 0) {
     return serve_error(conn, MHD_HTTP_SERVICE_UNAVAILABLE,
-        "ABORTED: cannot write backup log under " SAFETY_DIR
-        " — refusing an irreversible avatar overwrite");
+        "已中止：备份目录 " SAFETY_DIR
+        " 不可写，无法保证可还原，拒绝执行不可逆的头像覆盖写入");
   }
 
   /* Make sure the destination directory exists. */

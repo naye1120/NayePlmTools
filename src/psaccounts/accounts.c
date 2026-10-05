@@ -374,13 +374,13 @@ accounts_safety_json(const char *mode) {
     int f = safety_restore_all_files();
     if(r < 0 || f < 0) {
       snprintf(rmsg, sizeof(rmsg),
-               "RESTORE INCOMPLETE: reg failures=%d file failures=%d — the "
-               "backup log is kept so you can retry",
+               "还原未完成：注册表失败 %d 项、文件失败 %d 项 —— "
+               "备份日志已保留，可以再试一次",
                r < 0 ? -r : 0, f < 0 ? -f : 0);
     } else {
       snprintf(rmsg, sizeof(rmsg),
-               "restored %d registry value(s) and %d file(s); backup log "
-               "cleared — reboot to apply", r, f);
+               "已还原 %d 条注册表原值和 %d 个文件；备份日志已清空 —— "
+               "重启主机后生效", r, f);
     }
     reg_done = r > 0 ? r : 0;
     file_done = f > 0 ? f : 0;
