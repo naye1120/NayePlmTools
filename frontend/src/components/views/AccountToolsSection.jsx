@@ -26,7 +26,15 @@ import LoadingState from '../ui/LoadingState'
 const BTN_PRIMARY = 'btn btn-primary'
 const BTN_GHOST = 'btn btn-outline'
 /* [CN-FORK] v0.5.2.102 功能分色（样张 A + I2）：「同步」是从主机重读，属信息工具类 → 青实心 */
-const BTN_INFO = 'btn btn-info'
+/* [CN-FORK] v0.5.2.104 收敛档下 .btn-info 已是中性档，用户要求「同步也要有颜色」——
+ * 同步的实质是「把换算后的 ID 写回注册表」（未激活时才只换算），归「写入」语义 → 金档。 */
+const BTN_SYNC = 'btn btn-warn'
+/* [CN-FORK] v0.5.2.104 账号状态动作分色（用户：「这两个按钮需要反应他的状态，用特殊颜色」）：
+ *   建立状态（登入 / 激活）= 绿档，撤销状态（登出 / 反激活）= 红档。
+ *   与上方「已登录 / 已激活」绿徽标同源呼应 —— 绿按钮 = 点了会进入绿色那个状态，
+ *   红按钮 = 点了会退出当前状态，方向一眼可辨。 */
+const BTN_GRANT = 'btn btn-ok'
+const BTN_REVOKE = 'btn btn-danger'
 const INPUT_CLS = 'field'
 /* [CN-FORK] v0.5.2.100 可编辑框一档字色（.field-edit，见 index.css）：与只读换算结果（.field-ro 的
  * 辅助字色 + 虚线边）拉开明显对比，用户要求「可编辑的两个文本框字体颜色做个区分」。 */
@@ -611,9 +619,9 @@ export default function AccountToolsSection({ addToast }) {
                 {pin.waiting ? t('acctools.pin_waiting_short', '等待配对') : pin.status}
               </span>
             </>
-          ) : (
-            <span className="text-[15px] text-zinc-500">{t('acctools.pin_none', '暂无 PIN，点击下方按钮生成')}</span>
-          )}
+          ) : null /* [CN-FORK] v0.5.2.104 用户指令：「暂无 PIN，点击下方按钮生成」这句废话不要。
+                       没有 PIN 时这里什么都不显示 —— 下方那颗「生成 PIN」按钮本身就是答案，
+                       再写一句「点击下方按钮生成」只是把同一个意思说两遍。 */}
         </div>
 
         {/* [CN-FORK] v0.5.2.99 原来是 break-all：整行在「账号 ID：」中间就被截断换行，读起来像断句；
@@ -625,13 +633,15 @@ export default function AccountToolsSection({ addToast }) {
 
         {pin.waiting && (
           <div className="mt-3">
-            <div className="h-2 rounded-full bg-black/40 overflow-hidden">
-              <div
-                className={cn('h-full rounded-full', pin.remain <= 30 ? 'bg-red-400' : 'bg-ps-blue')}
-                style={{ width: `${pct}%`, transition: 'width 1s linear' }}
-              />
+            {/* [CN-FORK] v0.5.2.105 用户指令：「生成 pin 的进度条要高一些，炫酷一些，颜色可以用别的」。
+                从 h-2 的纯色条换成 .pin-bar / .pin-bar-fill（定义见 index.css）：
+                加厚到 --pin-bar-h（PC 14px / 电视 20px），走「青→蓝→紫」冷色渐变 + 外发光 + 一条循环扫过的流光；
+                剩余 ≤30 秒自动切「琥珀→红」渐变并整体脉冲 —— 「快过期了」由颜色与动效两条路同时给。
+                宽度过渡写在 .pin-bar-fill 里（transition: width 1s linear），这里只给宽度。 */}
+            <div className={cn('pin-bar', pin.remain <= 30 && 'is-critical')}>
+              <div className="pin-bar-fill" style={{ width: `${pct}%` }} />
             </div>
-            <div className="flex items-center mt-1.5 text-[12px] text-zinc-500">
+            <div className="flex items-center mt-2 text-[12px] text-zinc-500">
               <span>{t('acctools.pin_ttl', 'PIN 有效期')}</span>
               <span className="ml-auto tabular-nums">{fmtTime(pin.remain)}</span>
             </div>
@@ -710,7 +720,8 @@ export default function AccountToolsSection({ addToast }) {
                   <span className="ml-auto flex items-center">
                     <button
                       type="button"
-                      className={cn(BTN_GHOST, 'mr-2')}
+                      /* [CN-FORK] v0.5.2.104 颜色跟着状态走：已登录 → 登出（红档·撤销）；未登录 → 登入（绿档·建立） */
+                      className={cn(acc.signedIn ? BTN_REVOKE : BTN_GRANT, 'mr-2')}
                       onClick={acc.signedIn ? doSignout : doSignin}
                       disabled={disabled}
                     >
@@ -720,7 +731,10 @@ export default function AccountToolsSection({ addToast }) {
                     </button>
                     <button
                       type="button"
-                      className={BTN_GHOST}
+                      /* [CN-FORK] v0.5.2.104 用户口径：「登入 和激活 是绿档，登出 是红档，反激活是灰档」。
+                          所以撤销类里只有「登出」吃红档，「反激活」回中性档 —— 它是可随时重做的开关，
+                          份量低于登出，不该跟它抢同一档红。 */
+                      className={acc.activated ? BTN_GHOST : BTN_GRANT}
                       onClick={toggleActivation}
                       disabled={disabled}
                     >
@@ -755,8 +769,12 @@ export default function AccountToolsSection({ addToast }) {
                       {copiedKey === 'hex' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
-                  <button type="button" className={cn(BTN_INFO, 'ml-2 shrink-0')} onClick={syncId} disabled={disabled}>
-                    {t('acctools.sync', '同步')}
+                  {/* [CN-FORK] v0.5.2.105 用户指令：「同步按钮也加个小图标，跟修改按钮一样大，一样的风格」。
+                      照「修改」那颗的做法：图标在前（w-4 h-4）+ 文字，间距由 .btn > * + * 给（老内核 gap 不生效）；
+                      忙时文案切「处理中…」与「修改」一致，图标留着不换（与 Check 一样是静态图标）。 */}
+                  <button type="button" className={cn(BTN_SYNC, 'ml-2 shrink-0')} onClick={syncId} disabled={disabled}>
+                    <RefreshCw className="w-4 h-4" />
+                    {busy === 'sync' ? t('acctools.working', '处理中…') : t('acctools.sync', '同步')}
                   </button>
                 </div>
               </div>
@@ -777,23 +795,32 @@ export default function AccountToolsSection({ addToast }) {
               ))}
             </div>
 
-            <div className="flex items-center mt-4">
-              <div className="flex-1 min-w-0">
+            {/* [CN-FORK] v0.5.2.104 用户指令：「这个框缩短，将修改按钮和上边同步按钮对齐」。
+                原来这一行是 flex-1 铺满整宽：输入框一路顶到最右，修改按钮吊在卡片右边缘，
+                与上方「同步」不在同一条竖线上。现在套用与 ID 三格完全相同的那张 3 列栅格，
+                字段落在第 1 列、按钮贴本列右缘 —— 右缘自然与「同步」对齐（窄屏 <640px 仍是整宽单列）。
+                结构也与上面十六进制那格对齐：外层 flex + 内层 relative flex-1 min-w-0 包住输入框。 */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+              <div>
                 <div className="text-[12px] text-zinc-400 mb-1.5">
                   {t('acctools.name_field', '账号显示名 · 可编辑')}
                 </div>
-                <input
-                  className={INPUT_EDIT}
-                  value={renameVal}
-                  spellCheck={false}
-                  onChange={(e) => setRenameVal(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') applyRename() }}
-                />
+                <div className="flex items-center">
+                  <div className="relative flex-1 min-w-0">
+                    <input
+                      className={INPUT_EDIT}
+                      value={renameVal}
+                      spellCheck={false}
+                      onChange={(e) => setRenameVal(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') applyRename() }}
+                    />
+                  </div>
+                  <button type="button" className={cn(BTN_PRIMARY, 'ml-2 shrink-0')} onClick={applyRename} disabled={disabled}>
+                    <Check className="w-4 h-4" />
+                    {busy === 'rename' ? t('acctools.working', '处理中…') : t('acctools.rename', '修改')}
+                  </button>
+                </div>
               </div>
-              <button type="button" className={cn(BTN_PRIMARY, 'ml-2 shrink-0 mt-6')} onClick={applyRename} disabled={disabled}>
-                <Check className="w-4 h-4" />
-                {busy === 'rename' ? t('acctools.working', '处理中…') : t('acctools.rename', '修改')}
-              </button>
             </div>
 
             {/* [CN-FORK] v0.5.2.100 「欠 N 条原值记录」那句按用户指令不再渲染（只留绑定关系这句）。 */}

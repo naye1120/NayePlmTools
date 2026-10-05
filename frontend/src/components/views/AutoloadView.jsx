@@ -196,7 +196,7 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
                 <button onClick={() => moveDown(i)} disabled={i === autoloadList.length - 1} title={t("autoload.move_down", "下移")} className="icon-btn">
                   <ChevronDown />
                 </button>
-                <button onClick={() => setAutoloadList(autoloadList.filter((_, idx) => idx !== i))} title={t("autoload.remove_item", "移出序列")} className="icon-btn hover:bg-red-500/10 hover:text-red-500">
+                <button onClick={() => setAutoloadList(autoloadList.filter((_, idx) => idx !== i))} title={t("autoload.remove_item", "移出序列")} className="icon-btn is-danger">
                   <Trash2 />
                 </button>
               </div>

@@ -38,7 +38,9 @@ const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
       className={cn(
         "btn",
         isPS5 ? "px-8 ml-6" : "w-full md:w-auto mt-3 md:mt-0 md:ml-6",
-        p.isUpdate ? "bg-emerald-600 hover:bg-emerald-500 text-white" : "btn-primary"
+        /* [CN-FORK] v0.5.2.103 收敛档：更新原先是手写实心 emerald（骨架层漏网块），改走 .btn-ok。
+         * 安装仍是本页主操作 → .btn-primary（全站唯一的上色按钮）。 */
+        p.isUpdate ? "btn-ok" : "btn-primary"
       )}
     >
       <CloudDownload className="w-4 h-4" />
@@ -299,7 +301,10 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); onDelete(fileName) }}
-                        className="icon-btn hover:bg-red-500/10 hover:text-red-500"
+                        /* [CN-FORK] v0.5.2.103 收敛档：原写法是「悬停才变红」的灰图标，
+                            现在改用 .is-danger —— 图标恒为危险色（小图标染色，不是实心红块），
+                            不可逆的信号不再依赖悬停才出现（触屏/遥控器根本没有悬停）。 */
+                        className="icon-btn is-danger"
                         title={t("storage_hub.remove_payload", "Remove Payload")}
                         aria-label={t("storage_hub.remove_payload", "Remove Payload")}
                       >
@@ -310,7 +315,9 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                   {remoteMatch?.isUpdate && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onInstall(remoteMatch, remoteMatch.source_id, legacyRepoUrl) }}
-                      className="btn mt-1 w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs"
+                      /* [CN-FORK] v0.5.2.103 收敛档：原先是手写的实心 emerald 类（绕过骨架层的漏网实心块），
+                          改走 .btn-ok —— 更新属「成功态动作」，语义不变，但形态跟全站一致（淡染底 + 同色字）。 */
+                      className="btn btn-ok mt-1 w-full text-xs"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>

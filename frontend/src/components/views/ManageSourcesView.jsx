@@ -195,7 +195,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
                         onClick={() => remove(idx)}
                         title={t("manage_sources.remove_btn", "Remove source")}
                         aria-label={t("manage_sources.remove_btn", "Remove source")}
-                        className="icon-btn hover:bg-red-500/10 hover:text-red-500"
+                        className="icon-btn is-danger"
                       >
                         <Trash2 />
                       </button>

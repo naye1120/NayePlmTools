@@ -23,8 +23,9 @@
 .text-zinc-400 { color: #a1a9b3 !important; }
 .text-zinc-500 { color: #8b949e !important; }
 /* [CN-FORK] v0.5.2.89 图标盒的矩形底取消后，动作色只剩图标本身；深档文字档必须比实心底更亮才看得清。
- * [CN-FORK] v0.5.2.100 动作色转蓝，老内核兜底字面量跟着同步，否则实机上这条会盖住变量档、出现两套主色。 */
-.text-ps-blue { color: #58a6ff !important; }
+ * [CN-FORK] v0.5.2.100 动作色转蓝，老内核兜底字面量跟着同步，否则实机上这条会盖住变量档、出现两套主色。
+ * [CN-FORK] v0.5.2.104 主色换朱橙 #F43E06，兜底字面量同步为提亮一档的 #FF7043。 */
+.text-ps-blue { color: #ff7043 !important; }
 @media (min-width: 768px) {
   .md\:hidden { display: none !important; }
   .md\:flex { display: flex !important; }
@@ -91,47 +92,66 @@
    * [CN-FORK] v0.5.2.100 整套换成参考页 ps5-remoteplay-pin 的「灰墨」档（用户选定「整套照搬（含蓝主色）」）：
    *   画布 #111317、侧栏与卡片 #1B1F25、内嵌件取参考页的凹陷底 #0D1117 一族、发丝线 #30363D。
    *   inset 仍写成半透明：它同时坐在画布和卡片上，用 alpha 压暗才能在两种容器上都保持「凹进去」一档。
-   *   rail 必须保持实色：它是模态面板 .glass-panel 与粘顶条的浮层底，透明会透出滚过的内容。 */
-  --color-canvas: #111317;
-  --color-rail: #1b1f25;
-  --color-card: #1b1f25;
-  --color-inset: rgba(8, 10, 14, 0.3);             /* 压在卡片 #1B1F25 上 ≈ #151920，压在画布上 ≈ #0E1014 */
-  --color-inset-hover: rgba(203, 217, 230, 0.08);  /* 压在画布上 ≈ #202329、卡片上 ≈ #202328，比凹底明显提亮 */
-  --color-line: #30363d;
-  --color-line-hover: #444c56;
+   *   rail 必须保持实色：它是模态面板 .glass-panel 与粘顶条的浮层底，透明会透出滚过的内容。
+   * [CN-FORK] v0.5.2.103 「深空黑」：三档中性底整体再压深一档，并把彼此的差值收窄 ——
+   *   画布 #0B0D10、侧栏 #0E1116、卡片 #12151A、发丝线 #1E232A。层级不再靠色块深浅差，
+   *   而是靠 1px 发丝线 + 大留白划出来（现代开发者工具的主流做法）。
+   *   注：.head-bar 自 v0.5.2.102 起已不粘顶，因此它不再需要实色底（骨架层里已改透明）。 */
+  --color-canvas: #0b0d10;
+  --color-rail: #0e1116;
+  --color-card: #12151a;
+  --color-inset: rgba(0, 0, 0, 0.26);              /* 压在卡片 #12151A 上 ≈ #0D0F13，压在画布上 ≈ #08090B */
+  --color-inset-hover: rgba(255, 255, 255, 0.07);  /* 悬停反馈：比凹底明显提亮一档 */
+  --color-line: #1e232a;
+  --color-line-hover: #2f3742;
 
   /* ── 选中底（第 5 档，唯一）：S2 = 实心动作色芯片 ── */
-  --color-sel-bg: #2563eb;
+  --color-sel-bg: #f43e06;
   --color-sel-fg: #ffffff;
 
   /* ── 动作色：实心档 / 悬停 / 实心底上的字色 / 薄染 / 文字档 ──
-   * --color-ps-blue 是「主色的字与图标」，深底上要提亮一档才读得清（实心底仍用 #2563EB）；
+   * --color-ps-blue 是「主色的字与图标」，深底上要提亮一档才读得清（实心底仍用 #F43E06）；
    * --color-action 是「主色的底」，两个角色分开，别再混用。
    * [CN-FORK] v0.5.2.100 由亮橙 #FF9410 整套换成参考页的动作蓝 #2563EB（用户明确选择含蓝主色，
-   *   旧「主色不得为灰或蓝」约束本轮由用户解除）。深档悬停取亮一档 #3B82F6，浅档取深一档（见 light-theme.css）。 */
-  --color-action: #2563eb;
-  --color-action-hover: #3b82f6;
+   *   旧「主色不得为灰或蓝」约束本轮由用户解除）。
+   * [CN-FORK] v0.5.2.104 按用户指令换回暖色系 **#F43E06**（朱橙，色相 15°）。
+   *   ⚠ 对比度备忘：白字压在 #F43E06 上实测 **3.79:1**（#2563EB 时代是 5.12:1），
+   *   低于 WCAG AA 对正文的 4.5:1，但高于大字号/图形元素的 3:1。若要拉回 AA：
+   *   把 --color-sel-bg 压深到 #D93A00（白字 4.61:1），或让实心档改配深色字（#F43E06 配 #1A0A02 得 5.09:1）。 */
+  --color-action: #f43e06;
+  --color-action-hover: #ff5a1f;
   --color-on-action: #ffffff;
-  --color-action-tint: rgba(37, 99, 235, 0.16);
-  --color-action-line: rgba(37, 99, 235, 0.45);
-  --color-ps-blue: #58a6ff;
-  --color-ps-blue-glow: rgba(37, 99, 235, 0.4);
-  /* [CN-FORK] v0.5.2.102 实心按钮的「功能六色」（用户选定样张 A + I2，作废 .101 的描边紫档）。
-   * 一个功能固定一色、一律实心 + 白字；图标取**同色相提亮一档**（-icon），让图形从字里跳出来。
-   *   蓝 = 这一页唯一的主操作（与 .sel-chip 选中档同色）  紫 = 启动/重启/修改/取消
-   *   深紫 = 幽灵档（比紫低半档的辅助跳转）              青 = 刷新/复制等信息工具类
-   *   绿 = 成功与「已启用/安装/更新」                    金 = 上传/写入这类要留意的动作
-   *   红 = 不可逆（关闭/删除/停止）
-   * 六档底色配白字实测 ≥4.2:1；-icon 档对各自底色 ≥3.3:1（图标是非文字元素，线是 3:1）。
-   * 深浅两套主题同值，所以 light-theme.css 不翻这一组。 */
-  --fill-blue: #2563eb;    --fill-blue-hover: #1d4ed8;    --fill-blue-icon: #bcd4ff;
-  --fill-purple: #8250df;  --fill-purple-hover: #6d28d9;  --fill-purple-icon: #dcc6ff;
-  --fill-violet: #6d28d9;  --fill-violet-hover: #5b21b6;  --fill-violet-icon: #dcc6ff;
-  --fill-teal: #0d8a8a;    --fill-teal-hover: #0a6f6f;    --fill-teal-icon: #a5f3fc;
-  --fill-green: #1a7f37;   --fill-green-hover: #166128;   --fill-green-icon: #a7f3d0;
-  --fill-gold: #9a6700;    --fill-gold-hover: #7d5300;    --fill-gold-icon: #ffeab0;
-  --fill-red: #cf222e;     --fill-red-hover: #a51e2a;     --fill-red-icon: #ffc9c9;
-  --fill-fg: #ffffff;
+  --color-action-tint: rgba(244, 62, 6, 0.16);
+  --color-action-line: rgba(244, 62, 6, 0.45);
+  --color-ps-blue: #ff7043;
+  --color-ps-blue-glow: rgba(244, 62, 6, 0.4);
+  /* ── [CN-FORK] v0.5.2.103 按钮配色契约（**收敛**：全站只有「主操作」是实心彩块）──
+   * 用户选定「收敛：只留主操作上色」。实心蓝（--color-sel-bg）自此只属于 .btn-primary
+   * 与 .sel-chip；其余按钮一律「中性底 + 发丝线」，语义色只出现在字与图标上，不再铺满整块。
+   * 作废 v0.5.2.102 的六色实心档（--fill-{purple,violet,teal,green,gold,red} 已删）——
+   * 那一版一屏六七种饱和实心块，是「简约 / 高大上」最直接的障碍。
+   * 角色表：
+   *   中性档（次要 / 取消 / 返回 / 启动 / 修改）  --btn-bg / --btn-line / --btn-fg
+   *   幽灵档（低优先级跳转）                      --btn-ghost-*
+   *   语义四档（危险 / 成功 / 警示 / 信息）       各一组「淡染底 + 同色线 + 同色字」
+   * 深浅两套主题各翻一份：浅底上的淡染要换实色浅染才干净（见 light-theme.css）。 */
+  --btn-bg: rgba(255, 255, 255, 0.045);
+  --btn-bg-hover: rgba(255, 255, 255, 0.085);
+  --btn-fg: #c9d1d9;
+  --btn-line: #262c34;
+  --btn-line-hover: #39414c;
+  --btn-ghost-bg: transparent;
+  --btn-ghost-bg-hover: rgba(255, 255, 255, 0.06);
+  --btn-ghost-fg: #a1a9b3;
+
+  --btn-danger-fg: #f87171;  --btn-danger-tint: rgba(248, 113, 113, 0.09);
+  --btn-danger-tint-hover: rgba(248, 113, 113, 0.17);  --btn-danger-line: rgba(248, 113, 113, 0.32);
+  --btn-ok-fg: #3fb950;      --btn-ok-tint: rgba(63, 185, 80, 0.10);
+  --btn-ok-tint-hover: rgba(63, 185, 80, 0.18);        --btn-ok-line: rgba(63, 185, 80, 0.32);
+  --btn-warn-fg: #d29922;    --btn-warn-tint: rgba(210, 153, 34, 0.10);
+  --btn-warn-tint-hover: rgba(210, 153, 34, 0.18);     --btn-warn-line: rgba(210, 153, 34, 0.34);
+  --btn-info-fg: #a1a9b3;    --btn-info-tint: rgba(255, 255, 255, 0.05);
+  --btn-info-tint-hover: rgba(255, 255, 255, 0.09);    --btn-info-line: #262c34;
 
   /* ── 文字阶：主 / 次要 / 辅助 / 占位符 ── */
   --color-ps-text: #e6edf3;
@@ -179,6 +199,10 @@
   --switch-w: 3.5rem;
   --switch-h: 1.75rem;
   --knob-d: 1.25rem;
+  /* [CN-FORK] v0.5.2.105 PIN 倒计时进度条厚度：它是装饰条、不是命中区，所以另立一档，
+   * 不跟 --ctl-h 走（那条一降会把按钮/输入框一起降）。PC 档 0.85rem(≈14px，原 h-2 是 8px)；
+   * 电视端在下方 html[data-device="ps5"] 块放大到 1.25rem(20px)，隔着沙发也看得见那条流光。 */
+  --pin-bar-h: 0.85rem;
 }
 
 /* PS5 浏览器（1920×1080 + 遥控器）：命中区整体上抬一档。
@@ -193,6 +217,7 @@ html[data-device="ps5"] {
   --switch-w: 5.5rem;
   --switch-h: 2.75rem;
   --knob-d: 2.125rem;
+  --pin-bar-h: 1.25rem;   /* 20px：电视端进度条加厚一档（v0.5.2.105） */
 }
 
 /* @theme removed - Tailwind 4 only directive, using tailwind.config.js instead */
@@ -283,17 +308,37 @@ body {
 .panel-card {
   background: var(--color-card);
   border: 1px solid var(--color-line);
-  border-radius: 0.75rem;
+  /* [CN-FORK] v0.5.2.103 舒展档：圆角 0.75rem → 1rem，配合更松的板块内边距 */
+  border-radius: 1rem;
   overflow: hidden;
   transition: border-color 0.2s ease;
 }
-.panel-card:hover { border-color: var(--color-action-line); }
+.panel-card:hover { border-color: var(--color-line-hover); }
 .panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.875rem 1.25rem;
+  /* [CN-FORK] v0.5.2.103 板块头内边距放宽（0.875/1.25rem → 1.05/1.4rem），与舒展档对齐 */
+  padding: 1.05rem 1.4rem;
   border-bottom: 1px solid var(--color-line);
+}
+
+/* 板块标题（.panel-head 里那颗 h3）
+ * [CN-FORK] v0.5.2.106 用户指令：「所有这类子模块的标题辨识度都提高一些」。
+ * 原先是 text-sm(0.85rem≈13.6px) + font-semibold(600) —— 作为卡片主标题偏小偏细。
+ * 四条措施一起上，缺一条都差口气：
+ *   ① 字号 0.85rem → 1.05rem(≈16.8px)：最直接的一档；13.6px 在 1080p 电视上本就偏小。
+ *   ② 字重 600 → 700：近黑底上的浅色文字，笔画越细越「虚」，加粗一档才立得住。
+ *   ③ 字距 +0.01em：汉字彼此紧挨时笔画容易连成一片，给一点缝让每个字独立成形。
+ *   ④ 颜色不动（仍是 text-white）：纯白压 #12151A 已有约 19:1，瓶颈在字号与字重、不在色值。
+ * 单独立成骨架层类、不堆原子类：以后调标题只改这一处，也不会再冒出「某个视图自己写
+ * text-sm font-semibold」的副本。浅色主题不用另翻：本类不写 color，浅档仍由
+ * light-theme.css 把 text-white 反着映射成近黑（#1f2328）。 */
+.panel-title {
+  font-size: 1.05rem;
+  line-height: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 /* ── 焦点可见（[CN-FORK] v0.5.2.92）──
@@ -484,13 +529,12 @@ h1, h2, h3, h4 {
 }
 
 /* ── 页头横条（[CN-FORK] v0.5.2.94 立，v0.5.2.102 起不粘顶）──
- * 底必须是实色 rail 档：半透明会让压到它的内容透出来。负外边距是为了吃掉 main 的左右内边距
- * （窄屏 px-6 / ≥768px px-16），让那根发丝分界线铺满整宽。 */
+ * [CN-FORK] v0.5.2.103 去掉实色底：原底是 rail 档（比画布亮一档），在近黑画布上形成一条
+ * 横贯全宽的浅色带，割裂感很重。既然 .102 已经不粘顶、没有任何内容会压到它，就不需要实色底了
+ * —— 现在只留那根底部发丝线，页头与正文在同一张画布上。出血负边距是为了让分界线铺满整宽
+ * （窄屏 px-6 / ≥768px px-16）。 */
 .head-bar {
-  /* [CN-FORK] v0.5.2.102 用户指令「所有 head-bar 要跟随页面一起滚动」：去掉 .94 加的粘顶
-   * （position: sticky / top / z-index 三行），页头退回普通块，滚上去就跟着走。
-   * 出血负边距、实色 rail 底与那根发丝分界线都保留 —— 变的只是「钉不钉住」。 */
-  background-color: var(--color-rail);
+  background-color: transparent;
   margin: 0 -1.5rem;
   padding: 0.7rem 1.5rem 0.8rem;
   border-bottom: 1px solid var(--color-line);
@@ -552,9 +596,9 @@ html[data-device="ps5"] .head-bar {
   align-items: center;
   justify-content: center;
   min-height: var(--ctl-h);
-  padding: 0.3rem 0.9rem;
+  padding: 0.32rem 1rem;
   border: 1px solid transparent;
-  border-radius: 0.5rem;
+  border-radius: 0.625rem;
   font-family: inherit;
   font-size: 0.9rem;
   font-weight: 700;
@@ -567,7 +611,10 @@ html[data-device="ps5"] .head-bar {
 .btn > * + * { margin-left: 0.3rem; }
 
 /* 图标钮：与 .btn 同一档命中区，但保持正方形（w=h=--ctl-h）。
- * 全站所有「只有一个图标的按钮」都用它，不再手写 p-2 + w-4 h-4 的 32px 小块。 */
+ * 全站所有「只有一个图标的按钮」都用它，不再手写 p-2 + w-4 h-4 的 32px 小块。
+ * [CN-FORK] v0.5.2.103 收敛：从实心青块改为**无底幽灵档** —— 静息态只有一个中性色图标，
+ *   悬停/聚焦才浮出一层 inset 底。整页几十颗图标钮（刷新/返回/折叠/复制）因此全部安静下来，
+ *   视线只被真正的主操作（.btn-primary）抓走。复制成功仍给绿档反馈（见下方 .is-copied）。 */
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -577,21 +624,27 @@ html[data-device="ps5"] .head-bar {
   flex: none;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 0.5rem;
-  background-color: var(--fill-teal);
-  /* [CN-FORK] v0.5.2.102 图标钮转实心（用户选定样张 A + I2）：.101 的「紫字 + 透明底」
-   * 仍然是看不出色，现在跟其他按钮一样是实心底、白字，图形取同色相提亮一档。
-   * 单图标按钮归「信息工具类」＝青档；复制成功那一下换绿档（见下面 .is-copied）。 */
-  color: var(--fill-fg);
+  border-radius: 0.625rem;
+  background-color: transparent;
+  color: var(--color-ps-text-sub);
   cursor: pointer;
   transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
-.icon-btn:hover:not(:disabled) { background-color: var(--fill-teal-hover); }
+.icon-btn:hover:not(:disabled) { background-color: var(--color-inset-hover); color: var(--color-ps-text); }
 .icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 /* 图标本身保持原来的小尺寸，放大的是可点区域而不是图形 */
-.icon-btn > svg { width: 1.15rem; height: 1.15rem; color: var(--fill-teal-icon) !important; }
+.icon-btn > svg { width: 1.15rem; height: 1.15rem; color: var(--color-ps-text-sub) !important; }
+.icon-btn:hover:not(:disabled) > svg { color: var(--color-ps-text) !important; }
 /* 电视端可点区域到了 --ctl-h 的电视档（51px），图形跟着放大一档才在沙发上看得到 */
 html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
+
+/* [CN-FORK] v0.5.2.103 危险图标钮（列表行内的删除 / 卸载）：图标恒为危险色、悬停浮出淡红底。
+ * 收敛档下图标钮一律中性灰，只有这一类必须保住「这个动作不可逆」的信号 ——
+ * 用小图标染色而不是实心红块，语义在、噪声不在。 */
+.icon-btn.is-danger { color: var(--btn-danger-fg); }
+.icon-btn.is-danger > svg { color: var(--btn-danger-fg) !important; }
+.icon-btn.is-danger:hover:not(:disabled) { background-color: var(--btn-danger-tint); }
+.icon-btn.is-danger:hover:not(:disabled) > svg { color: var(--btn-danger-fg) !important; }
 
 /* 开关（ui/Switch.jsx）：轨道和旋钮的尺寸只在这一处定义，组件里不写死宽高，
  * 免得再出现「窄屏一档、宽屏一档、电视端没人管」的三份副本。 */
@@ -609,99 +662,116 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
   gap: 0.25rem;
   padding: 0.25rem;
   border: 1px solid var(--color-line);
-  border-radius: 0.75rem;
+  border-radius: 0.875rem;
   background-color: var(--color-inset);
 }
 .segmented-item { min-height: var(--ctl-h); padding: 0 0.6rem; }
 
 /* 游戏磁贴宫格（[CN-FORK] v0.5.2.100）：列数自适应，不再固定 grid-cols-2/3/4。
  * repeat(auto-fill, minmax(--tile-w, 1fr)) 的意思是「先按下限数能放几列，再把剩余宽度平分给这些列」，
- * 所以宽屏自然多放、窄屏自然少放；电视端只是把下限抬到 240px（--tile-w 的另一档）。
- * 用 grid 不用 flex：PS5 老内核不支持 flex 盒的 gap，而 grid 的 gap 是支持的。 */
+ * 所以宽屏自然多放、窄屏自然少放；电视端只是把下限抬到 300px（--tile-w 的另一档）。
+ * 用 grid 不用 flex：PS5 老内核不支持 flex 盒的 gap，而 grid 的 gap 是支持的。
+ * [CN-FORK] v0.5.2.103 磁贴间距 0.45rem → 0.7rem，跟「舒展」档的板块间距对齐。 */
 .tile-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(var(--tile-w), 1fr));
-  gap: 0.45rem;
+  gap: 0.7rem;
 }
 
-/* ── 实心按钮：一个功能一档色 ──
- * [CN-FORK] v0.5.2.102 用户选定样张 A + I2，指令原话「不同场景不同功能，要不同颜色的实心
- * 图标，跟图二风格一样，颜色不同而已」。作废 .101 的「紫描边 + 紫字」——那一版仍然是透明底，
- * 看上去还是「没上色」。从现在起每一档都是实心底 + 白字，svg 图形取同色相提亮一档（-icon），
- * 让图标从白字里跳出来。
- * 特异性备忘：`.X > *`（0,1,0）低于 `.X > svg`（0,1,1），所以先给全部子元素白字、再单独把
- * 图形换成 -icon 档。图形那一条必须带 !important：文件顶部 LEGACY 档把 .text-ps-blue / .text-white
- * 写成了 !important 字面量（老内核兜底），组件里的图标常挂这两个类，不加 !important 就压不住。 */
+/* ── 按钮配色（[CN-FORK] v0.5.2.103 收敛档）──
+ * 契约：**全站只有「这一页的主操作」是实心彩块**（.btn-primary，与 .sel-chip 同色）。
+ * 其余按钮一律「中性底 + 发丝线」；语义色只出现在字与图标上，不再铺满整块。
+ * 作废 v0.5.2.102 的六色实心档 —— 一屏六七种饱和色块与「简约 / 高大上」直接冲突。
+ * 语义四档仍严格区分（危险=红 / 成功=绿 / 警示=金 / 信息=中性），只是从「实心块」降为
+ * 「淡染底 + 同色描边 + 同色字」：静息态安静，语义一眼可辨，危险也不至于每行都在喊。
+ * 特异性备忘：`.X > *`（0,1,0）低于 `.X > svg`（0,1,1）。图形那条必须带 !important ——
+ * 文件顶部 LEGACY 档把 .text-ps-blue / .text-white 写成 !important 字面量给老内核兜底，
+ * 而组件里的图标普遍挂这两个类，不加 !important 压不住。 */
 
-/* 蓝 = 这一页唯一的主操作。沿用 --color-sel-bg（与文件末尾 .sel-chip 选中档同色同值），
- * 这里只补 I2 的图形档 */
+/* 蓝 = 这一页唯一的主操作（上传 / 安装 / 保存 / 移动到内部）。全站唯一的上色按钮。 */
 .btn-primary {
   background-color: var(--color-sel-bg);
+  border-color: transparent;
   color: var(--color-sel-fg);
 }
 .btn-primary:hover:not(:disabled) { background-color: var(--color-action-hover); }
 .btn-primary > * { color: var(--color-sel-fg); }
-.btn-primary > svg { color: var(--fill-blue-icon) !important; }
+.btn-primary > svg { color: #ffffff !important; }
 
-/* 紫 = 启动 / 重启 / 修改 / 取消：全站数量最多的「次要动作」档，取代 .101 的紫描边 */
+/* 中性档 = 次要动作：取消 / 返回 / 启动 / 重启 / 修改。淡底 + 发丝线，不加任何彩色。 */
 .btn-outline {
-  background-color: var(--fill-purple);
-  border-color: transparent;
-  color: var(--fill-fg);
+  background-color: var(--btn-bg);
+  border-color: var(--btn-line);
+  color: var(--btn-fg);
 }
-.btn-outline:hover:not(:disabled) { background-color: var(--fill-purple-hover); }
-.btn-outline > * { color: var(--fill-fg); }
-.btn-outline > svg { color: var(--fill-purple-icon) !important; }
+.btn-outline:hover:not(:disabled) {
+  background-color: var(--btn-bg-hover);
+  border-color: var(--btn-line-hover);
+  color: var(--color-ps-text);
+}
+.btn-outline > * { color: inherit; }
+.btn-outline > svg { color: var(--color-ps-text-sub) !important; }
+.btn-outline:hover:not(:disabled) > svg { color: var(--color-ps-text) !important; }
 
-/* 深紫 = 幽灵/跳转类辅助动作。低半档是为了跟「紫=启动」拉开层次，但不再是透明底 */
+/* 幽灵档 = 低优先级的跳转/取消：无底无边，只在悬停时浮一层 inset 底。 */
 .btn-ghost {
-  background-color: var(--fill-violet);
+  background-color: var(--btn-ghost-bg);
   border-color: transparent;
-  color: var(--fill-fg);
+  color: var(--btn-ghost-fg);
 }
-.btn-ghost:hover:not(:disabled) { background-color: var(--fill-violet-hover); }
-.btn-ghost > * { color: var(--fill-fg); }
-.btn-ghost > svg { color: var(--fill-violet-icon) !important; }
-
-/* 红 = 不可逆：关闭 / 删除 / 停止。危险本来就是实心语义，描边版反而看不出轻重 */
-.btn-danger {
-  background-color: var(--fill-red);
-  border-color: transparent;
-  color: var(--fill-fg);
+.btn-ghost:hover:not(:disabled) {
+  background-color: var(--btn-ghost-bg-hover);
+  color: var(--color-ps-text);
 }
-.btn-danger:hover:not(:disabled) { background-color: var(--fill-red-hover); }
-.btn-danger > * { color: var(--fill-fg); }
-.btn-danger > svg { color: var(--fill-red-icon) !important; }
+.btn-ghost > * { color: inherit; }
+.btn-ghost > svg { color: var(--color-ps-text-sub) !important; }
+.btn-ghost:hover:not(:disabled) > svg { color: var(--color-ps-text) !important; }
 
-/* 绿 = 成功态动作：已启用 / 安装 / 更新（图二那颗「已启用」芯片从蓝选中档换成这一档） */
-.btn-ok {
-  background-color: var(--fill-green);
-  border-color: transparent;
-  color: var(--fill-fg);
-}
-.btn-ok:hover:not(:disabled) { background-color: var(--fill-green-hover); }
-.btn-ok > * { color: var(--fill-fg); }
-.btn-ok > svg { color: var(--fill-green-icon) !important; }
-
-/* 金 = 要留意的写入动作：上传 / 写入 / 覆盖 */
-.btn-warn {
-  background-color: var(--fill-gold);
-  border-color: transparent;
-  color: var(--fill-fg);
-}
-.btn-warn:hover:not(:disabled) { background-color: var(--fill-gold-hover); }
-.btn-warn > * { color: var(--fill-fg); }
-.btn-warn > svg { color: var(--fill-gold-icon) !important; }
-
-/* 青 = 信息工具类：刷新 / 复制 / 查看，只读不改状态的动作 */
+/* 信息档 = 刷新 / 重试 / 同步 / 复制：只读不改状态，最安静的一档（与中性档同族）。 */
 .btn-info {
-  background-color: var(--fill-teal);
-  border-color: transparent;
-  color: var(--fill-fg);
+  background-color: var(--btn-info-tint);
+  border-color: var(--btn-info-line);
+  color: var(--btn-info-fg);
 }
-.btn-info:hover:not(:disabled) { background-color: var(--fill-teal-hover); }
-.btn-info > * { color: var(--fill-fg); }
-.btn-info > svg { color: var(--fill-teal-icon) !important; }
+.btn-info:hover:not(:disabled) {
+  background-color: var(--btn-info-tint-hover);
+  border-color: var(--btn-line-hover);
+  color: var(--color-ps-text);
+}
+.btn-info > * { color: inherit; }
+.btn-info > svg { color: var(--color-ps-text-sub) !important; }
+.btn-info:hover:not(:disabled) > svg { color: var(--color-ps-text) !important; }
+
+/* 红 = 不可逆：删除 / 终止 / 关闭。语义必须留，但改「淡红底 + 红边 + 红字」，
+ * 不再是一颗每行都在喊的实心红块。 */
+.btn-danger {
+  background-color: var(--btn-danger-tint);
+  border-color: var(--btn-danger-line);
+  color: var(--btn-danger-fg);
+}
+.btn-danger:hover:not(:disabled) { background-color: var(--btn-danger-tint-hover); }
+.btn-danger > * { color: var(--btn-danger-fg); }
+.btn-danger > svg { color: var(--btn-danger-fg) !important; }
+
+/* 绿 = 成功态：已启用 / 安装 / 更新 / 同步完成。 */
+.btn-ok {
+  background-color: var(--btn-ok-tint);
+  border-color: var(--btn-ok-line);
+  color: var(--btn-ok-fg);
+}
+.btn-ok:hover:not(:disabled) { background-color: var(--btn-ok-tint-hover); }
+.btn-ok > * { color: var(--btn-ok-fg); }
+.btn-ok > svg { color: var(--btn-ok-fg) !important; }
+
+/* 金 = 要留意的写入动作：上传 / 写入 / 覆盖。 */
+.btn-warn {
+  background-color: var(--btn-warn-tint);
+  border-color: var(--btn-warn-line);
+  color: var(--btn-warn-fg);
+}
+.btn-warn:hover:not(:disabled) { background-color: var(--btn-warn-tint-hover); }
+.btn-warn > * { color: var(--btn-warn-fg); }
+.btn-warn > svg { color: var(--btn-warn-fg) !important; }
 
 /* ── 表单输入：与 .btn 同一套圆角/字号与同一档命中区，底色用第 4 档中性底（inset）保持「凹进去」的输入感 ── */
 .field {
@@ -709,7 +779,7 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
   min-height: var(--ctl-h);
   padding: 0.3rem 0.75rem;
   border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
+  border-radius: 0.625rem;
   background-color: var(--color-inset);
   color: var(--color-ps-text);
   font-family: inherit;
@@ -743,23 +813,112 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 0.4rem;
-  background-color: var(--fill-teal);
-  color: var(--fill-fg);
+  border-radius: 0.45rem;
+  background-color: transparent;
+  color: var(--color-ps-text-sub);
   cursor: pointer;
 }
-.field-btn > svg { color: var(--fill-teal-icon) !important; }
-.field-btn:hover:not(:disabled) { background-color: var(--fill-teal-hover); }
-/* 复制成功那一下转绿档：实心色变化 = 「已经复制到了」当场看得见。
- * 权重 0,2,0 高于上面的 0,1,0，也高于 .field-btn > svg（0,1,1），所以图形档要另压一条。 */
-.field-btn.is-copied { background-color: var(--fill-green); }
-.field-btn.is-copied > svg { color: var(--fill-green-icon) !important; }
-/* PIN 后面那颗用的是通用 .icon-btn，同样给它一个复制成功的实心绿档 */
-.icon-btn.is-copied { background-color: var(--fill-green); }
-.icon-btn.is-copied > svg { color: var(--fill-green-icon) !important; }
-/* 已复制的绿档在悬停时不能被青档 hover 顶回去（:hover:not() 权重更高），所以跟着压深一档 */
+.field-btn > svg { color: var(--color-ps-text-sub) !important; }
+.field-btn:hover:not(:disabled) { background-color: var(--color-inset-hover); color: var(--color-ps-text); }
+.field-btn:hover:not(:disabled) > svg { color: var(--color-ps-text) !important; }
+/* 复制成功那一下转绿档：淡绿底 + 绿图标 = 「已经复制到了」当场看得见。
+ * 权重 0,2,0 高于上面的 0,1,0，也高于 .field-btn > svg（0,1,1），所以图形档要另压一条。
+ * [CN-FORK] v0.5.2.103 跟随按钮收敛：实心绿块 → 淡绿染底 + 绿图标。 */
+.field-btn.is-copied { background-color: var(--btn-ok-tint); }
+.field-btn.is-copied > svg { color: var(--btn-ok-fg) !important; }
+/* PIN 后面那颗用的是通用 .icon-btn，同样给它一个复制成功的绿档 */
+.icon-btn.is-copied { background-color: var(--btn-ok-tint); color: var(--btn-ok-fg); }
+.icon-btn.is-copied > svg { color: var(--btn-ok-fg) !important; }
+/* 已复制的绿档在悬停时不能被中性 hover 顶回去（:hover:not() 权重更高），所以跟着压深一档 */
 .field-btn.is-copied:hover:not(:disabled),
-.icon-btn.is-copied:hover:not(:disabled) { background-color: var(--fill-green-hover); }
+.icon-btn.is-copied:hover:not(:disabled) { background-color: var(--btn-ok-tint-hover); }
+
+/* ============================================================================
+ * [CN-FORK] v0.5.2.105 PIN 倒计时进度条（账号板块的「远程游玩配对 PIN」卡）
+ *
+ * 用户指令：「生成 pin 的进度条要高一些，炫酷一些，颜色可以用别的」。
+ * 原来是一条 h-2(8px) 的纯色条（bg-ps-blue 填充）—— 又细又平，而且主色换朱橙之后
+ * 它变成一条橙条，跟「正在等待配对」这种中性状态也不搭。
+ *
+ * 现在三件事：
+ *   1. 加厚：高度走 --pin-bar-h（PC 14px / 电视 20px），不再写死 h-2。
+ *   2. 炫酷：填充段用「青 → 蓝 → 紫」冷色渐变 + 外发光（冷色与朱橙主色形成互补，一眼跳出来），
+ *      再叠一条循环扫过的白色流光（::after，免去额外 DOM）。
+ *   3. 换色 + 临界反馈：剩余 ≤30 秒时整条切「琥珀 → 红」渐变、发光转红、并整体脉冲，
+ *      「快过期了」由颜色与动效两条路同时给出来。
+ *
+ * 实现要点：
+ *   · 渐变写在 background-image 上 —— index.css 的「一档一色」收口层只映射 background-color，
+ *     所以这条不会被翻掉，深浅两套主题共用同一组饱和色（在深空黑与纯白底上都压得住）。
+ *   · 轨道**不设 overflow:hidden**：填充段的外发光要能溢到轨道外才有「亮」的感觉。
+ *     需要裁的是流光（它是填充段的后代），所以 overflow:hidden 放在 .pin-bar-fill 上 ——
+ *     overflow 裁的是后代，不会裁掉元素自己的 box-shadow。
+ *   · 填充段绝对定位、left/top/bottom 归零：containing block 是轨道的 padding box（边框内侧），
+ *     所以它不会压住那根 1px 发丝线；宽度百分比也是相对 padding box，100% 时正好铺满。
+ * ==========================================================================*/
+.pin-bar {
+  position: relative;
+  height: var(--pin-bar-h);
+  border-radius: 999px;
+  background-color: var(--color-inset);
+  border: 1px solid var(--color-line);
+}
+.pin-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background-image: linear-gradient(90deg, #22d3ee 0%, #3b82f6 52%, #8b5cf6 100%);
+  box-shadow: 0 0 0.5rem rgba(56, 189, 248, 0.55), 0 0 1.1rem rgba(139, 92, 246, 0.32);
+  transition: width 1s linear;
+}
+/* 流光：一条半透明白斜条在填充段内循环扫过（左出右进） */
+.pin-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  background-image: linear-gradient(100deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.55) 50%, rgba(255, 255, 255, 0) 100%);
+  animation: pin-sheen 1.8s linear infinite;
+}
+/* 临界档（剩余 ≤30s）：红橙渐变 + 发光转红 + 整体脉冲 */
+.pin-bar.is-critical .pin-bar-fill {
+  background-image: linear-gradient(90deg, #f59e0b 0%, #ef4444 55%, #dc2626 100%);
+  box-shadow: 0 0 0.5rem rgba(239, 68, 68, 0.6), 0 0 1.15rem rgba(220, 38, 38, 0.38);
+  animation: pin-pulse 1s ease-in-out infinite;
+}
+@keyframes pin-sheen {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(240%); }
+}
+@-webkit-keyframes pin-sheen {
+  from { -webkit-transform: translateX(-110%); }
+  to { -webkit-transform: translateX(240%); }
+}
+@keyframes pin-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+
+/* ============================================================================
+ * [CN-FORK] v0.5.2.103 舒展层（用户选定「舒展：大留白 + 中大圆角」）
+ *
+ * 全站视图根节点统一是 <div className="space-y-6">（见 ui/PageHead.jsx 的容器约定），
+ * 所以「页面级板块间距」只要在这一个选择器上放大即可，不必去改 12 个视图文件。
+ * compact 尺度表里的 6 = 0.9rem 是给控件间隙用的紧凑值，页面节奏另立一档更合适：
+ *   板块间距 0.9rem → 1.35rem（≥768px 1.5rem），配合更大的板块内边距与圆角，
+ *   画面才有「贵」的呼吸感。权重相同（0,2,0）靠源码顺序取胜（本文件在 utilities 之后）。
+ * 注意排除 md:space-y-8（AutoloadView 两栏那一处自己定的更松一档），否则会被这里压回去。
+ * ==========================================================================*/
+.space-y-6 > * + * { margin-top: 1.35rem; }
+@media (min-width: 768px) {
+  .space-y-6 > * + * { margin-top: 1.5rem; }
+  .md\:space-y-8 > * + * { margin-top: 2rem; }
+}
 
 /* ============================================================================
  * [CN-FORK] v0.5.2.87 「一档一色」收口层

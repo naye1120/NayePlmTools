@@ -13,7 +13,8 @@
  * 浅色色板（[CN-FORK] v0.5.2.100 按参考页 ps5-remoteplay-pin 的蓝主色同族定制）：
  *   画布   #ffffff   侧栏 #f6f8fa   卡片 #ffffff   内嵌件 ≈#f4f5f6（半透凹底）   描线 #d0d7de
  *   主文字 #1f2328   次要 #454f59   辅助 #59636e   更淡 #8c959f   占位符 #8c959f
- *   选中底/实心按钮 #2563eb + 白字；动作色「文字/图标」档用浅底可读的深蓝 #0969da
+ *   选中底/实心按钮 #F43E06 + 白字；动作色「文字/图标」档用浅底可读的深一档 #C2330A
+ *   （v0.5.2.104 主色由蓝换朱橙，浅档同步）
  *   状态色：成功 #1a7f37 / 警示 #9a6700 / 危险 #cf222e（与动作蓝严格区隔）
  * ==========================================================================*/
 
@@ -24,25 +25,49 @@
    * [CN-FORK] v0.5.2.100 与深色档同构：画布/卡片纯白（「干净」不靠灰味），凹底靠半透明墨蓝压出，
    *   侧栏用极浅一档实色压重心。rail 不能跟着调成半透明——它是模态面板与粘顶条的底。 */
   --color-canvas: #ffffff;
-  --color-rail: #f6f8fa;
+  --color-rail: #f7f8fa;
   --color-card: #ffffff;
   --color-inset: rgba(9, 30, 66, 0.045);           /* 压在白画布/白卡片上 ≈ #f4f5f6 */
   --color-inset-hover: rgba(9, 30, 66, 0.09);      /* 压在白画布上 ≈ #eaebef */
-  --color-line: #d0d7de;
-  --color-line-hover: #afb8c1;
-  /* 选中底（S2）：实心蓝 + 白字，与深色档同值 */
-  --color-sel-bg: #2563eb;
+  /* [CN-FORK] v0.5.2.103 「深空黑」的浅色对位：分隔线一并收细（#d0d7de → #e4e7eb），
+   * 与深色档一样，层级交给 1px 发丝线 + 留白，而不是色块深浅差。 */
+  --color-line: #e4e7eb;
+  --color-line-hover: #cdd3da;
+  /* 选中底（S2）：实心朱橙 + 白字，与深色档同值 */
+  --color-sel-bg: #f43e06;
   --color-sel-fg: #ffffff;
-  /* 动作色：浅底上实心底保持 #2563eb，悬停压深一档；「文字/图标」档另用更深的 #0969da 才够对比 */
-  --color-action: #2563eb;
-  --color-action-hover: #1d4ed8;
+  /* 动作色：浅底上实心底保持 #F43E06，悬停压深一档；「文字/图标」档另用更深的 #C2330A 才够对比
+   * [CN-FORK] v0.5.2.104 主色换朱橙后浅档同步。⚠ 白字压 #F43E06 实测 3.79:1（低于 AA 正文 4.5:1），
+   *   深档的备忘同样适用，见 index.css 的 :root。 */
+  --color-action: #f43e06;
+  --color-action-hover: #d93a00;
   --color-on-action: #ffffff;
-  --color-action-tint: rgba(37, 99, 235, 0.1);
-  --color-action-line: rgba(37, 99, 235, 0.35);
-  --color-ps-blue: #0969da;
-  --color-ps-blue-glow: rgba(9, 105, 218, 0.3);
+  --color-action-tint: rgba(244, 62, 6, 0.09);
+  --color-action-line: rgba(244, 62, 6, 0.32);
+  --color-ps-blue: #c2330a;
+  --color-ps-blue-glow: rgba(194, 51, 10, 0.3);
   /* [CN-FORK] v0.5.2.102 这里不再有 secondary 档：.101 的「次要紫」已被功能六色实心档取代，
-   * 那组 --fill-* 令牌深浅两套主题同值（实心底 + 白字，对比度由底色自己保证），所以浅档不翻。 */
+   * 那组 --fill-* 令牌深浅两套主题同值（实心底 + 白字，对比度由底色自己保证），所以浅档不翻。
+   * [CN-FORK] v0.5.2.103 六色实心档已作废（收敛为「只留主操作上色」），改为按钮中性/语义档。
+   *   浅底上的「淡染」不能照搬深档的 rgba(色, .1)（白底上会脏），一律换实色浅染：
+   *   中性档 = 纯白底 + 灰线（按钮在白卡片上靠线框立住），语义四档 = 极浅同色底 + 同色线 + 同色字。 */
+  --btn-bg: #ffffff;
+  --btn-bg-hover: #f2f4f7;
+  --btn-fg: #1f2328;
+  --btn-line: #d8dee4;
+  --btn-line-hover: #b9c1c9;
+  --btn-ghost-bg: transparent;
+  --btn-ghost-bg-hover: rgba(9, 30, 66, 0.06);
+  --btn-ghost-fg: #59636e;
+
+  --btn-danger-fg: #cf222e;  --btn-danger-tint: #fff1ef;
+  --btn-danger-tint-hover: #ffe3df;                    --btn-danger-line: rgba(207, 34, 46, 0.26);
+  --btn-ok-fg: #1a7f37;      --btn-ok-tint: #eef8f1;
+  --btn-ok-tint-hover: #dcf2e3;                        --btn-ok-line: rgba(26, 127, 55, 0.26);
+  --btn-warn-fg: #9a6700;    --btn-warn-tint: #fff9e6;
+  --btn-warn-tint-hover: #fdf0c8;                      --btn-warn-line: rgba(154, 103, 0, 0.28);
+  --btn-info-fg: #454f59;    --btn-info-tint: #ffffff;
+  --btn-info-tint-hover: #f2f4f7;                      --btn-info-line: #d8dee4;
   /* 文字阶：主档近黑，次要/辅助跟着提深（用户反馈过「浅色字体太灰暗」） */
   --color-ps-text: #1f2328;
   --color-ps-text-sub: #454f59;
@@ -112,11 +137,12 @@
 
 /* ── 3. 少数不读 CSS 变量的实心类名 ── */
 /* [CN-FORK] v0.5.2.100 深色档 ps-blue 字面值已是动作蓝 #2563EB，白底上实心蓝底 + 白字对比足够，
-   浅档实心底与深色档同值（与变量档 --color-sel-bg / --color-action 保持一致） */
+   浅档实心底与深色档同值（与变量档 --color-sel-bg / --color-action 保持一致）
+   [CN-FORK] v0.5.2.104 主色换朱橙 #F43E06，浅档实心底同步。 */
 [data-theme="light"] .bg-ps-blue,
-[data-theme="light"] .hover\:bg-ps-blue:hover { background-color: #2563eb !important; }
+[data-theme="light"] .hover\:bg-ps-blue:hover { background-color: #f43e06 !important; }
 /* 封面角标：叠在封面上，两种主题都保持半透深色底 */
-[data-theme="light"] .bg-ps-blue\/85 { background-color: rgba(37, 99, 235, 0.9) !important; }
+[data-theme="light"] .bg-ps-blue\/85 { background-color: rgba(244, 62, 6, 0.9) !important; }
 
 /* 移动端底部导航（bg-black/80 之一）→ 白色悬浮栏；模态遮罩保持压暗 */
 [data-theme="light"] nav.bg-black\/80 {
@@ -163,17 +189,17 @@
 
 /* Bug B：带 important 修饰符的变体是独立类名（!text-white → .\!text-white），需单独映射 */
 [data-theme="light"] .\!text-white { color: #1f2328 !important; }
-[data-theme="light"] .\!text-ps-blue { color: #0969da !important; }
+[data-theme="light"] .\!text-ps-blue { color: #c2330a !important; }
 
-/* Bug D：动作色「文字与图标」档。浅底上实心蓝做文字偏暗，另取更深一档的链接蓝 #0969da；
-   边框/描边仍用实心底同值的 #2563eb，线条比文字要更「实」才看得出。 */
+/* Bug D：动作色「文字与图标」档。浅底上实心朱橙做文字偏亮、读不清，另取更深一档的 #C2330A；
+   边框/描边仍用实心底同值的 #F43E06，线条比文字要更「实」才看得出。 */
 [data-theme="light"] .text-ps-blue,
 [data-theme="light"] .hover\:text-ps-blue:hover,
 [data-theme="light"] .group-hover\:text-ps-blue,
 [data-theme="light"] .text-ps-blue\/60,
-[data-theme="light"] .text-ps-blue\/80 { color: #0969da !important; }
+[data-theme="light"] .text-ps-blue\/80 { color: #c2330a !important; }
 [data-theme="light"] .hover\:border-ps-blue:hover,
-[data-theme="light"] .border-ps-blue { border-color: #2563eb !important; }
+[data-theme="light"] .border-ps-blue { border-color: #f43e06 !important; }
 
 /* ============================================================================
  * [CN-FORK] v0.5.2.87 实心动作底上的字（必须放在文件最末尾）
@@ -204,3 +230,32 @@
 [data-theme="light"] .nav-item.is-active .text-zinc-300,
 [data-theme="light"] .nav-item.is-active .text-zinc-400,
 [data-theme="light"] .nav-item.is-active .text-ps-blue { color: #ffffff !important; }
+
+/* ============================================================================
+ * [CN-FORK] v0.5.2.103 语义按钮档在浅色下的「反向豁免」
+ *
+ * 上面 §2/Bug D 把 text-white / text-zinc-* / text-ps-blue 整体翻成浅底深色（权重 0,2,0 + !important），
+ * 而 index.css 里给语义按钮档定色的是 `.btn-danger > svg` 这类选择器（0,1,1）——权重更低，
+ * 浅色下会被洗成近黑/白，红边淡红底上就再也看不出「这是危险操作」。
+ * 这里按同样权重档补回（0,2,1 压过 0,2,0），只在浅色主题生效。
+ * 深色主题不需要这一段：那边对手是 index.css 顶部的 LEGACY 字面量（0,1,0），本来就压得住。
+ * ==========================================================================*/
+[data-theme="light"] .btn-danger,
+[data-theme="light"] .btn-danger > *,
+[data-theme="light"] .btn-danger > svg { color: var(--btn-danger-fg) !important; }
+[data-theme="light"] .btn-ok,
+[data-theme="light"] .btn-ok > *,
+[data-theme="light"] .btn-ok > svg { color: var(--btn-ok-fg) !important; }
+[data-theme="light"] .btn-warn,
+[data-theme="light"] .btn-warn > *,
+[data-theme="light"] .btn-warn > svg { color: var(--btn-warn-fg) !important; }
+[data-theme="light"] .btn-outline > svg,
+[data-theme="light"] .btn-ghost > svg,
+[data-theme="light"] .btn-info > svg,
+[data-theme="light"] .icon-btn > svg,
+[data-theme="light"] .field-btn > svg { color: var(--color-ps-text-sub) !important; }
+[data-theme="light"] .icon-btn.is-copied > svg,
+[data-theme="light"] .field-btn.is-copied > svg { color: var(--btn-ok-fg) !important; }
+/* 危险图标钮同理：上面的 .icon-btn > svg 是 (0,2,1)，这里要 (0,3,1) 才压得住 */
+[data-theme="light"] .icon-btn.is-danger,
+[data-theme="light"] .icon-btn.is-danger > svg { color: var(--btn-danger-fg) !important; }

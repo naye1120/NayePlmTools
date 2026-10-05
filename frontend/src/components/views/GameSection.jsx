@@ -36,21 +36,29 @@ function formatSize(bytes) {
 }
 /* 格式标签：与 ShadowMountPlus 一致的真实格式集。后端 /game_list 的 fmt 取值：
  * pkg（内置安装）/ ffPKG / exFAT / ffpfs / ffpfsc（镜像挂载）/ folder（裸目录）/ lz4（ampr 实时解压目录）；缺字段时按 src 回退。
- * c=彩色底色（内联 style 用，避开 Tailwind JIT 漏生成任意色类 + 浅色主题洗白字）。 */
+ * [CN-FORK] v0.5.2.103 徽标收敛：取色从「饱和实心底」改为「深色芯片上的同色字」，
+ * 所以这里的 c 现在是**文字/描边色**（提亮一档，压在近黑芯片上要读得清），不再是底色。
+ * 原值（#059669/#0891b2/#d97706/#7c3aed/#db2777/#4f46e5）作实心底用，做文字偏暗。 */
 const FMT_LABEL = {
-  pkg: { k: 'game.fmt_pkg', d: 'PKG', c: '#059669' },
-  ffpkg: { k: 'game.fmt_ffpkg', d: 'ffPKG', c: '#0891b2' },
-  exfat: { k: 'game.fmt_exfat', d: 'exFAT', c: '#d97706' },
-  ffpfs: { k: 'game.fmt_ffpfs', d: 'ffpfs', c: '#7c3aed' },
-  ffpfsc: { k: 'game.fmt_ffpfsc', d: 'ffpfsc', c: '#db2777' },
-  folder: { k: 'game.fmt_folder', d: '文件夹', c: '#475569' },
-  lz4: { k: 'game.fmt_lz4', d: 'LZ4', c: '#4f46e5' },
+  pkg: { k: 'game.fmt_pkg', d: 'PKG', c: '#3fb950' },
+  ffpkg: { k: 'game.fmt_ffpkg', d: 'ffPKG', c: '#39c5cf' },
+  exfat: { k: 'game.fmt_exfat', d: 'exFAT', c: '#e3b341' },
+  ffpfs: { k: 'game.fmt_ffpfs', d: 'ffpfs', c: '#a371f7' },
+  ffpfsc: { k: 'game.fmt_ffpfsc', d: 'ffpfsc', c: '#f778ba' },
+  folder: { k: 'game.fmt_folder', d: '文件夹', c: '#8b949e' },
+  lz4: { k: 'game.fmt_lz4', d: 'LZ4', c: '#7c8cff' },
 }
-/* 平台徒标颜色：PS5 蓝、PS4 紫。 */
-const PLAT_COLOR = { PS5: '#2563eb', PS4: '#7c3aed' }
-/* 统一尺寸的徒标样式（固定宽高 + 居中）；不用 text-white 类，颜色由内联 style 给定。 */
+/* 平台徒标颜色：PS5 蓝、PS4 紫（同样是文字色，不是底色）。 */
+const PLAT_COLOR = { PS5: '#58a6ff', PS4: '#a371f7' }
+/* 统一尺寸的徒标样式（固定宽高 + 居中）。
+ * [CN-FORK] v0.5.2.103 收敛：原来是「饱和实心底 + 白字」，一屏最多同时出现 8 种饱和色块
+ * （平台 2 色 + 格式 7 色 + 来源 2 色），是游戏页最吵的一处。现在统一成**深色芯片**：
+ * 底一律压暗（盖在任意封面上都可读，两种主题都不用翻），色相只由字与那根发丝线传达。
+ * 这是 GitHub label 的成熟做法 —— 语义一个不少，视觉噪声降一个数量级。 */
 const BADGE =
-  'inline-flex items-center justify-center w-[3.25rem] h-[18px] rounded text-[10px] font-bold leading-none shadow'
+  'inline-flex items-center justify-center w-[3.25rem] h-[18px] rounded-md text-[10px] font-semibold leading-none tracking-wide border'
+const CHIP_BG = 'rgba(8, 10, 14, 0.72)'
+const chipStyle = (c) => ({ color: c, borderColor: `${c}59`, backgroundColor: CHIP_BG })
 
 /* 单个游戏磁贴（宫格）：大图标铺满 1:1 + 名称/TID，来源徽标叠在图标角上，
  * 操作按钮排在图标下排。导出存档/截图、改名、标签为后续功能，本版禁用占位。 */
@@ -84,13 +92,14 @@ function GameCard({ g, iconFailed, onIconError }) {
           />
         )}
         {/* [CN-FORK] 左上角竖排徒标：上=平台(PS4/PS5)、下=格式。两枚统一尺寸（固定宽高、居中），
-         * 用内联 style 上彩色底 + 白字：既绕开 Tailwind JIT 可能没生成任意色类，也避开浅色主题
-         * 把 .text-white 洗成近黑的问题（这里根本不用 text-white 类）。 */}
+         * 用内联 style 上色：既绕开 Tailwind JIT 可能没生成任意色类，也避开浅色主题把
+         * .text-white 洗成近黑的问题（这里根本不用 text-white 类）。
+         * v0.5.2.103 起底一律是压暗芯片，色相只由字与线给（见上方 BADGE 注释）。 */}
         <div className="absolute top-1.5 left-1.5 flex flex-col items-start space-y-1">
           {platform && (
             <span
               className={BADGE}
-              style={{ backgroundColor: platColor, color: '#ffffff' }}
+              style={chipStyle(platColor)}
               title={platform === 'PS4' ? t('game.plat_ps4', 'PS4 游戏') : t('game.plat_ps5', 'PS5 游戏')}
             >
               {platform}
@@ -98,16 +107,15 @@ function GameCard({ g, iconFailed, onIconError }) {
           )}
           <span
             className={BADGE}
-            style={{ backgroundColor: fmtInfo.c, color: '#ffffff' }}
+            style={chipStyle(fmtInfo.c)}
             title={`${t('game.fmt', '格式')}: ${fmtLabel}`}
           >
             {fmtLabel}
           </span>
         </div>
         <span
-          className={`absolute top-1.5 right-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded ${
-            installed ? 'bg-ps-blue/85 text-white' : 'bg-amber-500/90 text-black'
-          }`}
+          className="absolute top-1.5 right-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border"
+          style={chipStyle(installed ? '#3fb950' : '#e3b341')}
           title={installed ? t('game.src_installed', '已安装') : t('game.src_dump', '转储/外挂')}
         >
           {installed ? t('game.badge_installed', '已安装') : t('game.badge_dump', '转储')}
