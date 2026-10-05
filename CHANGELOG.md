@@ -63,6 +63,12 @@
 * `jget()` 加可选 `opts`（`signal` / `timeoutMs`）；调用方自己 abort 时**原样抛出**，否则会被降级成「接口不可达」，关个窗还弹红条。
 * `AccountToolsSection.jsx` 回到 lint 干净（全仓 38 个问题均为存量，本次未新增）。
 
+### 📦 Release
+
+* **正式出包（短哈希 `8065f19`）**：`NayePlmTools_0.5.2.107-me.elf`（NAYE00001 媒体栏）· `NayePlmTools_0.5.2.107-ga.elf`（NAYE00004 游戏栏），两包各 9,875,208 字节。
+  * 二进制核对：内嵌标题 `NayePlmTools v0.5.2.107 by naye (8065f19, built at 2026-10-05 07:18:29 UTC)`（非 `DEV`）、`PLDMGR_VER:0.5.2.107`、titleId 分别 NAYE00001/NAYE00004；本轮新标记 `signout-full`×2 / `登出并反激活` / `the offline activation is kept` / `"origin"` / `正在解码图片` 均在包内。
+  * **出包踩坑（已记入 HANDOVER §3）**：`build_tiles.sh` 复用已有的 `frontend/dist`，而标题占位符 `[[TITLE_PLACEHOLDER]]` 是**一次性消费**的（注入 recipe 直接 `sed` 改 dist）。第一次出包时包内是 `.107` 的代码、标题却写着上一个提交 `6b51ee7` —— 必须先 `rm -rf frontend/dist` 重建才能让标题跟上。
+
 ### 📌 未决（待用户定夺）
 
 * 实心按钮对比度方案 A（照 `#F43E06`，3.79:1）/ B（压深 `#D93A00`，4.61:1）/ C（配深色字 `#1A0A02`，5.09:1）。
