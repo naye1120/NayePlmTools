@@ -25,6 +25,8 @@ import LoadingState from '../ui/LoadingState'
 
 const BTN_PRIMARY = 'btn btn-primary'
 const BTN_GHOST = 'btn btn-outline'
+/* [CN-FORK] v0.5.2.102 功能分色（样张 A + I2）：「同步」是从主机重读，属信息工具类 → 青实心 */
+const BTN_INFO = 'btn btn-info'
 const INPUT_CLS = 'field'
 /* [CN-FORK] v0.5.2.100 可编辑框一档字色（.field-edit，见 index.css）：与只读换算结果（.field-ro 的
  * 辅助字色 + 虚线边）拉开明显对比，用户要求「可编辑的两个文本框字体颜色做个区分」。 */
@@ -753,7 +755,7 @@ export default function AccountToolsSection({ addToast }) {
                       {copiedKey === 'hex' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
-                  <button type="button" className={cn(BTN_GHOST, 'ml-2 shrink-0')} onClick={syncId} disabled={disabled}>
+                  <button type="button" className={cn(BTN_INFO, 'ml-2 shrink-0')} onClick={syncId} disabled={disabled}>
                     {t('acctools.sync', '同步')}
                   </button>
                 </div>

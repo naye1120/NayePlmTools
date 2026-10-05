@@ -5,8 +5,8 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-- 版本：`MENU_VERSION = 0.5.2.101`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
-- 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
+- 版本：`MENU_VERSION = 0.5.2.102`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+- 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。**`.102` 尚未出包**：这批是**修掉 `.101` 改名取证代码的堆溢出（整 payload 崩）+ 按钮按功能转实心六色（样张 A + I2）+ 页头去粘顶**，等用户放行再构建。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
 - 近期定型（.64 → .100）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
   - `.65` 「默认云端仓库」总开关 `DEFAULT_REPO_ENABLED`（现默认关，可彻底停用内置官方源）
@@ -65,6 +65,14 @@
 >   - **本轮做法**：改名按四层尽力而为，每层结论原样拼进 `message`（Toast 直接可读，格式 `base | profile cache … | user home … | user_list.dat …`），让实机一轮就判死真实来源。③ 只认「全文唯一 + 无转义」的 `firstName` 字符串值，④ 只在去尾 `\r\n\0` 后**正好等于旧名**才改写，行尾字节原样保留；两者都写前登记备份（且**只在 `safety_file_was_absent()<0` 即未登记过时登记**，否则会把新名当原值覆盖掉备份）、写后回读比对，任一条件不满足就原样不动只报一句话。`user_list.dat` **只读探针**：结构无文档、写它等于拿全体账号名单去赌，故只报旧名/新名的字节偏移。
 >   - **下一轮的分支**：若探针报「旧名在 `user_list.dat` 某偏移、新名不在」→ 显示源就是它，届时按定宽字段做**等长或截断**的原位改写（仍是先备份后写）；若报「profile cache verified 而界面仍旧名」→ 说明这两处 UI 走的是内存里 ShellCore 的会话缓存，只能靠重启/切用户刷新，得改的是提示文案而不是写入层。
 >   - **配套放大**：`npsignin_result_t.message` 320 → 768；`accounts.c` 的 `emsg` 384 → 896、响应 `cap` 2048 → 4096（否则截成半句话，甚至把 JSON 截断成非法）。
+
+> **`.102`（2026-10-05，未出包）**
+> - **先记账一条教训：`.101` 的改名取证代码把整个 payload 弄崩了**（用户实机：改名弹出 `Failed to fetch` + 「读不到账号列表：Failed to fetch」，随后 ELF 死亡）。根因不在网络、不在 PS5 内核，在一行容量算法：`rename_profile_cache()` 里 `blen = len + nlen - vlen` 只覆盖「`firstName` 值之后」的尾部，**漏了 `vs - raw` 这段前缀**（头像 URL 之类，实测一百多字节），于是第三段 memcpy 往 malloc 块尾后面多写同样多的字节 → 砸穿堆元数据 → 进程没了 → 前端所有 fetch 一起失败。修法是 `pre = vs - raw; suf = len - vlen; blen = pre + nlen + suf`。**这类「按原文件长度推算新文件长度」的地方，凡有偏移前的头部，必须把头部一起算进容量**；`-Wall -Wextra` 查不出来，只有实机（或本地跑一遍拼接）才会炸。
+> - **崩在哪一步决定了设备上留了什么**：溢出发生在备份登记与 `write_file()` **之前**，所以 `online.json` 从未被写过、不需要清理；但第①②层（SysReg 槽 + UserService）在那之前已经写成功，注册表里现在是新名。`.101` 计划好的「按 Toast 逐层判读」这一轮**没有拿到数据**，重新跑改名后仍然要按 `base | profile cache … | user home … | user_list.dat …` 四段判读。
+> - **按钮整套转实心、按功能分色**（用户：「图三那种改法不对，不同场景不同功能要不同颜色的实心图标，跟图二风格一样，颜色不同而已」；样张 `d:\pldmanager\btn-solid-preview-v1.html` 选定 **A + I2**）。`.101` 的 `--color-secondary*` 三枚令牌与 `light-theme.css` 对应三行**已删**，换成 `:root` 的 `--fill-{blue,purple,violet,teal,green,gold,red}` + 各自 `-hover` / `-icon` 档 + `--fill-fg`，**深浅两主题同值**（实心底自己保证对比，不再靠翻档）。功能档：蓝＝本页唯一主操作（`.btn-primary`，仍与 `.sel-chip` 同值）· 紫＝启动/重启/修改/取消（`.btn-outline`）· 深紫＝幽灵（`.btn-ghost`）· 红＝不可逆（`.btn-danger`）· 绿＝已启用/安装/更新（`.btn-ok`，新增）· 青＝刷新/重试/同步/复制（`.btn-info`，新增）· 金＝上传/写入/覆盖（`.btn-warn`，新增）。六档配白字 ≥4.2:1。
+> - **I2 的实现约束（下次加实心档照着做，别踩）**：图形取同色相提亮一档写在 `.btn-* > svg`（特异性 0,1,1，压得住 `.btn-* > *` 的 0,1,0），但**必须带 `!important`** —— 文件顶部 LEGACY 把 `.text-ps-blue` / `.text-white` 写成 `!important` 字面量给老内核兜底，而组件里的图标普遍挂着这两个类；`.is-copied` 那类复合选择器（0,2,1）也要一并带上，否则会被自己的 `> svg` 反压。
+> - **档用错过一处，已纠**：温控「已启用」原本挂 `.sel-chip`，而 `.sel-chip` 的契约是「当前选中」不是「状态」，现改 `.btn-ok`；进程列表的 Retry 原本挂 `.btn-danger`（红＝不可逆），现改 `.btn-info`。全站其余调用点保持「次要动作＝紫、取消/返回＝紫、主操作＝蓝」不动。
+> - **页头不再粘顶**（用户：「所有 head-bar 要跟随页面一起滚动」）：`.head-bar` 去掉 `.94` 的 `position: sticky / top / z-index`，只留出血负边距 + rail 实色底 + 底部分界线。
 
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）

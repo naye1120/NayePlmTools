@@ -143,7 +143,8 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
             title={t("active_processes.error_loading", "Failed to load processes")}
             className="border border-red-500/20 rounded-xl bg-red-950/5"
             action={
-              <button onClick={() => fetchProcesses()} className="btn btn-danger">
+              /* [CN-FORK] v0.5.2.102 重试从红档换成青档（btn-info＝刷新/重试类），红只留给 kill 这类不可逆 */
+              <button onClick={() => fetchProcesses()} className="btn btn-info">
                 <RefreshCw className="w-4 h-4" />
                 <span>{t("active_processes.retry", "Retry")}</span>
               </button>

@@ -617,7 +617,7 @@ rename_profile_cache(uint32_t uid, const char *new_name, char *note, size_t n) {
   char old[SHELL_NAME_MAX];
   char *raw, *body;
   const char *vs, *ve;
-  long len, vlen, nlen, blen, cplen;
+  long len, vlen, nlen, blen, cplen, pre, suf;
 
   snprintf(path, sizeof(path),
            "/system_data/priv/cache/profile/0x%08X/online.json", uid);
@@ -645,16 +645,21 @@ rename_profile_cache(uint32_t uid, const char *new_name, char *note, size_t n) {
     return;
   }
 
-  blen = len + nlen - vlen;
+  /* 新文件 = 前缀 + 新名 + 后缀。前缀那段（`{"avatarUrl":"…","firstName":"`，
+   * 头像生成的文件里实测一百多字节）必须一起算进容量：漏了它就往 malloc 的
+   * 堆后面多写同样多的字节，直接砸穿元数据把整个 payload 带走。 */
+  pre = (long)(vs - raw);
+  suf = len - vlen;
+  blen = pre + nlen + suf;
   body = malloc((size_t)blen + 1);
   if(!body) {
     snprintf(note, n, "profile cache: out of memory");
     free(raw);
     return;
   }
-  memcpy(body, raw, (size_t)(vs - raw));
-  memcpy(body + (vs - raw), new_name, (size_t)nlen);
-  memcpy(body + (vs - raw) + nlen, ve, (size_t)(len - vlen));
+  memcpy(body, raw, (size_t)pre);
+  memcpy(body + pre, new_name, (size_t)nlen);
+  memcpy(body + pre + nlen, ve, (size_t)suf);
   free(raw);
 
   /* 只在「这条路径还没进过备份日志」时登记：safety_backup_file() 每次调用都会

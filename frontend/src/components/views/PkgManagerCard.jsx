@@ -10,8 +10,11 @@ import { cn } from '../../utils/helpers' /* [CN-FORK] v0.5.2.98 补回漏掉的 
  * 手动上传更新、启动或重启（上传新版后点一下即可切到新版本，其自身单实例互杀旧进程）、
  * 以及关闭（后端按进程名 SIGKILL，不跑就不占内存，也不会在 iframe 里误看到旧会话）。 */
 
-/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层（描边档 + 危险语义配色） */
+/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层
+ * [CN-FORK] v0.5.2.102 按功能分色（样张 A + I2）：启动/重启＝紫实心（BTN_GHOST，次要动作档），
+ * 关闭＝红实心（不可逆），上传更新＝金实心（写入类），刷新＝青实心（.icon-btn 自带）。 */
 const BTN_GHOST = 'btn btn-outline'
+const BTN_UPLOAD = 'btn btn-warn'
 const BTN_DANGER = 'btn btn-danger'
 
 export default function PkgManagerCard() {
@@ -114,7 +117,7 @@ export default function PkgManagerCard() {
           {busy === 'stop' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
           {busy === 'stop' ? t('pkg.stopping', '关闭中…') : t('pkg.stop', '关闭')}
         </button>
-        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy === 'upload'} className={cn(BTN_GHOST, 'ml-2')}>
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy === 'upload'} className={cn(BTN_UPLOAD, 'ml-2')}>
           {busy === 'upload' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
           {busy === 'upload' ? t('pkg.uploading', '上传中…') : t('pkg.upload', '上传更新')}
         </button>

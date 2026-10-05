@@ -15,8 +15,10 @@ import LoadingState from '../ui/LoadingState'
  * 注意：真正写 /dev/icc_fan 的调速已由 fan_control.c 常驻守护落地；FanControlCard 在
  * /fan_control 返回 supported:false 或请求失败时优雅显示「未接入」，不谎报成功。 */
 
-/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层（描边 / 实心两档） */
-const BTN_GHOST = 'btn btn-outline'
+/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层。
+ * [CN-FORK] v0.5.2.102 按功能分色（样张 A + I2）：这里的两档分别是「主操作（蓝实心）」与
+ * 「刷新/重读（青实心）」，原来的 BTN_GHOST 名字连同它的透明底一起作废。 */
+const BTN_INFO = 'btn btn-info'
 const BTN_PRIMARY = 'btn btn-primary'
 
 function MetricCard({ label, value, unit, warn }) {
@@ -119,7 +121,9 @@ function FanControlCard() {
           type="button"
           disabled={!supported || busy}
           onClick={toggleEnabled}
-          className={cn('btn ml-3', enabled ? 'sel-chip' : 'btn-outline')}
+          /* [CN-FORK] v0.5.2.102 「已启用」是图二那颗：从蓝选中档（.sel-chip 是「当前选中」，
+           * 不是状态）换成绿实心 btn-ok；未启用时仍是紫实心 btn-outline（开启这一动作属次要操作档）。 */
+          className={cn('btn ml-3', enabled ? 'btn-ok' : 'btn-outline')}
         >
           <Power className="w-4 h-4" />
           {enabled ? t('thermal.fan_on', '已启用') : t('thermal.fan_off', '未启用')}
@@ -242,7 +246,7 @@ export default function ThermalSection() {
             {t('thermal.auto_refresh', '自动刷新')}
             <span className="text-zinc-600 tabular-nums ml-1">·{AUTO_REFRESH_MS / 1000}s</span>
           </label>
-          <button onClick={() => load(false)} disabled={loading} className={BTN_GHOST}>
+          <button onClick={() => load(false)} disabled={loading} className={BTN_INFO}>
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {t('common.refresh', '刷新')}
           </button>

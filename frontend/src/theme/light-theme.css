@@ -41,11 +41,8 @@
   --color-action-line: rgba(37, 99, 235, 0.35);
   --color-ps-blue: #0969da;
   --color-ps-blue-glow: rgba(9, 105, 218, 0.3);
-  /* [CN-FORK] v0.5.2.101 次要按钮档（描边/幽灵/图标/框内复制四类）。深档是亮紫 #a371f7，
-   * 浅底上必须压深一档才够对比；图标属非文字元素，3:1 即可，#8250df 在白底实测约 4.9:1。 */
-  --color-secondary: #8250df;
-  --color-secondary-tint: rgba(130, 80, 223, 0.1);
-  --color-secondary-line: rgba(130, 80, 223, 0.35);
+  /* [CN-FORK] v0.5.2.102 这里不再有 secondary 档：.101 的「次要紫」已被功能六色实心档取代，
+   * 那组 --fill-* 令牌深浅两套主题同值（实心底 + 白字，对比度由底色自己保证），所以浅档不翻。 */
   /* 文字阶：主档近黑，次要/辅助跟着提深（用户反馈过「浅色字体太灰暗」） */
   --color-ps-text: #1f2328;
   --color-ps-text-sub: #454f59;

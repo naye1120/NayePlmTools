@@ -5,6 +5,8 @@ import { cn } from '../../utils/helpers'
 import PageHead from '../ui/PageHead' /* [CN-FORK] v0.5.2.94 页头/板块/加载归一 */
 import Section from '../ui/Section'
 import LoadingState from '../ui/LoadingState'
+/* [CN-FORK] v0.5.2.102 按功能分色（样张 A + I2）：重试＝青（btn-info，信息工具类），
+ * 复制/覆盖写入＝金（btn-warn），「移动到内部」仍是本页唯一主操作（蓝），返回/取消＝紫。 */
 
 const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
   const { t } = useTranslation()
@@ -90,7 +92,7 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
             <div className="ml-3">
               <p className="text-base font-bold text-white">{t("move_usb.error_title", "Something went wrong")}</p>
               <p className="text-red-400/80 leading-relaxed text-sm mt-1">{errorMsg}</p>
-              <button onClick={checkPayload} className="btn btn-danger mt-4">
+              <button onClick={checkPayload} className="btn btn-info mt-4">
                 <RefreshCw className="w-4 h-4" />
                 <span>{t("move_usb.retry_btn", "Retry")}</span>
               </button>
@@ -127,7 +129,7 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
             <div className="stack-x">
               <button onClick={onBack} className="btn btn-ghost flex-1">{t("move_usb.cancel_btn", "Cancel")}</button>
               <div className="flex flex-1">
-                <button onClick={() => performMove(true, true)} className="btn btn-outline flex-1">{t("move_usb.overwrite_copy_btn", "Overwrite & Copy")}</button>
+                <button onClick={() => performMove(true, true)} className="btn btn-warn flex-1">{t("move_usb.overwrite_copy_btn", "Overwrite & Copy")}</button>
                 <button onClick={() => performMove(true, false)} className="btn btn-primary flex-1 ml-2">{t("move_usb.overwrite_move_btn", "Overwrite & Move")}</button>
               </div>
             </div>
@@ -146,7 +148,7 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
               </div>
             </div>
             <div className="stack-x">
-              <button onClick={() => performMove(false, true)} className="btn btn-outline flex-1">{t("move_usb.copy_btn", "Copy to Internal")}</button>
+              <button onClick={() => performMove(false, true)} className="btn btn-warn flex-1">{t("move_usb.copy_btn", "Copy to Internal")}</button>
               <button onClick={() => performMove(false, false)} className="btn btn-primary flex-1">{t("move_usb.move_btn", "Move to Internal")}</button>
             </div>
           </div>

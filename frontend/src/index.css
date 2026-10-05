@@ -116,13 +116,22 @@
   --color-action-line: rgba(37, 99, 235, 0.45);
   --color-ps-blue: #58a6ff;
   --color-ps-blue-glow: rgba(37, 99, 235, 0.4);
-  /* [CN-FORK] v0.5.2.101 次要按钮档（用户：「所有的 btn 都要有颜色，但别用蓝色」）。
-   * 主按钮与选中态继续是动作蓝，蓝只留给「这一页唯一的主操作 + 当前选中」；
-   * 描边/幽灵/图标/框内复制这几类按钮改用紫：冷色同族、与蓝一眼分得开，
-   * 又不占用绿=成功、金=注意、红=危险这三档已经有名有姓的语义色。 */
-  --color-secondary: #a371f7;
-  --color-secondary-tint: rgba(163, 113, 247, 0.14);
-  --color-secondary-line: rgba(163, 113, 247, 0.45);
+  /* [CN-FORK] v0.5.2.102 实心按钮的「功能六色」（用户选定样张 A + I2，作废 .101 的描边紫档）。
+   * 一个功能固定一色、一律实心 + 白字；图标取**同色相提亮一档**（-icon），让图形从字里跳出来。
+   *   蓝 = 这一页唯一的主操作（与 .sel-chip 选中档同色）  紫 = 启动/重启/修改/取消
+   *   深紫 = 幽灵档（比紫低半档的辅助跳转）              青 = 刷新/复制等信息工具类
+   *   绿 = 成功与「已启用/安装/更新」                    金 = 上传/写入这类要留意的动作
+   *   红 = 不可逆（关闭/删除/停止）
+   * 六档底色配白字实测 ≥4.2:1；-icon 档对各自底色 ≥3.3:1（图标是非文字元素，线是 3:1）。
+   * 深浅两套主题同值，所以 light-theme.css 不翻这一组。 */
+  --fill-blue: #2563eb;    --fill-blue-hover: #1d4ed8;    --fill-blue-icon: #bcd4ff;
+  --fill-purple: #8250df;  --fill-purple-hover: #6d28d9;  --fill-purple-icon: #dcc6ff;
+  --fill-violet: #6d28d9;  --fill-violet-hover: #5b21b6;  --fill-violet-icon: #dcc6ff;
+  --fill-teal: #0d8a8a;    --fill-teal-hover: #0a6f6f;    --fill-teal-icon: #a5f3fc;
+  --fill-green: #1a7f37;   --fill-green-hover: #166128;   --fill-green-icon: #a7f3d0;
+  --fill-gold: #9a6700;    --fill-gold-hover: #7d5300;    --fill-gold-icon: #ffeab0;
+  --fill-red: #cf222e;     --fill-red-hover: #a51e2a;     --fill-red-icon: #ffc9c9;
+  --fill-fg: #ffffff;
 
   /* ── 文字阶：主 / 次要 / 辅助 / 占位符 ── */
   --color-ps-text: #e6edf3;
@@ -474,14 +483,13 @@ h1, h2, h3, h4 {
   .page-head > * + * { margin-top: 0; margin-left: 1rem; }
 }
 
-/* ── 页头粘顶（[CN-FORK] v0.5.2.94）──
- * sticky 的偏移量相对滚动容器（<main>）的内边距框，所以 top:0 就是贴住 main 的顶边，
- * 上面那 4rem 的 pt 会随内容滚走、不会露缝。底必须是实色 rail 档：半透明会让滚过的行透出来。
- * 负外边距是为了吃掉 main 的左右内边距（窄屏 px-6 / ≥768px px-16），让分界线铺满整宽。 */
+/* ── 页头横条（[CN-FORK] v0.5.2.94 立，v0.5.2.102 起不粘顶）──
+ * 底必须是实色 rail 档：半透明会让压到它的内容透出来。负外边距是为了吃掉 main 的左右内边距
+ * （窄屏 px-6 / ≥768px px-16），让那根发丝分界线铺满整宽。 */
 .head-bar {
-  position: sticky;
-  top: 0;
-  z-index: 30;
+  /* [CN-FORK] v0.5.2.102 用户指令「所有 head-bar 要跟随页面一起滚动」：去掉 .94 加的粘顶
+   * （position: sticky / top / z-index 三行），页头退回普通块，滚上去就跟着走。
+   * 出血负边距、实色 rail 底与那根发丝分界线都保留 —— 变的只是「钉不钉住」。 */
   background-color: var(--color-rail);
   margin: 0 -1.5rem;
   padding: 0.7rem 1.5rem 0.8rem;
@@ -570,17 +578,18 @@ html[data-device="ps5"] .head-bar {
   padding: 0;
   border: 1px solid transparent;
   border-radius: 0.5rem;
-  background-color: transparent;
-  /* [CN-FORK] v0.5.2.101 图标钮也上色（用户：「所有的 btn 都要有颜色，但别用蓝色」）：
-   * 平时是紫档描边字色，命中时才铺紫 tint。蓝只留给主按钮与选中态。 */
-  color: var(--color-secondary);
+  background-color: var(--fill-teal);
+  /* [CN-FORK] v0.5.2.102 图标钮转实心（用户选定样张 A + I2）：.101 的「紫字 + 透明底」
+   * 仍然是看不出色，现在跟其他按钮一样是实心底、白字，图形取同色相提亮一档。
+   * 单图标按钮归「信息工具类」＝青档；复制成功那一下换绿档（见下面 .is-copied）。 */
+  color: var(--fill-fg);
   cursor: pointer;
   transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
-.icon-btn:hover:not(:disabled) { background-color: var(--color-secondary-tint); color: var(--color-secondary); }
+.icon-btn:hover:not(:disabled) { background-color: var(--fill-teal-hover); }
 .icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 /* 图标本身保持原来的小尺寸，放大的是可点区域而不是图形 */
-.icon-btn > svg { width: 1.15rem; height: 1.15rem; }
+.icon-btn > svg { width: 1.15rem; height: 1.15rem; color: var(--fill-teal-icon) !important; }
 /* 电视端可点区域到了 --ctl-h 的电视档（51px），图形跟着放大一档才在沙发上看得到 */
 html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 
@@ -615,36 +624,84 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
   gap: 0.45rem;
 }
 
-/* 实心：页面唯一的「亮点」，一个视图里最多一个主操作。
- * 与文件末尾的 .sel-chip 同档同色（选中态与主按钮共用 S2），这里只补盒模型 */
+/* ── 实心按钮：一个功能一档色 ──
+ * [CN-FORK] v0.5.2.102 用户选定样张 A + I2，指令原话「不同场景不同功能，要不同颜色的实心
+ * 图标，跟图二风格一样，颜色不同而已」。作废 .101 的「紫描边 + 紫字」——那一版仍然是透明底，
+ * 看上去还是「没上色」。从现在起每一档都是实心底 + 白字，svg 图形取同色相提亮一档（-icon），
+ * 让图标从白字里跳出来。
+ * 特异性备忘：`.X > *`（0,1,0）低于 `.X > svg`（0,1,1），所以先给全部子元素白字、再单独把
+ * 图形换成 -icon 档。图形那一条必须带 !important：文件顶部 LEGACY 档把 .text-ps-blue / .text-white
+ * 写成了 !important 字面量（老内核兜底），组件里的图标常挂这两个类，不加 !important 就压不住。 */
+
+/* 蓝 = 这一页唯一的主操作。沿用 --color-sel-bg（与文件末尾 .sel-chip 选中档同色同值），
+ * 这里只补 I2 的图形档 */
 .btn-primary {
   background-color: var(--color-sel-bg);
   color: var(--color-sel-fg);
 }
 .btn-primary:hover:not(:disabled) { background-color: var(--color-action-hover); }
 .btn-primary > * { color: var(--color-sel-fg); }
+.btn-primary > svg { color: var(--fill-blue-icon) !important; }
 
-/* 描边：次要操作。
- * [CN-FORK] v0.5.2.101 用户指令「所有的 btn 都要有颜色，但别用蓝色」：原先是 card 底 +
- * 中性线 + 主文字色（看上去就是「没上色」），现在整档上紫（线、字都是 secondary）。 */
+/* 紫 = 启动 / 重启 / 修改 / 取消：全站数量最多的「次要动作」档，取代 .101 的紫描边 */
 .btn-outline {
-  background-color: var(--color-card);
-  border-color: var(--color-secondary-line);
-  color: var(--color-secondary);
+  background-color: var(--fill-purple);
+  border-color: transparent;
+  color: var(--fill-fg);
 }
-.btn-outline:hover:not(:disabled) { background-color: var(--color-secondary-tint); border-color: var(--color-secondary); }
+.btn-outline:hover:not(:disabled) { background-color: var(--fill-purple-hover); }
+.btn-outline > * { color: var(--fill-fg); }
+.btn-outline > svg { color: var(--fill-purple-icon) !important; }
 
-/* 幽灵：辅助/跳转，悬停才浮出底色。同上，字色直接给紫。 */
-.btn-ghost { background-color: transparent; color: var(--color-secondary); }
-.btn-ghost:hover:not(:disabled) { background-color: var(--color-secondary-tint); color: var(--color-secondary); }
+/* 深紫 = 幽灵/跳转类辅助动作。低半档是为了跟「紫=启动」拉开层次，但不再是透明底 */
+.btn-ghost {
+  background-color: var(--fill-violet);
+  border-color: transparent;
+  color: var(--fill-fg);
+}
+.btn-ghost:hover:not(:disabled) { background-color: var(--fill-violet-hover); }
+.btn-ghost > * { color: var(--fill-fg); }
+.btn-ghost > svg { color: var(--fill-violet-icon) !important; }
 
-/* 危险：描边形态的语义配色（停止/删除类），与动作蓝明显区隔；实心红留给确认弹窗内使用 */
+/* 红 = 不可逆：关闭 / 删除 / 停止。危险本来就是实心语义，描边版反而看不出轻重 */
 .btn-danger {
-  background-color: var(--color-inset);
-  border-color: var(--color-err-line);
-  color: var(--color-err);
+  background-color: var(--fill-red);
+  border-color: transparent;
+  color: var(--fill-fg);
 }
-.btn-danger:hover:not(:disabled) { background-color: var(--color-err-tint); border-color: var(--color-err); }
+.btn-danger:hover:not(:disabled) { background-color: var(--fill-red-hover); }
+.btn-danger > * { color: var(--fill-fg); }
+.btn-danger > svg { color: var(--fill-red-icon) !important; }
+
+/* 绿 = 成功态动作：已启用 / 安装 / 更新（图二那颗「已启用」芯片从蓝选中档换成这一档） */
+.btn-ok {
+  background-color: var(--fill-green);
+  border-color: transparent;
+  color: var(--fill-fg);
+}
+.btn-ok:hover:not(:disabled) { background-color: var(--fill-green-hover); }
+.btn-ok > * { color: var(--fill-fg); }
+.btn-ok > svg { color: var(--fill-green-icon) !important; }
+
+/* 金 = 要留意的写入动作：上传 / 写入 / 覆盖 */
+.btn-warn {
+  background-color: var(--fill-gold);
+  border-color: transparent;
+  color: var(--fill-fg);
+}
+.btn-warn:hover:not(:disabled) { background-color: var(--fill-gold-hover); }
+.btn-warn > * { color: var(--fill-fg); }
+.btn-warn > svg { color: var(--fill-gold-icon) !important; }
+
+/* 青 = 信息工具类：刷新 / 复制 / 查看，只读不改状态的动作 */
+.btn-info {
+  background-color: var(--fill-teal);
+  border-color: transparent;
+  color: var(--fill-fg);
+}
+.btn-info:hover:not(:disabled) { background-color: var(--fill-teal-hover); }
+.btn-info > * { color: var(--fill-fg); }
+.btn-info > svg { color: var(--fill-teal-icon) !important; }
 
 /* ── 表单输入：与 .btn 同一套圆角/字号与同一档命中区，底色用第 4 档中性底（inset）保持「凹进去」的输入感 ── */
 .field {
@@ -668,7 +725,7 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
  *              与旁边实线可编辑框分开；一档都不新增，仍读 --color-line / --color-inset。
  * .field-btn-pad / .field-btn  把复制钮嵌进框内右端（原来钮在框外，三个格子看不出谁是谁的），
  *              点击后 .is-copied 实心一档，让「已经复制到了」当场看得见。
- *              [CN-FORK] v0.5.2.101 这几档的字色/底色从动作蓝换成次要紫（用户：btn 别用蓝色）。 */
+ *              [CN-FORK] v0.5.2.102 框内复制钮转实心（样张 A + I2）：平时青档、复制成功绿档。 */
 .field-ro { border-style: dashed; color: var(--color-ps-text-sub); }
 /* [CN-FORK] v0.5.2.100 可编辑档：用户要求「可编辑的两个文本框字体颜色做个区分」。
  * 只读那两格已经是虚线边 + 辅助字色，可编辑这档再往「动作色文字」靠一档（深档亮蓝 #58A6FF、
@@ -687,14 +744,22 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
   justify-content: center;
   border: 0;
   border-radius: 0.4rem;
-  background-color: transparent;
-  color: var(--color-secondary);
+  background-color: var(--fill-teal);
+  color: var(--fill-fg);
   cursor: pointer;
 }
-.field-btn:hover:not(:disabled) { color: var(--color-secondary); background-color: var(--color-secondary-tint); }
-.field-btn.is-copied { color: var(--color-secondary); background-color: var(--color-secondary-tint); }
-/* PIN 后面那颗用的是通用 .icon-btn，同样给它一个复制成功的实心档 */
-.icon-btn.is-copied { color: var(--color-secondary); background-color: var(--color-secondary-tint); }
+.field-btn > svg { color: var(--fill-teal-icon) !important; }
+.field-btn:hover:not(:disabled) { background-color: var(--fill-teal-hover); }
+/* 复制成功那一下转绿档：实心色变化 = 「已经复制到了」当场看得见。
+ * 权重 0,2,0 高于上面的 0,1,0，也高于 .field-btn > svg（0,1,1），所以图形档要另压一条。 */
+.field-btn.is-copied { background-color: var(--fill-green); }
+.field-btn.is-copied > svg { color: var(--fill-green-icon) !important; }
+/* PIN 后面那颗用的是通用 .icon-btn，同样给它一个复制成功的实心绿档 */
+.icon-btn.is-copied { background-color: var(--fill-green); }
+.icon-btn.is-copied > svg { color: var(--fill-green-icon) !important; }
+/* 已复制的绿档在悬停时不能被青档 hover 顶回去（:hover:not() 权重更高），所以跟着压深一档 */
+.field-btn.is-copied:hover:not(:disabled),
+.icon-btn.is-copied:hover:not(:disabled) { background-color: var(--fill-green-hover); }
 
 /* ============================================================================
  * [CN-FORK] v0.5.2.87 「一档一色」收口层

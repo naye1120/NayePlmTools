@@ -5,10 +5,9 @@ import { RefreshCw, ExternalLink } from 'lucide-react'
 /* [CN-FORK] 「PKG安装」视图：把 PKG Manager 自带界面（:8844）内嵌到右侧内容区，侧栏保留。
  * 进入时查状态：未运行则自动拉起并轮询等待就绪（最多 ~20s），就绪后渲染 iframe。
  * 可行前提：PKG Manager 响应不设 X-Frame-Options/CSP（已核对其源码），且浏览器 cookie
- * 不区分端口，其登录态在 iframe 内正常。上传更新等低频操作在设置页管理卡片。 */
-
-/* [CN-FORK] v0.5.2.85 按钮收口到 index.css 骨架层（描边档） */
-const BTN_GHOST = 'btn btn-outline'
+ * 不区分端口，其登录态在 iframe 内正常。上传更新等低频操作在设置页管理卡片。
+ * [CN-FORK] v0.5.2.102 「重试」改用青实心档（btn-info：刷新/重试类同色），原 BTN_GHOST
+ * 常量只剩这一个用处，一并去掉。 */
 
 export default function PkgManagerFrame() {
   const { t } = useTranslation()
@@ -69,7 +68,7 @@ export default function PkgManagerFrame() {
         <p className="text-[12px] text-zinc-500 max-w-md text-center leading-relaxed">
           {t('pkg.frame_fail_hint', '请确认 elfldr 已在 9021 端口运行；也可到设置页的「PKG Manager」卡片查看状态。')}
         </p>
-        <button onClick={() => setTick((x) => x + 1)} className={BTN_GHOST}>
+        <button onClick={() => setTick((x) => x + 1)} className="btn btn-info">
           <RefreshCw className="w-4 h-4" />
           {t('pkg.frame_retry', '重试')}
         </button>

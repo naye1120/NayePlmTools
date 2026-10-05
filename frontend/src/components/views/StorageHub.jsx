@@ -391,7 +391,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
             title={t("storage_hub.repo_unavailable", "Repository Unavailable")}
             desc={t("storage_hub.repo_unavailable_desc", "Check your internet connection and try again.")}
             action={
-              <button onClick={() => fetchRemote(true)} className="btn btn-outline text-xs">{t("storage_hub.retry_btn", "Retry Connection")}</button>
+              <button onClick={() => fetchRemote(true)} className="btn btn-info text-xs">{t("storage_hub.retry_btn", "Retry Connection")}</button>
             }
           />
         ) : enrichedSources.length > 0 ? (
@@ -575,7 +575,9 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                   <div className="flex items-center shrink-0 ml-3">
                     <button
                       onClick={() => onImportFromUsb(path)}
-                      className="btn btn-outline group/btn"
+                      /* [CN-FORK] v0.5.2.102 写入内部存储属「金」档（样张 A：上传/写入＝btn-warn），
+                       * 与同页「重试连接」的青档（信息工具类）分开 */
+                      className="btn btn-warn group/btn"
                     >
                       <Database className="w-4 h-4 text-ps-blue group-hover/btn:text-current transition-colors" />
                       <span>{t("storage_hub.move_internal_btn", "Move to Internal")}</span>
