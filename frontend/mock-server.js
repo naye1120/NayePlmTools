@@ -4,6 +4,23 @@ import express from 'express';
 import cors from 'cors';
 import http from 'node:http'; // [CN-FORK] PKG Manager 桩服务：真实监听 8844 供本地端到端验证
 import net from 'node:net';   // [CN-FORK] 真实 TCP 探活（与实机 pkgmanager.c 探活语义一致）
+import { readFileSync } from 'node:fs'; // [CN-FORK] v0.5.2.113 /version 从 pldmgr.h 现读版本号
+import zlib from 'node:zlib'; // [CN-FORK] v0.5.2.112 磁贴背景要真转 DXT1 DDS：PNG 解压用（Node 自带）
+/* [CN-FORK] v0.5.2.113 /version 的词条从 pldmgr.h 现读，不再手抄。
+ * 病因：这里原来写死 '0.5.2.112' 并附了一句「与 pldmgr.h MENU_VERSION 保持一致」——
+ * 靠人去保持一致的注释，等于每次升版本都埋一颗雷：忘了改的话，mock 会报一个
+ * **已经不存在**的版本号，而前端在挂载时会拿它与构建时烧入的 __APP_VERSION__ 比对
+ * （见 src/main.jsx 的版本握手），对不上就触发一次「版本已更新」的刷新 —— 本地联调
+ * 会莫名其妙地刷页面，且原因看不出来。改成读头文件（与 vite.config.js 同一手法）。 */
+const MENU_VERSION = (() => {
+  try {
+    const src = readFileSync(new URL('../include/pldmgr.h', import.meta.url), 'utf8');
+    const m = src.match(/#define\s+MENU_VERSION\s+"([^"]+)"/);
+    return m ? m[1] : 'dev';
+  } catch {
+    return 'dev';
+  }
+})();
 
 const app = express();
 app.use(cors());
@@ -130,7 +147,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.111'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send(MENU_VERSION); // [CN-FORK] v0.5.2.113 现读 pldmgr.h，不再手抄（见文件头）
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -465,7 +482,19 @@ const mockGames = [
   { tid: 'PPSA01500', name: '容器镜像游戏', src: 'dump', fmt: 'ffpfsc', size: 145465737216 },
 ];
 app.get('/game_list', (req, res) => {
-  res.json({ games: mockGames, count: mockGames.length });
+  /* [CN-FORK] v0.5.2.112：过滤掉已删除的、套用改过的名字、带上两层自定义图的版本号。
+   * 列表项两个可选字段 `icon` / `bg`（都是 number，即「自定义版本号」）—— 有值时前端才去取
+   * /game_tile_icon 与 /game_tile_bg。这条要加进后端契约：不给这两个字段的话，
+   * 前端要么对每款游戏都白跑两次 404，要么永远显示不出自定义的图。 */
+  const games = mockGames
+    .filter((g) => !gameState.deleted.has(g.tid))
+    .map((g) => {
+      const out = { ...g, name: gameState.renamed[g.tid] || g.name };
+      if (gameState.icon[g.tid]) out.icon = gameState.icon[g.tid];
+      if (gameState.bg[g.tid]) out.bg = gameState.bg[g.tid];
+      return out;
+    });
+  res.json({ games, count: games.length });
 });
 
 // [CN-FORK] 游戏图标 mock：返回带 TID 的占位 SVG；两个 tid 故意 404，验证前端 onError 回退 Gamepad2
@@ -479,6 +508,705 @@ app.get('/game_icon', (req, res) => {
     + `<rect width="256" height="256" fill="#1e293b"/><circle cx="128" cy="100" r="46" fill="#2563eb"/>`
     + `<text x="128" y="200" font-family="monospace" font-size="24" fill="#e2e8f0" text-anchor="middle">${tid}</text></svg>`;
   res.type('image/svg+xml').send(svg);
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * [CN-FORK] v0.5.2.112 游戏管理新功能的 mock（详情 / 删除 / 存档 / 多媒体 / 改名）
+ *
+ * 接口契约以 `frontend/src/utils/gameApi.js` 顶部注释为准，这里只实现桩。
+ * 三个刻意的设计，让本地预览能覆盖**真实分支**而不是只走顺风路：
+ *
+ *  ① 删除的三种「非失败结局」按 tid 固定触发（DELETE_SPECIAL），逐条可核对：
+ *       PPSA01500 → 403 EPERM       源在受保护路径下，不允许删除
+ *       PPSA02000 → 409 EBUSY       游戏还在运行
+ *       EMUA90001 → 200 source_missing  源已不存在（不算失败）
+ *     其余 tid 走 202 + 异步任务，进度条会真的动。
+ *     ⚠ 这三个样本必须是 **dump 游戏**（can_manage_source=true）：前端完全认后端这个字段
+ *       来决定要不要画「删除源」，用已安装的 PKG 当样本的话，按钮根本不出现，错误路径白写。
+ *  ② 所有写操作（改名 / 换背景 / 删存档 / 删媒体 / 删游戏）都**改内存状态**，
+ *     刷新列表能看见变化 —— 只回 {ok:true} 的桩验证不了前端有没有真的重读。
+ *  ③ 媒体缩略图与原图都返回 SVG（带 TID 与序号），不塞假二进制：
+ *     目的是核对布局与交互，SVG 还能顺便把「这是第几号图」画在图上。
+ *
+ * 另：zip 返回的是**合法的空 zip**（22 字节的 end-of-central-directory），
+ * 不是随便一段字节 —— 这样「下载打包文件」在预览里能真的落一个能被解压工具打开的文件，
+ * 从而验证到「点了下载确实有文件下来」这一步，而不只是「按钮能点」。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+const EMPTY_ZIP = Buffer.from('504b0506' + '0'.repeat(36), 'hex');
+
+const DELETE_SPECIAL = {
+  /* 三个样本都必须是**可管源的 dump 游戏**（can_manage_source=true），否则前端不会渲染
+   * 「删除源」，这几条错误路径就只能在 curl 里验、界面上永远走不到。 */
+  PPSA01500: { status: 403, body: { error: 'EPERM', message: '这个游戏的源在受保护路径下，不允许删除' } },
+  PPSA02000: { status: 409, body: { error: 'EBUSY', reason: 'game_active', message: '这个游戏还在运行' } },
+  EMUA90001: { status: 200, body: { source_missing: true, scan_queued: true } },
+};
+
+const gameState = {
+  deleted: new Set(),   // 已删除的 tid，列表里过滤掉
+  renamed: {},          // tid -> 新名字
+  icon: {},             // [CN-FORK] v0.5.2.112 tid -> 自定义**图标**版本号（封面那一格，替代 icon0.png）
+  bg: {},               // tid -> 自定义**背景**版本号（整卡底图，图标压在它上面）
+  iconBytes: {},        // tid -> 上传的图标 PNG 原始字节（自定义过之后由 /game_tile_icon 回它）
+  bgBytes: {},          // tid -> 上传的背景 PNG 原始字节（/game_tile_bg 回的预览就是它）
+  bgDds: {},            // tid -> 上面那张背景转出来的 DXT1 DDS（/game_tile_bg_dds 回它）
+  saves: {},            // tid -> 存档数组
+  media: {},            // tid -> 媒体数组
+  auto: {},             // tid -> 自动存档配置
+  jobs: {},             // job_id -> 任务
+  nextJob: 1,
+  seq: 0,               // 让每次生成的假数据（体积/时间）有变化，避免看起来是写死的
+};
+
+/* 一个假的异步任务。进度不存下来、按「现在 - 开始时间」现算 —— 这样前端轮询几秒就能
+ * 看到进度条在动，而 mock 里不需要任何定时器（进程里少一个会泄漏的东西）。 */
+function startJob(kind, totalBytes, totalFiles, meta) {
+  const id = gameState.nextJob++;
+  const j = { id, kind, start: Date.now(), totalBytes, totalFiles, cancelled: false, meta: meta || {} };
+  gameState.jobs[id] = j;
+  /* 任务「跑完」的**后果**必须自己定时发生，不能挂在 /game_job_status 里 ——
+   * 那是读接口，而前端关掉弹窗就会停止轮询（真实行为：关窗不停任务）。
+   * 原来把「删除生效」写在读接口里，导致「关掉弹窗等一会儿再看」这条最真实的使用路径下，
+   * 删除永远不会落地。真机后端也不是靠谁来问才动手的。 */
+  if (kind === 'delete' && j.meta.tid) {
+    setTimeout(() => {
+      if (!j.cancelled) gameState.deleted.add(j.meta.tid);
+    }, jobDuration(j) * 1000);
+  }
+  return id;
+}
+
+/* 任务时长：体积越大跑越久，但夹在 3.5~9 秒 —— 太短看不清进度条，太长本地预览要等。 */
+function jobDuration(j) {
+  return Math.max(3.5, Math.min(9, j.totalBytes / 120e6));
+}
+
+function jobStatus(id) {
+  const j = gameState.jobs[id];
+  if (!j) return null;
+  const elapsed = (Date.now() - j.start) / 1000;
+  const dur = jobDuration(j);
+  const p = j.cancelled ? 1 : Math.min(1, elapsed / dur);
+  const done = p >= 1;
+  const bytesDone = Math.floor(j.totalBytes * p);
+  const filesDone = Math.floor(j.totalFiles * p);
+  return {
+    job_id: j.id,
+    active: !done,
+    phase: j.cancelled ? 'cancelled' : done ? 'done' : p < 0.15 ? 'measuring' : j.kind === 'delete' ? 'deleting' : 'transferring',
+    percent: Math.round(p * 1000) / 10,
+    bytes_done: bytesDone,
+    bytes_total: j.totalBytes,
+    files_done: filesDone,
+    files_total: j.totalFiles,
+    rate: p > 0 ? Math.round(bytesDone / Math.max(0.1, elapsed)) : 0,
+    elapsed: Math.round(elapsed * 10) / 10,
+    done,
+    ok: done && !j.cancelled,
+    error: j.cancelled ? '已取消' : '',
+    reason: '',
+  };
+}
+
+/* 详情：把列表项补齐成一份完整的详情。字段与 gameApi.js 的契约一一对应。
+ * 刻意留两个 tid 没有 content_id / version（模拟读不到 app.db 行的情况），
+ * 验证前端那些格子会不会正确显示成「—」而不是 undefined。 */
+function buildDetail(tid) {
+  const base = mockGames.find((x) => x.tid === tid);
+  if (!base) return null;
+  const installed = base.src === 'installed';
+  const platform = /^(CUSA|PPJB)/.test(tid) ? 'PS4' : 'PS5';
+  const sourceType = installed ? 'pkg' : base.fmt === 'folder' ? 'folder' : 'image';
+  const imgType = ['ffpkg', 'exfat', 'ffpfs', 'ffpfsc'].includes(base.fmt) ? base.fmt : '';
+  const known = tid !== 'PAUS00100' && tid !== 'EMUA90001';
+  return {
+    tid,
+    name: gameState.renamed[tid] || base.name,
+    src: base.src,
+    fmt: base.fmt,
+    size: base.size,
+    platform,
+    source_type: sourceType,
+    image_type: imgType,
+    content_id: known ? `${tid}-${tid}_00-${'0'.repeat(16)}` : '',
+    version: known ? `0${1 + (tid.charCodeAt(8) % 3)}.00${(tid.charCodeAt(7) % 9) + 1}.000` : '',
+    path: installed
+      ? `/user/app/${tid}/app.pkg`
+      : base.fmt === 'folder'
+        ? `/mnt/usb0/games/${tid}`
+        : `/mnt/usb0/games/${tid}.${base.fmt === 'exfat' ? 'exfat' : base.fmt}`,
+    runtime_path: installed ? '' : `/mnt/shadowmnt/${tid}`,
+    appdb_size: installed ? 3145728 + (tid.charCodeAt(6) % 7) * 1048576 : 0,
+    install_time: known ? '2026-09-12 21:33' : '',
+    last_launch: known ? '2026-10-04 22:10' : '',
+    mounted: !installed,
+    installed_pkg: installed,
+    can_uninstall: true,
+    /* 与真机同义：已安装的 PKG 没有可管的物理源（不能挂载、不能删源）。
+     * 前端不再自己用 installed_pkg 判一遍，完全认这个字段 —— 所以 DELETE_SPECIAL 里
+     * 那两个「详情说可管、后端却拒绝」的样本必须是 dump 游戏，否则那两条错误路径
+     * 在界面上根本走不到，桩就白做了。 */
+    can_manage_source: !installed,
+    saves_count: savesFor(tid).length,
+    media_count: mediaFor(tid).length,
+    /* 两层各自一个布尔（v0.5.2.112）：改名弹窗靠它决定「恢复默认」该不该可点。
+     * 只给一个合成布尔的话，用户换了图标之后再想清掉背景就会连图标一起丢掉。 */
+    title_icon_custom: !!gameState.icon[tid],
+    title_bg_custom: !!gameState.bg[tid],
+  };
+}
+
+/* 存档：按 tid 生成 0~3 条，稳定（同 tid 每次一样），便于对照。 */
+function savesFor(tid) {
+  if (gameState.saves[tid]) return gameState.saves[tid];
+  if (tid === 'PAUS00100') return [];               // 留一个「没有存档」的样本
+  const n = 1 + (tid.charCodeAt(5) % 3);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      id: `slot${i}`,
+      name: i === 0 ? '自动存档' : i === 1 ? '手动存档 1' : '手动存档 2',
+      kind: /^(CUSA|PPJB)/.test(tid) ? 'PS4' : 'PS5',
+      mtime: `2026-10-0${(i % 4) + 2} ${10 + i}:2${i}`,
+      size: 1048576 * (3 + i * 2) + (tid.charCodeAt(6) % 9) * 131072,
+      files: 8 + i * 3,
+    });
+  }
+  gameState.saves[tid] = out;
+  return out;
+}
+
+/* 媒体：截图为主 + 少量视频。数量按 tid 变化，留一个「空」的样本。 */
+function mediaFor(tid) {
+  if (gameState.media[tid]) return gameState.media[tid];
+  if (tid === 'PAUS00100') return [];
+  const nShots = 6 + (tid.charCodeAt(7) % 7);
+  const nVideos = tid.charCodeAt(8) % 3;
+  const out = [];
+  for (let i = 0; i < nShots; i++) {
+    out.push({
+      id: `${tid}-s${i}`,
+      kind: 'screenshot',
+      name: `2026100${(i % 9) + 1}_1${i % 10}${i % 6}0${i % 10}.png`,
+      mtime: `2026-10-0${(i % 9) + 1} 1${i % 10}:2${i % 6}`,
+      size: 3145728 + i * 262144,
+      w: 3840, h: 2160,
+    });
+  }
+  for (let i = 0; i < nVideos; i++) {
+    out.push({
+      id: `${tid}-v${i}`,
+      kind: 'video',
+      name: `2026100${(i % 9) + 1}_1${i}3${i}0.mp4`,
+      mtime: `2026-10-0${(i % 9) + 1} 1${i}:3${i}`,
+      size: 52428800 + i * 10485760,
+      w: 1920, h: 1080,
+      duration: 18 + i * 27,
+    });
+  }
+  gameState.media[tid] = out;
+  return out;
+}
+
+function autoFor(tid) {
+  if (!gameState.auto[tid]) {
+    gameState.auto[tid] = {
+      enabled: false,
+      mode: 'smb',
+      on_launch: true,
+      on_exit: true,
+      smb: { host: '192.168.1.10', share: 'ps5save', sub: tid, user: 'ps5', has_password: true },
+      ftp: { host: '192.168.1.10', port: 2121, path: `/ps5save/${tid}`, user: 'ps5', has_password: false },
+      http: { url: '', token_set: false },
+    };
+  }
+  return gameState.auto[tid];
+}
+
+/* 缩略图 / 原图 / 磁贴背景，统一用一个带文字的 SVG 生成 —— 一眼能看出是哪一张。 */
+function artSvg(label, sub, w, h, accent) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`
+    + `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">`
+    + `<stop offset="0" stop-color="${accent}"/><stop offset="1" stop-color="#0b1220"/></linearGradient></defs>`
+    + `<rect width="${w}" height="${h}" fill="url(#g)"/>`
+    + `<text x="${w / 2}" y="${h / 2 - h * 0.04}" font-family="monospace" font-size="${Math.round(h * 0.13)}"`
+    + ` fill="#e6edf3" text-anchor="middle">${label}</text>`
+    + `<text x="${w / 2}" y="${h / 2 + h * 0.1}" font-family="monospace" font-size="${Math.round(h * 0.08)}"`
+    + ` fill="#9fb0c7" text-anchor="middle">${sub}</text></svg>`;
+}
+
+/* 详情 */
+app.get('/game_detail', (req, res) => {
+  const d = buildDetail(String(req.query.tid || ''));
+  if (!d || gameState.deleted.has(d.tid)) {
+    return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+  }
+  res.json(d);
+});
+
+/* 删除（异步任务） */
+app.post('/game_delete', (req, res) => {
+  const tid = String((req.body && req.body.tid) || req.query.tid || '');
+  const confirm = !!(req.body && req.body.confirm);
+  if (!tid || gameState.deleted.has(tid)) {
+    return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+  }
+  if (!confirm) {
+    return res.status(400).json({ error: 'EINVAL', message: '需要 confirm=true 才允许删除' });
+  }
+  const special = DELETE_SPECIAL[tid];
+  if (special) return res.status(special.status).json(special.body);
+  const g = mockGames.find((x) => x.tid === tid);
+  const bytes = (g && g.size) || 40e9;
+  res.status(202).json({
+    job_id: startJob('delete', bytes, 20 + (tid.charCodeAt(7) % 60), { tid }),
+    scan_queued: true,
+  });
+});
+
+app.get('/game_job_status', (req, res) => {
+  const id = Number(req.query.job);
+  const st = jobStatus(id);
+  if (!st) return res.status(404).json({ error: 'ENOENT', message: '没有这个任务' });
+  /* 纯读。删除的落地由 startJob 里的定时器负责（见那里的注释）——
+   * 读接口不带副作用，才测得出「关掉弹窗、过一会儿再刷新列表」这条路径。 */
+  res.json(st);
+});
+
+app.get('/game_job_cancel', (req, res) => {
+  const j = gameState.jobs[Number(req.query.job)];
+  if (!j) return res.status(404).json({ error: 'ENOENT', message: '没有这个任务' });
+  j.cancelled = true;
+  res.json({ ok: true });
+});
+
+/* 挂载 / 卸载 / 卸载安装 */
+app.post('/game_mount', (req, res) => {
+  res.json({ ok: true, mode: (req.body && req.body.mode) === 'rw' ? 'rw' : 'ro' });
+});
+app.post('/game_unmount', (req, res) => res.json({ ok: true }));
+app.post('/game_uninstall', (req, res) => res.json({ ok: true, scan_queued: true }));
+
+/* 存档 */
+app.get('/game_saves', (req, res) => {
+  const tid = String(req.query.tid || '');
+  const base = mockGames.find((x) => x.tid === tid);
+  if (!base || gameState.deleted.has(tid)) {
+    return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+  }
+  res.json({
+    tid,
+    local_path: `/user/home/1234567890abcdef/savedata/${tid}`,
+    auto: autoFor(tid),
+    saves: savesFor(tid),
+  });
+});
+
+app.post('/game_save_auto', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  const cur = autoFor(tid);
+  const b = req.body || {};
+  /* 密码/token 没传 = 保持原值（与前端「留空即不修改」的约定一致）。 */
+  ['smb', 'ftp', 'http'].forEach((m) => {
+    if (!b[m]) return;
+    const next = { ...cur[m], ...b[m] };
+    if (b[m].password !== undefined) next.has_password = !!b[m].password;
+    if (b[m].token !== undefined) next.token_set = !!b[m].token;
+    delete next.password; delete next.token;
+    cur[m] = next;
+  });
+  cur.enabled = !!b.enabled;
+  cur.mode = b.mode || cur.mode;
+  cur.on_launch = b.on_launch !== false;
+  cur.on_exit = b.on_exit !== false;
+  res.json({ ok: true });
+});
+
+app.post('/game_save_test', (req, res) => {
+  const b = req.body || {};
+  const m = b.mode || 'smb';
+  const host = (b[m] && (b[m].host || b[m].url)) || '';
+  /* 故意留一个失败入口：主机填 0.0.0.0 或空就报失败，方便核对「测试连接」的失败样式。 */
+  if (!host || host === '0.0.0.0') {
+    return res.status(400).json({ error: 'EHOSTUNREACH', message: '连不上这个地址，请检查主机与端口' });
+  }
+  res.json({ ok: true, latency_ms: 8 + Math.floor(Math.random() * 30) });
+});
+
+app.get('/game_save_download', (req, res) => {
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${req.query.tid}-${req.query.save}.zip"`);
+  res.send(EMPTY_ZIP);
+});
+
+app.post('/game_save_upload', express.raw({ type: () => true, limit: '512mb' }), (req, res) => {
+  const tid = String(req.query.tid || '');
+  const slot = String(req.query.save || '');
+  const list = savesFor(tid);
+  const size = (req.body && req.body.length) || 1048576;
+  const name = slot ? ((list.find((s) => s.id === slot) || {}).name || slot) : `上传的存档 ${list.length + 1}`;
+  const id = slot || `slot${list.length}`;
+  const rec = { id, name, kind: 'PS5', mtime: '2026-10-05 21:00', size, files: Math.max(1, Math.round(size / 262144)) };
+  const at = list.findIndex((s) => s.id === id);
+  if (at >= 0) list[at] = rec; else list.push(rec);
+  res.json({ ok: true, files: rec.files, size });
+});
+
+app.get('/game_save_delete', (req, res) => {
+  const tid = String(req.query.tid || '');
+  const slot = String(req.query.save || '');
+  const list = savesFor(tid);
+  const at = list.findIndex((s) => s.id === slot);
+  if (at >= 0) list.splice(at, 1);
+  res.json({ ok: true });
+});
+
+/* 多媒体 */
+app.get('/game_media', (req, res) => {
+  const tid = String(req.query.tid || '');
+  const base = mockGames.find((x) => x.tid === tid);
+  if (!base || gameState.deleted.has(tid)) {
+    return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+  }
+  res.json({ tid, items: mediaFor(tid) });
+});
+
+app.get('/game_media_thumb', (req, res) => {
+  const id = String(req.query.id || '');
+  const w = Math.max(64, Math.min(1280, Number(req.query.w) || 320));
+  const kind = /-v\d+$/.test(id) ? 'video' : 'shot';
+  const accent = kind === 'video' ? '#7c3aed' : '#0891b2';
+  res.type('image/svg+xml').send(artSvg(kind === 'video' ? 'VIDEO' : 'SHOT', id.slice(-6), w, Math.round(w * 9 / 16), accent));
+});
+
+app.get('/game_media_file', (req, res) => {
+  const id = String(req.query.id || '');
+  const kind = /-v\d+$/.test(id) ? 'video' : 'shot';
+  const accent = kind === 'video' ? '#7c3aed' : '#0891b2';
+  /* 视频这里返回的其实还是一张 SVG —— <video> 解不了，但前端挂了 poster，
+   * 所以预览里看到的是封面图 + 原生播放控件，布局与真实情况一致。
+   * 主机侧的真实现由后端直接吐文件字节。 */
+  res.type('image/svg+xml').send(artSvg(kind === 'video' ? 'VIDEO PREVIEW' : 'SCREENSHOT', id, 1280, 720, accent));
+});
+
+app.post('/game_media_pack', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  const ids = req.body && req.body.ids;
+  const all = mediaFor(tid);
+  const picked = Array.isArray(ids) ? all.filter((x) => ids.includes(x.id)) : all;
+  if (picked.length === 0) {
+    return res.status(400).json({ error: 'EINVAL', message: '没有选中任何项目' });
+  }
+  const bytes = picked.reduce((n, x) => n + x.size, 0);
+  res.status(202).json({ job_id: startJob('pack', bytes, picked.length) });
+});
+
+app.get('/game_media_pack_get', (req, res) => {
+  const st = jobStatus(Number(req.query.job));
+  if (!st) return res.status(404).json({ error: 'ENOENT', message: '没有这个打包任务' });
+  if (!st.done) return res.status(409).json({ error: 'EBUSY', message: '打包还没完成' });
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="media-pack-${req.query.job}.zip"`);
+  res.send(EMPTY_ZIP);
+});
+
+app.get('/game_media_delete', (req, res) => {
+  const tid = String(req.query.tid || '');
+  const id = String(req.query.id || '');
+  const list = mediaFor(tid);
+  const at = list.findIndex((x) => x.id === id);
+  if (at >= 0) list.splice(at, 1);
+  res.json({ ok: true });
+});
+
+/* 改名 / 换磁贴背景 */
+app.post('/game_rename', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  const name = String((req.body && req.body.name) || '').trim();
+  if (!mockGames.find((x) => x.tid === tid)) {
+    return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+  }
+  if (!name) return res.status(400).json({ error: 'EINVAL', message: '名称不能为空' });
+  gameState.renamed[tid] = name;
+  res.json({ ok: true, name });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * [CN-FORK] v0.5.2.112 磁贴背景的 DDS 转换（PNG 解码 + DXT1 编码），在 mock 里**真做一遍**
+ *
+ * 为什么要在 mock 里真写一份编码器，而不是回个 `{ok:true}` 了事：
+ *   这一层唯一的硬契约就是**输出规格** —— 1920×1080 DXT1，总长 128 + 480*270*8 = 1,036,928 字节，
+ *   头布局与控制台已验证的 `assets/pic0.dds` 逐字节一致。桩如果不真编码，回归就只能断言
+ *   「前端把 PNG 传上来了」，而「规格对不对」这件事会一路拖到实机才暴露。
+ *   写一份之后，回归可以直接量长度、查 fourCC，规格漂了立刻红。
+ *
+ * 两个实现都是**故意从简**的，与仓库既有实现保持同源，不引第三方库：
+ *   · PNG 解码：只吃 canvas.toBlob('image/png') 会产出的那一种 —— 8 位、非隔行、
+ *     colorType 6(RGBA) 或 2(RGB)。逐行反滤波（5 种 filter）后展成 RGBA。
+ *   · DXT1 编码：端点色按**逐通道最大/最小**取（与 `avatar.c` 的 DXT5 同一条简化路子，
+ *     也与 `make_pic0.py` 依赖的 Pillow BC1 同量级）。它不做端点搜索、画质一般，
+ *     但**规格正确**，而我们这一层要验的正是规格。
+ * 故意用 3 色模式（color0 > color1）而不是 4 色：DXT1 的 4 色模式会把两个索引让给
+ * 「全黑 / 全白」，游戏封面这类图用 3 色插值更稳。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/* 反滤波：每行第一个字节是 filter 类型，后面是该行像素。
+ * bpp 是一像素的字节数（RGBA=4 / RGB=3），Paeth 与 Average 都要它。 */
+function pngUnfilter(raw, w, h, bpp) {
+  const stride = w * bpp;
+  const out = Buffer.alloc(stride * h);
+  for (let y = 0; y < h; y++) {
+    const filt = raw[y * (stride + 1)];
+    const src = y * (stride + 1) + 1;
+    const dst = y * stride;
+    const up = dst - stride;
+    for (let i = 0; i < stride; i++) {
+      const x = raw[src + i];
+      const a = i >= bpp ? out[dst + i - bpp] : 0;      // 左侧
+      const b = y > 0 ? out[up + i] : 0;                // 上方
+      const c = (i >= bpp && y > 0) ? out[up + i - bpp] : 0; // 左上
+      let v;
+      switch (filt) {
+        case 0: v = x; break;
+        case 1: v = x + a; break;
+        case 2: v = x + b; break;
+        case 3: v = x + ((a + b) >> 1); break;
+        case 4: {
+          const p = a + b - c;
+          const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+          v = x + (pa <= pb && pa <= pc ? a : (pb <= pc ? b : c));
+          break;
+        }
+        default: v = x;
+      }
+      out[dst + i] = v & 0xff;
+    }
+  }
+  return out;
+}
+
+/* PNG → { w, h, rgba }。解不出来就返回 null（调用方如实降级，别把好数据也判成坏）。 */
+function decodePng(buf) {
+  try {
+    if (!buf || buf.length < 8 || !buf.subarray(0, 8).equals(PNG_SIG)) return null;
+    let w = 0, h = 0, colorType = 0, bitDepth = 0, interlace = 0;
+    const idat = [];
+    let p = 8;
+    while (p + 8 <= buf.length) {
+      const len = buf.readUInt32BE(p);
+      const type = buf.toString('ascii', p + 4, p + 8);
+      const data = buf.subarray(p + 8, p + 8 + len);
+      if (type === 'IHDR') {
+        w = data.readUInt32BE(0); h = data.readUInt32BE(4);
+        bitDepth = data[8]; colorType = data[9]; interlace = data[12];
+      } else if (type === 'IDAT') {
+        idat.push(data);
+      } else if (type === 'IEND') {
+        break;
+      }
+      p += 12 + len;
+    }
+    if (!w || !h) return null;
+    /* 只认 8 位、非隔行、RGB/RGBA —— 别的形态 canvas 不会产出，不猜。 */
+    if (bitDepth !== 8 || interlace !== 0 || (colorType !== 6 && colorType !== 2)) return null;
+    const bpp = colorType === 6 ? 4 : 3;
+    const raw = zlib.inflateSync(Buffer.concat(idat));
+    if (raw.length < h * (w * bpp + 1)) return null;
+    const px = pngUnfilter(raw, w, h, bpp);
+    if (bpp === 4) return { w, h, rgba: px };
+    /* RGB → RGBA，alpha 一律 255 */
+    const rgba = Buffer.alloc(w * h * 4);
+    for (let i = 0, j = 0; i < w * h; i++, j += 3) {
+      rgba[i * 4] = px[j]; rgba[i * 4 + 1] = px[j + 1]; rgba[i * 4 + 2] = px[j + 2]; rgba[i * 4 + 3] = 255;
+    }
+    return { w, h, rgba };
+  } catch {
+    return null;
+  }
+}
+
+function rgb888to565(r, g, b) {
+  return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+}
+function rgb565to888(c) {
+  return [((c >> 11) & 0x1f) << 3, ((c >> 5) & 0x3f) << 2, (c & 0x1f) << 3];
+}
+
+/* 一个 4×4 块 → 8 字节 DXT1。与 avatar.c 的 color 部分同一路子（逐通道 min/max 取端点）。 */
+function compressDxt1Block(px, w, bx, by, rgba, out, off) {
+  const min = [255, 255, 255], max = [0, 0, 0];
+  for (let y = 0; y < 4; y++) {
+    const py = Math.min(by * 4 + y, px.h - 1);   // 右侧/底部的残缺块按边缘像素平铺，不是补零
+    for (let x = 0; x < 4; x++) {
+      const pxi = Math.min(bx * 4 + x, px.w - 1);
+      const i = (py * px.w + pxi) * 4;
+      for (let c = 0; c < 3; c++) {
+        const v = rgba[i + c];
+        if (v < min[c]) min[c] = v;
+        if (v > max[c]) max[c] = v;
+      }
+    }
+  }
+  let c0 = rgb888to565(max[0], max[1], max[2]);
+  let c1 = rgb888to565(min[0], min[1], min[2]);
+  if (c0 < c1) { const t = c0; c0 = c1; c1 = t; }
+  else if (c0 === c1 && c0 < 0xffff) c0++;    // 保证 c0 > c1，走 3 色插值模式
+  const p0 = rgb565to888(c0), p1 = rgb565to888(c1);
+  const pal = [p0, p1, [0, 0, 0], [0, 0, 0]];
+  for (let c = 0; c < 3; c++) {
+    pal[2][c] = Math.floor((2 * p0[c] + p1[c]) / 3);
+    pal[3][c] = Math.floor((p0[c] + 2 * p1[c]) / 3);
+  }
+  let idx = 0;
+  for (let y = 0; y < 4; y++) {
+    const py = Math.min(by * 4 + y, px.h - 1);
+    for (let x = 0; x < 4; x++) {
+      const pxi = Math.min(bx * 4 + x, px.w - 1);
+      const i = (py * px.w + pxi) * 4;
+      let best = 0, bestD = Infinity;
+      for (let j = 0; j < 4; j++) {
+        const dr = rgba[i] - pal[j][0], dg = rgba[i + 1] - pal[j][1], db = rgba[i + 2] - pal[j][2];
+        const d = dr * dr + dg * dg + db * db;
+        if (d < bestD) { bestD = d; best = j; }
+      }
+      idx |= best << ((y * 4 + x) * 2);
+    }
+  }
+  out.writeUInt16LE(c0, off);
+  out.writeUInt16LE(c1, off + 2);
+  out.writeUInt32LE(idx >>> 0, off + 4);
+}
+
+/* DDS 头 —— 字段布局与 `make_pic0.py` 的 build_bc1_header 逐字节一致
+ * （pixel-format 块在 76、dwFlags 0x000A1007、线性长度写整个压缩体、mipMapCount 1、
+ * bitCount 0、reserved1[0] 写 1）。那张 pic0.dds 是控制台已验证能被读的参考，
+ * 所以这里不做任何「顺手改进」：多一个变量，实机出问题时就要多排一天。 */
+function buildBc1Header(w, h) {
+  const linear = ((w + 3) >> 2) * ((h + 3) >> 2) * 8;
+  const head = Buffer.alloc(128);
+  head.write('DDS ', 0, 'ascii');
+  head.writeUInt32LE(124, 4);
+  head.writeUInt32LE(0x000a1007, 8);
+  head.writeUInt32LE(h, 12);
+  head.writeUInt32LE(w, 16);
+  head.writeUInt32LE(linear, 20);
+  head.writeUInt32LE(1, 24);            // mipMapCount
+  head.writeUInt32LE(1, 28);            // reserved1[0]（参考图写 1，照抄）
+  head.writeUInt32LE(32, 76);           // pf dwSize
+  head.writeUInt32LE(4, 80);            // DDPF_FOURCC
+  head.write('DXT1', 84, 'ascii');
+  head.writeUInt32LE(0x1000, 108);      // DDSCAPS_TEXTURE
+  return head;
+}
+
+function encodeDxt1Dds(png) {
+  const bw = (png.w + 3) >> 2, bh = (png.h + 3) >> 2;
+  const out = Buffer.alloc(128 + bw * bh * 8);
+  buildBc1Header(png.w, png.h).copy(out, 0);
+  let off = 128;
+  for (let by = 0; by < bh; by++) {
+    for (let bx = 0; bx < bw; bx++) {
+      compressDxt1Block(png, png.w, bx, by, png.rgba, out, off);
+      off += 8;
+    }
+  }
+  return out;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * [CN-FORK] v0.5.2.112 磁贴两层图：图标（封面格，1:1 PNG）与背景（整卡底图，16:9）
+ *
+ * 两套端点是刻意分开的（契约见 utils/gameApi.js 顶部）—— 用户要能「只换背景保住原封面」，
+ * 合成一层就做不到。实现上两份几乎一样，所以用一张表驱动，将来加第三层只加一行。
+ *
+ * 存储与呈现分开：上传的 PNG 原样留着供 <img> 预览（浏览器显示不了 DDS），
+ * 另外真转一份 DDS 留在 /game_tile_bg_dds 供核对 —— 这也正好把「后端该转成什么规格」
+ * 变成了 mock 里可执行的事实。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+const TILE_IMAGE_KINDS = {
+  icon: { bucket: () => gameState.icon, path: 'game_tile_icon', accent: '#1d4ed8' },
+  bg: { bucket: () => gameState.bg, path: 'game_tile_background', accent: '#b45309' },
+};
+
+Object.keys(TILE_IMAGE_KINDS).forEach((kind) => {
+  const K = TILE_IMAGE_KINDS[kind];
+  app.post(`/${K.path}`, express.raw({ type: () => true, limit: '64mb' }), (req, res) => {
+    const tid = String(req.query.tid || '');
+    if (!mockGames.find((x) => x.tid === tid)) {
+      return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+    }
+    const bytes = req.body || Buffer.alloc(0);
+    const bucket = K.bucket();
+    bucket[tid] = (bucket[tid] || 0) + 1;
+    const png = decodePng(bytes);
+    const store = kind === 'icon' ? gameState.iconBytes : gameState.bgBytes;
+    store[tid] = bytes;
+    let ddsBytes = 0;
+    if (kind === 'bg') {
+      /* 背景这一层要真转 DDS。转不动就把上一次的结果清掉，别留一份对不上的旧文件
+       * ——「接口说成功、下载下来是别的规格」比直接失败更难查。 */
+      if (png) {
+        const dds = encodeDxt1Dds(png);
+        gameState.bgDds[tid] = dds;
+        ddsBytes = dds.length;
+      } else {
+        delete gameState.bgDds[tid];
+      }
+      console.log(`[Mock] ${K.path} tid=${tid} png=${bytes.length}B`
+        + (png ? ` ${png.w}x${png.h} -> dds=${ddsBytes}B` : ' (PNG 解不出来，未生成 DDS)'));
+    } else {
+      console.log(`[Mock] ${K.path} tid=${tid} png=${bytes.length}B`
+        + (png ? ` ${png.w}x${png.h}` : ''));
+    }
+    res.json({ ok: true, bytes: bytes.length, dds_bytes: ddsBytes });
+  });
+
+  app.get(`/${K.path}_reset`, (req, res) => {
+    const tid = String(req.query.tid || '');
+    delete K.bucket()[tid];
+    const store = kind === 'icon' ? gameState.iconBytes : gameState.bgBytes;
+    delete store[tid];
+    if (kind === 'bg') delete gameState.bgDds[tid];
+    res.json({ ok: true });
+  });
+});
+
+/* 图标：自定义过就回它自己的 PNG 字节；没设过回那张带 TID 的占位 SVG（与 /game_icon 同一份数据源，
+ * 保证「设过 / 没设过」两种状态在界面上一眼可辨）。 */
+app.get('/game_tile_icon', (req, res) => {
+  const tid = String(req.query.tid || '');
+  if (!gameState.icon[tid]) return res.status(404).type('text/plain').send('not found');
+  const bytes = gameState.iconBytes[tid];
+  if (bytes && bytes.length) {
+    res.type('image/png');
+    return res.send(bytes);
+  }
+  res.type('image/svg+xml').send(artSvg(tid, `custom icon #${gameState.icon[tid]}`, 512, 512, TILE_IMAGE_KINDS.icon.accent));
+});
+
+/* 背景：这里回的是 **PNG 预览**（浏览器 <img> 显示不了 DDS）。真实后端要么留着上传的原图，
+ * 要么把 DDS 转回 PNG，两条路都行 —— 前端只要求「这一路能显示」。 */
+app.get('/game_tile_bg', (req, res) => {
+  const tid = String(req.query.tid || '');
+  if (!gameState.bg[tid]) return res.status(404).type('text/plain').send('not found');
+  const bytes = gameState.bgBytes[tid];
+  if (bytes && bytes.length) {
+    res.type('image/png');
+    return res.send(bytes);
+  }
+  res.type('image/svg+xml').send(artSvg(tid, `custom bg #${gameState.bg[tid]}`, 512, 512, TILE_IMAGE_KINDS.bg.accent));
+});
+
+/* DDS 原始字节：给下载核对与回归验规格用（1920×1080 DXT1 → 1,036,928 字节）。 */
+app.get('/game_tile_bg_dds', (req, res) => {
+  const tid = String(req.query.tid || '');
+  const dds = gameState.bgDds[tid];
+  if (!gameState.bg[tid] || !dds) return res.status(404).type('text/plain').send('not found');
+  res.type('application/octet-stream');
+  res.send(dds);
 });
 
 // [CN-FORK] 风扇温控 mock（预览用）：开关只置 enabled+清 applied；apply 才置生效。
@@ -726,6 +1454,23 @@ app.get('/events', (req, res) => {
   req.on('close', () => {
     clearInterval(interval);
   });
+});
+
+/* 回归脚本用的重置端点：把可变状态全部清零，保证每次跑都是干净开局 */
+app.post('/reset', (req, res) => {
+  gameState.deleted.clear();
+  gameState.renamed = {};
+  gameState.icon = {};
+  gameState.bg = {};
+  gameState.iconBytes = {};
+  gameState.bgBytes = {};
+  gameState.bgDds = {};
+  gameState.saves = {};
+  gameState.media = {};
+  gameState.auto = {};
+  gameState.jobs = {};
+  gameState.nextJob = 1;
+  res.json({ ok: true });
 });
 
 app.listen(PORT, '127.0.0.1', () => {

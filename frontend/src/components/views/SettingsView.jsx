@@ -305,12 +305,15 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
       </Section>
 
       {/* [CN-FORK] 支持作者：从移动端底部导航迁移至此，符合中文应用惯例。
-          说明沿用 settings.donate_desc（overlay 里已带 fork 归属与版本号），不另起一行重复。 */}
+          说明沿用 settings.donate_desc（overlay 里已带 fork 归属与版本号），不另起一行重复。
+          [CN-FORK] v0.5.2.113 版本号改成插值 __APP_VERSION__：这条文案里原本写死着
+          「（当前 v0.5.2.112）」，每升一次版本就得有人记得来改，忘了就会对用户谎报版本
+          ——出包检查里「产物内只有当前版本号」正是为了抓这个。 */}
       <Section id="donate" icon={Heart} title={t("settings.donate_title", "Support the Project")}>
         <NavRow
           icon={Heart}
           title={t("app.nav.donate", "Donate")}
-          description={t("settings.donate_desc", "If you like this project, you can buy the author a coffee.")}
+          description={t("settings.donate_desc", "If you like this project, you can buy the author a coffee.", { version: __APP_VERSION__ })}
           onClick={() => onNavigate('donate')}
           danger
         />

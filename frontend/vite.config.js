@@ -89,6 +89,11 @@ export default defineConfig(({ command }) => ({
       '/thermal_stats': { target: API_TARGET, changeOrigin: true },
       '/game_list': { target: API_TARGET, changeOrigin: true },
       '/game_icon': { target: API_TARGET, changeOrigin: true },
+      /* [CN-FORK] v0.5.2.112 游戏管理新功能（详情/删除/存档/多媒体/改名）整组端点。
+       * 这一组有 20 个，逐条列太脆（漏一条的后果就是「预览里那个弹窗永远报读不到」，
+       * 而且报的是被 SPA fallback 吞成 HTML 之后的 JSON 解析错误，完全看不出原因），
+       * 所以统一用 /game_ 前缀代理 —— 后端这一组接口也全在这个前缀下，不会误伤别的路径。 */
+      '/game_': { target: API_TARGET, changeOrigin: true },
       '/fan_control': { target: API_TARGET, changeOrigin: true },
       /* [CN-FORK] v0.5.1.64 删 /game_icon 代理：「当前游戏」探测随主页一起下线 */
       '/repository_install': { target: API_TARGET, changeOrigin: true },

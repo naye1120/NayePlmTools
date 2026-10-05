@@ -101,6 +101,13 @@ function App() {
   useEffect(() => {
     localStorage.setItem('sidebarExpanded', JSON.stringify(sidebarExpanded))
   }, [sidebarExpanded])
+
+  /* [CN-FORK] v0.5.2.112 侧栏展开态写给 <html data-sidebar>：index.css 的 --sidebar-w 读它，
+   * 给「铺满右侧」的那类面板定位（面板的 left 必须正好等于侧栏宽度）。与 data-device 同手法
+   * —— 属性写在 <html> 上，组件树里任何一层的面板都能靠一条 CSS 变量对齐，不用测量、不用上下文。 */
+  useEffect(() => {
+    document.documentElement.setAttribute('data-sidebar', sidebarExpanded ? 'expanded' : 'collapsed')
+  }, [sidebarExpanded])
   const [autoloadStatus, setAutoloadStatus] = useState(null)
   const [logs, setLogs] = useState([])
   const [payloads, setPayloads] = useState([])
@@ -483,8 +490,16 @@ function App() {
       </div>
 
       {/* Modals */}
+      {/* [CN-FORK] v0.5.2.112 层级约定（这几档是**跨组件**的，写在这里当唯一出处）：
+       *   1000  页面内弹窗（游戏详情 / 存档 / 多媒体 / 改名 / 待定）
+       *   1100  多媒体预览浮层（要压过它自己那个弹窗）
+       *   1900  App 级浮层：确认框、安装进度 —— **必须**高于 1000，否则被页面内弹窗盖住
+       *   2000  通知条容器（pointer-events-none，不吃点击）
+       *   9999  全屏加载 / 日志
+       * 1900 这一档是修事故加上的：确认框原来和页面内弹窗同为 1000，页面内弹窗在 DOM 里更靠后，
+       * 于是「在游戏详情里点删除源」弹出的确认框被详情弹窗整个盖住 —— 看不见也点不到。 */}
       {/* [CN-FORK] v0.5.2.93 安装/上传进行中是「不可打断」浮层：不给关闭入口，也不认返回键 */}
-      <Modal show={downloadModal.show} title={t("app.modals.installing.title", "Installing Payload")} dismissible={false}>
+      <Modal show={downloadModal.show} title={t("app.modals.installing.title", "Installing Payload")} dismissible={false} containerClass="z-[1900]">
         <div className="space-y-6">
           <div className="flex justify-between items-end">
             <span className="text-ps-blue font-black uppercase italic tracking-tighter text-lg">{downloadModal.name}</span>
@@ -500,6 +515,7 @@ function App() {
         show={confirmModal.show}
         title={confirmModal.title}
         onClose={() => setConfirmModal({ show: false })}
+        containerClass="z-[1900]"
         footer={
           <>
             <button onClick={() => setConfirmModal({ show: false })} className="btn btn-outline flex-1 uppercase tracking-tight">{t("app.buttons.cancel", "Cancel")}</button>
@@ -696,7 +712,7 @@ function App() {
 
           {/* [CN-FORK] 常用入口 / 游戏管理 / PKG安装（内嵌 PKG Manager 界面） */}
           {view === 'common_entries' && <CommonEntriesView showConfirm={showConfirm} addToast={addToast} />}
-          {view === 'game_manage' && <GameManageView />}
+          {view === 'game_manage' && <GameManageView addToast={addToast} showConfirm={showConfirm} />}
           {view === 'pkg' && <PkgManagerFrame />}
         </main>
       </div>

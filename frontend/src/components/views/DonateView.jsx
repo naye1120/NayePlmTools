@@ -108,7 +108,11 @@ const DonateView = ({ version }) => {
           <dt className="text-zinc-500">{t("donate.fork_upstream_version", "Upstream version")}</dt>
           <dd className="text-white font-semibold">v0.5.2</dd>
           <dt className="text-zinc-500">{t("donate.fork_version", "This fork")}</dt>
-          <dd className="text-white font-semibold">v{version || '0.5.2.111'}</dd>
+          {/* [CN-FORK] v0.5.2.113 兜底值原来写死 `'0.5.2.112'` —— 版本一涨它就是**过期的**，
+              而这个字段正是用来告诉用户「你现在装的是哪一版」。改成读构建时烧入的
+              __APP_VERSION__（vite.config.js 从 include/pldmgr.h 的 MENU_VERSION 取），
+              下一次升版本这里不用再有人记得改。dev server 下它是 'dev'，也不比旧版本号差。 */}
+          <dd className="text-white font-semibold">v{version || __APP_VERSION__}</dd>
         </dl>
         <p className="text-xs text-zinc-500 leading-relaxed">
           {t("donate.fork_donate_note", "Donations through the button above go to the original author (itsPLK), not this fork.")}

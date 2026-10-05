@@ -21,7 +21,7 @@ const Segmented = ({ options, value, onChange, label, className, itemClassName }
           role="radio"
           aria-checked={active}
           title={o.title || undefined}
-          onClick={() => onChange(o.value)}
+          onClick={() => onChange(o.value) }
           className={cn(
             "segmented-item flex items-center justify-center min-w-0 rounded-lg transition-colors",
             active ? "sel-chip" : "text-zinc-500 hover:text-white",
