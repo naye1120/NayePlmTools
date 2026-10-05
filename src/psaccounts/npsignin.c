@@ -585,7 +585,7 @@ read_small_file(const char *path, long *len_out, long max_size) {
 
 /* 在 online.json 的原始字节里定位 "firstName" 的值。三个硬性条件，任一不满足
  * 返回 0（宁可不写）：全文只出现一次这个键、值是非空字符串、值内不含反斜杠。
- * 成功时 *vs/*ve 框住值本身（不含两侧引号）。 */
+ * 成功时 vs 与 ve 之间框住值本身（不含两侧引号）。 */
 static int
 json_first_name_span(const char *raw, const char **vs, const char **ve) {
   const char *p, *q;
