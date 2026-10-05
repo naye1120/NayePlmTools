@@ -379,6 +379,15 @@ bash tools/build_tiles.sh   # 双磁贴变体一次出齐：-me(NAYE00001 媒体
 ./deploy.sh [PS5_IP]   # shutdown → 构建 → socat 推送 :9021；面板 http://[PS5_IP]:8911
 ```
 
+**主机端单测（一条命令跑齐）**：
+```bash
+wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/run_host_tests.sh"
+# slot_resolve 23/23 + offact_genid 13/13 + safety_origin 39/39，clang -Wall -Wextra 零告警
+```
+- 三个测试都**不链接 PS5 SDK**，只打桩 `sceRegMgr*` / `sceUserService*`，所以主机 clang 直接编。
+- `safety_origin_test.c` 必须带 `-DSAFETY_DIR='"/tmp/safety_origin_test"'` —— 真实的 `safety.c` 会真的去建目录写文件，不改这个宏主机上跑不了。脚本里已经带上了。
+- Windows 侧调用要用 `MSYS_NO_PATHCONV=1`（或 `wsl bash -c "…"` 把整条命令括起来），否则 Git Bash 会把 `/mnt/...` 当 Windows 路径改写掉。
+
 **出包三个坑（`.107`/`.108`/`.110` 实拍）**：
 
 1. **`build_tiles.sh` 会复用已有的 `frontend/dist`，而标题占位符是「一次性消费」的。** 标题注入发生在 `$(ASSET_HEADER)` 这条 recipe 里（`Makefile:90-100`），它 `sed` 的是 `frontend/dist/index.html` **本身** —— 第一次跑完 `[[TITLE_PLACEHOLDER]]` 就没了。所以**改了代码要重出包时，必须先 `rm -rf frontend/dist` 再 `npm run build`**，否则 `make` 里那句 `sed` 是空操作，标题会**停留在上一次的短哈希**（`.107` 就撞上过：包内是 `.107` 的代码，标题却写着上一个提交 `6b51ee7`）。
