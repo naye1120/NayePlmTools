@@ -1,11 +1,9 @@
 import React, { useState } from 'react'
-import { Terminal, ChevronRight, Globe, Languages, Palette, Heart, ScrollText, Package, CloudDownload, Power } from 'lucide-react'
+import { Terminal, ChevronRight, Globe, Languages, Palette, Heart, ScrollText, CloudDownload, Power } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../utils/helpers'
 // [CN-FORK] 外观（深/浅色）切换控件
 import ThemeToggle from '../../theme/ThemeToggle'
-// [CN-FORK] PKG Manager 管理卡片（上传更新/重启），侧栏菜单已改为直接跳转其界面
-import PkgManagerCard from './PkgManagerCard'
 import PageHead from '../ui/PageHead'
 import Section from '../ui/Section'
 import Switch from '../ui/Switch'
@@ -305,10 +303,6 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
           onClick={() => setShowChangelog(true)}
         />
       </Section>
-
-      {/* [CN-FORK] PKG Manager 管理：侧栏「PKG安装」菜单直接跳转 :8844，这里保留上传更新与重启。
-          卡片自己就是一个板块（含板块头），所以外层不再套 Section，避免卡中卡。 */}
-      <PkgManagerCard />
 
       {/* [CN-FORK] 支持作者：从移动端底部导航迁移至此，符合中文应用惯例。
           说明沿用 settings.donate_desc（overlay 里已带 fork 归属与版本号），不另起一行重复。 */}

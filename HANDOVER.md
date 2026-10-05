@@ -5,7 +5,7 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-- 版本：`MENU_VERSION = 0.5.2.100`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+- 版本：`MENU_VERSION = 0.5.2.101`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 - 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
 - 近期定型（.64 → .100）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
@@ -53,6 +53,19 @@
 > - `.100` **账号操作去确认弹窗**（用户：「登入登出 激活等操作的大提示全不要」；口径确认 = 去**操作前**的确认弹窗，非去反馈）：`AccountToolsSection` 不再调 `showConfirm`，登出/激活/反激活点击即发请求；**操作后的 Toast 保留**。`CommonEntriesView` 因此不再向下传 `showConfirm`。服务端 `confirm=online` 那道独立闸门照旧。
 > - `.100` **游戏磁贴改自适应、尺寸降三分之一**（用户：「再小三分之一左右，变成自适应，屏幕宽就多放、窄就少放，别固定四个」）：`GameSection.jsx` 宫格容器从 `grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3` 换成新增骨架类 **`.tile-grid`**（`repeat(auto-fill, minmax(var(--tile-w), 1fr))`），列宽下限立令牌：`:root` `--tile-w: 10.5rem`(168px)、`html[data-device="ps5"]` `15rem`(240px)。电视档正文列约 1470px → 6 列 ≈245px（原固定 4 列 ≈355px）。**`grid` 的 `gap` 老内核支持**，不违反 flex gap 禁令。
 > - `.100` **账号板块文案与可编辑框配色**（用户：「说明文字取消」「『本公举欠他21条原值记录』这几个字也不要」「可编辑的两个文本框字体颜色做个区分」）：板块顶部 `<p>`（词条 `acctools.desc`）与 `pending_records` 片段不再渲染（**词条保留在语言包，只删渲染**）；两格可编辑输入框（十六进制 ID / 账号显示名）加 `.field-edit`（字色走 `--color-ps-blue`，深 `#58a6ff` / 浅 `#0969da`），只读的换算结果两格仍走 `.field-ro`（虚线边 + 辅助字色），三格并排时谁能动一眼分得清。
+
+> **`.101`（2026-10-05）**
+> - `.101` **次要按钮档转紫（新增一档令牌）**（用户：「所有的 btn 都要有颜色，但别用蓝色」，颜色选择授权「你随便」）：`--color-secondary` / `-tint` / `-line`（深 `#a371f7`，浅 `#8250df` + `rgba(130,80,223,.1/.35)`），吃这一档的是 `.btn-outline`、`.btn-ghost`、`.icon-btn`（含 hover 与 `.is-copied`）、`.field-btn` 四处；**蓝只留给 `.btn-primary` 与 `.sel-chip`**（这一页唯一的主操作 + 当前选中）。紫选冷色同族是为了与蓝一眼分得开，同时不占用绿=成功、金=注意、红=危险这三档已有名有姓的语义色。仍然纯色无渐变、零改组件类名。
+> - `.101` **磁贴相对 `.100` 再放大四分之一**：`--tile-w` PC/手机 `10.5rem`(168px) → `13.125rem`(210px)，电视档 `15rem`(240px) → `18.75rem`(300px)；`.tile-grid` 的 `repeat(auto-fill, minmax(var(--tile-w),1fr))` 未动，所以仍是自适应，1920 正文列实测回到 4 列 ≈362px。
+> - `.101` **PKG Manager 开关卡片换页**（用户指令）：`PkgManagerCard` 挂载点 `SettingsView.jsx` → `CommonEntriesView.jsx` 温控板块之后（本页第四个板块，页面最底部）；卡片本身零改动，`SettingsView` 顺带去掉不再引用的 `Package` 图标导入。
+> - `.101` **改名显示源调查（事实 / 推断分开）**：
+>   - **事实**：`.100` 在实机上 SysReg 槽写入持久成功（`/api/accounts` 返回 slot1 `name:"Naye11"→"Naye87"`），Toast 亦报 `registry + UserService both verified`（Set 返回 0、Get 回读等于新名），**但主界面用户按钮与「切换用户」界面仍是旧名**。→ 结论：那两处 UI 不拿 UserService 缓存当显示源，`.100` 判据取错（回读成功 ≠ 界面用它）。
+>   - **事实**：真机取证（`D:\offact-new\_rename_forensics.log`）里 `/system_data/priv/cache/profile/0x1A1D3629/online.json` 原本 **ABSENT**、由头像写回才存在；`/user/home/<uid目录>/` 实测只有 `config.dat`/`np`/`nobackup` 等，**没有 `username.dat`**；`/system_data/priv/home/user_list.dat` 是 72 字节 0600、另有 `.0` 备份份。
+>   - **推断**：换头像在同目录能生效 → 壳层确实读 `profile/0x<UID>/online.json`，它的 `firstName` 是最有希望的显示源；`username.dat` 是 activity 类工具给用户打标签的读法（`elf-arsenal/src/activitydb.c`），本机可能压根不存在，故只能作为条件写 + 报告。
+>   - **本轮做法**：改名按四层尽力而为，每层结论原样拼进 `message`（Toast 直接可读，格式 `base | profile cache … | user home … | user_list.dat …`），让实机一轮就判死真实来源。③ 只认「全文唯一 + 无转义」的 `firstName` 字符串值，④ 只在去尾 `\r\n\0` 后**正好等于旧名**才改写，行尾字节原样保留；两者都写前登记备份（且**只在 `safety_file_was_absent()<0` 即未登记过时登记**，否则会把新名当原值覆盖掉备份）、写后回读比对，任一条件不满足就原样不动只报一句话。`user_list.dat` **只读探针**：结构无文档、写它等于拿全体账号名单去赌，故只报旧名/新名的字节偏移。
+>   - **下一轮的分支**：若探针报「旧名在 `user_list.dat` 某偏移、新名不在」→ 显示源就是它，届时按定宽字段做**等长或截断**的原位改写（仍是先备份后写）；若报「profile cache verified 而界面仍旧名」→ 说明这两处 UI 走的是内存里 ShellCore 的会话缓存，只能靠重启/切用户刷新，得改的是提示文案而不是写入层。
+>   - **配套放大**：`npsignin_result_t.message` 320 → 768；`accounts.c` 的 `emsg` 384 → 896、响应 `cap` 2048 → 4096（否则截成半句话，甚至把 JSON 截断成非法）。
+
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
@@ -112,7 +125,7 @@ bash tools/build_tiles.sh   # 双磁贴变体一次出齐：-me(NAYE00001 媒体
 
 ## 5. Fork 维护约定
 1. 所有 fork 专属改动打 `// [CN-FORK]` 注释标记；中文措辞/新增 key 只进 `locales-overlay/`，**绝不改 locales 子模块**。
-2. UI 配色分两层，都不改上游组件类名：**先改令牌层**（`tailwind.config.js` 的 `theme.extend.colors` + `index.css` 的 `:root` CSS 变量）——类名保留、值替换，全站一次生效；**再补重映射**（`theme/light-theme.css`）把上游写死的暗色工具类映射为浅色语义色。骨架层（`.nav-group-title`/`.nav-item`/`.page-head`/`.head-bar`/`.btn-*`/`.icon-btn`/`.row-link`/`.field`/`.field-ro`/`.field-edit`/`.field-btn`/`.switch-*`/`.segmented-*`/`.stack-x`/`.sel-chip`/`.tile-grid`，定义在 `index.css` 末尾）颜色一律走 CSS 变量，浅色只在 `light-theme.css` 翻变量，不写 `!important`。**命中区与行高不写死 px**：`--ctl-h`、`--row-h`、`--tile-w`、`--switch-*` 在 `:root` 与 `html[data-device="ps5"]` 各一档，组件只引用令牌。**动作主色自 `.100` 起是蓝 `#2563eb`（深档文字/图标档 `#58a6ff`、浅档 `#0969da`）** —— 早期 `.85` 那条「主色不得为灰或蓝」是当时的观感取向、非技术限制，已由用户在 `.100` 明确改判，别再拿它回退配色。
+2. UI 配色分两层，都不改上游组件类名：**先改令牌层**（`tailwind.config.js` 的 `theme.extend.colors` + `index.css` 的 `:root` CSS 变量）——类名保留、值替换，全站一次生效；**再补重映射**（`theme/light-theme.css`）把上游写死的暗色工具类映射为浅色语义色。骨架层（`.nav-group-title`/`.nav-item`/`.page-head`/`.head-bar`/`.btn-*`/`.icon-btn`/`.row-link`/`.field`/`.field-ro`/`.field-edit`/`.field-btn`/`.switch-*`/`.segmented-*`/`.stack-x`/`.sel-chip`/`.tile-grid`，定义在 `index.css` 末尾）颜色一律走 CSS 变量，浅色只在 `light-theme.css` 翻变量，不写 `!important`。**命中区与行高不写死 px**：`--ctl-h`、`--row-h`、`--tile-w`、`--switch-*` 在 `:root` 与 `html[data-device="ps5"]` 各一档，组件只引用令牌。**动作主色自 `.100` 起是蓝 `#2563eb`（深档文字/图标档 `#58a6ff`、浅档 `#0969da`）** —— 早期 `.85` 那条「主色不得为灰或蓝」是当时的观感取向、非技术限制，已由用户在 `.100` 明确改判，别再拿它回退配色。**蓝只允许出现在两处**：`.btn-primary`（这一页唯一的主操作）与 `.sel-chip`（当前选中）；其余按钮档（`.btn-outline`/`.btn-ghost`/`.icon-btn`/`.field-btn`）自 `.101` 起走 `--color-secondary`（深 `#a371f7` / 浅 `#8250df`，用户：「所有的 btn 都要有颜色，但别用蓝色」）。
 3. 升级上游：`git fetch upstream && git checkout main && git merge --ff-only upstream/main`，再 `git checkout cn-fork && git rebase main`。冲突集中在带 `[CN-FORK]` 的局部插入块。
 4. third_party 基线 ELF 需 `git add -f`；`include/assets_*.h`、`frontend/dist/`、根目录 `*.elf` 属构建产物，始终不入库。
 5. Commit 规范：`[CN-FORK] v<版本号>: <描述>`；**只本地提交，不配置 remote、禁止 push**。

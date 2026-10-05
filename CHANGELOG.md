@@ -1,3 +1,15 @@
+## v0.5.2.101 (CN-FORK)
+
+### 🎨 Design & UI Improvements
+* **描边/幽灵/图标/框内复制四类按钮整套转次要紫**（用户：「所有的 btn 都要有颜色，但别用蓝色」）：新增一档令牌 `--color-secondary` / `-tint` / `-line`（深档 `#a371f7`，浅档 `#8250df`——浅底上必须压深一档才够对比），`.btn-outline`、`.btn-ghost`、`.icon-btn`、`.field-btn` 与两处 `.is-copied` 全部改读它。蓝只留给「这一页唯一的主操作（`.btn-primary`）+ 当前选中（`.sel-chip`）」；紫是冷色同族、与蓝一眼分得开，又不占用绿=成功、金=注意、红=危险这三档已有名有姓的语义色。仍然纯色无渐变，组件类名一行未动。
+* **游戏磁贴相对 `.100` 再放大四分之一**：`.tile-grid` 的列宽下限 `--tile-w` PC/手机 10.5rem(168px) → 13.125rem(210px)，电视端 15rem(240px) → 18.75rem(300px)。1920 正文列实测回到 4 列 ≈362px，仍是自适应（宽屏多放、窄屏少放），只是每块变大。
+* **PKG Manager 开关卡片从设置页搬到「常用配置」页最下面**（用户指令）：`PkgManagerCard` 的挂载点由 `SettingsView` 移到 `CommonEntriesView` 的温控板块之后，成为本页第四个板块；卡片自身无改动，搬过去后自然吃到新的紫档按钮。设置页顺带去掉随之不再引用的 `Package` 图标导入。
+
+### 🐛 Bug Fixes & Feature Changes
+* **「修改用户名称」深挖到第三、四层，并把结果做成可读证据**（用户：`.100` 之后主界面用户按钮与切换用户界面仍是旧名）：`.100` 补的 UserService 那层实测回读是 "both verified"，说明那两处 UI 并不拿它当显示源，判据取错了。现在改名按四层尽力而为，每层的结论原样拼进返回消息（Toast 直接看得到）：① SysReg 槽（硬条件，失败即整笔否决）② `sceUserServiceSetUserName` ③ `/system_data/priv/cache/profile/0x<UID>/online.json` 的 `firstName`（换头像写回的就是这个目录且能生效，壳层确实读它）④ `/user/home/<目录>/username.dat`（activity 类工具给用户打标签读的是它）。③ 只认「全文唯一、无转义的普通字符串值」，④ 只在内容去掉行尾 `\r\n\0` 后**正好等于旧名**时才改写——格式对不上就原样不动、只报一句话，不做没有把握的覆盖；两处都写前登记备份（且只在未登记过时登记，避免把新名当原值）、写后回读比对。
+* **`/system_data/priv/home/user_list.dat` 只当只读探针**：实测 72 字节、A/B 双份，结构没有文档，写它等于拿全体账号名单去赌。因此一个字节都不动，只在消息里报「旧名/新名的字节在不在里面、住在第几偏移」，供实机判死显示源。`npsignin_result_t.message` 320 → 768，`accounts.c` 的 `emsg` 384 → 896、响应缓冲 `cap` 2048 → 4096（否则会截成半句话甚至非法 JSON）。
+
+
 ## v0.5.2.100 (CN-FORK)
 
 ### 🎨 Design & UI Improvements

@@ -116,6 +116,13 @@
   --color-action-line: rgba(37, 99, 235, 0.45);
   --color-ps-blue: #58a6ff;
   --color-ps-blue-glow: rgba(37, 99, 235, 0.4);
+  /* [CN-FORK] v0.5.2.101 次要按钮档（用户：「所有的 btn 都要有颜色，但别用蓝色」）。
+   * 主按钮与选中态继续是动作蓝，蓝只留给「这一页唯一的主操作 + 当前选中」；
+   * 描边/幽灵/图标/框内复制这几类按钮改用紫：冷色同族、与蓝一眼分得开，
+   * 又不占用绿=成功、金=注意、红=危险这三档已经有名有姓的语义色。 */
+  --color-secondary: #a371f7;
+  --color-secondary-tint: rgba(163, 113, 247, 0.14);
+  --color-secondary-line: rgba(163, 113, 247, 0.45);
 
   /* ── 文字阶：主 / 次要 / 辅助 / 占位符 ── */
   --color-ps-text: #e6edf3;
@@ -153,7 +160,8 @@
   --nav-h: 2.75rem;   /* 44px：菜单项自己一档，不跟着 --ctl-h 降（用户明确「菜单除外」） */
   /* [CN-FORK] v0.5.2.100 游戏磁贴列宽下限（用户：磁贴再小三分之一、别固定四列）。
    * 只定「最窄一档」，实际每行放几块由容器宽度决定 —— 宽屏自动多放、窄屏自动少放。 */
-  --tile-w: 10.5rem;  /* 168px：PC/手机档一列下限 */
+  /* [CN-FORK] v0.5.2.101 用户：「相对于现在再放大 4 分之一」→ 10.5rem × 1.25 = 13.125rem(210px) */
+  --tile-w: 13.125rem;  /* 210px：PC/手机档一列下限 */
   /* [CN-FORK] v0.5.2.99 手机底部栏高度：原 5rem(80px) 按用户要求减三分之一 → 53px。
    * 这一档被三处读：栏本身、pkg 页给 iframe 的视口高扣减、正文底部留白，所以立令牌不写死。 */
   --bar-h: 3.3333rem;
@@ -170,7 +178,9 @@ html[data-device="ps5"] {
   --ctl-h: 3.1875rem; /* 51px：同比例降四分之一（原 68px） */
   --nav-h: 4.25rem;   /* 68px：电视端菜单维持原样（这一档此前是 binding 的，侧栏项靠它定高） */
   --row-h: 5.5rem;  /* 88px */
-  --tile-w: 15rem;    /* 240px：电视端磁贴一档（正文列约 1470px 时正好 6 列，比原来固定 4 列的 ≈355px 小三分之一） */
+  /* [CN-FORK] v0.5.2.101 同样 ×1.25：15rem → 18.75rem(300px)。
+   * 正文列约 1470px 时按 300px 下限排到 4 列、每列实际 ≈362px，回到用户认识的「四块一排」大小。 */
+  --tile-w: 18.75rem;    /* 300px：电视端磁贴一档 */
   --switch-w: 5.5rem;
   --switch-h: 2.75rem;
   --knob-d: 2.125rem;
@@ -561,11 +571,13 @@ html[data-device="ps5"] .head-bar {
   border: 1px solid transparent;
   border-radius: 0.5rem;
   background-color: transparent;
-  color: var(--color-ps-text-sub);
+  /* [CN-FORK] v0.5.2.101 图标钮也上色（用户：「所有的 btn 都要有颜色，但别用蓝色」）：
+   * 平时是紫档描边字色，命中时才铺紫 tint。蓝只留给主按钮与选中态。 */
+  color: var(--color-secondary);
   cursor: pointer;
   transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
-.icon-btn:hover:not(:disabled) { background-color: var(--color-inset-hover); color: var(--color-ps-blue); }
+.icon-btn:hover:not(:disabled) { background-color: var(--color-secondary-tint); color: var(--color-secondary); }
 .icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 /* 图标本身保持原来的小尺寸，放大的是可点区域而不是图形 */
 .icon-btn > svg { width: 1.15rem; height: 1.15rem; }
@@ -612,17 +624,19 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
 .btn-primary:hover:not(:disabled) { background-color: var(--color-action-hover); }
 .btn-primary > * { color: var(--color-sel-fg); }
 
-/* 描边：次要操作 */
+/* 描边：次要操作。
+ * [CN-FORK] v0.5.2.101 用户指令「所有的 btn 都要有颜色，但别用蓝色」：原先是 card 底 +
+ * 中性线 + 主文字色（看上去就是「没上色」），现在整档上紫（线、字都是 secondary）。 */
 .btn-outline {
   background-color: var(--color-card);
-  border-color: var(--color-line);
-  color: var(--color-ps-text);
+  border-color: var(--color-secondary-line);
+  color: var(--color-secondary);
 }
-.btn-outline:hover:not(:disabled) { border-color: var(--color-action); color: var(--color-ps-blue); }
+.btn-outline:hover:not(:disabled) { background-color: var(--color-secondary-tint); border-color: var(--color-secondary); }
 
-/* 幽灵：辅助/跳转，悬停才浮出底色 */
-.btn-ghost { background-color: transparent; color: var(--color-ps-text-sub); }
-.btn-ghost:hover:not(:disabled) { background-color: var(--color-inset); color: var(--color-ps-text); }
+/* 幽灵：辅助/跳转，悬停才浮出底色。同上，字色直接给紫。 */
+.btn-ghost { background-color: transparent; color: var(--color-secondary); }
+.btn-ghost:hover:not(:disabled) { background-color: var(--color-secondary-tint); color: var(--color-secondary); }
 
 /* 危险：描边形态的语义配色（停止/删除类），与动作蓝明显区隔；实心红留给确认弹窗内使用 */
 .btn-danger {
@@ -653,7 +667,8 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
  * .field-ro    只读档：Base64 / 十进制两格是换算结果，点不动也改不了，用虚线边 + 辅助文字色
  *              与旁边实线可编辑框分开；一档都不新增，仍读 --color-line / --color-inset。
  * .field-btn-pad / .field-btn  把复制钮嵌进框内右端（原来钮在框外，三个格子看不出谁是谁的），
- *              点击后 .is-copied 用动作色实心一档，让「已经复制到了」当场看得见。 */
+ *              点击后 .is-copied 实心一档，让「已经复制到了」当场看得见。
+ *              [CN-FORK] v0.5.2.101 这几档的字色/底色从动作蓝换成次要紫（用户：btn 别用蓝色）。 */
 .field-ro { border-style: dashed; color: var(--color-ps-text-sub); }
 /* [CN-FORK] v0.5.2.100 可编辑档：用户要求「可编辑的两个文本框字体颜色做个区分」。
  * 只读那两格已经是虚线边 + 辅助字色，可编辑这档再往「动作色文字」靠一档（深档亮蓝 #58A6FF、
@@ -673,13 +688,13 @@ html[data-device="ps5"] .icon-btn > svg { width: 1.75rem; height: 1.75rem; }
   border: 0;
   border-radius: 0.4rem;
   background-color: transparent;
-  color: var(--color-ps-text-sub);
+  color: var(--color-secondary);
   cursor: pointer;
 }
-.field-btn:hover:not(:disabled) { color: var(--color-action); background-color: var(--color-action-tint); }
-.field-btn.is-copied { color: var(--color-action); background-color: var(--color-action-tint); }
+.field-btn:hover:not(:disabled) { color: var(--color-secondary); background-color: var(--color-secondary-tint); }
+.field-btn.is-copied { color: var(--color-secondary); background-color: var(--color-secondary-tint); }
 /* PIN 后面那颗用的是通用 .icon-btn，同样给它一个复制成功的实心档 */
-.icon-btn.is-copied { color: var(--color-action); background-color: var(--color-action-tint); }
+.icon-btn.is-copied { color: var(--color-secondary); background-color: var(--color-secondary-tint); }
 
 /* ============================================================================
  * [CN-FORK] v0.5.2.87 「一档一色」收口层

@@ -17,7 +17,9 @@
 
 typedef struct {
   int      ok;
-  char     message[320];
+  /* [CN-FORK] v0.5.2.101 改名要逐层如实回报（注册表 / UserService / profile 缓存 /
+   * username.dat），320 字节装不下这一整条诊断串，会截成半句话。 */
+  char     message[768];
   uint32_t user_id;
   char     user_name[24];
   int      slot;         /* activation slot 1..16, or 0 if none */
@@ -42,7 +44,12 @@ int npsignin_signin(uint32_t uid, const char *name, npsignin_result_t *out);
 int npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out);
 
 /* 把某个账号在其 SysReg 槽里的 user_name 改成 new_name。写前记原值、写后回读
- * 比对、与别的槽查重，任一不满足都拒绝。成功后 out->user_name 是新名字。 */
+ * 比对、与别的槽查重，任一不满足都拒绝。成功后 out->user_name 是新名字。
+ *
+ * [CN-FORK] v0.5.2.101 显示源不止注册表一层，所以这里逐层尽力而为：① SysReg 槽
+ * （硬条件，失败即整笔否决）② UserService ③ profile 缓存 online.json 的 firstName
+ * ④ /user/home/<uid>/username.dat。后三层只在格式对得上时才动，写没写成都作为
+ * 一段话拼进 message，供实机判定「主界面/切换用户列表到底读哪一层」。 */
 int npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
                     npsignin_result_t *out);
 

@@ -299,10 +299,12 @@ accounts_action(const char *action, uint32_t user_id, uint64_t custom_id,
   char obj[1024];
   account_obj(obj, sizeof(obj), user_id, name);
 
-  char emsg[384];
+  /* [CN-FORK] v0.5.2.101 改名 message 加长到 640（逐层回报），这里必须跟着放大：
+   * emsg 小了会截掉后半句，cap 小了 snprintf 直接吐出半条 JSON。 */
+  char emsg[896];
   esc_json(emsg, sizeof(emsg), message);
 
-  size_t cap = 2048;
+  size_t cap = 4096;
   char *buf = malloc(cap);
   if(!buf) return NULL;
   snprintf(buf, cap,

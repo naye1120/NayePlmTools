@@ -8,6 +8,7 @@ import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
 import AccountToolsSection from './AccountToolsSection' /* [CN-FORK] v0.5.2.99 账号/远程游玩配对板块（移植自 PS5 Account Tools） */
+import PkgManagerCard from './PkgManagerCard' /* [CN-FORK] v0.5.2.101 PKG Manager 开关：按用户指令从设置页搬到本页最下面 */
 
 /* [CN-FORK] 「常用入口」页：手动维护的快捷访问清单（IP:port 类服务导航）。
  * 数据存 payload 侧 /data/nayeplmtools/quicklinks.json（非浏览器 localStorage），
@@ -393,6 +394,10 @@ export default function CommonEntriesView({ showConfirm, addToast }) {
 
       {/* [CN-FORK] 板块三 温控管理：读 /thermal_stats 展示 CPU/GPU/SSD 温度 + 风扇 */}
       <ThermalSection />
+
+      {/* [CN-FORK] v0.5.2.101 板块四 PKG Manager 开关：从设置页搬来，放在本页最下面。
+          卡片自己就是一个板块（含板块头），所以外层不再套 Section，避免卡中卡。 */}
+      <PkgManagerCard />
       </div>
     </div>
   )

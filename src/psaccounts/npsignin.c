@@ -8,9 +8,11 @@
  * apply on PS5. Operations target an explicit user id + name.
  */
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -540,6 +542,253 @@ name_is_sane(const char *s) {
   return 1;
 }
 
+/* ------------------------------------------------------------------ *
+ *  改名的第三、四层：壳层显示名的另外两个候选来源                      *
+ *
+ *  .100 补的第二层（UserService）实机回读是 "both verified"，可主界面用户按钮
+ *  和「切换用户」列表仍是旧名 —— 那两处 UI 并不拿这份缓存当显示源。剩下的候选：
+ *    ③ /system_data/priv/cache/profile/0x<UID大写>/online.json 的 firstName
+ *       （换头像写回的就是这个目录、而且能生效，说明壳层确实读它）；
+ *    ④ /user/home/<uid目录>/username.dat（activity 类工具给用户打标签读的是它）。
+ *  两层的把握都不是 100%，所以各自把「读到什么、写没写、回读成不成」如实拼进
+ *  message，让用户实测一轮就能判死真正的显示源。任何一层的格式对不上都只是
+ *  原样不动 + 报一句话，不做没有把握的覆盖。
+ *
+ *  最后一个候选 /system_data/priv/home/user_list.dat（实测 72 字节二进制、A/B 双份）
+ *  只当**只读探针**用：结构没有文档，写它等于拿全体账号名单去赌，所以只报
+ *  「旧名/新名在不在里面、住在第几字节」，一个字节都不动。
+ * ------------------------------------------------------------------ */
+
+#define SHELL_NAME_MAX    64    /* 候选文件里名字的读出上限 */
+#define PROFILE_JSON_MAX  65536 /* online.json 的大小上限，超过就不当它是 JSON */
+#define USERNAME_DAT_MAX   4096
+
+static char *
+read_small_file(const char *path, long *len_out, long max_size) {
+  struct stat sb;
+  FILE *f;
+  char *buf;
+  size_t n;
+
+  *len_out = 0;
+  if(stat(path, &sb) != 0 || sb.st_size <= 0 || sb.st_size > max_size) return NULL;
+  buf = malloc((size_t)sb.st_size + 1);
+  if(!buf) return NULL;
+  f = fopen(path, "rb");
+  if(!f) { free(buf); return NULL; }
+  n = fread(buf, 1, (size_t)sb.st_size, f);
+  fclose(f);
+  buf[n] = 0;
+  *len_out = (long)n;
+  return buf;
+}
+
+/* 在 online.json 的原始字节里定位 "firstName" 的值。三个硬性条件，任一不满足
+ * 返回 0（宁可不写）：全文只出现一次这个键、值是非空字符串、值内不含反斜杠。
+ * 成功时 *vs/*ve 框住值本身（不含两侧引号）。 */
+static int
+json_first_name_span(const char *raw, const char **vs, const char **ve) {
+  const char *p, *q;
+
+  *vs = *ve = NULL;
+  p = strstr(raw, "\"firstName\"");
+  if(!p) return 0;
+  if(strstr(p + 11, "\"firstName\"")) return 0;
+  q = p + 11;
+  while(*q == ' ' || *q == '\t') q++;
+  if(*q != ':') return 0;
+  q++;
+  while(*q == ' ' || *q == '\t') q++;
+  if(*q != '"') return 0;
+  q++;
+  *vs = q;
+  while(*q && *q != '"') {
+    if(*q == '\\') return 0;
+    q++;
+  }
+  if(*q != '"' || q == *vs) return 0;
+  *ve = q;
+  return 1;
+}
+
+static void
+rename_profile_cache(uint32_t uid, const char *new_name, char *note, size_t n) {
+  char path[160];
+  char old[SHELL_NAME_MAX];
+  char *raw, *body;
+  const char *vs, *ve;
+  long len, vlen, nlen, blen, cplen;
+
+  snprintf(path, sizeof(path),
+           "/system_data/priv/cache/profile/0x%08X/online.json", uid);
+  raw = read_small_file(path, &len, PROFILE_JSON_MAX);
+  if(!raw) {
+    snprintf(note, n, "profile cache: no readable online.json for 0x%08X", uid);
+    return;
+  }
+  if(!json_first_name_span(raw, &vs, &ve)) {
+    snprintf(note, n, "profile cache: online.json has no plain \"firstName\" "
+                      "value — left alone");
+    free(raw);
+    return;
+  }
+
+  vlen = ve - vs;
+  nlen = (long)strlen(new_name);
+  cplen = (vlen < (long)sizeof(old) - 1) ? vlen : (long)sizeof(old) - 1;
+  memcpy(old, vs, (size_t)cplen);
+  old[cplen] = 0;
+
+  if(vlen == nlen && !memcmp(vs, new_name, (size_t)nlen)) {
+    snprintf(note, n, "profile cache: already \"%s\"", new_name);
+    free(raw);
+    return;
+  }
+
+  blen = len + nlen - vlen;
+  body = malloc((size_t)blen + 1);
+  if(!body) {
+    snprintf(note, n, "profile cache: out of memory");
+    free(raw);
+    return;
+  }
+  memcpy(body, raw, (size_t)(vs - raw));
+  memcpy(body + (vs - raw), new_name, (size_t)nlen);
+  memcpy(body + (vs - raw) + nlen, ve, (size_t)(len - vlen));
+  free(raw);
+
+  /* 只在「这条路径还没进过备份日志」时登记：safety_backup_file() 每次调用都会
+   * 用当前内容覆盖已存的 blob，改过之后再登记就会把新名当成原值。 */
+  if(safety_file_was_absent(path) < 0 && safety_backup_file(path) != 0) {
+    snprintf(note, n, "profile cache: backup refused — left alone");
+    free(body);
+    return;
+  }
+  if(write_file(path, (unsigned char *)body, (size_t)blen) != 0) {
+    snprintf(note, n, "profile cache \"%s\" -> \"%s\": write refused",
+             old, new_name);
+    free(body);
+    return;
+  }
+  free(body);
+
+  raw = read_small_file(path, &len, PROFILE_JSON_MAX);
+  if(raw && json_first_name_span(raw, &vs, &ve) &&
+     ve - vs == nlen && !memcmp(vs, new_name, (size_t)nlen))
+    snprintf(note, n, "profile cache \"%s\" -> \"%s\" verified", old, new_name);
+  else
+    snprintf(note, n, "profile cache: wrote \"%s\" but readback disagrees",
+             new_name);
+  free(raw);
+}
+
+/* /user/home/<目录>/username.dat 按纯文本名字读（对齐 activitydb 的读法）。
+ * 等值闸门：内容去掉尾部 \r\n\0 之后必须正好等于旧名才改写，其余一律不动 ——
+ * 这个文件没有权威格式文档，猜不得。行尾字节原样保留。 */
+static void
+rename_username_dat(const char *old_name, const char *new_name,
+                    char *note, size_t n) {
+  DIR *d;
+  struct dirent *de;
+  long olen = (long)strlen(old_name);
+  long nlen = (long)strlen(new_name);
+  int scanned = 0, hit = 0;
+  char where[48] = "";
+
+  d = opendir("/user/home");
+  if(!d) {
+    snprintf(note, n, "user home: /user/home unreadable");
+    return;
+  }
+
+  while((de = readdir(d)) != NULL) {
+    char path[256];
+    char *raw, *body;
+    long len, name_len, tail;
+
+    if(de->d_name[0] == '.') continue;
+    snprintf(path, sizeof(path), "/user/home/%s/username.dat", de->d_name);
+    raw = read_small_file(path, &len, USERNAME_DAT_MAX);
+    if(!raw) continue;
+    scanned++;
+
+    name_len = len;
+    while(name_len > 0 && (raw[name_len-1] == '\n' || raw[name_len-1] == '\r' ||
+                           raw[name_len-1] == 0)) name_len--;
+    if(name_len != olen || (olen > 0 && memcmp(raw, old_name, (size_t)olen) != 0)) {
+      free(raw);
+      continue;
+    }
+
+    tail = len - name_len;
+    body = malloc((size_t)(nlen + tail + 1));
+    if(!body) { free(raw); hit = -1; break; }
+    memcpy(body, new_name, (size_t)nlen);
+    memcpy(body + nlen, raw + name_len, (size_t)tail);
+    snprintf(where, sizeof(where), "%s", de->d_name);
+    free(raw);
+
+    if(safety_file_was_absent(path) < 0 && safety_backup_file(path) != 0) {
+      snprintf(note, n, "user home: %s/username.dat found but backup refused "
+                        "— left alone", where);
+      hit = -1;
+    } else if(write_file(path, (unsigned char *)body,
+                         (size_t)(nlen + tail)) == 0) {
+      hit = 1;
+    } else {
+      snprintf(note, n, "user home: %s/username.dat write refused", where);
+      hit = -1;
+    }
+    free(body);
+    break;   /* 名字全局唯一，改到一份就够 */
+  }
+  closedir(d);
+
+  if(hit > 0)
+    snprintf(note, n, "user home: %s/username.dat -> \"%s\"", where, new_name);
+  else if(hit == 0)
+    snprintf(note, n, "user home: scanned %d dir(s), none holds \"%s\"",
+             scanned, old_name);
+}
+
+static long
+mem_find(const char *hay, long hlen, const char *needle) {
+  long nlen = (long)strlen(needle), i;
+
+  if(nlen <= 0 || hlen < nlen) return -1;
+  for(i = 0; i + nlen <= hlen; i++)
+    if(!memcmp(hay + i, needle, (size_t)nlen)) return i;
+  return -1;
+}
+
+/* 只读探针。user_list.dat 是壳层用户名单的最后一个候选，实测只有 72 字节、
+ * 结构没有文档，写它等于拿全体账号名单去赌 —— 所以这一层只查「旧名/新名的字节
+ * 有没有出现在里面、在第几个字节」，把结论当证据报出去，一个字节都不动。 */
+static void
+probe_user_list_dat(const char *old_name, const char *new_name,
+                    char *note, size_t n) {
+  const char *path = "/system_data/priv/home/user_list.dat";
+  char oa[32], na[32];
+  char *raw;
+  long len, oidx, nidx;
+
+  raw = read_small_file(path, &len, PROFILE_JSON_MAX);
+  if(!raw) {
+    snprintf(note, n, "user_list.dat: absent or unreadable");
+    return;
+  }
+  oidx = mem_find(raw, len, old_name);
+  nidx = mem_find(raw, len, new_name);
+  free(raw);
+
+  if(oidx >= 0) snprintf(oa, sizeof(oa), "at 0x%lx", (unsigned long)oidx);
+  else          snprintf(oa, sizeof(oa), "not found");
+  if(nidx >= 0) snprintf(na, sizeof(na), "at 0x%lx", (unsigned long)nidx);
+  else          snprintf(na, sizeof(na), "not found");
+  snprintf(note, n, "user_list.dat %ld B: old %s / new %s (read-only probe)",
+           len, oa, na);
+}
+
 int
 npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
                 npsignin_result_t *out) {
@@ -608,6 +857,8 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
   {
     char buf[RENAME_NAME_BYTES];
     char shell[24] = {0};
+    char base[256];
+    char l3[128] = "", l4[256] = "", l5[160] = "";
     int set_rc, get_rc;
 
     memset(buf, 0, sizeof(buf));
@@ -616,23 +867,32 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
     get_rc = sceUserServiceGetUserName((int32_t)uid, shell, sizeof(shell));
 
     if(set_rc == 0 && get_rc == 0 && !strcmp(shell, new_name))
-      snprintf(out->message, sizeof(out->message),
+      snprintf(base, sizeof(base),
                "slot %d renamed %s -> %s (registry + UserService both verified)",
                out->slot, old_name, new_name);
     else if(set_rc != 0)
-      snprintf(out->message, sizeof(out->message),
+      snprintf(base, sizeof(base),
                "slot %d renamed %s -> %s in registry (verified), but UserService "
                "Set refused (0x%x) — the shell user list may keep the old name; "
                "original value is in the backup log",
                out->slot, old_name, new_name, (unsigned)set_rc);
     else
-      snprintf(out->message, sizeof(out->message),
+      snprintf(base, sizeof(base),
                "slot %d renamed %s -> %s in registry (verified); UserService "
                "reads \"%s\" (get 0x%x) — shell layer NOT confirmed, use Restore "
                "if it looks wrong",
                out->slot, old_name, new_name,
                (get_rc == 0 && shell[0]) ? shell : "(unreadable)",
                (unsigned)get_rc);
+
+    /* 第三、四层：写不写得动都只报一句话，绝不因此判失败。这两条加上末尾那条
+     * 只读探针，就是本轮的取证手段 ——「主界面和切换用户列表到底读哪一份」，
+     * 由它们的结果来回答。 */
+    rename_profile_cache(uid, new_name, l3, sizeof(l3));
+    rename_username_dat(old_name, new_name, l4, sizeof(l4));
+    probe_user_list_dat(old_name, new_name, l5, sizeof(l5));
+    snprintf(out->message, sizeof(out->message),
+             "%s | %s | %s | %s", base, l3, l4, l5);
   }
 
   out->ok = 1;
