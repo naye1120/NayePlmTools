@@ -12,11 +12,16 @@
 * **做法**：标题从原子类（`text-sm font-semibold`）收成**骨架层语义类 `.panel-title`**（定义在 `index.css` 的 `.panel-head` 之后）。以后调标题只改这一处，也不会再冒出「某个视图自己写一套」的副本。**浅色主题不用另翻**：`.panel-title` 不写 `color`，浅档仍由 `light-theme.css` 把 `text-white` 反着映射成近黑 `#1f2328`。
 * **层级未被压平**：板块内嵌卡的小标题（账号板块的「远程游玩配对 PIN」、温控的「风扇温控」）仍是 `text-[14px]`，落在板块标题（16.8px）下一档；`.panel-head` 另有图标 + 底边线做结构区分。
 
+### 📦 Release
+* **正式出包（短哈希 `0e9afb2`）**：`.103`–`.106` 四轮 UI 改动合成一个提交后一次出包。
+  * `NayePlmTools_0.5.2.106-me.elf`（NAYE00001 媒体栏）· `NayePlmTools_0.5.2.106-ga.elf`（NAYE00004 游戏栏），两包各 9,875,208 字节。
+  * 二进制核对：内嵌标题 `NayePlmTools v0.5.2.106 by naye (0e9afb2, ...)`（非 `DEV`）、`PLDMGR_VER:0.5.2.106`、titleId 分别 NAYE00001/NAYE00004、新前端标记 `pin-bar-fill`/`panel-title`/`#f43e06` 均在包内。
+
 ### ✅ Verification
 * `npm run build` 通过（`dist/index.html` 818.9 kB / gzip 226.4 kB）。
 * `npm run lint` 38 项（32 error / 6 warning），与改动前基线**完全一致**。
 * 深/浅两套主题下逐块实拍复核（「改动前」用注入样式还原旧值，非 git stash）。
-* **未实机（PS5）验收，未出包。**
+* **未实机（PS5）验收。**
 
 
 ## v0.5.2.105 (CN-FORK)
