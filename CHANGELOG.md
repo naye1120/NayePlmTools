@@ -6,7 +6,7 @@
 ### 🎨 Design & UI Improvements
 * **按钮全部转实心、按功能分色**（用户：「图三那种改法不对，不同场景不同功能要不同颜色的实心图标」；选定样张 A + I2）：作废 `.101` 的描边紫档（删 `--color-secondary*` 三枚令牌及 light-theme 对应行），新增 `--fill-{blue,purple,violet,teal,green,gold,red}` 各带 `-hover` 与 `-icon` 一档 + `--fill-fg`，深浅两主题同值（实心底自己保证对比，不再需要翻档）。功能映射：蓝＝本页唯一主操作（与 `.sel-chip` 同值，选中档不动）· 紫＝启动/重启/修改/取消（`.btn-outline`）· 深紫＝幽灵（`.btn-ghost`）· 红＝不可逆（`.btn-danger`）· 新增 `.btn-ok` 绿＝已启用/安装/更新、`.btn-info` 青＝刷新/重试/同步/复制、`.btn-warn` 金＝上传/写入/覆盖。六档底色配白字实测 ≥4.2:1，一律纯色无渐变，组件类名一行未动。
 * **I2 图形档**：实心按钮里的图标取同色相提亮一档（`.btn-* > svg { color: var(--fill-*-icon) }`），白字配浅色图形一眼分得开。这几条必须带 `!important`：文件顶部 LEGACY 把 `.text-ps-blue` / `.text-white` 写成 `!important` 字面量给老内核兜底，而组件里的图标普遍挂着这两个类。
-* **调用点按功能归位**：温控「已启用」从蓝选中芯片换成绿实心（`.sel-chip` 表达的是「当前选中」而不是「状态」，用错了档）；刷新/重试/同步五处（温控、PKG 卡片、PKG 内嵌帧、存储中心「重试连接」、进程列表 Retry）→ 青，账号「同步」→ 青；PKG「上传更新」与 USB 页 Copy/Move to Internal → 金；进程列表 Retry 原先错挂红档（红＝不可逆），一并纠正。
+* **调用点按功能归位**：温控「已启用」从蓝选中芯片换成绿实心（`.sel-chip` 表达的是「当前选中」而不是「状态」，用错了档）；刷新/重试/同步（温控、PKG 卡片、PKG 内嵌帧、存储中心「重试连接」、进程列表 Retry、账号「同步」）→ 青；PKG「上传更新」与 USB 页 Copy/Overwrite & Copy、存储中心 Move to Internal → 金；进程列表 Retry 原先错挂红档（红＝不可逆），一并纠正。
 * **页头不再粘顶**（用户：「所有 head-bar 要跟随页面一起滚动」）：`.head-bar` 去掉 `.94` 加的 `position: sticky / top / z-index` 三行，退回普通块；出血负边距、rail 实色底与那根发丝分界线都保留。
 
 
