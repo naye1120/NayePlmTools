@@ -205,9 +205,19 @@ psaccounts_handle(struct MHD_Connection *conn, const char *url,
     if(!strcmp("/api/avatar/upload", url)) {
       ret = avatar_upload_request(conn, upload_data, upload_data_size,
                                   &st->avatar_upload_state);
-      if(*upload_data_size == 0) {
-        avatar_upload_free(st->avatar_upload_state);
-        st->avatar_upload_state = NULL;
+      /* [CN-FORK] v0.5.2.109 判据必须是「avatar_upload_request 把 *state 置回了 NULL」，
+       * 不能再用 `*upload_data_size == 0` —— 这是实机「点头像 → 一直显示上传中、
+       * 不报错也不结束」的真根因。
+       *
+       * MHD 的调用序列是：① size=0 建状态 ② 后续若干帧带 body ③ 最后一帧 size=0 收尾。
+       * 而 avatar_upload_request 只在**第 ③ 帧**（或中途出错答完）才把 *state 置 NULL；
+       * 第 ① 帧虽然 size 也是 0，但它只是把文件打开、*state 仍指向新建的流式状态。
+       * 旧代码只看 size==0 就 free 掉流式状态 + free(st) + *con_cls=NULL —— 于是第 ① 帧
+       * 就把连接状态扔了，MHD 后续重新调用时又拿到 *con_cls==NULL、重新分配、
+       * 又进这个分支、又不消费 body……请求永远走不到收尾那帧，浏览器就一直等。
+       * 源工程（D:\offact-new/accounts/src/websrv.c）根本没有这个 free 块，
+       * 流式状态一律交给 request-completed 回调回收 —— 现在与它对齐。 */
+      if(st->avatar_upload_state == NULL) {
         free(st);
         *con_cls = NULL;
       }

@@ -469,8 +469,14 @@ function App() {
       "min-h-screen min-h-[100dvh] ps5-bg text-zinc-100 font-ps5 flex",
       isPS5 ? "flex-row overflow-hidden" : "flex-col md:flex-row md:overflow-hidden"
     )}>
-      {/* Toast Container */}
-      <div className="fixed top-0 right-0 p-8 z-[2000] space-y-4 pointer-events-none">
+      {/* Toast Container
+          [CN-FORK] v0.5.2.109 用户口径：「提示标签…太大太占地方了，能不能放到中下边」。
+          从右上角挪到**底部居中**；手机端要抬到底部导航栏之上（--bar-h + 安全区），
+          电视端没有底部栏（isPS5 时那根 bar 是 hidden），留一点边距就行。 */}
+      <div className={cn(
+        "fixed inset-x-0 bottom-0 z-[2000] flex flex-col items-center gap-2 px-4 pointer-events-none",
+        isPS5 ? "pb-6" : "pb-[calc(var(--bar-h)+env(safe-area-inset-bottom)+1rem)] md:pb-6"
+      )}>
         {toasts.map(t => (
           <Toast key={t.id} message={t.message} type={t.type} onClose={() => removeToast(t.id)} />
         ))}

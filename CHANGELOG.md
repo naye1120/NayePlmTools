@@ -1,3 +1,47 @@
+## v0.5.2.109 (CN-FORK)
+
+> 用户口径：「账号管理的提示标签 改的好看一点，太大带占地方了，能不能放到中下边，另外头像上传功能还是不生效。」追问后确认：提示标签 = **点完激活/登入弹出来的那条提示**（Toast），位置要「挪到卡片底部、居中」；头像的现象是**点上传后一直显示「上传中」，不变、不报错、也不提示**，在**主机上（PS5 浏览器开 :8911）**测的。
+
+### 🐛 Bug Fixes
+
+* **① 头像上传「一直转、不报错、也不结束」—— 真根因在后端 `psaccounts_handle` 的流式状态回收判据上。**
+  * 旧代码用 `*upload_data_size == 0` 当作「上传结束」的信号，然后 `free` 掉流式状态 + `free(st)` + `*con_cls = NULL`。
+  * 但 MHD 的调用序列是：**① size=0 建状态 → ② 若干帧带 body → ③ size=0 收尾**。第 ① 帧的 size 也是 0，可那时 `avatar_upload_request` 只是把文件打开、`*state` 仍指向新建的流式状态，**根本没结束**。于是第 ① 帧就把连接状态扔了 → MHD 重新调用时又拿到 `*con_cls == NULL`、重新分配、又进这个分支、又不消费 body……**请求永远走不到收尾那帧，浏览器就一直等**。这与实机现象逐字吻合。
+  * 修法：判据改成 **`st->avatar_upload_state == NULL`** —— `avatar_upload_request` 只在「收到完整 body 已经答完」或「中途出错已经答完」时才把 `*state` 置回 NULL。这也正是**源工程**（`D:\offact-new/accounts/src/websrv.c`）的做法：它压根没有这个 free 块，流式状态一律交给 `MHD_OPTION_NOTIFY_COMPLETED` 回调回收。现在与它对齐。
+  * **溯源**：`diff` 过原版 `avatar.c` —— **逐字节一致**。所以问题不在移植的转换/编码逻辑，而在并入主 ELF 时新加的这段回收代码。这类「合并两套 MHD 生命周期」的地方，以后一律以源工程的回收路径为准。
+* **② 前端把我们自己的超时误判成「用户取消」，静默吞掉。** `uploadCropped` 的 catch 里旧写法是 `if (err.name === 'AbortError' || ctl.signal.aborted) return` —— 而 `fetchWithTimeout` 30 秒超时触发的**也是 AbortError**，于是超时既没有错误提示、也没有任何交代（`.106` 及更早版本连超时都没有，所以是永久卡住）。现在 `closeCrop()` / 卸载兜底在 `abort()` 前给 controller 打 `userCancelled = true`，catch 里先看这个标记：**用户主动关窗才静默**，超时则明确报「头像上传超时（30 秒没等到主机响应）—— 主机端可能卡在图片转换或写盘，请重试」。三条收场路径现在都有结局：成功 / 后端拒（带原因）/ 超时。
+* **③ 本地 mock 的头像是个死胡同。** `mock-server.js` 原先 `/api/avatar` 写死 404、upload 只数字节不落地 —— 于是本地预览里「上传成功但缩略图永远是首字母占位」，**长得和实机那个故障一模一样**，白白把排查方向带偏。现在上传的字节留在内存、`/api/avatar?id=` 原样吐回来，本地就能验完「选图 → 裁剪 → 上传 → 应用 → 缩略图刷新」整条链。
+
+### 🎨 Design & UI Improvements
+
+* **Toast 挪到底部居中 + 整体缩小**（用户：「太大太占地方了，能不能放到中下边」）。
+  * 位置：容器从 `fixed top-0 right-0 p-8`（右上角）改为 `fixed inset-x-0 bottom-0` + `flex-col items-center`（**底部居中**）。手机端抬到底部导航栏之上（`calc(var(--bar-h) + env(safe-area-inset-bottom) + 1rem)`）；电视端底部栏是 `hidden`，只留 1.5rem 边距。
+  * 体量：内边距 16→10px、圆角 16→12px、图标 24→16px、正文字号压到 **13px**、阴影 `shadow-2xl`→`shadow-lg`；去掉 `font-bold uppercase`（全大写只影响英文，中文夹在中间很吵）。
+  * 实测：高 **56px+ → 36px**，水平中心与视口中心偏差 **0.0px**，距底 24px。语义与配色档位（成功 emerald / 错误 red）与驻留时长（4s / 9s）一行未动。
+
+### ✅ Verification
+
+* **新增 `avatar109.mjs`：19 / 19 全绿**（这是本轮两个改动的判据，全部是可证伪的数值断言）：
+  * **① Toast 几何**：水平中心偏差 ≤ 4px、距底 ≤ 60px、在上半屏之外（钉死「旧版是右上角」）、高 ≤ 44px、字号 ≤ 14px、`text-transform` 非 uppercase。
+  * **② 成功路径**：选图 → 弹窗出现 → 点「确认使用」→ 弹「头像已更新（写入 11 个文件 · …）」且是成功档；缩略图 `src` 带**新的** `_=` 时间戳、且 `naturalWidth > 0`（真的解码出来了）。
+  * **③ 后端拒绝**：stub 返回 `{ok:false,error:'decode failed: unknown image type'}` → 必须弹**红档**且**带主机给的原因**。
+  * **④ 主机不答（本轮的硬判据）**：stub 让上传请求**永不 fulfill** → 先断言按钮确实停在「上传中…」，再断言 **30 秒内必须弹「头像上传超时…」**、且是红档、且 busy 归零。**旧代码在这一格是静默 return。**
+* **既有回归未受影响**：`cropfix.mjs` **75 / 75**、`acct107.mjs` **23 / 23**。
+* **mock 闭环实测**：`curl` 三连 —— 未上传 `GET /api/avatar?id=` → **404**；`POST /api/avatar/upload`（2008 字节）→ `{"ok":true,...}`；再 `GET` → **HTTP 200 / image/png / 2008 字节**；无 `id` 的 `GET /api/avatar` → info JSON。
+* `npx eslint`：`Toast.jsx` / `AccountToolsSection.jsx` 干净；`App.jsx` 仍是 11 条存量问题（与 HEAD 逐条一致，本轮未新增）。
+
+### 📦 Release
+
+* **正式出包**：`NayePlmTools_0.5.2.109-me.elf`（NAYE00001 媒体栏）· `NayePlmTools_0.5.2.109-ga.elf`（NAYE00004 游戏栏）。
+* `.108` 的包（`12e2ba5`）**已过期** —— 它带的是没修上传的那个后端。
+
+### 📌 未决（待用户定夺）
+
+* 实心按钮对比度方案 A（照 `#F43E06`，3.79:1）/ B（压深 `#D93A00`，4.61:1）/ C（配深色字 `#1A0A02`，5.09:1）。
+* 游戏磁贴徽标收敛是否回退。
+* PIN 卡的两个小毛刺（重复 Toast / 双定时器）是否顺手清掉。
+* `SettingsView.jsx` 内置 `CHANGELOG` 数组停在 `v0.5.2.67`，`.68`–`.109` 未补。
+
 ## v0.5.2.108 (CN-FORK)
 
 > 修正 `.107` 的账号按钮语义 —— 用户口径（定稿）：「逻辑做错了，登出 就是只登出，反激活 即 登出并反激活，但是按钮文字不要改。」**本轮只改前端 + 语言包 + 文档，后端契约沿用 `.107`。**

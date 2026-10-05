@@ -793,6 +793,11 @@ export default function AccountToolsSection({ addToast }) {
       objectUrlRef.current = ''
     }
     if (uploadAbort.current) {
+      /* [CN-FORK] v0.5.2.109 打标「是用户主动关的窗」，再 abort。
+       * 不打标的话，uploadCropped 的 catch 分不清「用户取消」和「我们自己那 30 秒超时」
+       * —— 两者都是 AbortError，旧代码一律静默 return，于是超时在界面上表现为
+       * 「一直显示上传中、不报错也不结束」（实机就是这么被误判成卡死的）。 */
+      uploadAbort.current.userCancelled = true
       uploadAbort.current.abort()
       uploadAbort.current = null
     }
@@ -870,8 +875,14 @@ export default function AccountToolsSection({ addToast }) {
       loadAvatar(acc.userId)
       notify(t('acctools.avatar_done', '头像已更新（写入 {{n}} 个文件 · {{who}}）', { n: aj.copied, who: aj.user || acc.name }))
     } catch (err) {
-      /* 用户自己关窗 / 点取消导致的 abort 不是错误，静默收场 */
-      if (err && (err.name === 'AbortError' || ctl.signal.aborted)) return
+      /* [CN-FORK] v0.5.2.109 只有「用户自己关窗/点取消」才静默收场。
+       * 我们自己那 30s/20s 超时触发的 abort 也长成 AbortError，必须报出来 ——
+       * 否则界面上就是「一直显示上传中、不报错也不结束」，实机被当成卡死就是这个原因。 */
+      if (ctl.userCancelled) return
+      if (err && err.name === 'AbortError') {
+        notify(t('acctools.upload_timeout', '头像上传超时（30 秒没等到主机响应）—— 主机端可能卡在图片转换或写盘，请重试'), 'error')
+        return
+      }
       notify(t('acctools.upload_fail', '头像上传失败：{{why}}', { why: String((err && err.message) || err) }), 'error')
     } finally {
       if (uploadAbort.current === ctl) uploadAbort.current = null
@@ -898,7 +909,12 @@ export default function AccountToolsSection({ addToast }) {
    * 免得留下悬空的位图引用和永不 resolve 的 fetch。 */
   useEffect(() => () => {
     if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = '' }
-    if (uploadAbort.current) { uploadAbort.current.abort(); uploadAbort.current = null }
+    if (uploadAbort.current) {
+      /* 卸载时同样打标：组件都没了，不该再弹 Toast（见 closeCrop 里的同一处说明） */
+      uploadAbort.current.userCancelled = true
+      uploadAbort.current.abort()
+      uploadAbort.current = null
+    }
   }, [])
 
   const toneCls = { sub: 'text-zinc-400', ok: 'text-green-400', err: 'text-red-400' }

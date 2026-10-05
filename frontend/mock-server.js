@@ -130,7 +130,7 @@ app.get('/getip', (req, res) => {
 });
 
 app.get('/version', (req, res) => {
-  res.send('0.5.2.108'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
+  res.send('0.5.2.109'); // [CN-FORK] 与 pldmgr.h MENU_VERSION 保持一致
 });
 
 /* [CN-FORK] v0.5.1.64 删 /game_icon mock：后端该端点随主页硬件信息（当前游戏探测）一起下线 */
@@ -325,14 +325,28 @@ app.get('/api/remoteplay/pin/status', (req, res) => {
     message: '正在等你在 Chiaki 里填 PIN + Account ID（还剩 ' + remain + ' 秒）' })
 })
 
-app.get('/api/avatar', (req, res) => res.status(404).json({ ok: false, error: 'no avatar for that user' }))
+/* [CN-FORK] v0.5.2.109 头像在 mock 里也走一个真闭环：上传的字节留在内存里，
+ * `/api/avatar?id=` 原样吐回来。原来这里写死 404，于是本地预览里「上传成功但缩略图
+ * 永远是首字母占位」—— 与实机上那个「上传没反应」长得一模一样，白白误导排查方向。
+ * 现在本地就能验完「选图 → 裁剪 → 上传 → 应用 → 缩略图刷新」整条链。 */
+let mockAvatarBuf = null
+app.get('/api/avatar', (req, res) => {
+  if (!req.query.id) return res.json({ inputDir: '/data/ps5-account-tools/avatar/in', workDir: '/data/ps5-account-tools/avatar/work', sizes: [64, 128, 260, 440] })
+  if (!mockAvatarBuf) return res.status(404).json({ ok: false, error: 'no avatar for that user' })
+  res.set('Content-Type', 'image/png')
+  res.set('Cache-Control', 'no-cache')
+  res.send(mockAvatarBuf)
+})
 app.post('/api/avatar/upload', (req, res) => {
-  let n = 0
-  req.on('data', (c) => { n += c.length })
-  req.on('end', () => res.json({
-    ok: true, source: 'mock', size: n, sourceWidth: 260, sourceHeight: 260,
-    mode: req.query.mode || 'crop', sizes: [64, 128, 260, 440], workDir: '/tmp/mock',
-  }))
+  const chunks = []
+  req.on('data', (c) => { chunks.push(c) })
+  req.on('end', () => {
+    mockAvatarBuf = Buffer.concat(chunks)
+    res.json({
+      ok: true, source: 'mock', size: mockAvatarBuf.length, sourceWidth: 440, sourceHeight: 440,
+      mode: req.query.mode || 'crop', sizes: [64, 128, 260, 440], workDir: '/data/ps5-account-tools/avatar/work',
+    })
+  })
 })
 app.get('/api/avatar/apply-current-user', (req, res) => {
   res.json({
