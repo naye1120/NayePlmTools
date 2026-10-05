@@ -115,6 +115,9 @@ offact_activate(int slot, uint64_t id) {
   char name[OFFACT_NAME_MAX];
   if(offact_get_name(slot, name) || !name[0]) return -1;
   if(!id) id = offact_gen_id(name);
+  /* 这一批写入的来源是「离线激活」。登出时按来源筛，就能只退登录态、把这三条留住
+   * —— 见 safety.h 的 SAFETY_ORIGIN_M_SIGNOUT_ONLY。 */
+  safety_set_origin(SAFETY_ORIGIN_ACTIVATE);
   if(offact_set_id(slot, id))      return -1;
   if(offact_set_type(slot, "np"))  return -1;
   if(offact_set_flags(slot, OFFACT_DEFAULT_FLAGS)) return -1;
@@ -124,6 +127,7 @@ offact_activate(int slot, uint64_t id) {
 
 int
 offact_clear(int slot) {
+  safety_set_origin(SAFETY_ORIGIN_ACTIVATE);
   if(offact_set_id(slot, 0))   return -1;
   if(offact_set_flags(slot, 0)) return -1;
   return 0;

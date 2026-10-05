@@ -35,13 +35,19 @@ int npsignin_status(uint32_t uid, const char *name, npsignin_result_t *out);
 int npsignin_signin(uint32_t uid, const char *name, npsignin_result_t *out);
 
 /* 登出：把备份日志里**属于这个 uid** 的注册表记录逐条写回原值，并回灌它自己的
-   auth.dat/config.dat。别的账号名下的记录一律不动。保留离线激活的 account_id。
+   auth.dat/config.dat。别的账号名下的记录一律不动。
+
+   [CN-FORK] v0.5.2.107 加 keep_activation 开关 —— 登出不再必然连带反激活：
+     keep_activation = 1（界面上的「登出」）    只退登录态（来源 SIGNIN + 未标注的老
+       记录），离线激活写的 account_id/type/flags **留着**，下次可直接再登入。
+     keep_activation = 0（界面上的「登出并反激活」）不分来源全退，账号回到未激活。
 
    名下没有任何记录（= 这个登录态是别的工具写的，我们无从回滚）时，改走**基线登出**：
    signin_flag 归零、login_flag 写成实测的「已激活未登录」稳定态 0x1002，两个 NP
    会话文件先抄进备份层再从原位拿掉。写前逐键记原值，所以 Restore 仍能把那份登录
    状态原样放回去。抄不到原值就整笔否决，不做没有退路的删除。 */
-int npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out);
+int npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out,
+                     int keep_activation);
 
 /* 把某个账号在其 SysReg 槽里的 user_name 改成 new_name。写前记原值、写后回读
  * 比对、与别的槽查重，任一不满足都拒绝。成功后 out->user_name 是新名字。

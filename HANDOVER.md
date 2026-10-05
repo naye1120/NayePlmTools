@@ -5,8 +5,8 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-> - 版本：`MENU_VERSION = 0.5.2.106`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
-- 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。`.102` 是**修掉 `.101` 改名取证代码的堆溢出（整 payload 崩）+ 按钮按功能转实心六色（样张 A + I2）+ 页头去粘顶**（正式出包版 `NayePlmTools_0.5.2.102-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `be7fa8f`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 的包已过期。`.103`–`.105` 是**纯前端/文档改动、从未单独出包**（`.103` 收敛上色 + 深空黑 + 舒展留白；`.104` 账号板块按钮状态分色 + 主色换朱橙 `#F43E06`；`.105` 同步按钮补图标 + PIN 进度条重做），`.106` 把这四轮**一次性出包**（正式出包版 `NayePlmTools_0.5.2.106-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `0e9afb2`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.102` 的包已过期。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
+> - 版本：`MENU_VERSION = 0.5.2.107`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+- 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。`.102` 是**修掉 `.101` 改名取证代码的堆溢出（整 payload 崩）+ 按钮按功能转实心六色（样张 A + I2）+ 页头去粘顶**（正式出包版 `NayePlmTools_0.5.2.102-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `be7fa8f`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 的包已过期。`.103`–`.105` 是**纯前端/文档改动、从未单独出包**（`.103` 收敛上色 + 深空黑 + 舒展留白；`.104` 账号板块按钮状态分色 + 主色换朱橙 `#F43E06`；`.105` 同步按钮补图标 + PIN 进度条重做），`.106` 把这四轮**一次性出包**（正式出包版 `NayePlmTools_0.5.2.106-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `0e9afb2`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.102` 的包已过期。`.107` 是**头像上传/裁剪四项缺陷修复**（变形 / 卡死 / 拖拽裁剪 / 拖放选图）+ **账号「登出」不再连带反激活**（备份层加来源维度，登出/登出并反激活拆成两条路）—— 详见 §2.1.1 与 §2.2.1。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
 - 近期定型（.64 → .100）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
   - `.65` 「默认云端仓库」总开关 `DEFAULT_REPO_ENABLED`（现默认关，可彻底停用内置官方源）
@@ -238,12 +238,47 @@
 - `src/psaccounts/`（`.99` 并入）账号工具：注册表 16 槽扫描、离线激活、NP 假登录（auth.dat/config.dat）、头像写回、安全备份台账、`libSceRemoteplay` 配对 PIN（单会话 + 看门狗线程，退出前 `accounts_pin_shutdown()`）。路由全部在 `http_server.c` 的 `/api/*` 分支，**串行化 + con_cls 所有权**两条约定见 §0 的 `.99` 条目。
 - **铁律**：fork 不改 C 后端的路由/配置键/文件路径，保证升级上游时行为一致。（例外：`.99` 新增的 `/api/*` 账号路由，纯增量，不动上游路由。）
 
+#### 2.1.1 账号工具的三个概念（`.107` 定稿，改之前必读）
+
+**离线激活 → 登入 → 登出，是三个独立的状态，不是一件事。**
+
+| 动作 | 写什么 | 来源标记 | 界面按钮 |
+|---|---|---|---|
+| 离线激活 | 注册表 3 键：`account_id` / `type="np"` / `flags` | `SAFETY_ORIGIN_ACTIVATE` | 激活 |
+| 登入 | 22 个注册表键 + `auth.dat` + `config.dat` | `SAFETY_ORIGIN_SIGNIN` | 登入 |
+| 登出 | 按备份日志逐键回写原值（+ 回灌两个 NP 文件） | 按掩码筛 | 登出 / 登出并反激活 |
+
+- **顺序是硬的**：`npsignin_signin()` 开头 `if(slot == 0 || account_id == 0) → "not activated"`。没激活就登不进去。激活 = 发身份证，登入 = 把身份证交给系统认。
+- **`safety` 层按「scope(uid) + origin(来源)」两级筛**。`safety_restore_scope_mask(uid, mask)` 才是唯一入口，`safety_restore_scope()` 是 `mask = M_ALL` 的别名。
+  - `SAFETY_ORIGIN_M_SIGNOUT_ONLY = M_NONE | M_SIGNIN` → **「登出」**：只退登录态，激活留着。这是 `.107` 的行为变更（以前登出 = 全退）。
+  - `SAFETY_ORIGIN_M_ALL` → **「登出并反激活」**：不分来源全退，回到未激活。
+  - **`NONE` 必须被两种还原都覆盖**：它是老日志（本字段出现之前记的）和"调用方没设来源"的取值。宁可多回滚（回滚 = 写回原值，只会更接近原始状态），也绝不能因为格式换代把原值丢掉 —— 那等于永久失去还原能力。`reg.idx` 第 6 字段缺失或越界都降级成 `NONE`。
+- **真实重叠（别踩）**：槽 1 的 `KEY_FLAGS`(125831168) **就是** `REG_KEY_FLAG_2` = `LOGIN_FLAG`，`KEY_ID`/`KEY_TYPE` 同理。所以激活和登入会写同一批键 —— `safety_backup_reg()` 的 `find_rec()` 去重会保留**最早**那份原值，记录的 origin 也就归**最早那次写入**（`ACTIVATE`）。这正是「仅登出」能保住 `account_id` 的原因。
+- **改名（`RENAME`）**单独一类：退掉登录不该把用户改过的名字弹回去，所以「登出」不退它，「完全还原」才退。
+- **已登录时不要单独做「反激活」**：`offact_clear()` 只清 `account_id`/`flags`，signin_flag 还在 → 界面显示"未激活 / 已登录"，再点「登入」会被服务端拒。所以界面上这一格在已登录时换成「登出并反激活」。
+- **回归测试**：`test/safety_origin_test.c`（主机端，打桩 `sceRegMgr*`，39 条断言）+ `acct107.mjs`（界面与接口契约，22 条）。改这块必跑。
+
 ### 2.2 React 前端（`frontend/src/`）
 - `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、ManageSources、CommonEntries、MoveFromUsb、Donate、PkgManagerFrame...）。
 - `i18n.js` 加载 locale（子模块）+ **合并 `locales-overlay/<lang>.json`（后者优先）**；完成度 <70% 的语言不注册。
 - `components/ui/` 共用件：`Section`（板块 = `.panel-card` + 板块头 + body，`headless`/`bodyPad` 供自带头的卡片复用）、`PageHead`（页头 + 粘顶，`back`/`bleed`）、`EmptyState`、`LoadingState`、`Modal`、`Toast`、`Switch`（唯一开关）、`Segmented`（唯一互斥分段）、`NavButton`、`PayloadName`。**新页面一律用这些件，不要再手写板块容器 / 空态 / spinner。**
 - `utils/spatialNav.js`：仅 `isPS5` 挂载的遥控器空间导航。
 - `theme/`：`light-theme.css`（暗→亮类名重映射，零改上游组件）、`cn-typography.css`（中文排版）、`useTheme.js`（localStorage `pldmgrTheme`）、`ThemeToggle.jsx`。
+
+#### 2.2.1 头像裁剪弹窗（`.107` 重写，`AccountToolsSection.jsx` 的 `CropModal`）
+
+四条**互相独立**的踩坑记录，改这个组件前务必先读：
+
+1. **Tailwind preflight 的 `img,video{max-width:100%;height:auto}` 会掐扁绝对定位的图片。**
+   裁剪图靠 inline `width/height` 定尺寸，`max-width:100%` 把布局宽度压到容器宽（260 框 → 258），高度仍按自然高撑开 → 3200×1200 的图被压成 258×1200。**图越宽压得越狠，方形图几乎看不出**，所以症状是「部分图片严重变形」。凡是用 inline `width/height` 给 `<img>` 定尺寸的地方，都要显式写 `maxWidth:'none'` / `maxHeight:'none'`。
+2. **全局 `box-sizing:border-box` 会吃掉取景框的边框宽度。** 取景框写 `width:260px` + 1px 边框 → 可视内容只有 258×258，而 `clampView`/`zoomTo`/导出全按 `CROP_SIZE=260` 算，预览比导出每边少 1px。取景框必须 `boxSizing:'content-box'`。
+3. **弹窗绝不能在 busy 期间锁死。** 曾用 `dismissible={!busy}` + 取消键 `disabled={busy}`，主机一慢用户就被关在弹窗里出不来。现在的约定：恒可关闭，关窗即 `abort()` 在途请求并归零 `cropBusy`；`fetchWithTimeout` 给上传 30s / 应用 20s，`canvasToPngBlob` 给 `toBlob` 4 秒兜底（老 WebKit 大画布偶发**不回调**）。
+4. **换图重置用 `key={src}` 强制重挂，不要在 effect 里 setState。** 重挂天然归零全部内部 state，也避开 `react-hooks/set-state-in-effect`。另外 `nat` 到手前不渲染 `<img>`，否则新图会先按上一张的尺寸布局一帧。
+
+其余设计要点：初始适配 **cover**（contain 会留白边、导出带透明条）；缩放以**取景框中心为锚点**；滑杆走**相对倍数** 1×–4×（绝对 scale 在几千像素的图上只有 0.06 量级，整条区间挤在头几像素）；导出边长 **440**（覆盖 PS5 头像四档里最大的一档）；导出用**九参数 `drawImage`** 只光栅化取景框那块源矩形，大图不再整张进画布。
+
+**回归测试**：`cropfix.mjs`（75 条数值断言，见 `CHANGELOG v0.5.2.107`）。改这个组件后必跑 —— 第一条断言「`<img>` 的 `offsetWidth` == 自然宽」就是坑 1 的看门狗。
+
 
 ## 3. 构建与部署
 前端产物嵌入 ELF，分步：

@@ -31,12 +31,14 @@ typedef struct {
   int      size;
   int      len;
   uint32_t scope;   /* 发起这次写入的 uid；0 = 无归属 */
+  int      origin;  /* SAFETY_ORIGIN_*；0 = 未标注（老日志） */
 } rec_t;
 
 static rec_t  g_rec[MAXREC];
 static int    g_nrec = -1;      /* -1 = 还没从磁盘读进来 */
 static int    g_ready = 0;
 static uint32_t g_scope = 0;    /* 当前写入归属，由 safety_set_scope() 设定 */
+static int    g_origin = SAFETY_ORIGIN_NONE;  /* 当前写入来源，由 safety_set_origin() 设定 */
 
 /* ------------------------------------------------------------------ *
  * 小工具                                                              *
@@ -111,16 +113,23 @@ static int load_idx(void)
   if(!f) return 0;                     /* 没有日志 = 0 条，正常 */
   while(g_nrec < MAXREC && fgets(line, sizeof(line), f)) {
     unsigned int e, sc = 0;
-    int t, sz, len;
+    int t, sz, len, org = SAFETY_ORIGIN_NONE;
+    int got;
 
-    /* 第 5 个字段（归属）是后加的：老日志读不到就按"无归属"处理，
-     * 这样全量还原仍然管得到它，绝不会因为格式换代把原值丢掉。 */
-    if(sscanf(line, "%u %d %d %d %u", &e, &t, &sz, &len, &sc) < 4) continue;
+    /* 第 5 个字段（归属）与第 6 个字段（来源）都是后加的：老日志读不到就按
+     * "无归属 / 未标注"处理 —— 未标注会被**两种**还原都管到，所以全量还原
+     * 仍然管得到它，绝不会因为格式换代把原值丢掉。 */
+    got = sscanf(line, "%u %d %d %d %u %d", &e, &t, &sz, &len, &sc, &org);
+    if(got < 4) continue;
+    if(got < 6) org = SAFETY_ORIGIN_NONE;
+    if(org < SAFETY_ORIGIN_NONE || org > SAFETY_ORIGIN_RENAME)
+      org = SAFETY_ORIGIN_NONE;       /* 越界值一律降级成"两种还原都管" */
     g_rec[g_nrec].ent = (uint32_t)e;
     g_rec[g_nrec].type = t;
     g_rec[g_nrec].size = sz;
     g_rec[g_nrec].len = len;
     g_rec[g_nrec].scope = sc;
+    g_rec[g_nrec].origin = org;
     g_nrec++;
   }
   fclose(f);
@@ -138,8 +147,8 @@ static int save_idx(void)
   f = fopen(SAFETY_REG_IDX, "w");
   if(!f) return -1;
   for(i = 0; i < g_nrec; i++)
-    fprintf(f, "%u %d %d %d %u\n", g_rec[i].ent, g_rec[i].type,
-            g_rec[i].size, g_rec[i].len, g_rec[i].scope);
+    fprintf(f, "%u %d %d %d %u %d\n", g_rec[i].ent, g_rec[i].type,
+            g_rec[i].size, g_rec[i].len, g_rec[i].scope, g_rec[i].origin);
   if(fclose(f) != 0) return -1;
   return 0;
 }
@@ -224,6 +233,11 @@ void safety_set_scope(uint32_t uid)
   g_scope = uid;
 }
 
+void safety_set_origin(int origin)
+{
+  g_origin = origin;
+}
+
 int safety_backup_reg(const safety_key_t *keys, int n, uint32_t off)
 {
   unsigned char buf[4096];
@@ -251,7 +265,8 @@ int safety_backup_reg(const safety_key_t *keys, int n, uint32_t off)
 
     f = fopen(SAFETY_REG_IDX, "a");
     if(!f) return -1;
-    fprintf(f, "%u %d %d %d %u\n", k.ent, k.type, k.size, len, g_scope);
+    fprintf(f, "%u %d %d %d %u %d\n", k.ent, k.type, k.size, len, g_scope,
+            g_origin);
     fclose(f);
 
     if(g_nrec < MAXREC) {
@@ -260,6 +275,7 @@ int safety_backup_reg(const safety_key_t *keys, int n, uint32_t off)
       g_rec[g_nrec].size = k.size;
       g_rec[g_nrec].len = len;
       g_rec[g_nrec].scope = g_scope;
+      g_rec[g_nrec].origin = g_origin;
       g_nrec++;
     } else {
       g_nrec = -1;                      /* 内存表满了，下次重新从磁盘读 */
@@ -310,32 +326,50 @@ int safety_reg_count(void)
   return g_nrec;
 }
 
-int safety_reg_count_scope(uint32_t uid)
+/* 这条记录该不该被本次还原覆盖。origin 越界一律当成"未标注"，也就是**两种还原都管** ——
+ * 宁可多回滚（回滚是写回原值，只会更接近原始状态），也不能让老日志里的原值永远还原不了。 */
+static int origin_matches(int origin, uint32_t mask)
+{
+  unsigned int bit;
+
+  if(origin < SAFETY_ORIGIN_NONE || origin > SAFETY_ORIGIN_RENAME)
+    origin = SAFETY_ORIGIN_NONE;
+  bit = 1u << (unsigned int)origin;
+  return (mask & bit) != 0;
+}
+
+int safety_reg_count_scope_mask(uint32_t uid, uint32_t origin_mask)
 {
   int i, n = 0;
 
   if(g_nrec < 0) load_idx();
   for(i = 0; i < g_nrec; i++)
-    if(g_rec[i].scope == uid) n++;
+    if(g_rec[i].scope == uid && origin_matches(g_rec[i].origin, origin_mask)) n++;
   return n;
 }
 
+int safety_reg_count_scope(uint32_t uid)
+{
+  return safety_reg_count_scope_mask(uid, SAFETY_ORIGIN_M_ALL);
+}
+
 int safety_reg_at(int i, uint32_t *ent, int *type, int *size, int *len,
-                  uint32_t *scope)
+                  uint32_t *scope, int *origin)
 {
   if(g_nrec < 0) load_idx();
   if(i < 0 || i >= g_nrec) return -1;
-  if(ent)   *ent   = g_rec[i].ent;
-  if(type)  *type  = g_rec[i].type;
-  if(size)  *size  = g_rec[i].size;
-  if(len)   *len   = g_rec[i].len;
-  if(scope) *scope = g_rec[i].scope;
+  if(ent)    *ent    = g_rec[i].ent;
+  if(type)   *type   = g_rec[i].type;
+  if(size)   *size   = g_rec[i].size;
+  if(len)    *len    = g_rec[i].len;
+  if(scope)  *scope  = g_rec[i].scope;
+  if(origin) *origin = g_rec[i].origin;
   return 0;
 }
 
 /* scope == SAFETY_SCOPE_ALL 时不看归属、全部回滚；否则只动这个 uid 名下的记录，
- * 别人的记录连 blob 一起原样留在盘上。 */
-static int restore_matching(uint32_t scope)
+ * 别人的记录连 blob 一起原样留在盘上。origin_mask 再筛一层来源。 */
+static int restore_matching(uint32_t scope, uint32_t origin_mask)
 {
   unsigned char orig[4096], now[4096];
   char drop[MAXREC];
@@ -351,6 +385,7 @@ static int restore_matching(uint32_t scope)
     safety_key_t k;
 
     if(scope != SAFETY_SCOPE_ALL && g_rec[i].scope != scope) continue;
+    if(!origin_matches(g_rec[i].origin, origin_mask)) continue;
 
     blob_name(g_rec[i].ent, path, sizeof(path));
 
@@ -388,14 +423,19 @@ static int restore_matching(uint32_t scope)
   return bad ? -bad : ok;
 }
 
+int safety_restore_scope_mask(uint32_t uid, uint32_t origin_mask)
+{
+  return restore_matching(uid, origin_mask);
+}
+
 int safety_restore_scope(uint32_t uid)
 {
-  return restore_matching(uid);
+  return restore_matching(uid, SAFETY_ORIGIN_M_ALL);
 }
 
 int safety_restore_reg(void)
 {
-  return restore_matching(SAFETY_SCOPE_ALL);
+  return restore_matching(SAFETY_SCOPE_ALL, SAFETY_ORIGIN_M_ALL);
 }
 
 /* ------------------------------------------------------------------ *

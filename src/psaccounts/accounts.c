@@ -244,6 +244,9 @@ accounts_action(const char *action, uint32_t user_id, uint64_t custom_id,
   /* 这批写入的归属：备份日志里每条原值都会带上这个 uid，"登出"才能力求只回滚
      它自己名下的记录。preview 只读，记不记都一样。 */
   safety_set_scope(user_id);
+  /* 来源先归零：g_origin 是常驻状态，不重置的话"这一批没设来源"会继承上一次请求的
+     值，把记录错误地标成 SIGNIN/ACTIVATE。各动作在自己的写入点再设具体来源。 */
+  safety_set_origin(SAFETY_ORIGIN_NONE);
 
   /* 写操作的前置条件：备份目录必须可写——抄不到原值就不许动。六个动作对所有槽
      一视同仁，不再有"某个账号是禁区"。 */
@@ -277,7 +280,15 @@ accounts_action(const char *action, uint32_t user_id, uint64_t custom_id,
     ok = st.ok;
     snprintf(message, sizeof(message), "%s", st.message);
   } else if(!strcmp(action, "signout")) {
-    npsignin_signout(user_id, name, &st);
+    /* [CN-FORK] v0.5.2.107 「登出」= 只退登录态，离线激活留着。
+     * 以前这里会把激活一起退掉，用户点「登出」却发现账号被打回未激活 —— 现在分成
+     * 两条路：keep_activation=1 是「登出」，=0 是「登出并反激活」（signout-full）。 */
+    npsignin_signout(user_id, name, &st, 1);
+    ok = st.ok;
+    snprintf(message, sizeof(message), "%s", st.message);
+  } else if(!strcmp(action, "signout-full")) {
+    /* 「完全还原」：不分来源全退，账号回到未激活。仍是一键清账的唯一入口。 */
+    npsignin_signout(user_id, name, &st, 0);
     ok = st.ok;
     snprintf(message, sizeof(message), "%s", st.message);
   } else if(!strcmp(action, "rename")) {
@@ -325,6 +336,18 @@ type_name(int t) {
   return "str";
 }
 
+/* 备份记录的来源名，给 /api/safety 的诊断清单用。
+ * "none" 同时意味着"老日志（本字段出现之前记的）"，两种还原都会管到它。 */
+static const char *
+origin_name(int o) {
+  switch(o) {
+  case SAFETY_ORIGIN_ACTIVATE: return "activate";
+  case SAFETY_ORIGIN_SIGNIN:   return "signin";
+  case SAFETY_ORIGIN_RENAME:   return "rename";
+  default:                     return "none";
+  }
+}
+
 char *
 accounts_safety_json(const char *mode) {
   int restore = (mode && !strcmp(mode, "restore"));
@@ -358,7 +381,9 @@ accounts_safety_json(const char *mode) {
   esc_json(emsg, sizeof(emsg),
            restore ? rmsg : line);
 
-  cap = 1024 + (size_t)n * 80;
+  /* 每条记录 112 字节：多了 "origin":"activate" 这一段（v0.5.2.107）。
+   * 原来按 80 算，加上来源后单条最长约 105 字节，会挤爆尾部的收尾括号。 */
+  cap = 1024 + (size_t)n * 112;
   buf = malloc(cap);
   if(!buf) return NULL;
 
@@ -373,13 +398,14 @@ accounts_safety_json(const char *mode) {
 
   for(i = 0; i < n; i++) {
     uint32_t ent, scope = 0;
-    int t, sz, ln;
-    if(safety_reg_at(i, &ent, &t, &sz, &ln, &scope) != 0) continue;
-    if(len + 80 >= (int)cap) break;
+    int t, sz, ln, org = SAFETY_ORIGIN_NONE;
+    if(safety_reg_at(i, &ent, &t, &sz, &ln, &scope, &org) != 0) continue;
+    if(len + 112 >= (int)cap) break;
     len += snprintf(buf + len, cap - len, "%s{\"ent\":\"0x%08X\","
                     "\"entity\":%u,\"type\":\"%s\",\"declared\":%d,"
-                    "\"bytes\":%d,\"owner\":%u}",
-                    i ? "," : "", ent, ent, type_name(t), sz, ln, scope);
+                    "\"bytes\":%d,\"owner\":%u,\"origin\":\"%s\"}",
+                    i ? "," : "", ent, ent, type_name(t), sz, ln, scope,
+                    origin_name(org));
   }
 
   snprintf(buf + len, cap - len, "]}");

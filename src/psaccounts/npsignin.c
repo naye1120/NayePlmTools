@@ -359,6 +359,10 @@ npsignin_signin(uint32_t uid, const char *name, npsignin_result_t *out) {
   unsigned char cfg[sizeof(config_dat)];
   make_cfg(out, cfg);
 
+  /* 这一批写入（22 个注册表键 + auth.dat/config.dat）的来源是「登入」。
+   * 登出按来源筛，就只退这一批，把离线激活的 account_id 留着。 */
+  safety_set_origin(SAFETY_ORIGIN_SIGNIN);
+
   if(write_np_files(cfg, out->user_id) != 0) {
     out->ok = 0;
     snprintf(out->message, sizeof(out->message),
@@ -395,8 +399,11 @@ np_file_to_baseline(const char *path) {
 
 
 int
-npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out) {
+npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out,
+                 int keep_activation) {
   int restored, left;
+  uint32_t mask = keep_activation ? SAFETY_ORIGIN_M_SIGNOUT_ONLY
+                                  : SAFETY_ORIGIN_M_ALL;
 
   init_result(out, uid, name);
   fill_status(out);
@@ -404,9 +411,16 @@ npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out) {
   /* 原版这里只把 3 个 int 归零，但 signin 写的是 22 个键 —— 剩下 19 个模板值
      永远留在注册表里。改成按备份日志逐键写回原值，并且只写回**这个 uid 名下**
      的记录：别的账号还在登录状态时，退掉一个不能把另一个的原值也抹了。
-     auth.dat/config.dat 按 uid 定位，本来就是这一格的，照旧回灌。 */
+     auth.dat/config.dat 按 uid 定位，本来就是这一格的，照旧回灌。
 
-  restored = safety_restore_scope(uid);
+     [CN-FORK] v0.5.2.107 再加一层**来源**筛选。原来只按 uid 筛，于是离线激活写的那
+     3 个键（account_id / type / flags）和登录态混在同一次回滚里 —— 用户点「登出」
+     却发现账号被打回了未激活。现在：
+       keep_activation = 1（「登出」）        → 只退 SIGNIN + 未标注的老记录，激活留着
+       keep_activation = 0（「完全还原」）    → 不分来源全退，回到出厂
+     两条路都保留，是因为「完全还原」仍是一键清账的唯一入口。 */
+
+  restored = safety_restore_scope_mask(uid, mask);
   left = safety_reg_count();
   if(restored < 0) {
     out->ok = 0;
@@ -476,6 +490,8 @@ npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out) {
     }
 
     off = (uint32_t)(out->slot - 1) * 65536u;
+    /* 基线登出写的是登录态那两位，来源记成 SIGNIN —— 之后按来源筛也该把它退掉 */
+    safety_set_origin(SAFETY_ORIGIN_SIGNIN);
     if(wset_int(REG_KEY_SIGNIN_FLAG + off, 0) != 0) bad++;
     if(wset_int(REG_KEY_LOGIN_FLAG + off, REG_LOGIN_FLAG_OFFLINE) != 0) bad++;
 
@@ -511,10 +527,24 @@ npsignin_signout(uint32_t uid, const char *name, npsignin_result_t *out) {
 
   out->ok = 1;
   out->signed_in = 0;
-  snprintf(out->message, sizeof(out->message),
-           "signed out %s — restored %d of its own value(s), %d other pending "
-           "record(s) untouched; reboot to apply",
-           out->user_name, restored, left);
+  /* [CN-FORK] v0.5.2.107 两种登出要说清楚各自的后果，否则用户分不出自己点的是哪个：
+   *   keep_activation → 激活状态被有意留着，欠着的那几条要「完全还原」才清；
+   *   否则           → 账号回到未激活。 */
+  if(keep_activation) {
+    int still = safety_reg_count_scope_mask(uid, SAFETY_ORIGIN_M_ACTIVATE);
+    snprintf(out->message, sizeof(out->message),
+             "signed out %s — restored %d sign-in value(s); the offline "
+             "activation is kept (%d record(s) still pending, clear them with "
+             "a full restore); %d other pending record(s) untouched; reboot to "
+             "apply",
+             out->user_name, restored, still, left);
+  } else {
+    snprintf(out->message, sizeof(out->message),
+             "signed out %s and cleared its offline activation — restored %d "
+             "of its own value(s), %d other pending record(s) untouched; "
+             "reboot to apply",
+             out->user_name, restored, left);
+  }
   return 0;
 }
 
@@ -824,6 +854,10 @@ npsignin_rename(uint32_t uid, const char *old_name, const char *new_name,
              new_name);
     return -1;
   }
+
+  /* 改名既不是激活也不是登入。单独标一类来源，好让「登出」不去动它 ——
+   * 退掉登录不该把用户改过的名字弹回去；想连名字一起还原就走「完全还原」。 */
+  safety_set_origin(SAFETY_ORIGIN_RENAME);
 
   /* 查重：名字是 uid↔槽的唯一关联（slot_for_name 靠它），撞名会让两个账号
    * 在同一格里互相顶替，激活/登录状态立刻错乱。 */
