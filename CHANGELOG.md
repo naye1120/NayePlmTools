@@ -37,6 +37,10 @@
 ### 📦 Release
 
 * **正式出包**：`NayePlmTools_0.5.2.110-me.elf`（NAYE00001 媒体栏）· `NayePlmTools_0.5.2.110-ga.elf`（NAYE00004 游戏栏）。
+* 两包各 **9,875,208 字节**；内嵌标题 `NayePlmTools v0.5.2.110 by naye (dcfb48b, built at 2026-10-05 08:19:32 UTC)`（**非 DEV**）、`PLDMGR_VER:0.5.2.110`；`0.5.2.109` 残留 0 处；反向断言「登出并反激活」0 处。
+* sha256：`-me` = `ec17b3e1ed3295c2ac8d4593e7683e9e2e6ece377850f62b8f4c3e2464678020`；`-ga` = `5c551c943d0a4a7f9619c53105d2a6839cfabdb2801ffb7fe9c646ad7751589c`。
+* **包内逐字核对最终版判据**：压缩后的 `spatialNav` 里能读到 `if(n)return n=!1,void(o={x:s,y:r})`（方向键后第一发只立基准）与 `if(e*e+t*t<144)return`（12² = 144，位移判据）—— 确认带位移判据的那一版真的进了包，不是只看日志。
+* **`.109` 的包（`b8ea772`）已过期**。
 
 ### 📌 未决（待用户定夺）
 
