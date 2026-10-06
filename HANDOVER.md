@@ -585,9 +585,33 @@
 > - **验证口径**：主机套件 `overall: PASS`（**`game_mgr` 65 → 90** 条；`media_scan` 178 / `game_saves` 88 未动）；
 >   变异测试 **`mutation_check_game_mgr.sh` 4/4 红**（`srcdsrc` 8 红 / `imgtype` 2 / `pathimg` 2 / `mounted` 1），
 >   `mutation_check_media.sh` 5/5 红照旧；前端回归 `game112.mjs` **177 → 185 PASS**（新增 pkg 类与 folder 类两条取样）。
-> - **出包**：`NayePlmTools_0.5.2.127-me.elf` / `-ga.elf`。
-> - **刻意没改的两处**：磁贴上的来源角标仍按 `src` 上色（语义上没错、也没声称是 PKG）；
->   `can_uninstall` 仍读 app.db 的 `uninstallable` 列（与来源分类无关）。
+> - **出包**：`NayePlmTools_0.5.2.127-me.elf` / `-ga.elf`，各 10,785,872 字节、titleId 自检
+>   NAYE00001/NAYE00004 通过、内嵌标题真实短哈希 `952e0b7`（非 `DEV`）、内嵌页与 `frontend/dist`
+>   逐字节一致。
+> - **✅ 已实机（PS5）验收 —— 通过（2026-10-07）**。两条通道都验了：
+>   - **接口逐字段对照**（`_ftp_probe/badge_verify.py`）：真机 15 款**全部与 SMP 1.7beta4 的
+>     `/api/v1/games` 一致**，`source_type` 不符 **0/15**。推包前是 3/3 不符（`PPSA17599`
+>     `pkg`→`image`、`PPSA01773` `pkg`→`folder` 且 `mounted` 由 `true` 改成 `false`、`PPSA99101`
+>     `pkg`→`folder`）；`path` 也对了（`PPSA17599` 由 `/user/app/PPSA17599` 变成
+>     `/mnt/ext1/PPSA17599三十三号.ffpfsc`）。真·内置 PKG 样本 `PPSA01650` 仍判 `pkg` /
+>     `installed_pkg:true` / `can_manage_source:false`，未被误伤。
+>   - **界面级**（`device127_badges.mjs`，打真机 8911、跑的是真机内嵌的那份构建产物）
+>     **17/17 PASS**：版本 0.5.2.127、15 张磁贴、`PPSA17599` 来源类型=**镜像** + 有「删除源」、
+>     `PPSA01773` =**文件夹** + 无「已挂载」+ 有「删除源」、`PPSA01650` =**已安装 PKG** + 有
+>     「没有可删除的物理源」提示，以及**全列表除 `PPSA01650` 外 0 款**显示「已安装 PKG」。
+> - **刻意没改的两处**：
+>   - 磁贴列表右上角那个角标**仍按 `src` 上色**（`GameSection.jsx:81`
+>     `const installed = g.src === 'installed'`）—— **这个是「已安装 / 转储」，不是「已安装 PKG」**：
+>     它回答「这个游戏在列表里是**怎么被找到的**」，已注册进 app.db = 绿「已安装」，
+>     只躺在扫描路径上的 dump = 黄「转储」。ShadowMount 挂出来的游戏**也会注册进 app.db**，
+>     所以真机上 15 款 `src` 全是 `installed`、15 个角标全亮「已安装」—— **这是对的，不是本 bug**。
+>     用户问过「这里都是已安装 对吗」，答案就是对的；**别拿这个角标去改，也别为了「跟详情一致」
+>     把它换成按 `source_type` 上色**（那是三个不同的问题：注册与否 / 物理源形态 / 是否真 PKG）。
+>   - `can_uninstall` 仍读 app.db 的 `uninstallable` 列（与来源分类无关）。
+> - **与 SMP 刻意保留的一处偏差**：真·内置 PKG 的 `path`，SMP 给 `/user/app/<TID>/app.pkg`
+>   （那个文件），我们给 `/user/app/<TID>`（app 目录）。**判据与徽标完全一致**（`source_type`
+>   都是 `pkg`），只是路径指向粒度不同 —— 对「这个游戏的物理源在哪」而言 app 目录更直读，
+>   所以不改。要改的话只动 `gm_paths()` 的 `pkg` 分支（`appdir` 后拼 `/app.pkg`），别再动别处。
 
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
@@ -1079,26 +1103,37 @@ node pack125.mjs                               # 断言：无未捕获异常 / �
 
 **真机取证 / 推包 / 验收（`.125` 起）**：
 ```bash
-# 取证两条通道（都通，别只靠用户转述）
+# 取证三条通道（都通，别只靠用户转述）
 #   FTP  192.168.1.214:2121  anonymous / guest@example.com，被动、binary
 #        → _ftp_probe/pull_evidence.py，产物落 _ftp_probe/evidence/
 #          （pldmgr.log / av_content.db / av_contents 目录树 / 封面文件本身）
 #   HTTP 192.168.1.214:8911  面板自己的接口，可直接拉成品 zip 校验
+#   HTTP 192.168.1.214:10101 ShadowMountPlus 1.7beta4 自己的 Web UI + JSON API
+#        —— 全部路由是 **POST + JSON body**（GET 会 400）。`POST /api/v1/games`
+#        空 body 即返回全量真值（source_type / image_type / path / runtime_path /
+#        mounted / installed_pkg）。**任何「跟 SMP 对齐」的需求都打这个接口逐字段比，
+#        别照文档猜**（`.127` 就是这么定位 + 验收的，`_ftp_probe/badge_verify.py`）。
 
-# 推包：环境里没有 socat / docker，deploy.sh 跑不了，用等价三步
-#   ① GET /shutdown（置 http_keep_running = 0，干净退出）→ 轮询等 8911 关闭
-#   ② Python socket 把 ELF 灌进 192.168.1.214:9021（elfldr）
-#        → 对端回话 "[PLDMGR] Starting NayePlmTools v<ver> on port 8911..."
-#   ③ 轮询 GET /version 确认；顺手校验首页不含旧版本号
+# 推包：环境里没有 socat / docker，deploy.sh 跑不了，用 _ftp_probe/push_elf.py
+#        （① GET /shutdown 置 http_keep_running=0 → 轮询等 8911 关闭
+#          ② Python socket 把 ELF 灌进 :9021（elfldr），对端回话
+#             "[PLDMGR] Starting NayePlmTools v<ver> on port 8911..."
+#          ③ 轮询 GET /version 确认）
+python _ftp_probe/push_elf.py <elf路径> 0.5.2.127
 
 # 验收：跑在真机内嵌的构建产物上
 node device125.mjs                             # 12 条断言：版本 / 视频封面取真帧 / 打包轮询≥2 / 终态 / 下载按钮 / 下载端点真回字节
+node device127_badges.mjs                      # 17 条断言：版本 / 15 张磁贴 / 镜像类=镜像+删除源 / 文件夹类=文件夹+无已挂载 / 真PKG=已安装PKG+无源提示 / 全列表反面判据
 ```
 > **推包前必须 `/shutdown`**，否则旧 payload 仍占着 8911，新的起来绑不上。
 > 两个磁贴变体（`-me` NAYE00001 媒体栏 / `-ga` NAYE00004 游戏栏）**都深链到同一个
 > `http://127.0.0.1:8911/`**，功能等价，推哪个都行。
-> `device125.mjs` 与 `pack125.mjs` / `serve_dist.mjs` 同目录；给 node 的 `NO_PROXY`
+> `device125.mjs` / `device127_badges.mjs` 与 `pack125.mjs` / `serve_dist.mjs` 同目录
+> （`~/.workbuddy-ai/binaries/node/workspace/`）；给 node 的 `NO_PROXY`
 > 要带上 `192.168.1.214`。
+> **推包脚本的 stdout 会被终端缓冲吞掉**：`python push_elf.py` 若被超时杀掉会看不到任何输出，
+> 但**推送其实已经成功**。判断成功只认一件事 —— 再打一次 `GET /version` 看版本号有没有变。
+> 想让它别被杀，用后台方式跑（`run_in_background`）或加 `python -u`。
 
 **变异测试（`.124` 起，出包前手动跑一次）**：
 ```bash
@@ -1352,20 +1387,21 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
   记得同步更新 `test/mutation_check_media.sh`**。
 
 ## 7. 接手后的下一步（待定，非阻塞）
-- **`.127`（游戏详情来源类型错标成「已安装 PKG」）—— 待实机验收**。推包后进游戏管理 → 逐款打开详情，
-  按下面三条对（**每条都能一眼分胜负**）：
-  1. **`光与影：33号远征队`（`PPSA17599`，镜像类）**：来源类型应是 **镜像**（不是「已安装 PKG」）、
-     格式徽标 `FFPFSC`（不变）、**物理路径 `/mnt/ext1/PPSA17599三十三号.ffpfsc`**、
-     有「**删除源**」按钮（不该有「卸载 PKG」）。对齐物：SMP `games/info` 报
-     `source_type:image` / `image_type:pfsc`。
-  2. **`FINAL FANTASY VII REMAKE`（`PPSA01773`，文件夹类）**：来源类型应是 **文件夹**、
-     **不该出现「已挂载」**（SMP 报 `mounted:false`）、物理路径 `/mnt/ext1/PPSA01773最终幻想7重置`、
-     有「**删除源**」。
-  3. **一款真·内置 PKG**（如 PS4 游戏）：来源类型仍是 **已安装 PKG**、`installed_pkg` 为真、
-     没有「删除源」（`/game_delete` 该返 403 EPERM）、有「卸载」。
-  - 反面判据：**任何 ShadowMount 挂出来的游戏都不该再显示「已安装 PKG」**（`.126` 及以前 14 款全错标）。
-  - 对照工具：真机 `192.168.1.214:10101`（SMP 1.7beta4 的 API，POST + JSON body）——
-    `POST /api/v1/games/info` 拿它的真值逐字段比，别靠肉眼猜。
+- **`.127`（游戏详情来源类型错标成「已安装 PKG」）—— ✅ 已实机验收通过**（见 §0 的 `.127` 块）。
+  留两条回归口径（下次动游戏详情时照这几条验）：
+  1. **`光与影：33号远征队`（`PPSA17599`，镜像类）**：来源类型 = **镜像**、格式徽标 `FFPFSC`（不变）、
+     物理路径 `/mnt/ext1/PPSA17599三十三号.ffpfsc`、有「**删除源**」。
+  2. **`FINAL FANTASY VII REMAKE`（`PPSA01773`，文件夹类）**：来源类型 = **文件夹**、
+     **不出现「已挂载」**、有「**删除源**」。
+  3. **真·内置 PKG**（本机样本 `PPSA01650`）：来源类型 = **已安装 PKG**、`installed_pkg` 为真、
+     有「这是已安装的 PKG，没有可删除的物理源」、没有「删除源」（`/game_delete` 该返 403 EPERM）。
+  4. **反面判据**：全列表里**除真 PKG 外 0 款**显示「已安装 PKG」（`.126` 及以前 14 款全错标）。
+  5. **对照工具**：真机 `192.168.1.214:10101`（SMP 1.7beta4 的 API，POST + JSON body）——
+     `POST /api/v1/games` 空 body 即返回全量真值，逐字段比别靠肉眼猜。脚本在 `_ftp_probe/`：
+     `badge_verify.py`（接口对照）、`device127_badges.mjs`（界面级，`device127: PASS` 17/17）、
+     `push_elf.py`（推包：`/shutdown` → 等 8911 关闭 → socket 灌 :9021 → 轮询 `/version`）。
+  6. **别顺手改的两处**：磁贴列表右上角的「已安装/转储」角标（按 `src`，是「怎么找到的」，
+     15 款全亮「已安装」是对的）；`can_uninstall` 读 app.db 的 `uninstallable` 列。
 - **`.126`（压缩包改成「游戏编码-游戏名称/」一层）—— ✅ 已实机验收通过**（见 §0 的 `.126` 块）。
   留两条回归口径：
   ① 解压出来**只有一层**目录（`<游戏编码>-<游戏名称>/`），截图/录屏**直接**躺在里面，
