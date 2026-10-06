@@ -1,3 +1,51 @@
+## v0.5.2.128 (CN-FORK)
+
+> 用户口径：「**修bug 我游戏列表，点击卸载，报错了，刷新页面，游戏图标消失了，想挂载回来就没有可以点的地方了**」，
+> 听完原因后的决定是「**算了，不弄了，被下边的按钮功能全部取消，只留一个去 shownmount 管理，然后跳转 showmount 后台**」。
+>
+> **发生了什么（一句话）：卸载会把 ShadowMount 的游戏从注册表里删掉，但我们没有挂载能力，删了就回不来。**
+> `sceAppInstUtilAppUnInstall()` 对一款 ShadowMount 的**裸目录**游戏（`PPSA21567` 宇宙机器人）半失败地执行了：
+> 它**删掉了 app.db 注册 + `/user/app/<TID>/`（含 `mount.lnk` / `mount_img.lnk`）**，然后返回非 0 错误码。
+> 我们的 `game_runtime_uninstall()` 只在 `rc == 0` 时才 `game_mgr_invalidate()`，于是缓存一直留到 60s TTL / 刷新页面
+> 才重算 → 图标凭空消失。外置盘上的源（`/mnt/ext1/PPSA21567-宇宙机器人`）完好无损，ShadowMountPlus 那边也
+> 还列着它（`installed=false, source_available=true, can_uninstall=false`）—— 但我们这一侧只剩一张孤零零的
+> 空注册，**没有任何按钮能把它挂回去**，因为「挂载/重新注册」从来不在我们手上。
+>
+> **修法（按用户口径）：不做恢复能力，把挂载类的入口全部撤掉，交给 ShadowMount 自己管。**
+> 磁贴下原来四颗动作按钮（存档管理 / 多媒体管理 / 名称与背景 / 待定功能）全下线，换成一颗
+> **「去 ShadowMount 管理」**，点它直接跳 ShadowMount 后端（`http://<当前 host>:10101/`，
+> 那台机器的 ShadowMount Library Web UI 就挂在 10101 根路径，`GET` 200 / 193,606 字节）。
+> 挂载 / 卸载 / 重新注册这些会动 app.db 注册表的操作从此只在那边发生，我们不再碰。
+
+### ✂️ Removals
+
+* **磁贴下四颗动作按钮全部移除**（`frontend/src/components/views/GameSection.jsx`）：
+  `TILE_ACTIONS` 数组、四个专用图标（`game/GameActionIcons.jsx` 的 import）以及 `openAction` 分发整段删除。
+  「待定功能」那颗本来就是占位弹窗，现在连入口都没有了。
+* **换成一颗跳 ShadowMount 后台的按钮**：
+  * 目标 URL 用 `window.location.hostname` 拼 —— 在主机上从 `127.0.0.1:8911` 开面板时它就是
+    `127.0.0.1`，从电脑用 `192.168.x.x` 开就是局域网地址，**两边都不用配**。端口收进常量 `SMP_PORT = 10101`。
+  * 仍用 `.84` 那次的 `about:blank` 先行手法（PS5 老内核里 `window.open(url)` 只要不在点击手势的同步栈里
+    就被拦）；空窗开不出来再退化成直接开 url。
+  * 布局从 `grid grid-cols-4 gap-1.5` 收成单元素直接铺满 `inset-x-1.5 bottom-1.5`（少一层 DOM，
+    单列也不写 grid）；`z-10 + pointer-events-auto` 保留 —— 它压在详情热区之上，点按钮不会顺带打开详情。
+  * 中英文案：`去 ShadowMount 管理` / `Manage in ShadowMount`（新 key `game.smp_open`）；
+    板块提示 `game.tile_hint` 同步改掉「四颗按钮分别是……」这句过时的话。
+
+### 📝 注意
+
+* **存档 / 多媒体 / 名称与背景三个弹窗都在**，只是入口从磁贴搬到了**游戏详情**里：
+  详情多加一行 GridRow「名称与背景」（`GameDetailModal` 新增 `onOpenRename` prop），
+  与已有的「打开存档管理」/「打开多媒体管理」两行并列。这三个功能跟挂载/卸载毫无关系
+  （只改显示名、封面图、背景图，动的是 app.db 的显示字段，不碰注册与挂载），
+  ShadowMount 也不提供 —— 不能因为撤了磁贴按钮就连功能一起弄丢。
+* **「待定功能」那颗占位弹窗彻底没了入口**（实例还挂着，但 `modal.kind` 永远不会变成
+  `'pending'`，等于惰性死代码；真删要连弹窗组件一起摘，不值当）。
+* **详情弹窗里的「卸载」按钮这版没动**（用户只说撤磁贴下的按钮）。对 ShadowMount 的镜像 / 裸目录游戏，
+  它仍然是那颗「删掉注册却挂不回」的雷；要不要对它一并收掉，留给下一版决定。
+
+---
+
 ## v0.5.2.127 (CN-FORK)
 
 > 用户口径：「**这里都标识错误，你再跟 shownmount 对比一下**」（附两张游戏详情弹窗截图），

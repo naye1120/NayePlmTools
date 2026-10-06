@@ -60,7 +60,7 @@ const BUSY_REASON = {
   storage_busy: '另一个存储任务正在进行，请等它结束',
 }
 
-export default function GameDetailModal({ show, game, onClose, addToast, showConfirm, onOpenSaves, onOpenMedia, onChanged }) {
+export default function GameDetailModal({ show, game, onClose, addToast, showConfirm, onOpenSaves, onOpenMedia, onOpenRename, onChanged }) {
   const { t } = useTranslation()
   const tid = game && game.tid
   const [detail, setDetail] = useState(null)
@@ -382,6 +382,16 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
                   value={detail.media_count ? t('game.count_items', '{{n}} 个', { n: detail.media_count }) : ''}
                   onOpen={onOpenMedia ? () => onOpenMedia(g) : undefined}
                   openLabel={t('game.open_media', '打开多媒体管理')}
+                />
+                {/* [CN-FORK] v0.5.2.128 名称与背景在这里保留入口。磁贴下的四颗动作按钮下线后
+                 * 这个弹窗就成孤儿了 —— 它和挂载/卸载毫无关系（只改显示名与封面/背景图），
+                 * ShadowMount 也不提供这个功能，不该跟着一起消失。存档 / 多媒体同理（本来就有入口）。 */}
+                <GridRow
+                  cols={ROW_COLS}
+                  label={t('game.rename_title', '名称与背景')}
+                  value={detail.title_icon_custom || detail.title_bg_custom ? t('game.customized', '已自定义') : ''}
+                  onOpen={onOpenRename ? () => onOpenRename(g) : undefined}
+                  openLabel={t('game.open_rename', '打开名称与背景')}
                 />
               </div>
             </div>
