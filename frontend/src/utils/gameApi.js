@@ -262,7 +262,23 @@ export function watchJob(jobId, onTick, { intervalMs = 1000 } = {}) {
     try { onTick(st) } catch { /* 回调自己的问题，不该拖死轮询 */ }
   }
 
-  const tick = async () => {
+  /* [CN-FORK] v0.5.2.125 **必须是函数声明，不能写成 `const tick = async () => {…}` 再在体内
+   * `setTimeout(tick, intervalMs)` 自引用。**
+   *
+   * 构建 target 是 ['es2015','safari12']，es2015 没有 async，Babel 于是把 async 降级成
+   * generator 包装。对「自引用的 const 箭头函数」，Babel 会把整个 `const tick = …` 换成一个
+   * 立即调用并丢弃的 IIFE，却**不重写函数体里的那个自引用** —— 产物里留下一句
+   * `setTimeout(tick, a)`，而 `tick` 这个绑定已经不存在了。
+   *
+   * 真机症状（v0.5.2.124 实测）：第一次 `/game_job_status` 轮询正常返回，随后 `setTimeout`
+   * 抛 ReferenceError: tick is not defined，轮询**永久停摆**。界面停在「正在打包… 0%」，
+   * 「下载打包文件」按钮永远不出现 —— 而后端其实 1.2 秒就把 61MB 的包打好了。
+   *
+   * 为什么本地回归没抓到：game112.mjs 跑的是 vite dev server，发出去的是原生 ESM
+   * （async/await 不降级），这条 bug 只在**构建产物**里存在。见 HANDOVER §6。
+   *
+   * 函数声明的名字绑定在外层作用域，降级后自引用仍然有效。 */
+  async function tick() {
     if (stopped) return
     try {
       const st = await getJobStatus(jobId)

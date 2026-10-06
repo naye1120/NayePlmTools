@@ -719,6 +719,24 @@ function packNameFor(tid) {
   return `${sanitizeFileName(gameNameFor(tid))}-${ts}.zip`;
 }
 
+/* [CN-FORK] v0.5.2.125 Content-Disposition，与后端 http_server.c 的 add_disposition 同口径：
+ * 一份 ASCII 兜底（非 ASCII 逐字节换成 '_'）+ 一份 RFC 5987 的 filename*。
+ *
+ * 不能只写 `filename="<中文名>"` —— Node 的 setHeader 遇到非 ASCII 会直接抛 ERR_INVALID_CHAR，
+ * express 回 500，于是 mock 上「下载」这条路从来没被真正跑通过。后果不只是测试缺口：
+ * 真机上 124 版那个「打包完但下载按钮永不出现」的 bug，本来靠「点一下下载」就能立刻暴露，
+ * 却因为 mock 这一步自己先 500 而被长期掩盖。 */
+function disposition(name) {
+  const ascii = String(name).replace(/[^\x20-\x7e]/g, '_');
+  let enc = '';
+  for (const b of Buffer.from(String(name), 'utf8')) {
+    enc += b === 0x22 || b === 0x5c || b < 0x20 || b >= 0x7f
+      ? '%' + b.toString(16).toUpperCase().padStart(2, '0')
+      : String.fromCharCode(b);
+  }
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${enc}`;
+}
+
 /* 媒体：截图为主 + 少量视频。数量按 tid 变化，留一个「空」的样本。
  * 这里只出**原始字段**；name（显示名）/ dlname（下载名）由 /game_media 现算 ——
  * 因为游戏名可以被改，缓存进 gameState.media 就会把旧名字钉死。 */
@@ -878,7 +896,7 @@ app.post('/game_save_test', (req, res) => {
 
 app.get('/game_save_download', (req, res) => {
   res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="${req.query.tid}-${req.query.save}.zip"`);
+  res.setHeader('Content-Disposition', disposition(`${req.query.tid}-${req.query.save}.zip`));
   res.send(EMPTY_ZIP);
 });
 
@@ -939,7 +957,7 @@ app.get('/game_media_file', (req, res) => {
     const tid = String(req.query.tid || '');
     const m = mediaFor(tid).find((x) => x.id === id);
     const nm = m ? dlNameFor(tid, m.kind, m.mtime) : `${id}.bin`;
-    res.setHeader('Content-Disposition', `attachment; filename="${nm}"`);
+    res.setHeader('Content-Disposition', disposition(nm));
   }
   /* 视频这里返回的其实还是一张 SVG —— <video> 解不了，但前端挂了 poster，
    * 所以预览里看到的是封面图 + 原生播放控件，布局与真实情况一致。
@@ -966,7 +984,7 @@ app.get('/game_media_pack_get', (req, res) => {
   res.setHeader('Content-Type', 'application/zip');
   /* 包名与 job 状态里的 name 同源（后端也是从 aux 取 basename，只有一处算）。 */
   res.setHeader('Content-Disposition',
-    `attachment; filename="${st.name || `media-pack-${req.query.job}.zip`}"`);
+    disposition(st.name || `media-pack-${req.query.job}.zip`));
   res.send(EMPTY_ZIP);
 });
 

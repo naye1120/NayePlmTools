@@ -199,7 +199,11 @@ function App() {
     } catch (e) { return null }
   }
 
-  const refreshPayloads = async (retryCount = 0) => {
+  /* [CN-FORK] v0.5.2.125 必须是函数声明：函数体内有 `() => refreshPayloads(retryCount + 1)`
+   * 自引用（失败重试那条路），写成 `const refreshPayloads = async () => {…}` 会被 Babel 的
+   * async 降级搞坏（自引用不重写，变成悬空标识符）。详见 utils/gameApi.js 里 watchJob 的
+   * tick 注释与 HANDOVER §6。 */
+  async function refreshPayloads(retryCount = 0) {
     setLoadingPayloads(true)
     const data = await api('/list_payloads')
     if (data?.payloads) {

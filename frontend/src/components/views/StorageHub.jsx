@@ -107,7 +107,10 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
     localStorage.setItem('repoSortMode', mode)
   }
 
-  const fetchRemote = async (force = false) => {
+  /* [CN-FORK] v0.5.2.125 必须是函数声明：函数体内第 138 行有 `await fetchRemote(true)` 自引用，
+   * 写成 `const fetchRemote = async () => {…}` 会被 Babel 的 async 降级搞坏（自引用不重写，
+   * 变成悬空标识符）。详见 utils/gameApi.js 里 watchJob 的 tick 注释与 HANDOVER §6。 */
+  async function fetchRemote(force = false) {
     /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：不发请求，后端也不会给东西 */
     if (cloudDisabled) {
       setRepoData(null)

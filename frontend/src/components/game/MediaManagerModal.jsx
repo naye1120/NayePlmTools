@@ -65,6 +65,8 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
   const [job, setJob] = useState(null)              // 打包任务
   const [packed, setPacked] = useState(null)        // {job_id, count} 打包完成后可下载
   const [busyId, setBusyId] = useState('')
+  /* [CN-FORK] v0.5.2.125 取帧失败的视频 id（退回后端占位图），见网格里那段注释。 */
+  const [coverBad, setCoverBad] = useState(() => new Set())
   /* [CN-FORK] v0.5.2.123 「多久没收到主机的新数据」——**用本机时钟算**。
    *
    * 后端已经在 status 里给了 idle（距上次有进展多少秒），但那把尺子是主机那边的：
@@ -111,6 +113,7 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
     setPreview(null)
     setJob(null)
     setPacked(null)
+    setCoverBad(new Set())
     setTickAt(0)
     setNowMs(0)
   }
@@ -416,13 +419,40 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
                           title={it.name}
                           className="group block w-full aspect-video rounded-lg overflow-hidden bg-white/5 border border-white/10 hover:border-white/30 transition-colors relative"
                         >
-                          <img
-                            src={mediaThumbUrl(it.id, 320)}
-                            alt=""
-                            loading="lazy"
-                            className="w-full h-full object-cover"
-                            onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
-                          />
+                          {/* [CN-FORK] v0.5.2.125 视频封面直接取 webm 的帧。
+                           *
+                           * 真机取证（192.168.1.214）：PS5 给录屏生成的封面是
+                           * `/user/av_contents/thumbnails/video/<生成方>/<TID>/<hex>/<名>.webm.jxr`
+                           * —— **JPEG XR**（文件头 49 49 BC 01，1920×1080 24bpp，DCT 编码，
+                           * 约 75:1）。载荷里只有 stb_image，解不了 jxr，后端只能退占位图；
+                           * 照片那条路没事，因为照片封面是 `.png.jpeg`（普通 JPEG）。
+                           * 与其在载荷里塞一个 JXR 解码器，不如让浏览器自己从 webm 取一帧 ——
+                           * 用户要的本来就是「视频里面某一帧画面」。
+                           *
+                           * 用 preload="metadata" 直接显示首帧。**刻意不 seek**：载荷的文件直出没有
+                           * Range 支持，Chrome 会把该媒体判成「不可定位」（实测 currentTime 设
+                           * 不动、seekable 为空），写 seek 只是死代码；首帧本身就是视频里的一帧。
+                           * 真机实测（ASTRO BOT 的 43MB webm）：readyState=4、3840×2160，
+                           * 画到 canvas 取像素 avg=57 / max=242 —— 是有画面的，不是黑帧。
+                           * 取不到（浏览器不支持该编码 / 文件读不出来）就退回后端的占位图。 */}
+                          {isVideo && !coverBad.has(it.id) ? (
+                            <video
+                              src={mediaFileUrl(it.id)}
+                              preload="metadata"
+                              muted
+                              playsInline
+                              className="w-full h-full object-cover"
+                              onError={() => setCoverBad((s) => new Set(s).add(it.id))}
+                            />
+                          ) : (
+                            <img
+                              src={mediaThumbUrl(it.id, 320)}
+                              alt=""
+                              loading="lazy"
+                              className="w-full h-full object-cover"
+                              onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
+                            />
+                          )}
                           {isVideo && (
                             <>
                               <span className="absolute inset-0 flex items-center justify-center">
