@@ -47,6 +47,20 @@
   存档包 512MB、磁贴 PNG 64MB、JSON 1MB（`gr_post_limit()`）。
   前端能过、后端拒的后果是用户只看到一句「请求失败」，连为什么都拿不到。
 
+* **新增主机单测 `test/game_saves_test.c` + `test/make_game_fixture.py`（88 项断言）**。
+  夹具是两个用户目录（**第一个故意空着**）+ 两种槽形态 + 一个该被跳过的 `.upl_`，
+  三个路径宏用 `-D` 指到 `/tmp/pldmgr_saves_test`。钉住的是这几条真机上不好验、
+  出错又只在用户操作时才暴露的：
+  - 根目录取**体积最大**的命中（空用户目录先扫到就会让整个列表变成「0 字节」）；
+  - 一级子项即一个槽、`size`/`files` 递归统计、`.upl_` 不进列表；
+  - `auto` 的**明文密码/令牌永远不外泄**，只吐 `has_password` / `has_token`；
+  - `port` 认数字也认字符串、留空即不修改（下面 Bugfix 的第 2 条就是它钉住的）；
+  - 打包出的 zip 内容对得上、**打完源槽还在**；上传裸字节成新槽；删槽只删该删的。
+
+  测不了的两块写在文件头，免得当成漏了：SFO 里的读名字（`game_mgr_sfo_text` 在
+  `game_mgr.c`，那个文件要 `getmntinfo()`、主机上编不过，所以它是整个链接集里唯一
+  的桩）与 HTTP 那一层（没有 microhttpd）。
+
 ### 🐛 Bugfix
 
 * **`POST /game_save_auto` 取错了 `tid` 的位置 —— 每次点「保存配置」都 400。**
@@ -57,10 +71,29 @@
   挑出来的，**其余 8 条 POST 都核过没有同类问题**（delete/mount/unmount/uninstall
   走 body，存档上传与磁贴两层走 query，rename 走 body）。
 
+* **`port` 从不落盘，「测试连接」每次都打到 21。** 前端那个 `<input>` 的
+  `onChange` 存的是 `e.target.value` —— 出来**永远是字符串**，`inputMode="numeric"`
+  只是键盘提示、不做类型转换，所以请求体里是 `"port":"2121"` 而不是 `2121`。
+  后端两处（`game_saves_auto_set` 的落盘、`game_saves_test` 的取值）都只认
+  `cJSON_IsNumber`，于是端口整个被丢掉：保存后读回来还是默认 21，「测试连接」
+  连的也是 21 —— 用户填的 2121 等于没填，还会以为 FTP 本身坏了。
+  改成**数字与数字字符串都认**（`gs_get_port()`），空串仍按「留空即不修改」处理。
+  mock 那边是整段 raw 合并、不挑类型，所以这个问题只在真后端上暴露。
+
 * **`auto.http` 补一个 `has_token`**：前端那句「已保存过；留空则保持不变」是按
   `has_${f.key}` 通用拼的（secret 字段 = smb/ftp 的 `password`、http 的 `token`），
   只回契约里的 `token_set` 它永远读不到 `has_token` —— 令牌栏的提示一直不出现，
   而 smb/ftp 两栏都有，用户会以为令牌没存上。两个名一起给，契约不破、前端一行不改。
+
+* **存档那三条怎么防再犯：新增 `test/game_saves_test.c`（88 项断言）。**
+  由 `test/run_host_tests.sh` 拨起，夹具 `test/make_game_fixture.py` 现造
+  （两个用户目录、**第一个故意空着**；PS5 目录槽 + PS4 单文件槽；一个该被跳过的
+  `.upl_`）。它钉住了 **port 的数字/字符串双认** 与 **has_token**，以及根目录取
+  体积最大的命中、一级子项即一个槽、`size`/`files` 递归统计、
+  **明文密码/令牌永远不外泄**、打包出的 zip 内容与源槽完好、上传成新槽、删槽。
+  **唯一没被钉住的是 `tid` 在 query 还是 body** —— 那条在 `http_server.c`，
+  主机上没有 microhttpd。那类错编译期看不出来，只能靠对照审计，
+  已写进 HANDOVER §2.1.2 当规矩：**加新端点先查参数取自哪一侧**。
 
 * **多媒体「预览图片只显示最顶部的一条」+「打包下载失败」—— 两个症状一个根：
   `MHD_create_response_from_fd64`。**

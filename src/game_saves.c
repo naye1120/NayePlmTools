@@ -269,9 +269,30 @@ static const char *gs_field_str(cJSON *o, const char *k, const char *def) {
     if (f && cJSON_IsString(f) && f->valuestring) return f->valuestring;
     return def ? def : "";
 }
+/* 端口字段：JSON 数字和 "2121" 这种**数字字符串都认**。
+ *
+ * 前端 SaveManagerModal 那个 <input> 的 onChange 存的是 `e.target.value` ——
+ * 出来**永远是字符串**，`inputMode="numeric"` 只是手机键盘提示，不做类型转换。
+ * 所以请求体里就是 `"port":"2121"` 而不是 `"port":2121`。原先只认
+ * cJSON_IsNumber，于是：端口永远存不进配置文件（读回来还是默认 21）、
+ * 「测试连接」也每次打到 21 —— 用户填的 2121 等于没填，还会以为 FTP 坏了。
+ * mock 那边是整段 raw 合并、不挑类型，所以这个问题只在真后端上暴露。 */
+static int gs_get_port(cJSON *f, int def) {
+    if (f && cJSON_IsNumber(f)) {
+        double v = f->valuedouble;
+        return (v > 0 && v < 65536) ? (int)v : def;
+    }
+    if (f && cJSON_IsString(f) && f->valuestring && f->valuestring[0]) {
+        char *e = NULL;
+        double v = strtod(f->valuestring, &e);
+        if (e && e != f->valuestring && *e == 0) return (v > 0 && v < 65536) ? (int)v : def;
+    }
+    return def;
+}
+
+/* 本文件里只有 port 一处用它，所以直接并到同一条兼容逻辑上。 */
 static double gs_field_num(cJSON *o, const char *k, double def) {
-    cJSON *f = o ? cJSON_GetObjectItem(o, k) : NULL;
-    return (f && cJSON_IsNumber(f)) ? f->valuedouble : def;
+    return (double)gs_get_port(o ? cJSON_GetObjectItem(o, k) : NULL, (int)def);
 }
 static int gs_field_bool(cJSON *o, const char *k, int def) {
     cJSON *f = o ? cJSON_GetObjectItem(o, k) : NULL;
@@ -485,13 +506,14 @@ int game_saves_auto_set(const char *tid, const char *body, size_t len,
             cJSON *f = cJSON_GetObjectItem(in, fields[k]);
             if (f && cJSON_IsString(f)) gs_put_str(dst, fields[k], f->valuestring);
         }
-        cJSON *f = cJSON_GetObjectItem(in, "port");
-        if (f && cJSON_IsNumber(f) && f->valuedouble > 0 && f->valuedouble < 65536)
-            gs_put_num(dst, "port", f->valuedouble);
-        f = cJSON_GetObjectItem(in, "password");
-        if (f && cJSON_IsString(f)) gs_put_str(dst, "password", f->valuestring);
-        f = cJSON_GetObjectItem(in, "token");
-        if (f && cJSON_IsString(f)) gs_put_str(dst, "token", f->valuestring);
+        /* 空串/缺键 → 不动（留空即不修改）；填了才覆盖，数字字符串照样认。 */
+        int prt = gs_get_port(cJSON_GetObjectItem(in, "port"), -1);
+        if (prt > 0) gs_put_num(dst, "port", (double)prt);
+        /* 这两个用 pf 不用 f：f 是下面那个 cJSON *f 的，被我的 port 那行提前用掉了。 */
+        cJSON *pf = cJSON_GetObjectItem(in, "password");
+        if (pf && cJSON_IsString(pf)) gs_put_str(dst, "password", pf->valuestring);
+        pf = cJSON_GetObjectItem(in, "token");
+        if (pf && cJSON_IsString(pf)) gs_put_str(dst, "token", pf->valuestring);
     }
 
     cJSON *f;

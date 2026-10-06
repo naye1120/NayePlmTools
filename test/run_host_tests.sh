@@ -74,5 +74,30 @@ else
     echo "=== media_scan SKIPPED: 需要 python3 做夹具与 zip 校验 ==="
 fi
 
+# [CN-FORK] v0.5.2.116 游戏管理 → 存档（src/game_saves.c）
+# 夹具同样是 python3 现造（两个用户目录、两种槽形态、一个该被跳过的 .upl_），
+# 缺 python3 就整段跳过，不半跑。
+SAVES_ROOT=/tmp/pldmgr_saves_test
+if command -v python3 >/dev/null 2>&1; then
+    echo "=== game_saves_fixture ==="
+    rm -rf "$SAVES_ROOT"
+    if ! python3 test/make_game_fixture.py "$SAVES_ROOT"; then
+        echo "  FIXTURE FAILED"; fail=1
+    else
+        # src/game_mgr.c 不进来：它要 getmntinfo()（BSD 专有），主机上编不过。
+        # 它唯一漏进来的符号 game_mgr_sfo_text 由 test/game_saves_test.c 桩掉 ——
+        # 于是 SFO 里读名字那条测不了，「读不到就用子项名」的兜底分支反而被测到。
+        run_one game_saves src/game_saves.c \
+            -Iinclude -Isrc/psaccounts/third_party \
+            -DGS_HOME='"/tmp/pldmgr_saves_test/home"' \
+            -DGAME_SAVES_AUTO_PATH='"/tmp/pldmgr_saves_test/saves_auto.json"' \
+            -DGAME_SAVES_PACK_DIR='"/tmp/pldmgr_saves_test/packs"' \
+            src/game_job.c src/json_helpers.c src/utils.c src/inflate.c src/zip_io.c \
+            src/psaccounts/third_party/cJSON.c
+    fi
+else
+    echo "=== game_saves SKIPPED: 需要 python3 做夹具 ==="
+fi
+
 echo "==== overall: $([ $fail -eq 0 ] && echo PASS || echo FAIL) ===="
 exit $fail

@@ -341,6 +341,16 @@
   原来从 query 取（前端塞在 body 里 → 必 400）；`auto.http` 只回 `token_set`，
   而前端按 `has_${f.key}` 拼提示，读不到 `has_token` 就永远不显示「已保存过」。
   **以后加端点先查这一侧** —— 这类错编译期看不出来，只有真机点一下才会暴露。
+  审计后又追加了第三条：`port` 后端只认 JSON 数字，而前端 `<input>` 出来的
+  **永远是字符串**（`inputMode` 只是键盘提示），于是端口从不落盘、「测试连接」
+  每次都打到默认的 21。
+  **现在有了回归覆盖**：`.116` 新增 `test/game_saves_test.c`（88 项断言，
+  `test/run_host_tests.sh` 拨起，夹具 `test/make_game_fixture.py`），
+  把 port 的双认、`has_token`、根目录取体积最大的命中、递归计数、
+  **明文不外泄**、打包/上传/删除一起钉住。
+  **仍然测不到的是「参数取自 query 还是 body」** —— 那一层要 microhttpd，
+  主机上没有；加新端点时只能照上面那套方法把 `gameApi.js` 和 `mock-server.js`
+  并排读一遍。
 
 ##### `gr_file_response()` —— 文件直出为什么不走 `MHD_create_response_from_fd64`
 
