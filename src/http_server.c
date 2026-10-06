@@ -11,6 +11,7 @@
 #include <strings.h>
 #include <fcntl.h>  /* [CN-FORK] open() for /game_icon */
 #include <unistd.h> /* [CN-FORK] close() for /game_icon */
+#include <stdint.h> /* [CN-FORK] v0.5.2.115 MHD_create_response_from_fd64(uint64_t) */
 #include <sys/stat.h>
 #include <microhttpd.h>
 
@@ -31,6 +32,7 @@
 #include "quicklinks.h" /* [CN-FORK] 「常用入口」自定义快捷访问 */
 #include "thermal.h"    /* [CN-FORK] 温控只读端点 /thermal_stats */
 #include "game_mgr.h"   /* [CN-FORK] 游戏列表 /game_list + 图标 /game_icon */
+#include "game_media.h" /* [CN-FORK] v0.5.2.115 多媒体管理 /game_media*（六条 + 任务两条） */
 #include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF：账号/头像/安全还原/远程游玩
  * 配对接口认领 /api/ 前缀，其余路由仍全部归本文件 */
@@ -63,6 +65,32 @@ static struct MHD_Response *alloc_response_buffer(char **out) {
     MHD_add_response_header(resp, "Content-Type", "application/json");
     add_cors_headers(resp);
     return resp;
+}
+
+/* [CN-FORK] v0.5.2.115 小 JSON 直接按栈上内容回（MUST_COPY 会先拷再交给 MHD，
+ * 所以传局部数组是安全的）。统一加 Content-Type + CORS，免得每条路由各写一遍漏掉一个。 */
+static enum MHD_Result queue_json(struct MHD_Connection *conn, int status,
+                                  const char *json, size_t len) {
+    struct MHD_Response *resp = MHD_create_response_from_buffer(
+        len, (void *)json, MHD_RESPMEM_MUST_COPY);
+    MHD_add_response_header(resp, "Content-Type", "application/json");
+    add_cors_headers(resp);
+    enum MHD_Result ret = MHD_queue_response(conn, status, resp);
+    MHD_destroy_response(resp);
+    return ret;
+}
+
+/* 统一的 JSON 错误回包：{error, message}。
+ * message 走 pldmgr_json_escape —— 出错文案里带 strerror 时会有引号和反斜杠，
+ * 直接 snprintf 进 JSON 会造出一个前端 .json() 解析不了的响应体。 */
+static enum MHD_Result queue_json_error(struct MHD_Connection *conn, int status,
+                                        const char *code, const char *msg) {
+    char esc[480];
+    char buf[560];
+    pldmgr_json_escape(msg ? msg : "", esc, sizeof(esc));
+    int n = snprintf(buf, sizeof(buf), "{\"error\":\"%s\",\"message\":\"%s\"}", code, esc);
+    if (n < 0 || (size_t)n >= sizeof(buf)) n = 0;
+    return queue_json(conn, status, buf, (size_t)n);
 }
 
 static int has_supported_extension(const char *path) {
@@ -138,6 +166,10 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_THERMAL) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_LIST) == 0) return 1; /* [CN-FORK] 游戏板块拉取，降噪 */
     if (strcmp(url, ROUTE_GAME_ICON) == 0) return 1;
+    /* [CN-FORK] v0.5.2.115 缩略图一次开面板要打几十张、任务进度 1s 一次，这两条降噪；
+     * /game_media（列表）与 /game_media_pack_get（下载）一次一发，留着记日志。 */
+    if (strcmp(url, ROUTE_GAME_MEDIA_THUMB) == 0) return 1;
+    if (strcmp(url, ROUTE_GAME_JOB_STATUS) == 0) return 1;
     if (strcmp(url, ROUTE_FAN_CONTROL) == 0) return 1; /* [CN-FORK] 风扇温控页加载/应用，降噪 */
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
@@ -277,6 +309,17 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
 
         if (strcmp(url, ROUTE_SOURCES_SET) == 0 && strcmp(method, "POST") == 0) {
             struct PostStatus *status = malloc(sizeof(struct PostStatus));
+            status->data = NULL;
+            status->size = 0;
+            status->error = 0;
+            *con_cls = status;
+            return MHD_YES;
+        }
+
+        /* [CN-FORK] v0.5.2.115 打包任务：{tid, ids:[…]|null} 的 JSON 体 */
+        if (strcmp(url, ROUTE_GAME_MEDIA_PACK) == 0 && strcmp(method, "POST") == 0) {
+            struct PostStatus *status = malloc(sizeof(struct PostStatus));
+            if (!status) return MHD_NO;
             status->data = NULL;
             status->size = 0;
             status->error = 0;
@@ -446,6 +489,66 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                 conn, ok == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR, resp_ss);
             MHD_destroy_response(resp_ss);
             return ret_ss;
+        }
+    }
+
+    /* ── [CN-FORK] v0.5.2.115 Handle POST data for /game_media_pack ──
+     * 请求体 {tid, ids:[…]|null} → 202 语义上的 {job_id}。前端随后 1s 一次打
+     * /game_job_status?job= 拿进度，跑完再 GET /game_media_pack_get?job= 取成品。 */
+    if (strcmp(url, ROUTE_GAME_MEDIA_PACK) == 0 && strcmp(method, "POST") == 0) {
+        struct PostStatus *status = (struct PostStatus *)*con_cls;
+        if (*upload_data_size != 0) {
+            /* 请求体最多 512KB：每个 id 约 60 字节，够写 8000 个了 */
+            if (status->size + *upload_data_size > (512u << 10)) {
+                status->error = 1;
+            } else {
+                char *nd = realloc(status->data, status->size + *upload_data_size + 1);
+                if (!nd) {
+                    status->error = 1;
+                } else {
+                    status->data = nd;
+                    memcpy(status->data + status->size, upload_data, *upload_data_size);
+                    status->size += *upload_data_size;
+                    status->data[status->size] = '\0';
+                }
+            }
+            *upload_data_size = 0;
+            return MHD_YES;
+        } else {
+            long long job_id = 0;
+            char msg[192];
+            int rc = -2;
+            msg[0] = 0;
+            if (status->error) {
+                snprintf(msg, sizeof(msg), "请求体过大或内存不足");
+            } else if (status->data) {
+                rc = game_media_pack_start_json(status->data, status->size, &job_id,
+                                                msg, sizeof(msg));
+            } else {
+                snprintf(msg, sizeof(msg), "请求体为空");
+            }
+            if (status->data) free(status->data);
+            free(status);
+            *con_cls = NULL;
+
+            char emsg[400];
+            pldmgr_json_escape(msg, emsg, sizeof(emsg));
+            char out[600];
+            int on = snprintf(out, sizeof(out), "{\"job_id\":%lld,\"error\":\"%s\","
+                               "\"message\":\"%s\"}",
+                               job_id, rc == 0 ? "" : (rc == -1 ? "EBUSY" : "EBAD"), emsg);
+            if (on < 0 || (size_t)on >= sizeof(out)) on = 0;
+
+            struct MHD_Response *resp = MHD_create_response_from_buffer(
+                (size_t)on, (void *)out, MHD_RESPMEM_MUST_COPY);
+            MHD_add_response_header(resp, "Content-Type", "application/json");
+            add_cors_headers(resp);
+            enum MHD_Result ret = MHD_queue_response(
+                conn,
+                rc == 0 ? MHD_HTTP_OK : (rc == -1 ? MHD_HTTP_CONFLICT : MHD_HTTP_BAD_REQUEST),
+                resp);
+            MHD_destroy_response(resp);
+            return ret;
         }
     }
 
@@ -1189,6 +1292,138 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             MHD_add_response_header(resp, "Content-Type", "text/plain");
             http_status = MHD_HTTP_NOT_FOUND;
         }
+    } else if (strcmp(url, ROUTE_GAME_MEDIA) == 0) {
+        /* [CN-FORK] v0.5.2.115 多媒体列表：打开弹窗拉一次 + 手动刷新，绝不轮询。
+         * 项数由扫库决定，写在 items 后面（md_item_to_json 那套 first 分隔符逻辑）。 */
+        const char *mtid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        if (!mtid)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
+        char *mresp_buf;
+        struct MHD_Response *moom = alloc_response_buffer(&mresp_buf);
+        if (moom)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, moom);
+        int mlen = game_media_list_json(mtid, mresp_buf, RESPONSE_BUFFER_SIZE);
+        if (mlen < 0) {
+            free(mresp_buf);
+            return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                                    "读取系统媒体库失败（av_content.db）");
+        }
+        resp = MHD_create_response_from_buffer((size_t)mlen, (void *)mresp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_MEDIA_THUMB) == 0) {
+        /* [CN-FORK] 缩略图二进制：系统缩略图 → 盒式平均缩放 → JPEG 落盘缓存。
+         * 前端网格按 ~240px 取 w=320 —— 4K 原图绝不进网格。 */
+        const char *thid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "id");
+        const char *thw = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "w");
+        int thw_i = thw ? atoi(thw) : 320;
+        unsigned char *td = NULL;
+        size_t tlen = 0;
+        const char *tmime = "image/jpeg";
+        int trc = thid ? game_media_thumb(thid, thw_i, &td, &tlen, &tmime) : -1;
+        if (trc == 0 && td) {
+            resp = MHD_create_response_from_buffer(tlen, (void *)td, MHD_RESPMEM_MUST_FREE);
+            MHD_add_response_header(resp, "Content-Type", tmime);
+            MHD_add_response_header(resp, "Cache-Control", "public, max-age=86400");
+        } else if (trc == -1) {
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "参数不合法");
+        } else {
+            /* -2 = 源图不在，或格式没有解码器（HDR .jxr / mp4 视频帧）。
+             * 前端缩略图是 <img onError> 兜的，回 404 就够。 */
+            const char *t404 = "404 Not Found\n";
+            resp = MHD_create_response_from_buffer(strlen(t404), (void *)t404, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(resp, "Content-Type", "text/plain");
+            http_status = MHD_HTTP_NOT_FOUND;
+        }
+    } else if (strcmp(url, ROUTE_GAME_MEDIA_FILE) == 0) {
+        /* [CN-FORK] 原图 / 原视频 fd 直出：录屏动辄几百 MB，读进内存就是把面板 OOM 掉。
+         * response 成功创建后 fd 的所有权交给 MHD（销毁时它替我们 close）；
+         * 创建失败必须自己 close，否则这里会漏一个 fd。 */
+        const char *fid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "id");
+        if (!fid)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 id");
+        int ffd = -1;
+        off_t fsz = 0;
+        const char *fmime = "application/octet-stream";
+        int frc = game_media_open(fid, &ffd, &fsz, &fmime);
+        if (frc == -1)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "参数不合法");
+        if (frc != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "文件不存在");
+        resp = MHD_create_response_from_fd64((uint64_t)fsz, ffd);
+        if (!resp) {
+            close(ffd);
+            return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO", "无法读取文件");
+        }
+        MHD_add_response_header(resp, "Content-Type", fmime);
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_MEDIA_DELETE) == 0) {
+        /* [CN-FORK] 删除：只删文件，不写 av_content.db —— 见 include/game_media.h 铁律①。
+         * 逻辑失败回 404 带 message，前端 request() 会把 message 抛成 toast 文案。 */
+        const char *dtid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        const char *did = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "id");
+        if (!dtid || !did)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid 或 id");
+        char dmsg[192];
+        int drc = game_media_delete(dtid, did, dmsg, sizeof(dmsg));
+        if (drc == 0) {
+            char desc[400];
+            char dout[480];
+            pldmgr_json_escape(dmsg, desc, sizeof(desc));
+            int dn = snprintf(dout, sizeof(dout), "{\"ok\":true,\"message\":\"%s\"}", desc);
+            if (dn < 0 || (size_t)dn >= sizeof(dout)) dn = 0;
+            return queue_json(conn, MHD_HTTP_OK, dout, (size_t)dn);
+        }
+        return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", dmsg[0] ? dmsg : "删除失败");
+    } else if (strcmp(url, ROUTE_GAME_JOB_STATUS) == 0) {
+        /* [CN-FORK] 任务进度：前端 1s 一次轮询（在 is_noisy_route 里已降噪）。 */
+        const char *jqs = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "job");
+        char *jend = NULL;
+        long long jid = jqs ? strtoll(jqs, &jend, 10) : 0;
+        if (!jqs || !jend || jend == jqs || jid <= 0)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少或非法的 job");
+        /* 2048 不是拍脑袋：phase + error + reason 三段都做了 JSON 转义，最坏总长
+         * 已经贴近 1000 —— 用 1024 一旦截断，game_media_pack_status 会返回 -1，
+         * 路由把它当「任务不存在」回 404，前端看到的是一个凭空消失的任务。 */
+        char jbuf[2048];
+        int jn = game_media_pack_status(jid, jbuf, sizeof(jbuf));
+        if (jn < 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "任务不存在或已过期");
+        return queue_json(conn, MHD_HTTP_OK, jbuf, (size_t)jn);
+    } else if (strcmp(url, ROUTE_GAME_JOB_CANCEL) == 0) {
+        const char *cqs = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "job");
+        char *cend = NULL;
+        long long cid = cqs ? strtoll(cqs, &cend, 10) : 0;
+        if (!cqs || !cend || cend == cqs || cid <= 0)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少或非法的 job");
+        if (game_media_pack_cancel(cid) != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "任务不存在或已结束");
+        return queue_json(conn, MHD_HTTP_OK,
+                          "{\"ok\":true,\"reason\":\"cancelled\"}", 33);
+    } else if (strcmp(url, ROUTE_GAME_MEDIA_PACK_GET) == 0) {
+        /* [CN-FORK] 取打包成品：同样 fd 直出，包可以几百 MB。 */
+        const char *pqs = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "job");
+        char *pend = NULL;
+        long long pid = pqs ? strtoll(pqs, &pend, 10) : 0;
+        if (!pqs || !pend || pend == pqs || pid <= 0)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少或非法的 job");
+        int pfd = -1;
+        off_t psz = 0;
+        int prc = game_media_pack_open(pid, &pfd, &psz);
+        if (prc == -1)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "任务不存在或已过期");
+        if (prc != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT",
+                                    "打包还没完成，或产出文件已被清理");
+        resp = MHD_create_response_from_fd64((uint64_t)psz, pfd);
+        if (!resp) {
+            close(pfd);
+            return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO", "无法读取打包文件");
+        }
+        MHD_add_response_header(resp, "Content-Type", "application/zip");
+        MHD_add_response_header(resp, "Content-Disposition",
+                                "attachment; filename=\"media_pack.zip\"");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_GET_CONFIG) == 0) {
         PldmgrConfig cfg;
         config_read(&cfg);

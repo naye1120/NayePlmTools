@@ -9,7 +9,8 @@ fail=0
 run_one() {
     name="$1"; src="$2"; shift 2
     echo "=== $name ==="
-    if ! clang -Wall -Wextra -O0 -Isrc/psaccounts "$@" "$src" "test/${name}_test.c" -o "/tmp/${name}_test"; then
+    # 末尾 -lpthread -lm：media_scan 要起打包 worker 线程，stb_image_write 要 libm。
+    if ! clang -Wall -Wextra -O0 -Isrc/psaccounts "$@" "$src" "test/${name}_test.c" -o "/tmp/${name}_test" -lpthread -lm; then
         echo "  BUILD FAILED"; fail=1; return
     fi
     "/tmp/${name}_test" || fail=1
@@ -19,6 +20,55 @@ run_one slot_resolve   src/psaccounts/npsignin.c
 run_one offact_genid   src/psaccounts/offact.c
 # safety.c really creates SAFETY_DIR, so point it at a temp dir on the host.
 run_one safety_origin  src/psaccounts/safety.c -DSAFETY_DIR='"/tmp/safety_origin_test"'
+
+# [CN-FORK] v0.5.2.115 游戏管理 → 多媒体管理（src/game_media.c）
+# 这条测试比另外三个重：夹具（一个列序照抄真机的 av_content.db + 它引用的真实文件）
+# 要 python3 现造，产出的 zip 也要 python3 复验 —— 缺 python3 就整段跳过，不半跑。
+MEDIA_ROOT=/tmp/pldmgr_media_test
+if command -v python3 >/dev/null 2>&1; then
+    echo "=== media_fixture ==="
+    rm -rf "$MEDIA_ROOT"
+    if ! python3 test/make_media_fixture.py "$MEDIA_ROOT"; then
+        echo "  FIXTURE FAILED"; fail=1
+    else
+        run_one media_scan src/game_media.c \
+            -Iinclude -Isrc/psaccounts/third_party \
+            -DGAME_MEDIA_ROOT='"/tmp/pldmgr_media_test/av_contents"' \
+            -DGAME_MEDIA_DB_PATH='"/tmp/pldmgr_media_test/av_content.db"' \
+            -DGAME_MEDIA_THUMB_DIR='"/tmp/pldmgr_media_test/thumbs"' \
+            -DGAME_MEDIA_PACK_DIR='"/tmp/pldmgr_media_test/pack"' \
+            -DGAME_MEDIA_USER_PREFIX='"/tmp/pldmgr_media_test"' \
+            src/json_helpers.c src/utils.c \
+            src/psaccounts/third_party/cJSON.c src/psaccounts/third_party/stb_impl.c
+        # log_server.c 不进来：它的头要 microhttpd.h（主机上没有）。
+        # pldmgr_log 由 test/media_scan_test.c 自己提供（默认静音）。
+
+        if [ -f "$MEDIA_ROOT/list.json" ]; then
+            echo "=== media_verify json ==="
+            python3 test/media_verify.py json "$MEDIA_ROOT/list.json" 5 || fail=1
+
+            echo "=== media_verify zip (subset 2) ==="
+            python3 test/media_verify.py zip "$MEDIA_ROOT/pack_subset.zip" "$MEDIA_ROOT" \
+                "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png" \
+                "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_170000_00474348.jxr" \
+                || fail=1
+
+            echo "=== media_verify zip (all 5) ==="
+            python3 test/media_verify.py zip "$MEDIA_ROOT/pack_all.zip" "$MEDIA_ROOT" \
+                "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png" \
+                "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_170000_00474348.jxr" \
+                "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_180000_00474349.png" \
+                "/av_contents/video/NPXS40087/PPSA99008/18c/20261006_101112_001.mp4" \
+                "/av_contents/video/NPXS40087/PPSA99008/18c/20261006_102233_002.mp4" \
+                || fail=1
+        else
+            echo "=== media_verify SKIPPED (list.json 没生成) ==="
+            fail=1
+        fi
+    fi
+else
+    echo "=== media_scan SKIPPED: 需要 python3 做夹具与 zip 校验 ==="
+fi
 
 echo "==== overall: $([ $fail -eq 0 ] && echo PASS || echo FAIL) ===="
 exit $fail

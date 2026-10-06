@@ -25,7 +25,10 @@
  *   GET  /game_job_status?job=<id>
  *        → { job_id, active, phase, percent, bytes_done, bytes_total,
  *            files_done, files_total, rate, elapsed, done, ok, error, reason }
- *        phase: idle|preparing|measuring|deleting|finalizing|done|failed|cancelled
+ *        phase: idle|preparing|measuring|packing|deleting|finalizing|done|failed|cancelled
+ *               [CN-FORK] v0.5.2.115：packing = 打包任务在写 zip（后端已实现）；
+ *               deleting/finalizing 是游戏删除任务的占位，还没接后端 —— 前端只把 phase
+ *               原样显示，多出的取值不会出错，但中文映射表里也没有它的词条。
  *   GET  /game_job_cancel?job=<id>          → {ok}
  *
  * 存档

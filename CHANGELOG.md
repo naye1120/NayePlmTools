@@ -1,3 +1,165 @@
+## v0.5.2.115 (CN-FORK)
+
+> 本轮口径：接 `.112`/`.113` 的**纯前端**多媒体管理，补**后端**。前端契约（`gameApi.js`
+> 文件头）是唯一事实来源，后端照它实现，前端功能一行不改。用户指令原文是
+> 「继续，不要中断」—— 没有新的 UI 口径。
+>
+> **为什么是 `.115` 不是 `.114`**：`.114` 那轮（磁贴再放大 ×1.25 + 改名页背景块改回
+> 左右分栏）已在本日 01:47 出过 `-me`/`-ga` 两个正式包，而本轮的 `src/game_media.c`
+> 是 09:58 才建的 —— 复用同一个版本号会让两个内容不同的二进制共用一个版本，
+> 违反「每次调整构建前 +1」。`.114` 的文档在上一轮收尾时漏写了，本轮一并补上（见下）。
+>
+> 本轮出包：`NayePlmTools_0.5.2.115-me.elf` / `-ga.elf`（`-Os -Wall` 零警告）。
+
+### ✨ Features
+
+* **游戏管理 → 多媒体管理后端：六条业务端点 + 两条任务端点，全部按 `gameApi.js` 契约实现。**
+  新文件 `src/game_media.c` + 契约头 `include/game_media.h`：
+
+  | 端点 | 实现要点 |
+  |---|---|
+  | `GET /game_media?tid=` | 读 `av_content.db` 过滤 tid → `{tid, items[], count, truncated}` |
+  | `GET /game_media_thumb?id=&w=320` | 系统缩略图 → 盒式平均缩放 → JPEG → 落盘缓存 |
+  | `GET /game_media_file?id=` | `MHD_create_response_from_fd64` **fd 直出** |
+  | `POST /game_media_pack` | `{tid, ids}` → 单 worker 打包任务 → `{job_id}` |
+  | `GET /game_media_pack_get?job=` | fd 直出 zip |
+  | `GET /game_media_delete?tid=&id=` | 只删文件 → `{ok, message}` |
+  | `GET /game_job_status?job=` | `{job_id, active, phase, percent, …}`，1s 一次 |
+  | `GET /game_job_cancel?job=` | `{ok:true, reason:"cancelled"}` |
+
+* **数据源是 `/system_data/priv/mms/av_content.db` 的 `tbl_PhotoVideo`，只读。**
+  为什么不扫目录：`.jxr`（HDR 截图）的宽高从文件头读不出来（stb_image 不解 JXR），
+  而库一次给出 `content_path/icon_path/width/height/duration(_ms)`。读法与
+  `game_mgr.c` 读 `app.db` 完全同构 —— 极简 SQLite 只读解析器，非 WAL、页 4096、
+  整库 ~180KB 整读进内存。
+  * **列序号按列名现数、不写死**（`md_sql_col_index` 数顶层逗号）：固件间列序可能变，
+    且 `width`/`icon_width`、`duration`/`duration_ms`、`content_path` 是前缀撞车的
+    三对，前后都要挡。
+  * **`size` 用 `stat`、`mtime` 用文件的 `localtime`**，不用库里的值：
+    库的 `size_on_storage` 是「原图 + 缩略图」之和（真机 4150751 vs 实际 3815723），
+    库的 `created_time` 是 UTC，与文件名里的本地时间差 8 小时。
+
+* **打包 = 自研 STORE zip。** SDK 的 `target/lib` 里没有 zlib（curl/mbedtls/
+  microhttpd/pthread 有，`-lz` 没有），引第三方压缩库要动构建链；而 png/jxr/mp4
+  本身就是压缩过的，再 deflate 一遍只多花 CPU。**always 写 EOCD64 + locator +
+  经典 EOCD**，单条目 `size` 或偏移 ≥ 4GiB 就挂 `0x0001` extra —— 两种读法拿到的
+  值一致。产出用 Python `zipfile` 逐条验 CRC + 逐字节比内容（主机测试里）。
+  * **本地头的 CRC 先写 0 占位、数据流完 `lseek` 回填**：源文件因此只读一遍。
+    最初版本为「先算出 CRC 再写头」整读了两遍，录屏几百 MB 时等于白白翻倍 IO。
+  * zip 内条目名 = `content_path` 去掉 `/av_contents/`（如 `photo/<生成器>/<TID>/<hex>/…`），
+    跨分片唯一且可读。
+
+* **大文件一律 fd 直出**（`MHD_create_response_from_fd64`，fd 由 MHD 关）。
+  录屏动辄几百 MB，读进内存就是把面板 OOM 掉。只有缩略图（几十 KB）走内存。
+  response 创建失败时**必须自己 `close(fd)`** —— 成功才移交所有权。
+
+### 🐞 本轮抓出来的三个真 bug
+
+前两个是新测试**上线第一跑**抓到的，第三个是对着前端 `watchJob`/`MediaManagerModal`
+的消费方式**复读契约**读出来的 —— 编译期三种都看不出来，真机上才炸。
+
+1. **`md_scan_locked` 只 walk 了 page 1。** page 1 是 `sqlite_master`，里面是建表语句、
+   不是媒体行。`md_cols_locked` 当时只带回列序、把 `tbl_PhotoVideo` 的 **root page**
+   丢了。表现极具迷惑性：**库读到了、7 个列号全对、`count` 却恒为 0**。
+   `game_mgr.c` 是两次 walk（page 1 找 root → `m.root` 读数据），我漏了第二跳。
+2. **`game_media_pack_start_json` 的 use-after-free。** `ids[i]` 直接指向
+   `cJSON_GetArrayItem` 返回的 `valuestring`，而这些字符串挂在 JSON 树上 ——
+   我在 `cJSON_Delete(root)` **之后**才把 ids 传给 `md_pack_start`。
+   结果是 `md_path_ok` 读已释放内存、`msg` 神秘地回「参数不合法」，
+   表现是「按 id 打包恒定失败、全量打包却正常」。现已在 `Delete` 前 `strdup` 副本。
+   顺带收紧：`ids` 里混进**非字符串**元素改为直接拒绝（原实现会静默跳过，
+   `[1,2]` 会退化成全量打包 —— 比报错危险得多）。
+3. **任务状态 JSON 里 `error` 转义了、`reason` 没转。** 两个字段是同一条链
+   （`md_pack_fail`）传下来的自由文本，只转一个等于给自己留一个「只要某条失败原因里
+   出现引号就整个响应体变成非法 JSON、前端 `.json()` 直接抛」的洞。
+   一并把 HTTP 侧状态缓冲 `jbuf` 从 1024 抬到 2048 —— `phase`+`error`+`reason`
+   三段的最坏长度已经贴近 1000 字节，截断会表现为「任务莫名其妙变成 404」。
+
+> 一并记下：写夹具时 `def rel(root, *parts)` **没用上 `root` 形参**，导致
+> `content_path` 少一段 `photo/`，症状与 bug ① 几乎一样（也是 count=0）。
+> 两个问题叠在一起，是靠在 `md_cb_row` 每道筛子后加临时日志才分开的 ——
+> 下次遇到「扫到了但一条都不出」，先打 `content_path` 全文再看 stat。
+
+### 🧪 Tests
+
+* `test/make_media_fixture.py` —— 现造夹具：`sqlite3` 造 `tbl_PhotoVideo`（19 列，
+  **列的相对顺序照抄真机 66 列 schema**，好让 `width` vs `icon_width`、
+  `duration` vs `duration_ms` 这两对前缀撞车真的被测到）+ 6 条行 +
+  它引用的真实文件（PNG 用 `zlib` 拼，缩略图 JPEG 由 C 侧 `stb_image_write` 写，
+  Python 标准库造不出来）。夹具库设成 `0444`，测试里断言它没被动过。
+* `test/media_scan_test.c` —— 98 项断言：列表（条数/kind/分隔符/tid 过滤/非法 tid）、
+  定位（含穿越）、原图 fd、缩略图（JPEG 图标解码 + 1920×1080 缩到 200×112 +
+  HDR `.jxr` 与 mp4 的 -2 分支）、打包（子集 2 条 / 全量 5 条）、
+  删除（tid 不符拒删 + 原图与 `.meta`/`.dat` 消失 + **`av_content.db` 分毫未动**）。
+* `test/media_verify.py` —— C 侧没法验 zip（无 zlib），交 Python：`testzip()` 逐条 CRC、
+  逐字节比内容、条目名与 `content_path` 的映射、压缩方式必须 `STORED`；
+  `json` 模式解析 `list.json` 并校 `count == len(items)`（分隔符写错第一个炸这儿）。
+* `test/run_host_tests.sh` 从 3 条增至 4 条，末尾补 `-lpthread -lm`（打包 worker 线程 +
+  stb 的 libm）。`log_server.c` 不参与主机链接（它的头要 `microhttpd.h`），
+  `pldmgr_log` 由测试文件提供、默认静音，`MEDIA_TEST_VERBOSE=1` 才开。
+* **验收状态**：主机测试 `4/4 PASS`（media_scan 98/98 + 三次 zip 校验全对）；
+  PS5 ELF 构建 `-Os -Wall` 零警告；前端 `npx eslint` 跑我碰过的
+  `gameApi.js` / `MediaManagerModal.jsx` / `format.js` 全绿。
+  ⚠️ `npm run lint` **全局仍有 28 个 error**，全在 `App.jsx`、各 `*View.jsx`、
+  `vite.config.js` 里（`no-unused-vars` / `react-hooks/set-state-in-effect`）——
+  **都是历史遗留，本轮一个都没碰**，但记在这里免得下次以为是新引入的。
+
+### ⚠️ 偏离与已知限制
+
+* **删除只删文件，不写 `av_content.db`。** SDK 里没有 sqlite3，仓库那套极简解析器只会读
+  b-tree；手写 b-tree 删除等于拿用户全部截图去赌系统库不被写坏。
+  库里的行留给媒体库自己清 —— 它有 `file_status` 列，**是否自动对账未验证**（§7c）。
+  本轮用夹具证明了「删完我们自己的库文件分毫未动」，但**真机媒体库的反应仍是黑箱**。
+* **`.jxr` 无解码器 → 缩略图 404。** 系统缩略图（`icon_path`）缺失时才落到这一步，
+  前端 `<img onError>` 已兜住。真机上系统缩略图始终存在，这条是兜底不是常态。
+* **§7 待验证（下一轮拿真机取证，别当已知事实）**：
+  * a. 录屏目录层级是否与 photo 同构（`/video/<生成器>/<TID>/<hex>/…`）——
+    真机 `video/` 目录当时是空的；
+  * b. 视频时长读 `duration` 还是 `duration_ms`（单位是秒还是毫秒）——
+    实机没有录屏，两列都是 0；实现按 `duration_ms>0 ? /1000 : duration` 走，
+    主机测试把两条分支都钉住了（但**钉的是我们的行为，不是真机语义**）；
+  * c. 只删文件后，媒体库再次打开是否会出现幽灵条目。
+* `phase` 新增 `packing`（实现在 `game_media.c`，`gameApi.js` 的枚举注释已同步补上）；
+  注释里的 `deleting`/`finalizing` 仍是游戏删除任务的占位，**还没有后端**。
+* `/game_media` 与 `/game_media_thumb` 里 `.jxr` 的宽高来自**库**，不是文件头 ——
+  库与文件不一致时（用户手动放过文件）会显示库的值。这是刻意的取舍。
+
+---
+
+## v0.5.2.114 (CN-FORK)
+
+> ⚠️ **这一轮的包出了、文档漏了** —— 上一轮跑完就收尾了，`CHANGELOG` 与 `HANDOVER`
+> 一个字没写。这里由 `.115` 补记。
+> 包：`NayePlmTools_0.5.2.114-me.elf` / `-ga.elf`，本日 01:47 出，两包各 **9,957,216 字节**，
+> 内嵌标题 `NayePlmTools v0.5.2.114 by naye (91fa4fb, built at 2026-10-05 17:46:55 UTC)`
+> （**非 DEV**）、`PLDMGR_VER:0.5.2.114`；`.113` 的包已过期。
+>
+> 本轮只动前端与版本号，**C 后端功能一行未改**。
+
+### ✨ Features
+
+* **游戏磁贴再放大 1/4（同一根令牌的第三次调档）。** 口径原文：「relative 再大四分之一左右」。
+
+  | 档 | `.101` | `.114` |
+  |---|---|---|
+  | PC/手机 `--tile-w` | 13.125rem(210px) | **16.40625rem(262.5px)** |
+  | 电视 `html[data-device="ps5"]` | 18.75rem(300px) | **23.4375rem(375px)** |
+
+  * 实机反馈：`.113` 的 210px 在电视端正文列里挤得每行放 6~7 块，磁贴上的四颗按钮挨得很近、
+    「查看详情」的方图也压得过小，用户还是觉得小。
+  * 电视端 375px 下限在正文列约 1470px 时排到 3 列、每列实际 ≈490px —— 回到「三块一排」的
+    舒适档（4 块一排时遥控器方向键要按 4~5 下才跨一列）。
+  * **`.100` 缩小 → `.101` 放大 → `.114` 再放大**，是同一根 `--tile-w` 的第三次调档；
+    `index.css` 两处（`:root` 与 `html[data-device="ps5"]`）都记了完整沿革，
+    改这格前先看注释，别再来回拧。
+
+* **改名页「磁贴背景」块改回左右分栏（`.112` 那轮的竖排撤掉）。**
+  口径原文：「磁贴背景的按钮和说明放到图片右边」。竖排时预览能开到最大，但整块太高、
+  按钮要滚才看得见；改回「图左、按钮说明右」后与上面的图标块结构完全对称，
+  两个块并排时视觉一致。
+
+---
+
 ## v0.5.2.113 (CN-FORK)
 
 > 用户口径（本轮原文，一条）：

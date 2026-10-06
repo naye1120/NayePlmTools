@@ -53,10 +53,21 @@
 /* [CN-FORK] 游戏管理板块：游戏列表(app.db+扫描dump) + 单游戏图标(icon0.png) */
 #define ROUTE_GAME_LIST "/game_list"
 #define ROUTE_GAME_ICON "/game_icon"
+/* [CN-FORK] v0.5.2.115 多媒体管理（截图/录屏）。契约 = frontend/src/utils/gameApi.js 的文件头，
+ * 实现 = include/game_media.h 的文件头，两边是同一份。 */
+#define ROUTE_GAME_MEDIA "/game_media"
+#define ROUTE_GAME_MEDIA_THUMB "/game_media_thumb"
+#define ROUTE_GAME_MEDIA_FILE "/game_media_file"
+#define ROUTE_GAME_MEDIA_PACK "/game_media_pack"
+#define ROUTE_GAME_MEDIA_PACK_GET "/game_media_pack_get"
+#define ROUTE_GAME_MEDIA_DELETE "/game_media_delete"
+/* [CN-FORK] 通用任务进度/取消：打包任务在用，日后游戏删除任务同样挂这两条 */
+#define ROUTE_GAME_JOB_STATUS "/game_job_status"
+#define ROUTE_GAME_JOB_CANCEL "/game_job_cancel"
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
 
-#define MENU_VERSION "0.5.2.114" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.114，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.115" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.115，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"

@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+# [CN-FORK] v0.5.2.115 test/make_media_fixture.py
+#
+# 给 test/media_scan_test.c 造一份主机夹具：一个**能被 src/game_media.c 那套极简 SQLite
+# 解析器读出来**的 av_content.db，外加它引用到的真实文件。
+#
+# 为什么不用真机抓回来的库（D:\pldmanager\_ftp_probe\media\av_content.db）：
+#   ① 那里面带真机 account 相关列，不该进仓库；
+#   ② 夹具必须自给自足 —— 换台机器 clone 下来也要能跑，
+#      而 FTP 取证数据只在本机有。
+# 所以这里用 sqlite3 现造一个**列序照抄真机 schema 的子集**（真机 tbl_PhotoVideo 66 列，
+# 这里留 19 列、相对顺序与真机一致）：game_media.c 是「按列名定位序号」不是「写死序号」，
+# 列数变了也该读对 —— 这正是这个夹具要守住的性质。
+#
+# 用法：python3 test/make_media_fixture.py [/tmp/pldmgr_media_test]
+# 环境：python3 + 标准库（sqlite3 / zlib / struct），无第三方依赖。
+
+import os
+import shutil
+import sqlite3
+import struct
+import sys
+import zlib
+
+ROOT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/pldmgr_media_test"
+
+PHOTO = os.path.join(ROOT, "av_contents", "photo")
+THUMB = os.path.join(ROOT, "av_contents", "thumbnails", "photo")
+VIDEO = os.path.join(ROOT, "av_contents", "video")
+
+# 真机：/av_contents/photo/<生成器>/<TID>/<3位hex>/<时间戳_随机>.<ext>
+GEN = "NPXS40087"
+TID = "PPSA99008"     # 主测试游戏：5 条（3 截图 + 2 录屏）
+OTHER = "PPSA00001"   # 另一个游戏 1 条 —— 删除测试拿它开刀，免得把主集合改小
+SHARD = "18c"
+
+
+def png_bytes(w, h, rgb):
+    """纯标准库拼一张 PNG（8bit 真彩，整幅同色 → 压完很小）。"""
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    row = b"\x00" + (bytes(rgb) * w)
+    raw = row * h
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9))
+            + chunk(b"IEND", b""))
+
+
+def put(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
+def rel(media_type, *parts):
+    """绝对路径 → content_path（相对媒体根，即去掉 /user 前缀）。
+    ⚠️ 第一个参数是 photo/video 这一层，必须拼进去 —— 漏了它 content_path 会少一段，
+    stat 全部落空，表现是「库读到了、列也对，但一条都列不出来」（踩过一次）。"""
+    return os.path.join("/av_contents", media_type, *parts).replace(os.sep, "/")
+
+
+# ── 文件 ────────────────────────────────────────────────────────────────────
+p1 = os.path.join(PHOTO, GEN, TID, SHARD, "20261005_165454_00474347.png")
+p2 = os.path.join(PHOTO, GEN, TID, SHARD, "20261005_170000_00474348.jxr")
+p3 = os.path.join(PHOTO, GEN, TID, SHARD, "20261005_180000_00474349.png")
+v1 = os.path.join(VIDEO, GEN, TID, SHARD, "20261006_101112_001.mp4")
+v2 = os.path.join(VIDEO, GEN, TID, SHARD, "20261006_102233_002.mp4")
+o1 = os.path.join(PHOTO, GEN, OTHER, "9a1", "20261004_090000_00000001.png")
+
+put(p1, png_bytes(640, 360, (30, 90, 200)))
+# HDR 截图：stb 解不了 .jxr —— 真机上就是靠 icon_path 兜的，这里**故意不给 icon**，
+# 用来覆盖 game_media_thumb 的 -2（→ 404）分支。
+put(p2, b"\x49\x49\x00\x01" + os.urandom(256))
+put(p3, png_bytes(1920, 1080, (200, 40, 40)))
+# 录屏：假 mp4（我们不解视频，只做 stat / 打包 / 直出）
+put(v1, b"\x00\x00\x00\x18ftypmp42" + os.urandom(4096))
+put(v2, b"\x00\x00\x00\x18ftypmp42" + os.urandom(4096))
+put(o1, png_bytes(320, 180, (10, 200, 10)))
+
+# 副文件：同目录 <原名>.meta（JSON）与 <原名>.dat（1024B），删除时要一并干掉
+put(p1 + ".meta", b'{"ageLevel":1,"appVer":"01.00","segmentInfo":"game"}')
+put(p1 + ".dat", os.urandom(1024))
+
+# 缩略图：真机是 .jpeg，由 test/media_scan_test.c 用 stb_image_write 现写一张
+# （Python 标准库造不出 JPEG）。path 必须与下面 DB 里 row1 的 icon_path 一致。
+ICON = os.path.join(THUMB, GEN, TID, SHARD, "20261005_165454_00474347.png.jpeg")
+
+# ── av_content.db ───────────────────────────────────────────────────────────
+# 列名与**相对顺序**照抄真机 tbl_PhotoVideo（66 列里的 19 列）。game_media.c 靠
+# md_sql_col_index 按列名数逗号，所以这里的顺序不是装饰：
+#   · width 必须排在 icon_width 前面（前缀撞车）
+#   · duration 必须排在 duration_ms 前面（前缀撞车）
+# 这两条真机上也是这个顺序，夹具照抄，防止哪天「优化」成硬编码序号。
+DDL = """CREATE TABLE tbl_PhotoVideo (
+  mrid INTEGER PRIMARY KEY AUTOINCREMENT,
+  parental_level TEXT,
+  duration INTEGER,
+  duration_ms INTEGER,
+  width INTEGER,
+  height INTEGER,
+  icon_width INTEGER,
+  icon_height INTEGER,
+  mime_type INTEGER,
+  content_type TEXT,
+  generator_title_id TEXT,
+  content_path TEXT,
+  appli_title_id TEXT,
+  optional_title_id TEXT,
+  imported_date INTEGER,
+  last_update_date INTEGER,
+  title TEXT,
+  icon_path TEXT,
+  created_time INTEGER
+)"""
+
+# (content_path, icon_path, w, h, duration, duration_ms, tid, mime, kind)
+ROWS = [
+    (rel("photo", GEN, TID, SHARD, "20261005_165454_00474347.png"),
+     "/av_contents/thumbnails/photo/%s/%s/%s/20261005_165454_00474347.png.jpeg" % (GEN, TID, SHARD),
+     3840, 2160, 0, 0, TID, 131083, "png"),
+    (rel("photo", GEN, TID, SHARD, "20261005_170000_00474348.jxr"),
+     "", 3840, 2160, 0, 0, TID, 131098, "jxr"),
+    (rel("photo", GEN, TID, SHARD, "20261005_180000_00474349.png"),
+     "", 1920, 1080, 0, 0, TID, 131083, "png"),
+    (rel("video", GEN, TID, SHARD, "20261006_101112_001.mp4"),
+     "", 1280, 720, 0, 15000, TID, 131072, "mp4"),
+    (rel("video", GEN, TID, SHARD, "20261006_102233_002.mp4"),
+     "", 1280, 720, 12, 0, TID, 131072, "mp4"),
+    (rel("photo", GEN, OTHER, "9a1", "20261004_090000_00000001.png"),
+     "", 320, 180, 0, 0, OTHER, 131083, "png"),
+]
+
+db = os.path.join(ROOT, "av_content.db")
+if os.path.exists(db):
+    os.remove(db)
+
+con = sqlite3.connect(db)
+con.execute("PRAGMA page_size=4096")   # 真机就是 4096
+con.execute("PRAGMA journal_mode=DELETE")  # 真机是回滚日志模式，不是 WAL
+con.execute("PRAGMA encoding='UTF-8'")
+con.execute(DDL)
+con.executemany(
+    "INSERT INTO tbl_PhotoVideo (parental_level, duration, duration_ms, width, height,"
+    " icon_width, icon_height, mime_type, content_type, generator_title_id, content_path,"
+    " appli_title_id, title, icon_path, created_time)"
+    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [(None, d, dm, w, h, None, None, mime, kind, GEN, cp, tid, None, ic or None, 0)
+     for (cp, ic, w, h, d, dm, tid, mime, kind) in ROWS],
+)
+con.commit()
+con.close()
+os.chmod(db, 0o444)  # 铁律①：库只读。测试里也会断言它是 444。
+
+# ── 汇总清单，给 shell / C 测试复用 ─────────────────────────────────────────
+manifest = os.path.join(ROOT, "manifest.txt")
+with open(manifest, "w") as f:
+    for (cp, ic, _w, _h, _d, _dm, tid, _m, kind) in ROWS:
+        f.write("%s\t%s\t%s\n" % (tid, kind, cp))
+    f.write("ICON\t%s\t%s\n" % (TID, ICON))
+
+print("fixture ready: %s (%d rows, %d bytes db)" % (ROOT, len(ROWS), os.path.getsize(db)))
+print("icon (written by C test): %s" % ICON)

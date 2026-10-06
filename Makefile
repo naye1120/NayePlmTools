@@ -37,6 +37,8 @@ SRCS += src/psaccounts/api.c src/psaccounts/accounts.c src/psaccounts/npsignin.c
         src/psaccounts/offact.c src/psaccounts/avatar.c src/psaccounts/safety.c \
         src/psaccounts/sys_lite.c \
         src/psaccounts/third_party/cJSON.c src/psaccounts/third_party/stb_impl.c
+# [CN-FORK] v0.5.2.115 游戏管理 → 多媒体管理（截图/录屏）后端
+SRCS += src/game_media.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf
 VERSION := $(shell grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"')
