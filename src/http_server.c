@@ -9,9 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <errno.h>   /* [CN-FORK] v0.5.2.116 mkdir 的 EEXIST（存档下载临时目录） */
+#include <time.h>    /* [CN-FORK] v0.5.2.116 存档下载临时包名里的毫秒级唯一因子 */
 #include <fcntl.h>  /* [CN-FORK] open() for /game_icon */
 #include <unistd.h> /* [CN-FORK] close() for /game_icon */
-#include <stdint.h> /* [CN-FORK] v0.5.2.115 MHD_create_response_from_fd64(uint64_t) */
+#include <stdint.h> /* [CN-FORK] gr_file_read 的 uint64_t pos（MHD 内容回调签名） */
 #include <sys/stat.h>
 #include <microhttpd.h>
 
@@ -19,6 +21,7 @@
 #include "pldmgr.h"
 #include "log_server.h"
 #include "config.h"
+#include "cJSON.h" /* [CN-FORK] v0.5.2.116 POST 分发里从 body 取 tid/name */
 #include "payload_mgr.h"
 #include "repository.h"
 #include "sha256.h"
@@ -33,6 +36,9 @@
 #include "thermal.h"    /* [CN-FORK] 温控只读端点 /thermal_stats */
 #include "game_mgr.h"   /* [CN-FORK] 游戏列表 /game_list + 图标 /game_icon */
 #include "game_media.h" /* [CN-FORK] v0.5.2.115 多媒体管理 /game_media*（六条 + 任务两条） */
+#include "game_runtime.h" /* [CN-FORK] v0.5.2.116 删源 / 挂载 / 卸载挂载 / 卸载安装 */
+#include "game_saves.h"   /* [CN-FORK] v0.5.2.116 存档六条 */
+#include "game_title.h"   /* [CN-FORK] v0.5.2.116 改名 + 磁贴两层图六条 */
 #include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF：账号/头像/安全还原/远程游玩
  * 配对接口认领 /api/ 前缀，其余路由仍全部归本文件 */
@@ -91,6 +97,271 @@ static enum MHD_Result queue_json_error(struct MHD_Connection *conn, int status,
     int n = snprintf(buf, sizeof(buf), "{\"error\":\"%s\",\"message\":\"%s\"}", code, esc);
     if (n < 0 || (size_t)n >= sizeof(buf)) n = 0;
     return queue_json(conn, status, buf, (size_t)n);
+}
+
+/* [CN-FORK] v0.5.2.116 **文件直出一律走自写回调，不再用 MHD_create_response_from_fd64。**
+ *
+ * 症状（用户实测，多媒体管理两条）：原图/录屏预览只画出图片**最顶上的一条**，
+ * 打包 zip 下载**直接失败**。同一进程里其余响应全好 —— 缩略图、所有 JSON 走
+ * MHD_create_response_from_buffer，/events 的 SSE 流走 MHD_create_response_from_callback。
+ * 也就是说本工程里**唯一**出问题的就是 fd 直出这一条分支。
+ *
+ * 排查到的差别：链接进来的 libmicrohttpd.a 里导出了 MHD_send_sendfile_，说明
+ * fd 直出会落到内核 sendfile() 那条路上；而 MHD 的文档自己写着，构建没开
+ * MHD_FEATURE_RESPONSES_SHARED_FD 时「同一条响应在多个连接上并发可能把错误数据
+ * 发给客户端」。Content-Length 是照 fstat 报出去的，字节却少一截 —— 图片解码到断点
+ * 就停（只剩顶部一条），zip 少尾（下载判失败）。两条症状同一个根。
+ *
+ * 改法：自己按 pos lseek + read，整条 sendfile 路径绕开。内存仍是每块 32KB，
+ * 几百 MB 的录屏照样不进堆 —— 换掉的只是「谁来搬字节」，不是「搬多少」。
+ * /events 那条流真机上一直是好的，_from_callback 这条路是通的，两处走同一条。
+ *
+ * fd 所有权仍按 MHD 约定由 free 回调关；任何创建失败的路径都必须自己收尸，
+ * 否则每次「没设过背景」都会漏一个 fd。 */
+typedef struct { int fd; } gr_file_cls_t;
+
+static ssize_t gr_file_read(void *cls, uint64_t pos, char *buf, size_t max) {
+    gr_file_cls_t *f = (gr_file_cls_t *)cls;
+    if (!f || f->fd < 0) return MHD_CONTENT_READER_END_WITH_ERROR;
+    if (max == 0) return 0;
+    if (lseek(f->fd, (off_t)pos, SEEK_SET) < 0)
+        return MHD_CONTENT_READER_END_WITH_ERROR;
+    ssize_t n = read(f->fd, buf, max);
+    if (n < 0) {
+        if (errno == EINTR) return 0; /* 被信号打断：让 MHD 再问一次，别判死 */
+        return MHD_CONTENT_READER_END_WITH_ERROR;
+    }
+    /* 0 = 文件比声明的 size 短（理论上到不了）。回 END_OF_STREAM 会被 MHD 当成
+     * error 收连接 —— 与其悄悄发半张图，不如让浏览器明确知道这次没拿到完整的。 */
+    if (n == 0) return MHD_CONTENT_READER_END_OF_STREAM;
+    return n;
+}
+
+static void gr_file_free(void *cls) {
+    gr_file_cls_t *f = (gr_file_cls_t *)cls;
+    if (!f) return;
+    if (f->fd >= 0) close(f->fd);
+    free(f);
+}
+
+static struct MHD_Response *gr_file_response(off_t size, int fd) {
+    gr_file_cls_t *f = (gr_file_cls_t *)calloc(1, sizeof(*f));
+    if (!f) { close(fd); return NULL; }
+    f->fd = fd;
+    struct MHD_Response *r = MHD_create_response_from_callback(
+        (uint64_t)size, 32u * 1024u, &gr_file_read, f, &gr_file_free);
+    if (!r) gr_file_free(f); /* 创建失败 MHD 不会替我们调 free 回调 */
+    return r;
+}
+
+/* [CN-FORK] v0.5.2.116 把磁贴图 / 存档包按路径直出。
+ * 不读进内存：用户上传的背景能到 64MB，存档包能到 512MB，进内存就是拿面板的堆去赌一次
+ * OOM；字节怎么搬交给上面的 gr_file_response（见那段注释为什么不用 fd 直出）。
+ * remove_after 在**response 创建成功之后**再 unlink：POSIX 下已打开的 fd 不受
+ * unlink 影响，MHD 会照常把它流完，这样下载不必等连接结束才能清理临时包。 */
+static enum MHD_Result reply_file(struct MHD_Connection *conn, const char *path,
+                                  const char *mime, const char *disposition,
+                                  int remove_after) {
+    int fd = path ? open(path, O_RDONLY) : -1;
+    if (fd >= 0) {
+        struct stat st;
+        if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+            struct MHD_Response *r = gr_file_response(st.st_size, fd);
+            if (r) {
+                MHD_add_response_header(r, "Content-Type", mime);
+                if (disposition) MHD_add_response_header(r, "Content-Disposition", disposition);
+                MHD_add_response_header(r, "Cache-Control", "no-store");
+                add_cors_headers(r);
+                if (remove_after) unlink(path);
+                enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, r);
+                MHD_destroy_response(r);
+                return ret;
+            }
+        }
+        close(fd);
+    }
+    /* 失败也一并清掉临时包（成功那条分支已经 unlinks 过，再 unlink 一次只是
+     * 白得一个 ENOENT，但换来「任何退出路径都不留垃圾」这条不会忘的性质）。 */
+    if (remove_after && path) unlink(path);
+    return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "文件不存在");
+}
+
+/* [CN-FORK] v0.5.2.116 这条 POST 要收多少字节的请求体；0 = 不归我们管。
+ * 上限不是随手定的，逐条对着 mock-server.js 的 express.raw({limit:…})：
+ *   存档包 512mb、磁贴 PNG 64mb、其余 JSON 1MB。
+ * 前端能过、后端拒的后果是用户只看到一句「请求失败」，连为什么都拿不到。 */
+static size_t gr_post_limit(const char *url) {
+    if (strcmp(url, ROUTE_GAME_SAVE_UPLOAD) == 0) return (size_t)512 << 20;
+    if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0 ||
+        strcmp(url, ROUTE_GAME_TILE_BACKGROUND) == 0)
+        return (size_t)64 << 20;
+    if (strcmp(url, ROUTE_GAME_DELETE) == 0 ||
+        strcmp(url, ROUTE_GAME_SAVE_AUTO) == 0 ||
+        strcmp(url, ROUTE_GAME_SAVE_TEST) == 0 ||
+        strcmp(url, ROUTE_GAME_RENAME) == 0 ||
+        strcmp(url, ROUTE_GAME_MOUNT) == 0 ||
+        strcmp(url, ROUTE_GAME_UNMOUNT) == 0 ||
+        strcmp(url, ROUTE_GAME_UNINSTALL) == 0)
+        return (size_t)1 << 20;
+    return 0;
+}
+
+/* 统一的 {error, message} 回包，返回写入长度。与 queue_json_error 的区别：
+ * 这一个把 *code 也一起设了 —— POST 分发有 7 条分支、6 种状态码，
+ * 让每条分支自己 snprintf 再各自记得改 code，漏一个就是「参数错了却回 200」，
+ * 前端只会显示一句干巴巴的成功提示。 */
+static int gr_json_err(char *out, size_t size, int *code, int http,
+                       const char *ecode, const char *msg) {
+    char esc[480];
+    pldmgr_json_escape(msg ? msg : "", esc, sizeof(esc));
+    int n = snprintf(out, size, "{\"error\":\"%s\",\"message\":\"%s\"}", ecode, esc);
+    if (n < 0 || (size_t)n >= size) return -1;
+    *code = http;
+    return n;
+}
+
+/* 从 JSON body 里取一个字符串字段。取不到 / 类型不对 / 超长一律 0。 */
+static int gr_json_str(const char *body, size_t len, const char *key,
+                       char *out, size_t osz) {
+    cJSON *root;
+    out[0] = '\0';
+    if (!body || !len) return 0;
+    root = cJSON_ParseWithLength(body, len);
+    if (!root) return 0;
+    cJSON *f = cJSON_GetObjectItem(root, key);
+    int ok = 0;
+    if (cJSON_IsString(f) && f->valuestring) {
+        /* 超长就整个拒绝，不截断 —— 截断后的名字会被存成另一回事，
+         * 用户看到的和他输的对不上，还以为是编码问题。 */
+        if (strlen(f->valuestring) < osz) {
+            snprintf(out, osz, "%s", f->valuestring);
+            ok = 1;
+        }
+    }
+    cJSON_Delete(root);
+    return ok;
+}
+
+/* [CN-FORK] v0.5.2.116 POST 请求体收完之后的分发。返回响应体长度，*code 回状态码。
+ * 删源/挂载/卸载四条**自己**拼完整响应体（它们的状态码种类最多，见 game_runtime.h）；
+ * 其余五条在这里翻译。 */
+static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
+                            const char *body, size_t len,
+                            char *out, size_t size, int *code) {
+    const char *tid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+    const char *save = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "save");
+
+    if (strcmp(url, ROUTE_GAME_DELETE) == 0)
+        return game_runtime_delete(body, len, out, size, code);
+    if (strcmp(url, ROUTE_GAME_MOUNT) == 0)
+        return game_runtime_mount(body, len, out, size, code);
+    if (strcmp(url, ROUTE_GAME_UNMOUNT) == 0)
+        return game_runtime_unmount(body, len, out, size, code);
+    if (strcmp(url, ROUTE_GAME_UNINSTALL) == 0)
+        return game_runtime_uninstall(body, len, out, size, code);
+
+    if (strcmp(url, ROUTE_GAME_SAVE_TEST) == 0) {
+        if (game_saves_test(body, len, out, size) == 0) {
+            *code = MHD_HTTP_OK;
+            return (int)strlen(out);
+        }
+        return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST,
+                           "EHOSTUNREACH", "连不上这个地址，请检查主机与端口");
+    }
+
+    if (strcmp(url, ROUTE_GAME_SAVE_AUTO) == 0) {
+        char msg[192];
+        msg[0] = 0;
+        if (!tid || !*tid)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (game_saves_auto_set(tid, body, len, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               msg[0] ? msg : "参数不合法");
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true}");
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    if (strcmp(url, ROUTE_GAME_SAVE_UPLOAD) == 0) {
+        char msg[192];
+        long long files = 0, bytes = 0;
+        msg[0] = 0;
+        if (!tid || !save)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid 或 save");
+        if (!body || !len)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "上传的文件是空的");
+        if (game_saves_upload(tid, save, (const unsigned char *)body, len,
+                              &files, &bytes, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "上传失败");
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true,\"files\":%lld,\"size\":%lld}", files, bytes);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    if (strcmp(url, ROUTE_GAME_RENAME) == 0) {
+        char btid[32], bname[512], msg[192], shown[GAME_TITLE_MAX_NAME * 4 + 8];
+        char esc[GAME_TITLE_MAX_NAME * 6 + 16];
+        msg[0] = 0;
+        if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) ||
+            !gr_json_str(body, len, "name", bname, sizeof(bname)))
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid 或 name");
+        if (game_title_set_name(btid, bname, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               msg[0] ? msg : "名称不合法");
+        /* 回**存下来的**名字，不是原样回传：set_name 会去控制字符、去首尾空白、
+         * 按 UTF-8 字符数截到 128，回一个没截过的会让前端存下一份对不上的值。 */
+        game_title_get_name(btid, shown, sizeof(shown));
+        pldmgr_json_escape(shown, esc, sizeof(esc));
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true,\"name\":\"%s\"}", esc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    /* 磁贴两层图：tid 在 query（契约定的），body 是 PNG 原始字节。 */
+    if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0) {
+        char msg[192];
+        long long bytes = 0;
+        msg[0] = 0;
+        if (!tid || !*tid)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (!body || !len)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "图片是空的");
+        int rc = game_title_set_icon(tid, (const unsigned char *)body, len,
+                                     &bytes, msg, sizeof(msg));
+        if (rc == -1)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "图片不合法");
+        if (rc != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                               msg[0] ? msg : "写入失败");
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true,\"bytes\":%lld}", bytes);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    if (strcmp(url, ROUTE_GAME_TILE_BACKGROUND) == 0) {
+        char msg[192];
+        long long bytes = 0, dds = 0;
+        msg[0] = 0;
+        if (!tid || !*tid)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (!body || !len)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "图片是空的");
+        int rc = game_title_set_bg(tid, (const unsigned char *)body, len,
+                                   &bytes, &dds, msg, sizeof(msg));
+        if (rc == -1)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "图片不合法");
+        if (rc != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                               msg[0] ? msg : "写入失败");
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true,\"bytes\":%lld,\"dds_bytes\":%lld}", bytes, dds);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    return gr_json_err(out, size, code, MHD_HTTP_NOT_FOUND, "ENOENT", "没有这条路由");
 }
 
 static int has_supported_extension(const char *path) {
@@ -170,6 +441,10 @@ static int is_noisy_route(const char *url) {
      * /game_media（列表）与 /game_media_pack_get（下载）一次一发，留着记日志。 */
     if (strcmp(url, ROUTE_GAME_MEDIA_THUMB) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_JOB_STATUS) == 0) return 1;
+    /* [CN-FORK] v0.5.2.116 磁贴三张图都是 <img src> 拉的，一次打开要打三发 */
+    if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0) return 1;
+    if (strcmp(url, ROUTE_GAME_TILE_BG) == 0) return 1;
+    if (strcmp(url, ROUTE_GAME_TILE_BG_DDS) == 0) return 1;
     if (strcmp(url, ROUTE_FAN_CONTROL) == 0) return 1; /* [CN-FORK] 风扇温控页加载/应用，降噪 */
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
@@ -318,6 +593,19 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
 
         /* [CN-FORK] v0.5.2.115 打包任务：{tid, ids:[…]|null} 的 JSON 体 */
         if (strcmp(url, ROUTE_GAME_MEDIA_PACK) == 0 && strcmp(method, "POST") == 0) {
+            struct PostStatus *status = malloc(sizeof(struct PostStatus));
+            if (!status) return MHD_NO;
+            status->data = NULL;
+            status->size = 0;
+            status->error = 0;
+            *con_cls = status;
+            return MHD_YES;
+        }
+
+        /* [CN-FORK] v0.5.2.116 游戏管理的 POST 请求体：七条 JSON + 两条裸字节
+         * （磁贴 PNG、存档包）共用同一个 PostStatus 累加器。三条 JSON 的语义
+         * 在**收完之后**才分岔（见下方 gr_dispatch_post），所以这里只认路由不认内容。 */
+        if (strcmp(method, "POST") == 0 && gr_post_limit(url) != 0) {
             struct PostStatus *status = malloc(sizeof(struct PostStatus));
             if (!status) return MHD_NO;
             status->data = NULL;
@@ -549,6 +837,68 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                 resp);
             MHD_destroy_response(resp);
             return ret;
+        }
+    }
+
+    /* ── [CN-FORK] v0.5.2.116 Handle POST data for /game_* ──
+     * 九条端点（删源 / 存档自动与连通性 / 存档上传 / 改名 / 磁贴两层图 / 挂载 /
+     * 卸载挂载 / 卸载安装）共用同一个累加器，**收完才分发**。
+     * 与 /game_media_pack 那条刻意保持同一套结构：MHD 是把请求体切成若干块
+     * 送进来的，只有 upload_data_size==0 那一发才代表「体收完了」，
+     * 在那之前动手会拿到半截 JSON 或半张 PNG。 */
+    {
+        size_t grcap = gr_post_limit(url);
+        if (grcap != 0 && strcmp(method, "POST") == 0) {
+            struct PostStatus *status = (struct PostStatus *)*con_cls;
+            if (*upload_data_size != 0) {
+                if (status->size + *upload_data_size > grcap) {
+                    status->error = 1; /* 超限后只排水不收数，仍要一路 drain 到收完 */
+                } else {
+                    char *nd = realloc(status->data, status->size + *upload_data_size + 1);
+                    if (!nd) {
+                        status->error = 1;
+                    } else {
+                        status->data = nd;
+                        memcpy(status->data + status->size, upload_data, *upload_data_size);
+                        status->size += *upload_data_size;
+                        status->data[status->size] = '\0';
+                    }
+                }
+                *upload_data_size = 0;
+                return MHD_YES;
+            }
+
+            char out[4096];
+            int code = MHD_HTTP_INTERNAL_SERVER_ERROR;
+            int on;
+            out[0] = '\0';
+            if (status->error) {
+                on = snprintf(out, sizeof(out),
+                              "{\"error\":\"EBAD\",\"message\":\"请求体过大或内存不足\"}");
+                code = MHD_HTTP_CONTENT_TOO_LARGE;
+            } else {
+                on = gr_dispatch_post(conn, url, status->data, status->size,
+                                      out, sizeof(out), &code);
+            }
+            if (status->data) free(status->data);
+            free(status);
+            *con_cls = NULL;
+            if (on < 0 || (size_t)on >= sizeof(out)) {
+                /* 走到这里说明上面某个 snprintf 被截断了 —— 半截 JSON 比一条
+                 * 通用错误严重得多：前端 .json() 直接抛，用户看到的是白屏式失败。 */
+                on = snprintf(out, sizeof(out),
+                              "{\"error\":\"EIO\",\"message\":\"响应过长\"}");
+                code = MHD_HTTP_INTERNAL_SERVER_ERROR;
+            }
+
+            struct MHD_Response *r = MHD_create_response_from_buffer(
+                (size_t)on, (void *)out, MHD_RESPMEM_MUST_COPY);
+            MHD_add_response_header(r, "Content-Type", "application/json");
+            MHD_add_response_header(r, "Cache-Control", "no-store");
+            add_cors_headers(r);
+            enum MHD_Result gr = MHD_queue_response(conn, code, r);
+            MHD_destroy_response(r);
+            return gr;
         }
     }
 
@@ -1336,9 +1686,11 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             http_status = MHD_HTTP_NOT_FOUND;
         }
     } else if (strcmp(url, ROUTE_GAME_MEDIA_FILE) == 0) {
-        /* [CN-FORK] 原图 / 原视频 fd 直出：录屏动辄几百 MB，读进内存就是把面板 OOM 掉。
-         * response 成功创建后 fd 的所有权交给 MHD（销毁时它替我们 close）；
-         * 创建失败必须自己 close，否则这里会漏一个 fd。 */
+        /* [CN-FORK] 原图 / 原视频：录屏动辄几百 MB，读进内存就是把面板 OOM 掉，
+         * 所以按路径直出。字节由 gr_file_response 自己 lseek+read 搬（为什么不用
+         * MHD_create_response_from_fd64，见那段注释 —— 真机上正是那条路只画出图片
+         * 顶部一条、打包 zip 下载判失败）。fd 的所有权在 free 回调里关，
+         * 创建失败 gr_file_response 已经替我们收了尸，这里不能再 close。 */
         const char *fid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "id");
         if (!fid)
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 id");
@@ -1350,11 +1702,9 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "参数不合法");
         if (frc != 0)
             return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "文件不存在");
-        resp = MHD_create_response_from_fd64((uint64_t)fsz, ffd);
-        if (!resp) {
-            close(ffd);
+        resp = gr_file_response(fsz, ffd);
+        if (!resp)
             return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO", "无法读取文件");
-        }
         MHD_add_response_header(resp, "Content-Type", fmime);
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_GAME_MEDIA_DELETE) == 0) {
@@ -1401,7 +1751,9 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         return queue_json(conn, MHD_HTTP_OK,
                           "{\"ok\":true,\"reason\":\"cancelled\"}", 33);
     } else if (strcmp(url, ROUTE_GAME_MEDIA_PACK_GET) == 0) {
-        /* [CN-FORK] 取打包成品：同样 fd 直出，包可以几百 MB。 */
+        /* [CN-FORK] 取打包成品：包可以几百 MB，按路径直出；字节由
+         * gr_file_response 自己 lseek+read 搬（不用 MHD_create_response_from_fd64
+         * 的理由见那段注释 —— 真机上正是那条路把 zip 发短了，下载直接判失败）。 */
         const char *pqs = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "job");
         char *pend = NULL;
         long long pid = pqs ? strtoll(pqs, &pend, 10) : 0;
@@ -1415,15 +1767,116 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (prc != 0)
             return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT",
                                     "打包还没完成，或产出文件已被清理");
-        resp = MHD_create_response_from_fd64((uint64_t)psz, pfd);
-        if (!resp) {
-            close(pfd);
+        resp = gr_file_response(psz, pfd); /* 失败时 fd 已被 gr_file_response 收掉 */
+        if (!resp)
             return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO", "无法读取打包文件");
-        }
         MHD_add_response_header(resp, "Content-Type", "application/zip");
         MHD_add_response_header(resp, "Content-Disposition",
                                 "attachment; filename=\"media_pack.zip\"");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_DETAIL) == 0) {
+        /* [CN-FORK] v0.5.2.116 单游戏详情：打开弹窗拉一次，不轮询。
+         * 刻意**不**套用 /game_list 那份 60s 快照 —— 详情里有存档数、媒体数、
+         * 两层自定义图标志这些「刚改完就要看见」的活值，进了缓存就等于把
+         * 用户刚设的图标吞掉一分钟。 */
+        const char *xd = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        if (!xd)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
+        char *xb;
+        struct MHD_Response *xoom = alloc_response_buffer(&xb);
+        if (xoom)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, xoom);
+        int xn = game_mgr_detail_json(xd, xb, RESPONSE_BUFFER_SIZE);
+        if (xn < 0) {
+            free(xb);
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "主机上找不到这个游戏");
+        }
+        resp = MHD_create_response_from_buffer((size_t)xn, (void *)xb, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_SAVES) == 0) {
+        /* [CN-FORK] v0.5.2.116 存档列表。项数由槽决定（一个存档目录一个槽），
+         * 但保险起见仍走 1MB 的大缓冲，不挤 jbuf[2048]。 */
+        const char *xs = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        if (!xs)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
+        char *sb;
+        struct MHD_Response *soom = alloc_response_buffer(&sb);
+        if (soom)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, soom);
+        int sn = game_saves_list_json(xs, sb, RESPONSE_BUFFER_SIZE);
+        if (sn < 0) {
+            free(sb);
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "参数不合法");
+        }
+        resp = MHD_create_response_from_buffer((size_t)sn, (void *)sb, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_SAVE_DOWNLOAD) == 0) {
+        /* [CN-FORK] v0.5.2.116 打包即下：没有任务槽可复用（契约里这条路不产生 job_id），
+         * 所以同步打完、fd 直出、流完自动清理。文件名只用 tid（alnum），
+         * 不掺 save —— save 是用户起的槽名，能带引号，会把 Content-Disposition 打断。 */
+        const char *xd = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        const char *xs2 = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "save");
+        if (!xd || !xs2)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid 或 save");
+        if (mkdir(GAME_SAVES_PACK_DIR, 0777) != 0 && errno != EEXIST)
+            return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                                    "无法创建下载临时目录");
+        char zpath[900], zmsg[192], disp[160];
+        zmsg[0] = 0;
+        snprintf(zpath, sizeof(zpath), "%s/%s_%lld_%d.zip", GAME_SAVES_PACK_DIR, xd,
+                 (long long)time(NULL), (int)getpid());
+        if (game_saves_pack(xd, xs2, zpath, zmsg, sizeof(zmsg)) != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT",
+                                    zmsg[0] ? zmsg : "找不到这个存档");
+        snprintf(disp, sizeof(disp), "attachment; filename=\"%s_saves.zip\"", xd);
+        return reply_file(conn, zpath, "application/zip", disp, 1);
+    } else if (strcmp(url, ROUTE_GAME_SAVE_DELETE) == 0) {
+        const char *xd = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        const char *xs2 = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "save");
+        if (!xd || !xs2)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid 或 save");
+        char dmsg[192];
+        dmsg[0] = 0;
+        if (game_saves_remove(xd, xs2, dmsg, sizeof(dmsg)) != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT",
+                                    dmsg[0] ? dmsg : "找不到这个存档");
+        return queue_json(conn, MHD_HTTP_OK, "{\"ok\":true}", 11);
+    } else if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0) {
+        const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        char tp[768];
+        tp[0] = 0;
+        if (!xt || game_title_icon_path(xt, tp, sizeof(tp)) != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "没有设过自定义图标");
+        return reply_file(conn, tp, "image/png", NULL, 0);
+    } else if (strcmp(url, ROUTE_GAME_TILE_BG) == 0) {
+        /* 回的是 **PNG 预览**：浏览器的 <img> 解不了 DDS，前端也只消费这个 URL。 */
+        const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        char tp[768];
+        tp[0] = 0;
+        if (!xt || game_title_bg_png_path(xt, tp, sizeof(tp)) != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "没有设过自定义背景");
+        return reply_file(conn, tp, "image/png", NULL, 0);
+    } else if (strcmp(url, ROUTE_GAME_TILE_BG_DDS) == 0) {
+        const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        char tp[768];
+        tp[0] = 0;
+        if (!xt || game_title_bg_dds_path(xt, tp, sizeof(tp)) != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "没有设过自定义背景");
+        return reply_file(conn, tp, "application/octet-stream", NULL, 0);
+    } else if (strcmp(url, ROUTE_GAME_TILE_ICON_RESET) == 0) {
+        const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        if (!xt)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
+        game_title_reset_icon(xt);
+        return queue_json(conn, MHD_HTTP_OK, "{\"ok\":true}", 11);
+    } else if (strcmp(url, ROUTE_GAME_TILE_BACKGROUND_RESET) == 0) {
+        const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        if (!xt)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
+        game_title_reset_bg(xt);
+        return queue_json(conn, MHD_HTTP_OK, "{\"ok\":true}", 11);
     } else if (strcmp(url, ROUTE_GET_CONFIG) == 0) {
         PldmgrConfig cfg;
         config_read(&cfg);

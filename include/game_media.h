@@ -83,6 +83,10 @@ typedef struct {
 /* 列表。成功返回写入长度（≥0），打不开库/参数非法返回 -1（调用方回 500）。 */
 int game_media_list_json(const char *tid, char *buf, size_t size);
 
+/* [CN-FORK] v0.5.2.116 /game_detail 的 media_count：只数不拼 JSON。
+ * tid 不合法 / 库里没有这个游戏 → 0（不是错误，详情里那一格显示 0 即可）。 */
+int game_media_count(const char *tid);
+
 /* 按 id（content_path）取一条；找不到返回 -1。items_json 之外的路径解析都走它。 */
 int game_media_lookup(const char *id, game_media_item_t *out);
 

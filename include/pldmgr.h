@@ -64,10 +64,33 @@
 /* [CN-FORK] 通用任务进度/取消：打包任务在用，日后游戏删除任务同样挂这两条 */
 #define ROUTE_GAME_JOB_STATUS "/game_job_status"
 #define ROUTE_GAME_JOB_CANCEL "/game_job_cancel"
+/* [CN-FORK] v0.5.2.116 游戏管理模块余下的 19 条端点。契约 = frontend/src/utils/gameApi.js
+ * 的文件头，与 .115 那批（游戏列表/图标/多媒体）同一份文档的续篇。
+ * 分组照契约注释分：详情 → 删除与任务 → 存档 → 改名与磁贴 → 运行时。
+ * /game_tile_icon 与 /game_tile_background 是**一路径两方法**（GET 取图 / POST 换图），
+ * 所以只有一个宏，分发在 method 上分岔。 */
+#define ROUTE_GAME_DETAIL "/game_detail"
+#define ROUTE_GAME_DELETE "/game_delete"
+#define ROUTE_GAME_SAVES "/game_saves"
+#define ROUTE_GAME_SAVE_AUTO "/game_save_auto"
+#define ROUTE_GAME_SAVE_TEST "/game_save_test"
+#define ROUTE_GAME_SAVE_DOWNLOAD "/game_save_download"
+#define ROUTE_GAME_SAVE_UPLOAD "/game_save_upload"
+#define ROUTE_GAME_SAVE_DELETE "/game_save_delete"
+#define ROUTE_GAME_RENAME "/game_rename"
+#define ROUTE_GAME_TILE_ICON "/game_tile_icon"
+#define ROUTE_GAME_TILE_ICON_RESET "/game_tile_icon_reset"
+#define ROUTE_GAME_TILE_BACKGROUND "/game_tile_background"
+#define ROUTE_GAME_TILE_BACKGROUND_RESET "/game_tile_background_reset"
+#define ROUTE_GAME_TILE_BG "/game_tile_bg"
+#define ROUTE_GAME_TILE_BG_DDS "/game_tile_bg_dds"
+#define ROUTE_GAME_MOUNT "/game_mount"
+#define ROUTE_GAME_UNMOUNT "/game_unmount"
+#define ROUTE_GAME_UNINSTALL "/game_uninstall"
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
 
-#define MENU_VERSION "0.5.2.115" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.115，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.116" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.116，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"

@@ -19,7 +19,11 @@ run_one() {
 run_one slot_resolve   src/psaccounts/npsignin.c
 run_one offact_genid   src/psaccounts/offact.c
 # safety.c really creates SAFETY_DIR, so point it at a temp dir on the host.
-run_one safety_origin  src/psaccounts/safety.c -DSAFETY_DIR='"/tmp/safety_origin_test"'
+# 注意：SAFETY_DIR 若与测试**可执行文件同名**（都是 /tmp/safety_origin_test），
+# safety_init 一 mkdir 就把 ld 之后的输出路径占成目录了，第二次跑必报
+# `Is a directory`。所以这里换成一个不同名的目录。
+rm -rf /tmp/safety_origin_dir
+run_one safety_origin  src/psaccounts/safety.c -DSAFETY_DIR='"/tmp/safety_origin_dir"'
 
 # [CN-FORK] v0.5.2.115 游戏管理 → 多媒体管理（src/game_media.c）
 # 这条测试比另外三个重：夹具（一个列序照抄真机的 av_content.db + 它引用的真实文件）
@@ -38,7 +42,7 @@ if command -v python3 >/dev/null 2>&1; then
             -DGAME_MEDIA_THUMB_DIR='"/tmp/pldmgr_media_test/thumbs"' \
             -DGAME_MEDIA_PACK_DIR='"/tmp/pldmgr_media_test/pack"' \
             -DGAME_MEDIA_USER_PREFIX='"/tmp/pldmgr_media_test"' \
-            src/json_helpers.c src/utils.c \
+            src/game_job.c src/zip_io.c src/inflate.c src/json_helpers.c src/utils.c \
             src/psaccounts/third_party/cJSON.c src/psaccounts/third_party/stb_impl.c
         # log_server.c 不进来：它的头要 microhttpd.h（主机上没有）。
         # pldmgr_log 由 test/media_scan_test.c 自己提供（默认静音）。

@@ -17,10 +17,38 @@
  * name 经 JSON 转义（含中文）。返回写入长度。 */
 int game_mgr_list_json(char *buf, size_t size);
 
+/* [CN-FORK] v0.5.2.116 单个游戏的完整详情（/game_detail）。
+ * 字段与 frontend/src/utils/gameApi.js 文件头的「详情」那一段一一对应。
+ * 返回写入长度；**-1 = 这个 tid 不在任何一份枚举里**，路由据此回 404
+ * （宁可 404 也不回一份凭空拼的详情 —— 前端拿到假字段会显示假按钮）。 */
+int game_mgr_detail_json(const char *tid, char *buf, size_t size);
+
+/* [CN-FORK] v0.5.2.116 /game_delete 要的三元组，路径算法与 /game_detail 共用。
+ * 返回 1 = 找到这个游戏（src/path/runtime 均已填，runtime 可能为空串 = 没注册挂载）；
+ * 返回 0 = 这个 tid 不在任何一份枚举里（路由据此 404）。 */
+int game_mgr_source(const char *tid, char *src, size_t ssz,
+                    char *path, size_t psz, char *runtime, size_t rsz);
+
+/* [CN-FORK] v0.5.2.116 让 60s 列表缓存立刻过期（删除/卸载/删除源之后调）。 */
+void game_mgr_invalidate(void);
+
+/* [CN-FORK] v0.5.2.116 path 是否落在某个已知 dump 扫描根**之下**（必须是子项，
+ * 根本身不算）。删除前的白名单只认两种源：注册过的镜像文件，或这个判据为真的目录。 */
+int game_mgr_is_scan_path(const char *path);
+
 /* 解析某 titleId 的图标文件绝对路径写入 out（icon0.png）。成功返回 1，找不到返回 0。
  * 候选顺序：/user/app/<TID>/sce_sys → 该 TID 沙盒 app0/sce_sys → /user/appmeta/<TID> →
  * /system_data/priv/appmeta/<TID>。供 /game_icon?tid= 端点读取。tid 必须是 9 位 alnum。 */
 int game_mgr_icon_path(const char *tid, char *out, size_t osz);
+
+/* [CN-FORK] v0.5.2.116 找这个游戏**放磁贴图的 sce_sys 目录**（已存在才返回，绝不新建）。
+ * 顺序：/user/app/<TID>/sce_sys → mount.lnk 解出的 dump 根/sce_sys → scan paths 下的
+ * <path>/<TID>/sce_sys。找不到返回 0 —— 调用方**不要**自己 mkdir，见 game_title.c。 */
+int game_mgr_sce_sys_dir(const char *tid, char *out, size_t osz);
+
+/* [CN-FORK] v0.5.2.116 读一个 param.sfo 里的字符串字段（key 如 "SAVEDATA_TITLE"）。
+ * 0 成功（out 已填），非 0 失败（out 置空）。存档槽的显示名用它。 */
+int game_mgr_sfo_text(const char *path, const char *key, char *out, size_t osz);
 
 /* [CN-FORK] app.db 路径统一出口：游戏列表枚举与「常用入口」磁贴链接同步共用。 */
 #define GAME_MGR_APPDB_PATH "/system_data/priv/mms/app.db"

@@ -30,6 +30,8 @@
 #include <sys/types.h>
 
 #include "game_media.h"
+#include "zip_io.h"       /* v0.5.2.116 zip 编码器已搬出去（存档下载要共用） */
+#include "game_job.h"     /* v0.5.2.116 任务槽已搬进 game_job.c（删除任务要共用） */
 #include "pldmgr.h"       /* pldmgr_log / pldmgr_json_escape（经 utils.h） */
 #include "json_helpers.h" /* ensure_dir_recursive */
 #include "stb_image.h"
@@ -532,6 +534,27 @@ int game_media_list_json(const char *tid, char *buf, size_t size) {
     return (int)j.pos;
 }
 
+/* ── 条数（/game_detail 的 media_count 用）────────────────────────────────
+ * 走的是同一把锁、同一个 md_scan_locked，只是回调换成计数 —— 不复用
+ * game_media_list_json 是因为那条路要写几百 KB 的 JSON 再解析回去，
+ * 详情页每次打开都白烧一遍。计数本身仍要扫全表，这是拿准确值的代价，
+ * 但比「拼 JSON + 找 count 字段」省掉一次大内存分配与一次 memcpy。 */
+typedef struct { int count; int cap; } md_count_t;
+static int md_count_cb(const game_media_item_t *it, void *user) {
+    md_count_t *c = (md_count_t *)user;
+    (void)it;
+    c->count++;
+    return c->count >= c->cap ? 1 : 0; /* 到顶就停，别为一个「够大了」的数字扫到底 */
+}
+int game_media_count(const char *tid) {
+    if (!md_tid_ok(tid)) return 0;
+    md_count_t c = {0, 100000};
+    pthread_mutex_lock(&g_mu);
+    md_scan_locked(tid, NULL, md_count_cb, &c);
+    pthread_mutex_unlock(&g_mu);
+    return c.count;
+}
+
 /* ── 定位单条 ── */
 static int md_copy_cb(const game_media_item_t *it, void *user) {
     memcpy(user, it, sizeof(game_media_item_t));
@@ -885,129 +908,32 @@ int game_media_delete(const char *tid, const char *id, char *msg, size_t msgsz) 
     return 0;
 }
 
-/* ══════════════ ⑤ 打包任务：单 worker + 自研 STORE zip ══════════════
- *
- * 为什么自己写 zip：SDK 的 target/lib 里没有 zlib（curl/mbedtls/microhttpd/pthread 有，
- * -lz 没有），引第三方压缩库要动构建链。而截图(png/jxr)、录屏(mp4/webm)本身就是压缩过的，
- * 再 deflate 一遍只多花 CPU 不省多少空间 —— STORE 是零依赖且近乎等价的选择。
- *
- * zip64：凡是 size 或本地头偏移 ≥ 4GiB 就给该条目挂 0x0001 extra；EOCD64 + locator
- * **永远写**（classic EOCD 里该变哨兵的字段才变哨兵），这样两种读法拿到的值都一致。
- * 产出可用 python -c "import zipfile;zipfile.ZipFile(p).testzip()" 直接验。 */
+/* zip 编码器已搬进 src/zip_io.c（zip_io.h 声明）。原位置是 zip_ent_t 加
+ * md_p16/p32/p64 加 md_dos_time 加 md_pack_write，约 330 行。
+ * 搬走的原因：存档上传/下载也要 zip（游戏管理的存档六条路由），一个仓库里
+ * 放两份必须逐字节一致的 zip 编码器，改一处忘一处就是静默的数据损坏。
+ * 条目结构现在是 zip_io.h 的 zip_ent_t（字段一字未改）。 */
 
-typedef struct {
-    char abs[700];
-    char zname[512];
-    long long size;
-    uint32_t crc;
-    uint64_t offset;
-    int z64; /* 本地头/中央目录里要不要挂 zip64 extra（以 size 为准） */
-} md_ent_t;
 
-static pthread_mutex_t g_job_mu = PTHREAD_MUTEX_INITIALIZER;
-static struct {
-    long long id;
-    int active, done, ok;
-    char phase[24];
-    long long bytes_done, bytes_total;
-    int files_done, files_total;
-    time_t started;
-    int cancel;
-    char error[256];
-    char reason[32];
-    char zip[700];
-} g_job;
-static long long g_last_id;
+/* ── v0.5.2.116：任务槽本体已搬进 game_job.c ──────────────────────────────
+ * 原来这里的 g_job / g_job_mu / g_last_id 现在归 game_job.c 所有（打包与删除共用一个槽，
+ * 见 include/game_job.h 的头注释）。下面三个 md_* 只是原名薄壳，免得动几百处调用点；
+ * 进度/取消那三个也跟着 zip 编码器进了 zip_io.c，这里不再需要。 */
 
-static uint32_t g_crc_tab[256];
-static int g_crc_ready;
+static void md_set_phase(const char *ph) { gj_set_phase(ph); }
 
-static void md_crc_init(void) {
-    if (g_crc_ready) return;
-    for (uint32_t i = 0; i < 256; i++) {
-        uint32_t c = i;
-        for (int k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
-        g_crc_tab[i] = c;
-    }
-    g_crc_ready = 1;
-}
+static void md_pack_fail(const char *reason, const char *msg) { gj_fail(reason, msg); }
 
-static uint32_t md_crc(uint32_t c, const unsigned char *b, size_t n) {
-    while (n--) c = g_crc_tab[(c ^ *b++) & 0xFF] ^ (c >> 8);
-    return c;
-}
+static void md_pack_ok_done(void) { gj_ok_done(); }
 
-static void md_p16(unsigned char *p, uint32_t v) {
-    p[0] = (unsigned char)(v & 0xFF);
-    p[1] = (unsigned char)((v >> 8) & 0xFF);
-}
-static void md_p32(unsigned char *p, uint32_t v) {
-    md_p16(p, v & 0xFFFF);
-    md_p16(p + 2, v >> 16);
-}
-static void md_p64(unsigned char *p, uint64_t v) {
-    md_p32(p, (uint32_t)(v & 0xFFFFFFFFu));
-    md_p32(p + 4, (uint32_t)(v >> 32));
-}
+/* 打包进度与取消走任务槽（CRC 表也在 game_job.c）。
+ * 这三个是 zip_hooks_t 的任务版实现；存档下载是同步 HTTP 请求、没有后台任务
+ * 可挂，它那边直接传 NULL —— 把进度硬绑在任务槽上就得为一次同步下载伪造任务。 */
+static void md_zb(void *u, long long n) { (void)u; gj_add_bytes(n); }
+static void md_zf(void *u) { (void)u; gj_add_file(); }
+static int md_zc(void *u) { (void)u; return gj_cancelled(); }
+static const zip_hooks_t md_zip_hooks = { NULL, md_zc, md_zb, md_zf };
 
-static void md_dos_time(time_t t, uint16_t *dt, uint16_t *dd) {
-    struct tm tmv;
-    if (!localtime_r(&t, &tmv)) { *dt = 0; *dd = 0x21; return; }
-    int y = tmv.tm_year + 1900;
-    if (y < 1980) y = 1980;
-    *dt = (uint16_t)((tmv.tm_hour << 11) | (tmv.tm_min << 5) | (tmv.tm_sec / 2));
-    *dd = (uint16_t)(((y - 1980) << 9) | ((tmv.tm_mon + 1) << 5) | tmv.tm_mday);
-}
-
-static void md_set_phase(const char *ph) {
-    pthread_mutex_lock(&g_job_mu);
-    snprintf(g_job.phase, sizeof(g_job.phase), "%s", ph);
-    pthread_mutex_unlock(&g_job_mu);
-}
-
-static void md_pack_fail(const char *reason, const char *msg) {
-    pthread_mutex_lock(&g_job_mu);
-    snprintf(g_job.phase, sizeof(g_job.phase), "%s", reason);
-    snprintf(g_job.error, sizeof(g_job.error), "%s", msg);
-    snprintf(g_job.reason, sizeof(g_job.reason), "%s", reason);
-    g_job.ok = 0;
-    g_job.done = 1;
-    g_job.active = 0;
-    g_job.cancel = 0;
-    pthread_mutex_unlock(&g_job_mu);
-}
-
-static void md_pack_ok_done(void) {
-    pthread_mutex_lock(&g_job_mu);
-    snprintf(g_job.phase, sizeof(g_job.phase), "done");
-    g_job.ok = 1;
-    g_job.done = 1;
-    g_job.active = 0;
-    g_job.error[0] = 0;
-    g_job.reason[0] = 0;
-    if (g_job.bytes_total > 0) g_job.bytes_done = g_job.bytes_total;
-    if (g_job.files_total > 0) g_job.files_done = g_job.files_total;
-    pthread_mutex_unlock(&g_job_mu);
-}
-
-static int md_job_cancelled(void) {
-    pthread_mutex_lock(&g_job_mu);
-    int c = g_job.cancel;
-    pthread_mutex_unlock(&g_job_mu);
-    return c;
-}
-
-static void md_job_add_bytes(long long n) {
-    pthread_mutex_lock(&g_job_mu);
-    g_job.bytes_done += n;
-    pthread_mutex_unlock(&g_job_mu);
-}
-
-static void md_job_add_file(void) {
-    pthread_mutex_lock(&g_job_mu);
-    g_job.files_done++;
-    pthread_mutex_unlock(&g_job_mu);
-}
 
 /* ── 收集待打包的路径 ── */
 typedef struct { char **v; int n, cap; } md_paths_t;
@@ -1037,7 +963,7 @@ static void md_paths_free(md_paths_t *p) {
 
 /* 建条目表：解析路径 + stat。返回 0 成功；-1 = 一条可用的都没有。 */
 static int md_build_entries(const char *tid, const char *const *ids, int nids,
-                            md_ent_t **out, int *out_n, long long *out_total,
+                            zip_ent_t **out, int *out_n, long long *out_total,
                             int *skipped) {
     md_paths_t paths;
     memset(&paths, 0, sizeof(paths));
@@ -1065,7 +991,7 @@ static int md_build_entries(const char *tid, const char *const *ids, int nids,
     }
     if (paths.n == 0) { md_paths_free(&paths); return -1; }
 
-    md_ent_t *e = (md_ent_t *)calloc((size_t)paths.n, sizeof(md_ent_t));
+    zip_ent_t *e = (zip_ent_t *)calloc((size_t)paths.n, sizeof(zip_ent_t));
     if (!e) { md_paths_free(&paths); return -1; }
 
     int n = 0;
@@ -1094,211 +1020,6 @@ static int md_build_entries(const char *tid, const char *const *ids, int nids,
     return 0;
 }
 
-/* 流式拷一个源文件到 zip：算 CRC + 推进进度 + 每块看一次取消。
- * 返回 0 完成，1 已取消，-1 读写失败。 */
-static int md_put(int fd, const void *p, size_t n) { return md_write_all(fd, p, n); }
-
-/* 整包写盘。返回 0 成功，1 已取消，-1 失败（*err 里给人话）。 */
-static int md_pack_write(const char *zip, md_ent_t *e, int n, const char **err) {
-    /* unlink 再 O_EXCL：新 inode。已经在下载上一包的连接还拿着旧 inode，POSIX 下不受影响 */
-    unlink(zip);
-    int fd = open(zip, O_WRONLY | O_CREAT | O_EXCL, 0644);
-    if (fd < 0) { *err = "无法创建打包文件"; return -1; }
-
-    uint64_t off = 0;
-    int rc = 0;
-    const char *why = "写入失败";
-
-    for (int i = 0; i < n && rc == 0; i++) {
-        struct stat sb;
-        if (stat(e[i].abs, &sb) != 0 || !S_ISREG(sb.st_mode) || sb.st_size <= 0) {
-            *err = "有文件在打包前被移走了";
-            rc = -1;
-            break;
-        }
-        e[i].size = (long long)sb.st_size;
-        e[i].z64 = (e[i].size >= 0xFFFFFFFFLL);
-        e[i].offset = off;
-
-        size_t nl = strlen(e[i].zname);
-        unsigned char lex[20];
-        size_t lexl = 0;
-        if (e[i].z64) {
-            md_p16(lex + 0, 0x0001);
-            md_p16(lex + 2, 16);
-            md_p64(lex + 4, (uint64_t)e[i].size);
-            md_p64(lex + 12, (uint64_t)e[i].size);
-            lexl = 20;
-        }
-
-        /* 本地头：CRC 先写 0 占位，数据流完再 lseek 回去补 4 字节 —— 源文件因此只读一遍。
-         * 录屏几百 MB，为了「先算出 CRC 再写头」而整读一遍等于把 IO 直接翻倍。 */
-        unsigned char lh[30];
-        md_p32(lh + 0, 0x04034b50);
-        md_p16(lh + 4, e[i].z64 ? 45 : 20);
-        md_p16(lh + 6, 0x0800); /* general purpose bit 11 = UTF-8 文件名 */
-        md_p16(lh + 8, 0);      /* method 0 = STORE */
-        uint16_t dt, dd;
-        md_dos_time(sb.st_mtime, &dt, &dd);
-        md_p16(lh + 10, dt);   /* last mod time @10 */
-        md_p16(lh + 12, dd);   /* last mod date @12 */
-        md_p32(lh + 14, 0);    /* crc-32 @14，占位 */
-        md_p32(lh + 18, e[i].z64 ? 0xFFFFFFFFu : (uint32_t)e[i].size); /* compressed @18 */
-        md_p32(lh + 22, e[i].z64 ? 0xFFFFFFFFu : (uint32_t)e[i].size); /* uncompressed @22 */
-        md_p16(lh + 26, (uint16_t)nl);   /* file name length @26 */
-        md_p16(lh + 28, (uint16_t)lexl); /* extra field length @28 */
-
-        if (lseek(fd, (off_t)e[i].offset, SEEK_SET) < 0 ||
-            md_put(fd, lh, 30) != 0 ||
-            md_put(fd, e[i].zname, nl) != 0 ||
-            (lexl && md_put(fd, lex, lexl) != 0)) {
-            *err = why;
-            rc = -1;
-            break;
-        }
-
-        int in = open(e[i].abs, O_RDONLY);
-        if (in < 0) { *err = "源文件打不开"; rc = -1; break; }
-        size_t cp = 256 * 1024;
-        unsigned char *b = (unsigned char *)malloc(cp);
-        if (!b) { close(in); *err = "内存不足"; rc = -1; break; }
-
-        uint32_t crc = 0xFFFFFFFFu;
-        long long left = e[i].size;
-        while (left > 0 && rc == 0) {
-            if (md_job_cancelled()) { rc = 1; break; }
-            size_t want = left > (long long)cp ? cp : (size_t)left;
-            ssize_t r = read(in, b, want);
-            if (r <= 0) { *err = "读源文件失败"; rc = -1; break; }
-            crc = md_crc(crc, b, (size_t)r);
-            if (md_put(fd, b, (size_t)r) != 0) { *err = why; rc = -1; break; }
-            left -= r;
-            md_job_add_bytes(r);
-        }
-        free(b);
-        close(in);
-        if (rc != 0) break;
-
-        e[i].crc = crc ^ 0xFFFFFFFFu;
-
-        /* 回填 CRC，再把写指针挪回条目末尾 */
-        unsigned char cs[4];
-        md_p32(cs, e[i].crc);
-        off_t after = (off_t)e[i].offset + 30 + (off_t)nl + (off_t)lexl + (off_t)e[i].size;
-        if (lseek(fd, (off_t)e[i].offset + 14, SEEK_SET) < 0 ||
-            md_put(fd, cs, 4) != 0 ||
-            lseek(fd, after, SEEK_SET) < 0) {
-            *err = why;
-            rc = -1;
-            break;
-        }
-        off = (uint64_t)after;
-        md_job_add_file();
-    }
-
-    if (rc == 0) {
-        /* ── 中央目录 ── */
-        uint64_t cd_off = off;
-        for (int i = 0; i < n && rc == 0; i++) {
-            size_t nl = strlen(e[i].zname);
-            int need_off = e[i].offset >= 0xFFFFFFFFULL;
-            size_t payload = (e[i].z64 ? 16u : 0u) + (need_off ? 8u : 0u);
-            size_t el = payload ? 4 + payload : 0;
-            unsigned char ch[46];
-            md_p32(ch + 0, 0x02014b50);
-            md_p16(ch + 4, 0x031E);                 /* version made by: UNIX 3.0 */
-            md_p16(ch + 6, el ? 45 : 20);           /* version needed */
-            md_p16(ch + 8, 0x0800);                 /* UTF-8 */
-            md_p16(ch + 10, 0);                     /* STORE */
-            md_p16(ch + 12, 0);
-            md_p16(ch + 14, 0);                     /* 时间随后按原文件重算 */
-            md_p32(ch + 16, e[i].crc);
-            md_p32(ch + 20, e[i].z64 ? 0xFFFFFFFFu : (uint32_t)e[i].size);
-            md_p32(ch + 24, e[i].z64 ? 0xFFFFFFFFu : (uint32_t)e[i].size);
-            md_p16(ch + 28, (uint16_t)nl);
-            md_p16(ch + 30, (uint16_t)el);
-            md_p16(ch + 32, 0);                     /* comment len */
-            md_p16(ch + 34, 0);                     /* disk start */
-            md_p16(ch + 36, 0);                     /* internal attrs */
-            md_p32(ch + 38, 0x81A40000u);           /* external attrs: 0100644 << 16 */
-            md_p32(ch + 42, need_off ? 0xFFFFFFFFu : (uint32_t)e[i].offset);
-
-            struct stat sb;
-            uint16_t dt = 0, dd = 0x21;
-            if (stat(e[i].abs, &sb) == 0) md_dos_time(sb.st_mtime, &dt, &dd);
-            md_p16(ch + 12, dt);
-            md_p16(ch + 14, dd);
-
-            unsigned char ex[32];
-            size_t exl = 0;
-            if (payload) {
-                md_p16(ex + 0, 0x0001);
-                md_p16(ex + 2, (uint16_t)payload);
-                exl = 4;
-                if (e[i].z64) {
-                    md_p64(ex + exl, (uint64_t)e[i].size);
-                    md_p64(ex + exl + 8, (uint64_t)e[i].size);
-                    exl += 16;
-                }
-                if (need_off) {
-                    md_p64(ex + exl, e[i].offset);
-                    exl += 8;
-                }
-            }
-
-            if (md_put(fd, ch, 46) != 0 ||
-                md_put(fd, e[i].zname, nl) != 0 ||
-                (exl && md_put(fd, ex, exl) != 0)) {
-                *err = why;
-                rc = -1;
-            }
-            off += 46 + nl + exl;
-        }
-
-        if (rc == 0) {
-            uint64_t cd_size = off - cd_off;
-            uint64_t eocd64_off = off;
-
-            unsigned char z[56];
-            md_p32(z + 0, 0x06064b50);
-            md_p64(z + 4, 44);
-            md_p16(z + 12, 0x031E);
-            md_p16(z + 14, 45);
-            md_p32(z + 16, 0);
-            md_p32(z + 20, 0);
-            md_p64(z + 24, (uint64_t)n);
-            md_p64(z + 32, (uint64_t)n);
-            md_p64(z + 40, cd_size);
-            md_p64(z + 48, cd_off);
-
-            unsigned char loc[20];
-            md_p32(loc + 0, 0x07064b50);
-            md_p32(loc + 4, 0);
-            md_p64(loc + 8, eocd64_off);
-            md_p32(loc + 16, 1);
-
-            unsigned char eo[22];
-            md_p32(eo + 0, 0x06054b50);
-            md_p16(eo + 4, 0);
-            md_p16(eo + 6, 0);
-            uint16_t ne = n >= 0xFFFF ? 0xFFFFu : (uint16_t)n;
-            md_p16(eo + 8, ne);
-            md_p16(eo + 10, ne);
-            md_p32(eo + 12, cd_size >= 0xFFFFFFFFULL ? 0xFFFFFFFFu : (uint32_t)cd_size);
-            md_p32(eo + 16, cd_off >= 0xFFFFFFFFULL ? 0xFFFFFFFFu : (uint32_t)cd_off);
-            md_p16(eo + 20, 0);
-
-            if (md_put(fd, z, 56) != 0 || md_put(fd, loc, 20) != 0 || md_put(fd, eo, 22) != 0) {
-                *err = why;
-                rc = -1;
-            }
-        }
-    }
-
-    if (close(fd) != 0 && rc == 0) { *err = why; rc = -1; }
-    if (rc != 0) unlink(zip);
-    return rc;
-}
 
 typedef struct {
     char tid[32];
@@ -1308,13 +1029,13 @@ typedef struct {
 
 static void md_pack_run(md_pack_req_t *req) {
     char zip[700];
-    pthread_mutex_lock(&g_job_mu);
-    snprintf(zip, sizeof(zip), "%s", g_job.zip);
-    pthread_mutex_unlock(&g_job_mu);
+    gj_lock();
+    snprintf(zip, sizeof(zip), "%s", gj_state()->aux);
+    gj_unlock();
 
     md_set_phase("preparing");
 
-    md_ent_t *e = NULL;
+    zip_ent_t *e = NULL;
     int n = 0, skipped = 0;
     long long total = 0;
     int rc = md_build_entries(req->tid,
@@ -1327,12 +1048,7 @@ static void md_pack_run(md_pack_req_t *req) {
     }
 
     md_set_phase("measuring");
-    pthread_mutex_lock(&g_job_mu);
-    g_job.bytes_total = total;
-    g_job.files_total = n;
-    g_job.bytes_done = 0;
-    g_job.files_done = 0;
-    pthread_mutex_unlock(&g_job_mu);
+    gj_set_totals(total, n);
 
     /* 顺手清掉上一包：不同文件名，不冲突；正在下旧包的连接拿着旧 inode 不受影响 */
     {
@@ -1351,7 +1067,7 @@ static void md_pack_run(md_pack_req_t *req) {
 
     md_set_phase("packing");
     const char *err = "打包失败";
-    int w = md_pack_write(zip, e, n, &err);
+    int w = zip_write(zip, e, n, &md_zip_hooks, &err);
     free(e);
     req->ids = NULL;
     req->nids = 0;
@@ -1362,14 +1078,14 @@ static void md_pack_run(md_pack_req_t *req) {
     }
     if (w != 0) { md_pack_fail("failed", err); return; }
 
+    /* 先收尾、再补提示：md_pack_ok_done 会把 error 清空，反过来写等于白写一句
+     * 「有 N 个文件不见了」（原版就是这个顺序，那句话一直没显示出来过）。 */
+    md_pack_ok_done();
     if (skipped > 0) {
         char m[192];
         snprintf(m, sizeof(m), "完成，但有 %d 个文件在打包前不见了", skipped);
-        pthread_mutex_lock(&g_job_mu);
-        snprintf(g_job.error, sizeof(g_job.error), "%s", m);
-        pthread_mutex_unlock(&g_job_mu);
+        gj_set_error(m);
     }
-    md_pack_ok_done();
     pldmgr_log("[PLDMGR] media: pack job done -> %s (%lld bytes, %d files)\n",
                zip, total, n);
 }
@@ -1426,7 +1142,7 @@ static int md_pack_start(const char *tid, const char *const *ids, int nids,
         }
     }
 
-    md_crc_init();
+    gj_crc_init();
     if (ensure_dir_recursive(GAME_MEDIA_PACK_DIR) != 0) {
         for (int i = 0; i < req->nids; i++) free(req->ids[i]);
         free(req->ids);
@@ -1435,34 +1151,18 @@ static int md_pack_start(const char *tid, const char *const *ids, int nids,
         return -1;
     }
 
-    pthread_mutex_lock(&g_job_mu);
-    if (g_job.active) {
-        pthread_mutex_unlock(&g_job_mu);
+    long long id = 0;
+    if (gj_begin(GJ_KIND_PACK, &id, msg, msgsz) != 0) {
+        /* 已有任务在跑：槽没领到，这里必须把整份请求还回去 */
         for (int i = 0; i < req->nids; i++) free(req->ids[i]);
         free(req->ids);
         free(req);
-        if (msg) snprintf(msg, msgsz, "已有打包任务在进行");
         return -1;
     }
-    long long id = (long long)time(NULL);
-    if (id <= g_last_id) id = g_last_id + 1;
-    g_last_id = id;
-    g_job.id = id;
-    g_job.active = 1;
-    g_job.done = 0;
-    g_job.ok = 0;
-    g_job.phase[0] = 'p'; /* "preparing" */
-    snprintf(g_job.phase, sizeof(g_job.phase), "preparing");
-    g_job.bytes_done = 0;
-    g_job.bytes_total = 0;
-    g_job.files_done = 0;
-    g_job.files_total = 0;
-    g_job.started = time(NULL);
-    g_job.cancel = 0;
-    g_job.error[0] = 0;
-    g_job.reason[0] = 0;
-    snprintf(g_job.zip, sizeof(g_job.zip), "%s/pack_%lld.zip", GAME_MEDIA_PACK_DIR, id);
-    pthread_mutex_unlock(&g_job_mu);
+    snprintf(gj_state()->phase, sizeof(gj_state()->phase), "preparing");
+    snprintf(gj_state()->aux, sizeof(gj_state()->aux),
+             "%s/pack_%lld.zip", GAME_MEDIA_PACK_DIR, id);
+    gj_unlock();
 
     pthread_t th;
     if (pthread_create(&th, NULL, md_pack_thread, req) != 0) {
@@ -1553,73 +1253,27 @@ int game_media_pack_start_json(const char *body, size_t len,
     return rc;
 }
 
+/* ── 三个对外入口（v0.5.2.116 起都是薄壳，实体在 game_job.c）───────────────
+ *
+ * /game_job_status 与 /game_job_cancel 这两条路由对**两种任务一视同仁**（打包、删除都走
+ * 它们），所以真正的实现是 gj_status_json / gj_cancel；这里保留原函数名只是为了不惊动
+ * http_server.c 与 test/media_scan_test.c 里已经跑通的调用点。
+ *
+ * game_media_pack_open 则**必须**按 kind 过滤：删除任务的 job id 同样能被查到，
+ * 但它的 aux 装的是待删源路径而不是 zip —— 不挡这道，用一个删除任务的 id 就能把
+ * aux 当成文件路径去 open。 */
 int game_media_pack_status(long long job_id, char *buf, size_t size) {
-    if (!buf || size < 64) return -1;
-    pthread_mutex_lock(&g_job_mu);
-    if (!g_job.id || job_id != g_job.id) {
-        pthread_mutex_unlock(&g_job_mu);
-        return -1;
-    }
-    double elapsed = g_job.started ? difftime(time(NULL), g_job.started) : 0.0;
-    if (elapsed < 0) elapsed = 0;
-    double percent = 0.0;
-    if (g_job.bytes_total > 0) {
-        percent = 100.0 * (double)g_job.bytes_done / (double)g_job.bytes_total;
-    } else if (g_job.files_total > 0) {
-        percent = 100.0 * (double)g_job.files_done / (double)g_job.files_total;
-    } else if (g_job.done) {
-        percent = 100.0;
-    }
-    if (percent > 100.0) percent = 100.0;
-    if (g_job.done && g_job.ok) percent = 100.0;
-    double rate = elapsed > 0.5 ? (double)g_job.bytes_done / elapsed : 0.0;
-
-    char eerr[560], ph[40], rs[160];
-    pldmgr_json_escape(g_job.error, eerr, sizeof(eerr));
-    pldmgr_json_escape(g_job.phase, ph, sizeof(ph));
-    /* reason 也必须转义 —— 它和 error 是同一条链上（md_pack_fail）传下来的自由文本，
-     * 只转 error 不转 reason 等于给自己留一个「只要某条失败原因里出现引号就整个
-     * 响应体变成非法 JSON」的洞（前端 .json() 直接抛）。 */
-
-    int n = snprintf(buf, size,
-                     "{\"job_id\":%lld,\"active\":%s,\"phase\":\"%s\",\"percent\":%.1f,"
-                     "\"bytes_done\":%lld,\"bytes_total\":%lld,"
-                     "\"files_done\":%d,\"files_total\":%d,"
-                     "\"rate\":%.0f,\"elapsed\":%.1f,"
-                     "\"done\":%s,\"ok\":%s,\"error\":\"%s\",\"reason\":\"%s\"}",
-                     g_job.id,
-                     g_job.active ? "true" : "false",
-                     ph, percent,
-                     g_job.bytes_done, g_job.bytes_total,
-                     g_job.files_done, g_job.files_total,
-                     rate, elapsed,
-                     g_job.done ? "true" : "false",
-                     g_job.ok ? "true" : "false",
-                     eerr, rs);
-    pthread_mutex_unlock(&g_job_mu);
-    if (n < 0 || (size_t)n >= size) return -1;
-    return n;
+    return gj_status_json(job_id, buf, size);
 }
 
 int game_media_pack_cancel(long long job_id) {
-    pthread_mutex_lock(&g_job_mu);
-    if (!g_job.id || job_id != g_job.id) {
-        pthread_mutex_unlock(&g_job_mu);
-        return -1;
-    }
-    if (g_job.active) g_job.cancel = 1;
-    pthread_mutex_unlock(&g_job_mu);
-    return 0;
+    return gj_cancel(job_id, NULL, 0);
 }
 
 int game_media_pack_open(long long job_id, int *out_fd, off_t *out_size) {
     if (!out_fd || !out_size) return -1;
     char zip[700];
-    pthread_mutex_lock(&g_job_mu);
-    int match = (g_job.id && job_id == g_job.id);
-    snprintf(zip, sizeof(zip), "%s", g_job.zip);
-    pthread_mutex_unlock(&g_job_mu);
-    if (!match) return -1;
+    if (gj_aux(job_id, GJ_KIND_PACK, zip, sizeof(zip)) != 0) return -1;
 
     int fd = open(zip, O_RDONLY);
     if (fd < 0) return -2;

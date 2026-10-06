@@ -38,7 +38,11 @@ SRCS += src/psaccounts/api.c src/psaccounts/accounts.c src/psaccounts/npsignin.c
         src/psaccounts/sys_lite.c \
         src/psaccounts/third_party/cJSON.c src/psaccounts/third_party/stb_impl.c
 # [CN-FORK] v0.5.2.115 游戏管理 → 多媒体管理（截图/录屏）后端
-SRCS += src/game_media.c
+SRCS += src/game_media.c src/game_job.c src/zip_io.c src/inflate.c
+# [CN-FORK] v0.5.2.116 游戏管理余下的后端：改名+磁贴两层图 / 存档 / 运行时（删源·挂载·卸载）
+# 三者之间只靠 include 里的声明互相说话：game_title 写完要让 game_mgr 的列表缓存作废，
+# game_runtime 删完同样要 —— 所以 game_title.o、game_runtime.o 都依赖 game_mgr.o。
+SRCS += src/game_title.c src/game_saves.c src/game_runtime.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf
 VERSION := $(shell grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"')

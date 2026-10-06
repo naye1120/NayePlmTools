@@ -1,3 +1,82 @@
+## v0.5.2.116 (CN-FORK)
+
+> 本轮按用户两句话推进：先「把游戏管理模块的后端全部完成」，收尾时又来一句
+> 「同步修复预览图片不全，下载失败的问题」。
+>
+> ① **游戏管理后端补完**：`.115` 只做了多媒体六条 + 两条任务端点，本轮把
+>    `gameApi.js` 文件头剩下的**一次做完，共 19 条**（详情/删除、存档六条、
+>    改名与磁贴九条、运行期三条）。**前端一行没改** —— `npm.cmd run lint` 仍是
+>    基线 28 error / 6 warning，本轮未触碰任何 `frontend/` 文件。
+> ② **预览图片只剩顶部一条 + 打包下载失败**：两个症状一个根，见 🐛 Bugfix。
+>
+> 本轮出包：`NayePlmTools_0.5.2.116-me.elf` / `-ga.elf`（`-Os -Wall` 零警告）。
+
+### ✨ Features
+
+* **游戏管理后端补完：19 条端点按 `gameApi.js` 文件头逐条实现。** 新增六个模块，
+  每个都带一份契约头注释（字段名、边界、真机取证结论写在那里面）：
+
+  | 文件 | 管什么 |
+  |---|---|
+  | `src/game_title.c` / `include/game_title.h` | 改名 + 磁贴两层图（图标 1:1 PNG / 背景 16:9 PNG→1920×1080 DXT1 DDS，外加 PNG 预览与 DDS 原字节两路取回） |
+  | `src/game_saves.c` / `include/game_saves.h` | 存档六条：列表 / 自动备份配置 / 远程连通测试 / 下载 zip / 上传 / 删除 |
+  | `src/game_runtime.c` / `include/game_runtime.h` | 运行期三条：mount / unmount / uninstall（`sceAppInstUtilAppUnInstall(title_id)` 单参，符号在 `libSceAppInstUtil.so`，**真实 `make` 链接通过**） |
+  | `src/game_job.c` / `include/game_job.h` | 任务槽本体（打包与删除**共用一个槽**）+ 进度 / 取消 / CRC32 |
+  | `src/zip_io.c` / `include/zip_io.h` | zip 编码器（媒体打包与存档下载**共用同一份**，字段一字未改） |
+  | `src/inflate.c` / `include/inflate.h` | 存档上传解压（仓库里没有 zlib，自己解） |
+
+  | 分组 | 端点 |
+  |---|---|
+  | 详情 / 删除 | `GET /game_detail?tid=`、`POST /game_delete {tid,confirm}` → 202 `{job_id}` / 409 `EBUSY` / 403 `EPERM` / 200 `{source_missing}` |
+  | 存档 | `GET /game_saves?tid=`、`POST /game_save_auto`、`POST /game_save_test`、`GET /game_save_download?tid=&save=`、`POST /game_save_upload?tid=&save=`（裸 body，512MB 上限）、`GET /game_save_delete?tid=&save=` |
+  | 改名 / 磁贴 | `POST /game_rename`、`POST`+`GET /game_tile_icon?tid=`、`GET /game_tile_icon_reset`、`POST /game_tile_background?tid=`（64MB 上限）、`GET /game_tile_background_reset`、`GET /game_tile_bg`（PNG 预览）、`GET /game_tile_bg_dds`（1036928 B 原字节） |
+  | 运行期 | `POST /game_mount {tid,mode}`、`POST /game_unmount {tid}`、`POST /game_uninstall {tid}` |
+  | 任务 | `GET /game_job_status?job=`、`GET /game_job_cancel?job=`（`.115` 已接；`.116` 起与删除任务共用同一槽，取文件路径时按 `kind` 过滤） |
+
+* **`game_mgr` 补齐详情与扫描边界**：`game_mgr_detail_json()` 按契约出 24 个字段；
+  `game_mgr_is_scan_path()` 判「这个路径归不归游戏管理扫」（前缀后必须跟 `/`，
+  否则 `/a/bc` 会被 `/a/b` 认走）；`game_mgr_invalidate()` 让改名/换图立刻穿过
+  `/game_list` 那份 60s 快照 —— 不加这一下，刚设的图标会被列表缓存吞掉一分钟。
+
+* **游戏删除是后台任务**：`measuring → deleting → finalizing` 三段进度，
+  按「文件 + 目录 + 软链」数条目，所以进度条的比例与最终删掉的一致
+  （`GR_MAX_DEPTH 32` / `GR_MAX_ENTRIES 1000000` 两条硬上限兜住符号链接环）。
+
+* **请求体上限逐条对着 `mock-server.js` 的 `express.raw({limit:…})`**：
+  存档包 512MB、磁贴 PNG 64MB、JSON 1MB（`gr_post_limit()`）。
+  前端能过、后端拒的后果是用户只看到一句「请求失败」，连为什么都拿不到。
+
+### 🐛 Bugfix
+
+* **多媒体「预览图片只显示最顶部的一条」+「打包下载失败」—— 两个症状一个根：
+  `MHD_create_response_from_fd64`。**
+
+  排查链：同一进程里**走 `MHD_create_response_from_buffer` 的全好**（缩略图、所有 JSON），
+  **走 `MHD_create_response_from_callback` 的也全好**（`/events` 那条 SSE 流真机上一直是好的），
+  **唯独走 fd 直出的两条出事** —— `/game_media_file`（原图/录屏预览）与
+  `/game_media_pack_get`（打包 zip 下载），正好就是用户报的这两个。
+  `Content-Length` 是照 `fstat` 报出去的，字节却少一截：图片解码到断点就停
+  （只剩顶部一条），zip 少尾（下载直接判失败）。链接进来的 `libmicrohttpd.a` 里
+  导出了 `MHD_send_sendfile_`，说明 fd 直出那条分支会落到内核 `sendfile()` 上，
+  而 MHD 自己的文档写着：构建没开 `MHD_FEATURE_RESPONSES_SHARED_FD` 时，
+  「同一条响应并发可能把错误数据发给客户端」。
+
+  改法：新增 `gr_file_response()` —— 一个 32KB 块的 `MHD_create_response_from_callback`，
+  回调里自己 `lseek(pos) + read()`，整条 `sendfile` 路径绕开，**fd 所有权仍由 free 回调关**。
+  换掉的只是「谁来搬字节」，不是「搬多少」：几百 MB 的录屏照样不进堆。
+  三处调用点一起换掉 —— `/game_media_file`、`/game_media_pack_get`、以及本轮新写的
+  `reply_file()`（存档下载 / 磁贴图标预览 / 磁贴背景预览 / DDS 原字节），
+  否则 `.116` 的存档下载会原样继承同一个 bug。
+
+### ⚠️ 待真机验证
+
+- **本轮的 fd→回调改动本身**（`.116` 出包后第一件事就是验这两条）：
+  打开一张截图看预览是否整张 → 打包下载一个 zip 看能否正常解开。
+  顺带确认没有 fd 泄漏（连着开 50 次预览，`/proc`/`sysctl` 的 fd 数不涨）。
+- **`.115` 遗留三项**（见 HANDOVER §7：录屏目录层级、视频时长读哪一列、只删文件后系统媒体库的反应）。
+
+---
+
 ## v0.5.2.115 (CN-FORK)
 
 > 本轮口径：接 `.112`/`.113` 的**纯前端**多媒体管理，补**后端**。前端契约（`gameApi.js`
