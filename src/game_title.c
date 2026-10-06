@@ -16,6 +16,7 @@
 #include "pldmgr.h"        /* pldmgr_log */
 #include "stb_image.h"
 #include "stb_image_write.h"
+#include "tile_db.h"       /* 改名 / 背景落进主机那一步（app.db + appinfo.db） */
 #include "utils.h"         /* pldmgr_json_escape */
 
 #define TT_BG_W 1920
@@ -167,6 +168,15 @@ int game_title_set_name(const char *tid, const char *name, char *msg, size_t msg
      * 五个写入口都调这一句 —— 放在路由里会漏（将来从别处调就没人记得），
      * 放在读口（override_name / icon_ver）里会自锁（读它自己就是缓存的来源）。 */
     game_mgr_invalidate();
+
+    /* [CN-FORK] v0.5.2.118 上面那份 name.txt 只改得了**面板**：主屏磁贴的名字根本
+     * 不是文件，而是 app.db 的平铺名字列 + appinfo.db 的 TITLE。不补这一句，用户看到
+     * 的就是「网页改了、PS5 上没改」。best-effort —— 写不进主机库只记日志，面板那层
+     * 照常算成功；为什么只动平铺列、不动 JSON 镜像，见 src/tile_db.c 头注释。 */
+    char hmsg[256];
+    if (tile_db_set_name(tid, s, hmsg, sizeof(hmsg)) != 0)
+        pldmgr_log("[PLDMGR] title: %s 主机端改名未生效：%s\n", tid,
+                   hmsg[0] ? hmsg : "见上一条日志");
     return 0;
 }
 
@@ -297,22 +307,42 @@ static int tt_as_png(const unsigned char *in, size_t len,
  * 备份只在 orig/ 里还没有那一份时做 —— 否则第二次应用会把「我们自己写的那张」
  * 当成原图备份下来，还原就成了空操作。
  * 全程 best-effort：写不进去只记日志。图仍在我们自己那份里，面板照常显示。 */
+/* 读整个文件到堆上。两个都要照看：
+ *
+ * ① **别在栈上开大数组**。这里原来是 `unsigned char chunk[65536]` —— 64KB，
+ *    是全仓最大的栈数组（第二大的才 16KB），而且**只有改磁贴图标 / 背景这条路会走到**
+ *    （tt_apply 备份主机原图、tt_restore 还原），改名那条一次都不碰。MHD 是
+ *    MHD_USE_THREAD_PER_CONNECTION，每个连接一条线程，栈是 pthread 默认给的，
+ *    这一帧叠加 http_on_request(4KB out) → gr_dispatch_post → set_bg → tt_apply
+ *    后就顶在边上 —— 真机反馈正是「改图标和背景会死机」，而改名不会。
+ *    收到 4KB：一帧小一个数量级，读取次数多 16 倍但每次都是纯 memcpy，无感。
+ * ② **按几何倍数扩容**。原来 `realloc(b, cap + n)` 每次只多要一个 chunk，
+ *    realloc 得把已读部分整段再拷一遍 → O(n²)：50MB 的 pic0 光搬就要几十 GB 的 memcpy。
+ *    换成翻倍后总拷贝量恒定在 2×文件大小。
+ * 读出来的就是原文件字节，不做 NUL 结尾（调用方一律用返回的长度）。 */
 static unsigned char *tt_read_all(const char *path, size_t *out_len) {
     *out_len = 0;
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
     unsigned char *b = NULL;
     size_t cap = 0, n = 0;
-    unsigned char chunk[65536];
-    while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) {
-        unsigned char *nb = (unsigned char *)realloc(b, cap + n);
-        if (!nb) { free(b); fclose(f); return NULL; }
-        b = nb;
-        memcpy(b + cap, chunk, n);
-        cap += n;
+    unsigned char chunk[4096];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+        if (n + got > cap) {
+            size_t nc = cap ? cap * 2 : 65536;
+            while (nc < n + got) nc *= 2;
+            unsigned char *nb = (unsigned char *)realloc(b, nc);
+            if (!nb) { free(b); fclose(f); return NULL; }
+            b = nb;
+            cap = nc;
+        }
+        memcpy(b + n, chunk, got);
+        n += got;
     }
     fclose(f);
-    *out_len = cap;
+    if (!b) return NULL;
+    *out_len = n;
     return b;
 }
 
@@ -686,6 +716,15 @@ int game_title_set_bg(const char *tid, const unsigned char *png, size_t len,
         tt_apply(d, t, pic0, pic0_len);
         snprintf(t, sizeof(t), "%s/pic0.dds", sdir);
         tt_apply(d, t, dds, dds_len);
+        /* [CN-FORK] v0.5.2.118 光写 pic0.dds 主屏**不画**：Shell 只看 app.db 的
+         * pic0Info 一列 —— 真机消融结论是「手工装的 app 光写文件、甚至重启都不会
+         * 自己补上这一列，必须自己写；写完主屏实时重绘，不用重启」。
+         * 这正是「背景在机器端没生效」的另一半。
+         * 必须排在 tt_apply 之后：注册进去的 ?ts= 得是这份文件刚写完的 mtime。 */
+        char hmsg[256];
+        if (tile_db_set_bg(tid, t, hmsg, sizeof(hmsg)) != 0)
+            pldmgr_log("[PLDMGR] title: %s 背景没登记进 app.db：%s\n", tid,
+                       hmsg[0] ? hmsg : "见上一条日志");
     } else {
         pldmgr_log("[PLDMGR] title: %s 找不到 sce_sys，背景只存在面板里\n", tid);
     }

@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -38,6 +39,24 @@ void pldmgr_log(const char *fmt, ...) {
     va_end(ap);
 }
 
+/* [CN-FORK] v0.5.2.121 game_media.c 的「游戏名称-截图时间」命名要问
+ * game_title_get_name。真身在 src/game_title.c，而那个文件会拖进
+ * game_mgr.c（sce_sys 目录）+ tile_db.c + sqlite3（9MB 合并源码）——
+ * 对「命名用的是不是游戏名」这件事没有信息量，所以照 pldmgr_log 的老办法给桩，
+ * 顺便把名字钉成可断言的值。
+ *
+ * ⚠️ 注意哪条路会调它：只有**带 tid 过滤**的扫描会（md_scan_locked 里
+ * `if (tid && md_tid_ok(tid))`）。game_media_lookup(id) 传的是 tid=NULL，
+ * 所以那条路的 name 仍是文件名 —— 下面两组断言刻意分开，正好把这条性质钉住。 */
+int game_title_get_name(const char *tid, char *out, size_t osz) {
+    if (!out || !osz) return 0;
+    out[0] = 0;
+    if (!tid) return 0;
+    if (strcmp(tid, "PPSA99008") == 0) { snprintf(out, osz, "宇宙机器人"); return 1; }
+    if (strcmp(tid, "PPSA00001") == 0) { snprintf(out, osz, "另一个游戏"); return 1; }
+    return 0;
+}
+
 #define ROOT "/tmp/pldmgr_media_test"
 
 #define C_PNG1 "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png"
@@ -46,6 +65,8 @@ void pldmgr_log(const char *fmt, ...) {
 #define C_VID1 "/av_contents/video/NPXS40087/PPSA99008/18c/20261006_101112_001.mp4"
 #define C_VID2 "/av_contents/video/NPXS40087/PPSA99008/18c/20261006_102233_002.mp4"
 #define C_OTH  "/av_contents/photo/NPXS40087/PPSA00001/9a1/20261004_090000_00000001.png"
+/* 录屏 + .jxr 封面帧（真机那条路，见 make_media_fixture.py 的 JXR_TID 段） */
+#define C_VIDJ "/av_contents/video/NPXS40087/PPSA99009/18c/20261007_120000_003.mp4"
 
 #define ICON_REL "/av_contents/thumbnails/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png.jpeg"
 
@@ -65,6 +86,26 @@ static int g_checks, g_fails;
 static int exists(const char *p) {
     struct stat st;
     return stat(p, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+/* 从列表 JSON 里抠出第一个 "field":"value" 的值。
+ * 只够本测试用（不做完整 JSON 解析）—— 但足以把「名字长什么样」钉住，
+ * 而 strstr 只能判子串、判不了「时间戳那 15 位都是数字」这类形状。 */
+static int field1(const char *json, const char *field, char *out, size_t osz) {
+    if (!json || !field || !out || osz == 0) return 0;
+    out[0] = 0;
+    char pat[64];
+    snprintf(pat, sizeof(pat), "\"%s\":\"", field);
+    const char *p = strstr(json, pat);
+    if (!p) return 0;
+    p += strlen(pat);
+    const char *e = strchr(p, '"');
+    if (!e) return 0;
+    size_t n = (size_t)(e - p);
+    if (n >= osz) n = osz - 1;
+    memcpy(out, p, n);
+    out[n] = 0;
+    return 1;
 }
 
 /* 数目录里的普通文件个数（缩略图缓存有没有真落盘，靠它断言） */
@@ -200,6 +241,42 @@ int main(void) {
         CHECK(strstr(buf, "\"duration\":15.0") != NULL, "缺 15.0 秒的录屏时长");
         CHECK(strstr(buf, "\"duration\":12.0") != NULL, "缺 duration 兜底分支的 12.0 秒");
         CHECK(strstr(buf, "\"mtime\":\"20") != NULL, "mtime 应是 YYYY-MM-DD…");
+
+        /* ── 命名（v0.5.2.121 / .122）───────────────────────────────────────
+         * 用户口径：「截图下载和视频下载的命名方式是游戏名称-截图时间」。
+         * 显示名与下载名**刻意不同**（前者给人看、可以有空格冒号；后者要落盘、
+         * 一个都不能有），所以两组都钉住 —— 只钉一组，另一组漂了没人知道。
+         * 具体时间戳取决于夹具文件落盘那一刻的 mtime，所以判形状不判全串。 */
+        {
+            char nm[300], dl[300];
+            CHECK(field1(buf, "name", nm, sizeof(nm)), "列表里没有 name 字段");
+            CHECK(field1(buf, "dlname", dl, sizeof(dl)), "列表里没有 dlname 字段");
+            printf("  name=%s  dlname=%s\n", nm, dl);
+
+            const char *gp = "宇宙机器人-";
+            size_t gl = strlen(gp);
+            CHECK(strncmp(nm, gp, gl) == 0, "显示名应以「游戏名称-」开头: %s", nm);
+            CHECK(nm[gl + 4] == '-' && nm[gl + 7] == '-',
+                  "显示名后面应跟 YYYY-MM-DD: %s", nm);
+            CHECK(strchr(nm, ':') != NULL, "显示名应带 HH:MM（给人看的）: %s", nm);
+
+            CHECK(strncmp(dl, gp, gl) == 0, "下载名应以「游戏名称-」开头: %s", dl);
+            CHECK(strchr(dl, ' ') == NULL && strchr(dl, ':') == NULL,
+                  "下载名里不能有空格与冒号（Windows / Shell 不接受）: %s", dl);
+            CHECK(strstr(dl, ".png") != NULL, "下载名应带原扩展名 .png: %s", dl);
+            /* 时间戳段：8 位日期 + '_' + 6 位时间 + '.' */
+            {
+                const char *ts = dl + gl;
+                int ok = 1;
+                for (int i = 0; i < 8; i++) if (!isdigit((unsigned char)ts[i])) ok = 0;
+                if (ts[8] != '_') ok = 0;
+                for (int i = 9; i < 15; i++) if (!isdigit((unsigned char)ts[i])) ok = 0;
+                if (ts[15] != '.') ok = 0;
+                CHECK(ok, "下载名时间戳应为 YYYYMMDD_HHMMSS.<ext>: %s", dl);
+            }
+            /* 录屏那一条也要带上自己的扩展名 */
+            CHECK(strstr(buf, ".mp4\"") != NULL, "录屏的下载名应带 .mp4");
+        }
         /* 分隔符：first 标志一旦写错，这些形状会立刻出现 */
         CHECK(strstr(buf, "[,") == NULL, "首项前多了逗号");
         CHECK(strstr(buf, ",]") == NULL, "末项后多了逗号");
@@ -238,7 +315,11 @@ int main(void) {
         CHECK(it.size == (long long)st.st_size, "size=%lld 应为 %lld（stat 真值，不是 DB 的 size_on_storage）",
               it.size, (long long)st.st_size);
     }
+    /* lookup 走的是 tid=NULL 的扫描，**不经过**游戏名那条路 → name 仍是文件名。
+     * 这与列表里那组（游戏名称-截图时间）互为对照：命名只在带 tid 过滤时发生。
+     * 别把这条改成与列表一样的 —— 改了就丢掉了「只有带 tid 才带游戏名」这条性质。 */
     CHECK(strcmp(it.name, "20261005_165454_00474347.png") == 0, "name=%s", it.name);
+    CHECK(strcmp(it.dlname, "20261005_165454_00474347.png") == 0, "dlname=%s", it.dlname);
     CHECK(it.icon[0] != 0, "icon_path 该被读出来");
     CHECK(it.stamp[4] == '-' && it.stamp[7] == '-' && it.stamp[10] == ' ',
           "mtime 格式不对: %s", it.stamp);
@@ -281,6 +362,35 @@ int main(void) {
     CHECK(game_media_open("/etc/passwd", &fd, &sz, &mime) == -1, "越界原图应 -1");
     CHECK(game_media_open(NULL, &fd, &sz, &mime) == -1, "NULL id 应 -1");
 
+    /* ── ③-b 下载文件名（v0.5.2.122）──────────────────────────────────────
+     * 用户口径：「截图下载和视频下载的命名方式是游戏名称-截图时间」。
+     * 这条只负责**算名字**；下不下发由 http_server.c 的 add_disposition 管。 */
+    {
+        char dn[300];
+        CHECK(game_media_download_name("PPSA99008", C_PNG1, dn, sizeof(dn)) == 0, "取下载名失败");
+        printf("  dlname(PPSA99008)=%s\n", dn);
+        CHECK(strncmp(dn, "宇宙机器人-", strlen("宇宙机器人-")) == 0,
+              "下载名应以游戏名开头: %s", dn);
+        CHECK(strchr(dn, ':') == NULL && strchr(dn, ' ') == NULL,
+              "下载名不能有冒号与空格（落盘/命令行都不接受）: %s", dn);
+        CHECK(strstr(dn, ".png") != NULL, "下载名应带原扩展名: %s", dn);
+
+        /* 录屏走同一条路，扩展名跟着 content_path 走 */
+        CHECK(game_media_download_name("PPSA99008", C_VID2, dn, sizeof(dn)) == 0, "录屏取下载名失败");
+        CHECK(strstr(dn, ".mp4") != NULL, "录屏下载名应带 .mp4: %s", dn);
+
+        /* 游戏名取不到（没改过名 / name.txt 不在）→ 退回原文件名，不是空串 */
+        CHECK(game_media_download_name("ZZZZ99999", C_PNG1, dn, sizeof(dn)) == 0,
+              "没有游戏名时也该给出名字");
+        CHECK(strcmp(dn, "20261005_165454_00474347.png") == 0, "无游戏名应退回原名: %s", dn);
+
+        /* 参数非法 / 文件不在 */
+        CHECK(game_media_download_name("PPSA99008", "/etc/passwd", dn, sizeof(dn)) == -1,
+              "越界 id 应 -1");
+        CHECK(game_media_download_name("PPSA99008", "/av_contents/photo/x/y/z/a.png", dn, sizeof(dn)) == -1,
+              "盘上没有的文件应 -1");
+    }
+
     /* ── ④ 缩略图 ───────────────────────────────────────────────────── */
     unsigned char *td = NULL;
     size_t tlen = 0;
@@ -318,9 +428,45 @@ int main(void) {
     /* HDR .jxr 没有 icon、stb 也不认 → -2（HTTP 侧回 404） */
     CHECK(game_media_thumb(C_JXR, 320, &td, &tlen, &mime) == -2, "HDR .jxr 应 -2");
     free(td); td = NULL;
-    /* 录屏没有图标帧 → -2 */
-    CHECK(game_media_thumb(C_VID1, 320, &td, &tlen, &mime) == -2, "录屏应 -2");
-    free(td); td = NULL;
+
+    /* ── 录屏缩略图：必须回**占位图**，不是 404（v0.5.2.120/122）────────────
+     * 用户口径：「视频没有预览图片」。真机上是「录屏没有可解封面帧」——
+     * 要么 icon_path 为空，要么指向一张 stb 解不动的 .jxr。两种都必须落到占位图。
+     * 断言四件：rc==0 / 是 JPEG / 尺寸 320x180 / 中央真有白色播放三角。
+     * 只断 rc==0 是不够的：给一张纯黑图也能过，而那在界面上就是「还是没缩略图」。 */
+    {
+        td = NULL; tlen = 0;
+        CHECK(game_media_thumb(C_VID1, 320, &td, &tlen, &mime) == 0,
+              "无 icon 的录屏应回占位图而不是 404");
+        CHECK(td && tlen > 100 && memcmp(td, "\xff\xd8\xff", 3) == 0, "占位图应是 JPEG");
+        if (td && tlen > 4) {
+            int iw = 0, ih = 0, ic = 0;
+            unsigned char *px = stbi_load_from_memory(td, (int)tlen, &iw, &ih, &ic, 0);
+            CHECK(px != NULL, "占位图 JPEG 解不回来");
+            CHECK(iw == 320 && ih == 180, "占位图尺寸 = %dx%d，应 320x180", iw, ih);
+            if (px && iw == 320 && ih == 180) {
+                /* 三角左顶点在中心、向右侧张开 ts 像素；取中心偏右 1/4 处必然在三角内 */
+                int ts = (iw < ih ? iw : ih) / 4;
+                int sx = iw / 2 + ts / 2, sy = ih / 2;
+                const unsigned char *c = px + ((size_t)sy * (size_t)iw + (size_t)sx) * 3;
+                CHECK(c[0] > 200 && c[1] > 200 && c[2] > 200,
+                      "占位图中央应有白色播放三角，实际 RGB=(%d,%d,%d)", c[0], c[1], c[2]);
+            }
+            stbi_image_free(px);
+        }
+        free(td); td = NULL;
+
+        /* ⚠️ 这一条才是用户真机上那个：icon_path **非空**、文件也真的在，
+         * 但它是 .jxr（HDR 封面帧），stb 解不动。旧代码只看「icon 在不在」，
+         * 于是走进解码分支、失败、回 -2 —— 视频缩略图因此一直空白。
+         * 判据必须是「这条是视频」，不是「有没有 icon_path」。 */
+        td = NULL; tlen = 0;
+        CHECK(game_media_thumb(C_VIDJ, 320, &td, &tlen, &mime) == 0,
+              "带 .jxr 封面帧的录屏也应是占位图，不是 404");
+        CHECK(td && tlen > 100 && memcmp(td, "\xff\xd8\xff", 3) == 0,
+              "带 .jxr 封面帧时产出的也应是 JPEG 占位图");
+        free(td); td = NULL;
+    }
     /* 越界 id → -1，绝不能去 stat */
     CHECK(game_media_thumb("/etc/passwd", 320, &td, &tlen, &mime) == -1, "越界缩略图应 -1");
     free(td); td = NULL;
@@ -362,6 +508,22 @@ int main(void) {
     CHECK(strstr(sbuf, "\"ok\":true") != NULL, "子集任务失败: %s", sbuf);
     CHECK(strstr(sbuf, "\"files_total\":2") != NULL, "files_total 应 2: %s", sbuf);
     CHECK(strstr(sbuf, "\"percent\":100.0") != NULL, "percent 应 100: %s", sbuf);
+    /* v0.5.2.122 新增 idle（距上次有进展多少秒）：任务结束后恒 0 ——
+     * 前端拿它当「是不是卡住了」的判据，跑完还一直涨就会被自己误导。 */
+    CHECK(strstr(sbuf, "\"idle\":0") != NULL, "任务结束后 idle 应为 0: %s", sbuf);
+
+    /* 压缩包命名（v0.5.2.121/122）：游戏名称-打包时间戳.zip，且**状态里透出同名**
+     * —— 前端 <a download> 与 http_server 的 Content-Disposition 都取这一处，
+     * 两边同源才不会「界面上写 A、落盘叫 B」。 */
+    {
+        char zn[300];
+        CHECK(game_media_pack_name(job, zn, sizeof(zn)) == 0, "取包名失败");
+        printf("  pack name=%s\n", zn);
+        CHECK(strncmp(zn, "宇宙机器人-", strlen("宇宙机器人-")) == 0, "包名应以游戏名开头: %s", zn);
+        CHECK(strstr(zn, ".zip") != NULL, "包名应带 .zip: %s", zn);
+        CHECK(strchr(zn, ':') == NULL && strchr(zn, ' ') == NULL, "包名不能有冒号/空格: %s", zn);
+        CHECK(strstr(sbuf, "\"name\":\"宇宙机器人-") != NULL, "状态 JSON 应透出包名: %s", sbuf);
+    }
 
     fd = -1; sz = 0;
     CHECK(game_media_pack_open(job, &fd, &sz) == 0, "取子集包失败");
@@ -369,6 +531,30 @@ int main(void) {
     if (fd >= 0) {
         CHECK(dump_fd(ROOT "/pack_subset.zip", fd, sz) == 0, "写出子集包失败");
         close(fd);
+    }
+
+    /* ── 大文件：跨过 zip_write 的 256 KB 分块边界 ───────────────────────────
+     * 用户报的「打包卡在 0 B / 58.7 MB」正落在这条路上，而夹具里的录屏原来只有
+     * 4 KB —— 一个分块都读不满，on_bytes 只回调一次，CRC 回填那两行 lseek 也只在
+     * 收尾走一遍。等于「大文件 + 多次分块 + 条目收尾」这条路从来没被测过。
+     * 现在 v1 是 1536 KiB + 12 字节头，至少 6 次分块。 */
+    {
+        const char *body = "{\"tid\":\"PPSA99008\",\"ids\":[\"" C_VID1 "\"]}";
+        job = 0;
+        n = game_media_pack_start_json(body, strlen(body), &job, msg, sizeof(msg));
+        CHECK(n == 0, "大文件打包启动失败 rc=%d msg=%s", n, msg);
+        CHECK(wait_job(job, sbuf, sizeof(sbuf)) == 0, "大文件任务没跑完: %s", sbuf);
+        CHECK(strstr(sbuf, "\"ok\":true") != NULL, "大文件任务失败: %s", sbuf);
+        CHECK(strstr(sbuf, "\"files_total\":1") != NULL, "大文件 files_total 应 1: %s", sbuf);
+        /* 8 字节 ftyp 头 + 1536 KiB */
+        CHECK(strstr(sbuf, "\"bytes_total\":1572876") != NULL,
+              "大文件 bytes_total 应为源文件真实大小（1572876）: %s", sbuf);
+        fd = -1; sz = 0;
+        CHECK(game_media_pack_open(job, &fd, &sz) == 0, "取大文件包失败");
+        if (fd >= 0) {
+            CHECK(dump_fd(ROOT "/pack_big.zip", fd, sz) == 0, "写出大文件包失败");
+            close(fd);
+        }
     }
 
     /* 全量：5 条 */

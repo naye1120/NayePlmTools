@@ -191,6 +191,48 @@ static enum MHD_Result reply_file(struct MHD_Connection *conn, const char *path,
     return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "文件不存在");
 }
 
+/* [CN-FORK] v0.5.2.122 下载文件名下发（用户口径：「截图下载和视频下载的命名方式是
+ * 游戏名称-截图时间。压缩包也是游戏名称-打包时间戳」）。
+ *
+ * 中文名必须走 RFC 5987 的 `filename*`，但 PS5 的 WebKit 很老，只认
+ * `filename="…"` —— 所以两个都给：前者是 UTF-8 百分号编码（现代浏览器优先用它），
+ * 后者把非 ASCII 压成 '_'（兜底，保证头本身合法）。
+ *
+ * 引号 / 反斜杠 / 控制字符一律转义：名字来自游戏名，游戏名是用户输入的，
+ * 一个 '"' 就能把 Content-Disposition 拆坏（那是响应头注入）。 */
+static void add_disposition(struct MHD_Response *resp, const char *name) {
+    if (!resp || !name || !name[0]) return;
+    static const char *hex = "0123456789ABCDEF";
+
+    char ascii[300];
+    size_t k = 0;
+    for (const unsigned char *p = (const unsigned char *)name; *p && k + 1 < sizeof(ascii); p++) {
+        unsigned char c = *p;
+        ascii[k++] = (c < 0x20 || c >= 0x7f) ? '_' : (char)c;
+    }
+    ascii[k] = 0;
+
+    char enc[1200];
+    size_t e = 0;
+    for (const unsigned char *p = (const unsigned char *)name; *p && e + 4 < sizeof(enc); p++) {
+        unsigned char c = *p;
+        if (c == '"' || c == '\\' || c < 0x20 || c >= 0x7f) {
+            enc[e++] = '%';
+            enc[e++] = hex[c >> 4];
+            enc[e++] = hex[c & 0x0f];
+        } else {
+            enc[e++] = (char)c;
+        }
+    }
+    enc[e] = 0;
+
+    char hdr[1600];
+    int n = snprintf(hdr, sizeof(hdr),
+                     "attachment; filename=\"%s\"; filename*=UTF-8''%s", ascii, enc);
+    if (n > 0 && (size_t)n < sizeof(hdr))
+        MHD_add_response_header(resp, "Content-Disposition", hdr);
+}
+
 /* [CN-FORK] v0.5.2.116 这条 POST 要收多少字节的请求体；0 = 不归我们管。
  * 上限不是随手定的，逐条对着 mock-server.js 的 express.raw({limit:…})：
  *   存档包 512mb、磁贴 PNG 64mb、其余 JSON 1MB。
@@ -1719,6 +1761,17 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!resp)
             return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO", "无法读取文件");
         MHD_add_response_header(resp, "Content-Type", fmime);
+        /* dl=1 才下发文件名：同一个 URL 还要给 <img>/<video> 当预览源，
+         * 对预览也挂 attachment 会让某些浏览器直接不渲染。 */
+        {
+            const char *fdl = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "dl");
+            if (fdl && fdl[0] == '1') {
+                const char *ftid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+                char fname[300];
+                if (game_media_download_name(ftid, fid, fname, sizeof(fname)) == 0)
+                    add_disposition(resp, fname);
+            }
+        }
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_GAME_MEDIA_DELETE) == 0) {
         /* [CN-FORK] 删除：只删文件，不写 av_content.db —— 见 include/game_media.h 铁律①。
@@ -1745,10 +1798,11 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         long long jid = jqs ? strtoll(jqs, &jend, 10) : 0;
         if (!jqs || !jend || jend == jqs || jid <= 0)
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少或非法的 job");
-        /* 2048 不是拍脑袋：phase + error + reason 三段都做了 JSON 转义，最坏总长
-         * 已经贴近 1000 —— 用 1024 一旦截断，game_media_pack_status 会返回 -1，
+        /* 4096 不是拍脑袋：phase + error + reason + name（v0.5.2.122 新增的成品
+         * zip 名，游戏名最长 255 字节、JSON 转义后翻倍）四段都做了转义，最坏总长
+         * 已经贴近 1700 —— 用 1024 一旦截断，game_media_pack_status 会返回 -1，
          * 路由把它当「任务不存在」回 404，前端看到的是一个凭空消失的任务。 */
-        char jbuf[2048];
+        char jbuf[4096];
         int jn = game_media_pack_status(jid, jbuf, sizeof(jbuf));
         if (jn < 0)
             return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "任务不存在或已过期");
@@ -1784,8 +1838,17 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!resp)
             return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO", "无法读取打包文件");
         MHD_add_response_header(resp, "Content-Type", "application/zip");
-        MHD_add_response_header(resp, "Content-Disposition",
-                                "attachment; filename=\"media_pack.zip\"");
+        /* 包名在 md_pack_start 里就定死了（游戏名称-打包时间戳.zip），这里只取 basename。
+         * 以前硬编码 "media_pack.zip" —— 用户要的「压缩包也是游戏名称-打包时间戳」
+         * 因此从来没到过浏览器（落盘的包名是对的，下载下来的却永远是 media_pack.zip）。 */
+        {
+            char pname[300];
+            if (game_media_pack_name(pid, pname, sizeof(pname)) == 0)
+                add_disposition(resp, pname);
+            else
+                MHD_add_response_header(resp, "Content-Disposition",
+                                        "attachment; filename=\"media_pack.zip\"");
+        }
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_GAME_DETAIL) == 0) {
         /* [CN-FORK] v0.5.2.116 单游戏详情：打开弹窗拉一次，不轮询。

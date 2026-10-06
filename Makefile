@@ -9,7 +9,8 @@ STRIP  := /opt/ps5-payload-sdk/bin/prospero-strip
 SDK      := /opt/ps5-payload-sdk
 TARGET   := $(SDK)/target
 INCLUDES := -Iinclude -I$(TARGET)/include \
-           -Isrc/psaccounts -Isrc/psaccounts/third_party
+           -Isrc/psaccounts -Isrc/psaccounts/third_party \
+           -Ithird_party/sqlite3
 # [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入需要的两个库（SDK 里是 .so）：
 #   -lkernel_sys     sys_lite.c 的凭据提权（kernel_set_ucred / root / jail）
 #   -lSceRemoteplay  accounts.c 生成远程游玩配对 PIN（只读，不调用即不占会话）
@@ -43,6 +44,9 @@ SRCS += src/game_media.c src/game_job.c src/zip_io.c src/inflate.c
 # 三者之间只靠 include 里的声明互相说话：game_title 写完要让 game_mgr 的列表缓存作废，
 # game_runtime 删完同样要 —— 所以 game_title.o、game_runtime.o 都依赖 game_mgr.o。
 SRCS += src/game_title.c src/game_saves.c src/game_runtime.c
+# [CN-FORK] v0.5.2.118 磁贴写回主机那一步：改名要写 app.db + appinfo.db 的平铺名字列，
+# 换背景要写 app.db 的 pic0Info —— 都得真跑 SQL，见 third_party/sqlite3 那段规则。
+SRCS += src/tile_db.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf
 VERSION := $(shell grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"')
@@ -133,14 +137,34 @@ $(FRONTEND_DIST):
 	@echo "Please run 'make frontend-build' locally on your host machine first."
 	@exit 1
 
-$(ELF): $(ASSET_HEADER) $(MANIFEST_HEADER) $(CA_HEADER) $(FAVICON_SVG_HEADER) $(ICON_PNG_HEADER) $(SRCS)
+# [CN-FORK] v0.5.2.118 静态 SQLite（合并源码）：改名要 UPDATE app.db / appinfo.db 的平铺
+# 名字列，换背景要 UPDATE app.db 的 pic0Info —— 固件不带 libSceSqlite.sprx、SDK 也没有
+# stub，sqlite3_* 只能整个编进来。单独一条规则、单独一套 CFLAGS，三个理由：
+#   ① -Wall 套在合并版上会把上游既有的风格提示算进我们「零新增警告」的账里 → -w 关掉；
+#   ② THREADSAFE=1 —— 参考工程是单线程独立 ELF 所以取 0，本进程是 MHD 线程池，
+#      改名与换背景可能同时落到两条连接上，得让 SQLite 自己串行化；
+#   ③ 一堆 SQLITE_OMIT_* 把 JSON / 扩展加载 / TCL 变量等用不到的功能摘掉，再靠
+#      -ffunction-sections + --gc-sections 把死代码丢出 ELF，压住 ELF 体积。
+SQLITE_DIR := third_party/sqlite3
+SQLITE_OBJ := $(SQLITE_DIR)/sqlite3.o
+SQLITE_CFLAGS := -I$(SQLITE_DIR) -w -Os -ffunction-sections -fdata-sections \
+	-DSQLITE_OS_UNIX=1 -DSQLITE_THREADSAFE=1 -DSQLITE_TEMP_STORE=2 \
+	-DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_OMIT_DEPRECATED=1 \
+	-DSQLITE_OMIT_JSON=1 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DQS=0 \
+	-DSQLITE_UNTESTABLE=1 -DSQLITE_OMIT_TCL_VARIABLE=1 \
+	-DSQLITE_OMIT_PROGRESS_CALLBACK=1 -DSQLITE_OMIT_TRACE
+
+$(SQLITE_OBJ): $(SQLITE_DIR)/sqlite3.c $(SQLITE_DIR)/sqlite3.h
+	$(CC) $(SQLITE_CFLAGS) -c $< -o $@
+
+$(ELF): $(ASSET_HEADER) $(MANIFEST_HEADER) $(CA_HEADER) $(FAVICON_SVG_HEADER) $(ICON_PNG_HEADER) $(SRCS) $(SQLITE_OBJ)
 	@echo "Building $(ELF)..."
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(ELF) $(SRCS) $(LIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $(ELF) $(SRCS) $(SQLITE_OBJ) $(LIBS)
 	@echo "Stripping $(ELF)..."
 	$(STRIP) $(ELF)
 
 clean:
-	rm -f $(ELF) $(ASSET_HEADER) $(MANIFEST_HEADER) $(CA_HEADER) $(FAVICON_SVG_HEADER) $(ICON_PNG_HEADER) src/*.o
+	rm -f $(ELF) $(ASSET_HEADER) $(MANIFEST_HEADER) $(CA_HEADER) $(FAVICON_SVG_HEADER) $(ICON_PNG_HEADER) src/*.o $(SQLITE_OBJ)
 
 
 

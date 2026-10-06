@@ -38,6 +38,22 @@ const TABS = [
   { value: 'video', label: '视频' },
 ]
 
+/* [CN-FORK] v0.5.2.122 后端给的 phase 是机器可读的（preparing / measuring /
+ * packing / done / failed / cancelled）。用户看到「正在打包…」时真正想知道的是
+ * **卡在哪一步** —— 尤其这一版之前报过「一直卡在这个页面」：进度条不动的时候，
+ * 「正在读取媒体库」和「正在写入压缩包」是两件完全不同的事（一个该等、一个该查），
+ * 所以这一行必须显示出来，不能只留一个不动的百分比。 */
+const PHASE_TEXT = {
+  preparing: ['game.phase_preparing', '正在读取媒体库…'],
+  measuring: ['game.phase_measuring', '正在计算体积…'],
+  packing: ['game.phase_packing', '正在写入压缩包…'],
+  cancelled: ['game.phase_cancelled', '已取消'],
+}
+function phaseText(phase, t) {
+  const e = PHASE_TEXT[phase]
+  return e ? t(e[0], e[1]) : ''
+}
+
 export default function MediaManagerModal({ show, game, onClose, addToast, showConfirm }) {
   const { t } = useTranslation()
   const tid = game && game.tid
@@ -131,11 +147,17 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
       if (stopJobRef.current) stopJobRef.current()
       stopJobRef.current = watchJob(r.job_id, (st) => {
         if (!aliveRef.current) return
-        setJob(st)
+        /* 失联时 onTick 拿到的是一个只有 job_id/error 的残缺对象（见 watchJob）。
+         * 直接 setJob(st) 会把已经量出来的体积/文件数抹成 `—`、进度条退回不确定态 ——
+         * 恰恰在最需要「最后停在哪」的时候把证据丢掉。所以只在 transient 时做合并，
+         * 正常 tick 一律整体替换。 */
+        setJob((prev) => (st.transient && prev ? { ...prev, ...st } : st))
         if (st.done) {
           if (stopJobRef.current) { stopJobRef.current(); stopJobRef.current = null }
-          if (st.ok) setPacked({ job_id: r.job_id, count: ids ? ids.length : items.length })
-          else if (st.error) addToast?.(t('game.pack_fail', '打包失败：{{why}}', { why: st.error }), 'error')
+          /* name 是后端定下的成品文件名（游戏名称-打包时间戳.zip）。存下来给
+           * <a download> 用 —— 服务端也下发了同名 Content-Disposition，两边同源。 */
+          if (st.ok) setPacked({ job_id: r.job_id, count: ids ? ids.length : items.length, name: st.name || '' })
+          else if (st.error && !st.transient) addToast?.(t('game.pack_fail', '打包失败：{{why}}', { why: st.error }), 'error')
         }
       })
     } catch (e) {
@@ -254,16 +276,29 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
               {job && (
                 <div className="mb-3 p-3 rounded-xl border border-white/10 bg-white/[0.03]">
                   <div className="flex items-center justify-between gap-3 mb-2">
-                    <strong className="text-white panel-note">
-                      {job.done
-                        ? (job.ok ? t('game.pack_done', '打包完成') : t('game.pack_failed', '打包失败'))
-                        : t('game.packing', '正在打包…')}
-                    </strong>
-                    <span className="text-zinc-400 tabular-nums panel-note">
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <strong className="text-white panel-note shrink-0">
+                        {job.lost
+                          ? t('game.job_lost_title', '与主机失联')
+                          : job.done
+                            ? (job.ok ? t('game.pack_done', '打包完成') : t('game.pack_failed', '打包失败'))
+                            : t('game.packing', '正在打包…')}
+                      </strong>
+                      {!job.done && phaseText(job.phase, t) && (
+                        <span className="panel-tiny text-zinc-500 truncate">{phaseText(job.phase, t)}</span>
+                      )}
+                    </div>
+                    <span className="text-zinc-400 tabular-nums panel-note shrink-0">
                       {job.done ? '' : `${Math.max(0, Math.min(100, Math.round(job.percent || 0)))}%`}
                     </span>
                   </div>
-                  {!job.done && <ProgressBar percent={job.percent} indeterminate={job.phase === 'measuring' || job.phase === 'preparing'} className="mb-2" />}
+                  {/* indeterminate 只在**还不知道总量**时用（preparing 那一段）。
+                   * 原版把它挂在 phase 上，于是总量 58.7 MB 已经知道了、进度条还在
+                   * 来回跑一条 1/3 宽的脉冲 —— 截图里「进度条三成满、右边写着 0%」
+                   * 就是这一处造成的：一条不反映真实进度的动画比一条不动的更误导。 */}
+                  {!job.done && (
+                    <ProgressBar percent={job.percent} indeterminate={!job.bytes_total} className="mb-2" />
+                  )}
                   {!job.done && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5">
                       <Stat label={t('game.job_bytes', '体积')} value={job.bytes_total ? `${formatSizeAlways(job.bytes_done)} / ${formatSizeAlways(job.bytes_total)}` : '—'} />
@@ -272,9 +307,27 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
                       <Stat label={t('game.job_elapsed', '用时')} value={formatElapsed(job.elapsed)} />
                     </div>
                   )}
-                  {job.error && <p className="mt-2 text-red-400 panel-note break-words">{job.error}</p>}
+                  {/* 卡住与否交给**时间**说话：idle 是后端算的「距上次有进展多少秒」。
+                   * 没有它，一个不动的进度条分不清「在啃大文件」和「线程早没了」。 */}
+                  {!job.done && !job.transient && job.idle >= 20 && (
+                    <p className="mt-2 text-amber-400 panel-note break-words">
+                      {t('game.job_stalled', '已 {{n}} 秒没有进展；若长时间不动，可取消任务后重试', { n: job.idle })}
+                    </p>
+                  )}
+                  {job.error && !job.transient && <p className="mt-2 text-red-400 panel-note break-words">{job.error}</p>}
+                  {job.transient && (
+                    <p className="mt-2 text-amber-400 panel-note break-words">
+                      {job.lost
+                        ? t('game.job_lost', '与主机失联，任务状态未知；请关掉面板重新打开查看')
+                        : t('game.job_retry', '与主机失联，正在重试…')}
+                    </p>
+                  )}
                   {packed && (
-                    <a className="btn btn-ok mt-3" href={mediaPackUrl(packed.job_id)} download>
+                    <a
+                      className="btn btn-ok mt-3"
+                      href={mediaPackUrl(packed.job_id)}
+                      download={packed.name || true}
+                    >
                       <Download className="w-4 h-4" />
                       <span>{t('game.pack_get', '下载打包文件（{{n}} 项）', { n: packed.count })}</span>
                     </a>
@@ -390,6 +443,7 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
           onClose={() => setPreview(null)}
           onDelete={onDeleteOne}
           busyId={busyId}
+          tid={tid}
           t={t}
         />
       )}
@@ -399,7 +453,7 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
 
 /* 预览层：图片直接铺满，视频用原生 <video controls>（自带播放/进度/全屏）。
  * 左右方向键切换上一张/下一张 —— 遥控器上这是最自然的翻页方式。 */
-function Lightbox({ items, index, onIndex, onClose, onDelete, busyId, t }) {
+function Lightbox({ items, index, onIndex, onClose, onDelete, busyId, tid, t }) {
   const it = items[index]
   const isVideo = it.kind === 'video'
 
@@ -449,7 +503,16 @@ function Lightbox({ items, index, onIndex, onClose, onDelete, busyId, t }) {
           >
             <Trash2 className="w-4 h-4" />
           </button>
-          <a className="icon-btn" href={mediaFileUrl(it.id)} download title={t('game.media_download', '下载')} aria-label={t('game.media_download', '下载')}>
+          {/* 下载：落盘名走后端那份 dlname（游戏名称-截图时间.<ext>）。
+              dl=1 让后端再下一遍同名 Content-Disposition —— 旧 WebKit 不一定认
+              download 属性，两条一起给才稳。 */}
+          <a
+            className="icon-btn"
+            href={mediaFileUrl(it.id, { dl: 1, tid })}
+            download={it.dlname || true}
+            title={t('game.media_download', '下载')}
+            aria-label={t('game.media_download', '下载')}
+          >
             <Download className="w-4 h-4" />
           </a>
           <button type="button" className="icon-btn" onClick={onClose} title={t('app.buttons.close', '关闭')} aria-label={t('app.buttons.close', '关闭')}>

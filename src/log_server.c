@@ -4,7 +4,9 @@
 #include <stdarg.h>
 #include <pthread.h>
 #include <errno.h>
+#include <poll.h>     /* [CN-FORK] v0.5.2.122 log_stdout 的「可写才写」 */
 #include <time.h>
+#include <unistd.h>   /* [CN-FORK] v0.5.2.122 write() */
 #include <sys/stat.h> /* [CN-FORK] 日志落盘需要 mkdir */
 
 #include "log_server.h"
@@ -58,6 +60,29 @@ static void log_append_file(const char *line) {
 void log_server_set_active(void) { server_active_flag = 1; }
 int pldmgr_server_is_active(void) { return server_active_flag; }
 
+/* [CN-FORK] v0.5.2.122 stdout 改成「可写才写」。
+ *
+ * payload 的 stdout 是**启动器给的 socket / 管道**（不是终端），对端不排空它。
+ * 缓冲一满，`printf` 就**永久**阻塞 —— 而调用 pldmgr_log 的线程里有一个正好是
+ * 后台打包线程。于是现象是：任务槽已经报出总量（体积 58.7 MB / 文件 0-3），
+ * 此后一个字节都不动，阶段永远停在 "measuring"，用户看到的是一块不动的进度条。
+ * 一条日志能卡死一个后台任务，代价完全不成比例。
+ *
+ * 所以先 poll 问一句「写得进去吗」：不可写就丢掉 stdout 这一份。日志的另外两个
+ * 去处（内存环形缓冲给 /logs 与 SSE、以及落盘 /data/nayeplmtools/pldmgr.log）
+ * 都在下面照旧，排查能力一点没少。 */
+static void log_stdout(const char *line, size_t n) {
+    if (!line || n == 0) return;
+    struct pollfd p;
+    p.fd = STDOUT_FILENO;
+    p.events = POLLOUT;
+    p.revents = 0;
+    if (poll(&p, 1, 0) <= 0) return;
+    if (!(p.revents & POLLOUT)) return;
+    ssize_t r = write(STDOUT_FILENO, line, n);
+    (void)r; /* 短写 / EAGAIN / 失败都无所谓：这不是日志的唯一去处 */
+}
+
 void pldmgr_log(const char *fmt, ...) {
     char line[MAX_LOG_LINE_LEN];
     va_list args;
@@ -65,8 +90,8 @@ void pldmgr_log(const char *fmt, ...) {
     vsnprintf(line, sizeof(line), fmt, args);
     va_end(args);
 
-    /* Print to stdout */
-    printf("%s", line);
+    /* Print to stdout（可写才写，见 log_stdout 的注释） */
+    log_stdout(line, strlen(line));
 
     /* Remove trailing newline for internal storage if present */
     size_t len = strlen(line);

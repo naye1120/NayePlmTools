@@ -594,7 +594,10 @@ function jobStatus(id) {
   return {
     job_id: j.id,
     active: !done,
-    phase: j.cancelled ? 'cancelled' : done ? 'done' : p < 0.15 ? 'measuring' : j.kind === 'delete' ? 'deleting' : 'transferring',
+    /* [CN-FORK] v0.5.2.122 phase 取值与真机对齐：打包走 preparing → measuring →
+     * packing（原来这里给的是 'transferring'，后端从来没有这个取值 —— 前端的中文
+     * 映射表认不出它，界面上会直接显示一个英文单词）。 */
+    phase: j.cancelled ? 'cancelled' : done ? 'done' : p < 0.15 ? 'measuring' : j.kind === 'delete' ? 'deleting' : 'packing',
     percent: Math.round(p * 1000) / 10,
     bytes_done: bytesDone,
     bytes_total: j.totalBytes,
@@ -602,10 +605,16 @@ function jobStatus(id) {
     files_total: j.totalFiles,
     rate: p > 0 ? Math.round(bytesDone / Math.max(0.1, elapsed)) : 0,
     elapsed: Math.round(elapsed * 10) / 10,
+    /* mock 的进度是按时间现算的，永远不会「卡住」，所以 idle 恒 0。
+     * 真机后端算的是「距上次有进展多少秒」（game_job.c 的 g_last_progress）。 */
+    idle: 0,
     done,
     ok: done && !j.cancelled,
     error: j.cancelled ? '已取消' : '',
     reason: '',
+    /* 打包成品文件名（游戏名称-打包时间戳.zip）；删除任务为空串 —— 与后端
+     * gj_status_json 的 name 字段一一对应，前端拿它当 <a download> 的值。 */
+    name: (j.meta && j.meta.name) || '',
   };
 }
 
@@ -677,7 +686,42 @@ function savesFor(tid) {
   return out;
 }
 
-/* 媒体：截图为主 + 少量视频。数量按 tid 变化，留一个「空」的样本。 */
+/* 游戏显示名（改过名就用新名）—— 与后端 game_title_get_name 同源语义。 */
+function gameNameFor(tid) {
+  const base = mockGames.find((x) => x.tid === tid);
+  return gameState.renamed[tid] || (base ? base.name : tid);
+}
+
+/* 后端 md_sanitize_name 的等价物：空格 / 冒号 / 斜杠 / 引号 / 通配符 → '-'。
+ * 游戏名里带空格（「战神 诸神黄昏」）与全角括号是常态，落盘前必须清一遍。 */
+function sanitizeFileName(s) {
+  // eslint-disable-next-line no-control-regex -- 控制字符是**故意**要挡的（后端同样挡）
+  return String(s).replace(/[ :/\\<>"|?*\u0000-\u001f\u007f]/g, '-');
+}
+
+/* 「游戏名称-YYYYMMDD_HHMMSS.<ext>」—— 与后端 md_dlname 同一口径。
+ * mock 的 mtime 是 'YYYY-MM-DD HH:MM'（没有秒），补 ':00' 再格式化。 */
+function dlNameFor(tid, kind, mtime) {
+  const ext = kind === 'video' ? 'mp4' : 'png';
+  const d = new Date(`${String(mtime).replace(' ', 'T')}:00`);
+  const p = (n) => String(n).padStart(2, '0');
+  const ts = Number.isNaN(d.getTime())
+    ? 'unknown'
+    : `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `${sanitizeFileName(gameNameFor(tid))}-${ts}.${ext}`;
+}
+
+/* 打包成品名：「游戏名称-打包时间戳.zip」 */
+function packNameFor(tid) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const ts = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `${sanitizeFileName(gameNameFor(tid))}-${ts}.zip`;
+}
+
+/* 媒体：截图为主 + 少量视频。数量按 tid 变化，留一个「空」的样本。
+ * 这里只出**原始字段**；name（显示名）/ dlname（下载名）由 /game_media 现算 ——
+ * 因为游戏名可以被改，缓存进 gameState.media 就会把旧名字钉死。 */
 function mediaFor(tid) {
   if (gameState.media[tid]) return gameState.media[tid];
   if (tid === 'PAUS00100') return [];
@@ -688,7 +732,6 @@ function mediaFor(tid) {
     out.push({
       id: `${tid}-s${i}`,
       kind: 'screenshot',
-      name: `2026100${(i % 9) + 1}_1${i % 10}${i % 6}0${i % 10}.png`,
       mtime: `2026-10-0${(i % 9) + 1} 1${i % 10}:2${i % 6}`,
       size: 3145728 + i * 262144,
       w: 3840, h: 2160,
@@ -698,7 +741,6 @@ function mediaFor(tid) {
     out.push({
       id: `${tid}-v${i}`,
       kind: 'video',
-      name: `2026100${(i % 9) + 1}_1${i}3${i}0.mp4`,
       mtime: `2026-10-0${(i % 9) + 1} 1${i}:3${i}`,
       size: 52428800 + i * 10485760,
       w: 1920, h: 1080,
@@ -869,7 +911,14 @@ app.get('/game_media', (req, res) => {
   if (!base || gameState.deleted.has(tid)) {
     return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
   }
-  res.json({ tid, items: mediaFor(tid) });
+  /* name（显示名）/ dlname（下载名）在这里现算、不进缓存 —— 游戏名可以改，
+   * 缓存进 gameState.media 就把旧名字钉死了（后端也是每次扫库现算）。 */
+  const items = mediaFor(tid).map((m) => ({
+    ...m,
+    name: `${gameNameFor(tid)}-${m.mtime}`,
+    dlname: dlNameFor(tid, m.kind, m.mtime),
+  }));
+  res.json({ tid, items });
 });
 
 app.get('/game_media_thumb', (req, res) => {
@@ -884,6 +933,14 @@ app.get('/game_media_file', (req, res) => {
   const id = String(req.query.id || '');
   const kind = /-v\d+$/.test(id) ? 'video' : 'shot';
   const accent = kind === 'video' ? '#7c3aed' : '#0891b2';
+  /* dl=1 → 下发文件名（游戏名称-截图时间.<ext>），与后端 add_disposition 同口径。
+   * 预览（<img>/<video>）不带 dl，免得 attachment 影响渲染。 */
+  if (String(req.query.dl || '') === '1') {
+    const tid = String(req.query.tid || '');
+    const m = mediaFor(tid).find((x) => x.id === id);
+    const nm = m ? dlNameFor(tid, m.kind, m.mtime) : `${id}.bin`;
+    res.setHeader('Content-Disposition', `attachment; filename="${nm}"`);
+  }
   /* 视频这里返回的其实还是一张 SVG —— <video> 解不了，但前端挂了 poster，
    * 所以预览里看到的是封面图 + 原生播放控件，布局与真实情况一致。
    * 主机侧的真实现由后端直接吐文件字节。 */
@@ -899,7 +956,7 @@ app.post('/game_media_pack', (req, res) => {
     return res.status(400).json({ error: 'EINVAL', message: '没有选中任何项目' });
   }
   const bytes = picked.reduce((n, x) => n + x.size, 0);
-  res.status(202).json({ job_id: startJob('pack', bytes, picked.length) });
+  res.status(202).json({ job_id: startJob('pack', bytes, picked.length, { name: packNameFor(tid) }) });
 });
 
 app.get('/game_media_pack_get', (req, res) => {
@@ -907,7 +964,9 @@ app.get('/game_media_pack_get', (req, res) => {
   if (!st) return res.status(404).json({ error: 'ENOENT', message: '没有这个打包任务' });
   if (!st.done) return res.status(409).json({ error: 'EBUSY', message: '打包还没完成' });
   res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="media-pack-${req.query.job}.zip"`);
+  /* 包名与 job 状态里的 name 同源（后端也是从 aux 取 basename，只有一处算）。 */
+  res.setHeader('Content-Disposition',
+    `attachment; filename="${st.name || `media-pack-${req.query.job}.zip`}"`);
   res.send(EMPTY_ZIP);
 });
 

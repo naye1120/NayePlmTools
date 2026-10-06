@@ -213,7 +213,8 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction }) {
       </div>
 
       {/* 名称 + TID（行末右侧标游戏体积）+ 详情提示 */}
-      <div className="space-y-0.5 min-w-0 pointer-events-none">
+      {/* [CN-FORK] v0.5.2.119 名称+体积行加半透明背景条，突出显示 */}
+      <div className="space-y-0.5 min-w-0 pointer-events-none bg-white/[0.04] rounded-md px-2 py-1 -mx-0.5">
         <p className="text-[14px] font-bold text-white truncate" title={g.name}>{g.name}</p>
         <div className="flex items-baseline justify-between">
           <span className="text-[11px] text-zinc-500 font-mono tracking-wider truncate">{g.tid}</span>

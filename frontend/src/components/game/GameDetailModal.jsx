@@ -161,13 +161,18 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
             stopWatch()
             stopJobRef.current = watchJob(r.job_id, (st) => {
               if (!aliveRef.current) return
-              setJob(st)
+              /* 失联时 onTick 拿到的是残缺对象（见 watchJob 的注释）：整体替换会把
+               * 已经量出来的体积/文件数抹掉，所以 transient 时做合并。 */
+              setJob((prev) => (st.transient && prev ? { ...prev, ...st } : st))
               if (st.done) {
                 stopWatch()
                 if (st.ok) {
                   addToast?.(t('game.delete_ok', '「{{name}}」已删除', { name: g.name || tid }))
                   onChanged?.()
                   onClose?.()
+                } else if (st.transient) {
+                  /* 失联 ≠ 删除失败：任务可能已经跑完了，只是我们问不到。别谎报失败。 */
+                  addToast?.(t('game.job_lost', '与主机失联，任务状态未知；请关掉面板重新打开查看'), 'error')
                 } else if (st.error) {
                   addToast?.(t('game.delete_fail', '删除失败：{{why}}', { why: st.error }), 'error')
                 }
@@ -361,16 +366,21 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
           <div className="mt-5 p-4 rounded-xl border border-white/10 bg-white/[0.03]">
             <div className="flex items-center justify-between gap-3 mb-2">
               <strong className="text-white panel-body">
-                {job.done
-                  ? (job.ok ? t('game.job_done', '删除完成') : t('game.job_failed', '删除失败'))
-                  : (PHASE_LABEL[job.phase] || job.phase || t('game.job_running', '处理中'))}
+                {job.lost
+                  ? t('game.job_lost_title', '与主机失联')
+                  : job.done
+                    ? (job.ok ? t('game.job_done', '删除完成') : t('game.job_failed', '删除失败'))
+                    : (PHASE_LABEL[job.phase] || job.phase || t('game.job_running', '处理中'))}
               </strong>
               <span className="text-zinc-400 tabular-nums panel-note">
                 {job.done ? '' : `${Math.max(0, Math.min(100, Math.round(job.percent || 0)))}%`}
               </span>
             </div>
             {!job.done && (
-              <ProgressBar percent={job.percent} indeterminate={job.phase === 'measuring' || job.phase === 'preparing'} className="mb-3" />
+              /* [CN-FORK] v0.5.2.122 indeterminate 只在**总量还不知道**时用。
+               * 挂 phase 上的旧写法会在总量已知后仍然来回跑一条 1/3 宽的脉冲，
+               * 而右边百分比写着 0% —— 一条不反映真实进度的动画比一条不动的更误导。 */
+              <ProgressBar percent={job.percent} indeterminate={!job.bytes_total} className="mb-3" />
             )}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5 panel-note">
               <Stat label={t('game.job_bytes', '体积')} value={
@@ -382,7 +392,19 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
               <Stat label={t('game.job_rate', '速率')} value={formatRate(job.rate)} />
               <Stat label={t('game.job_elapsed', '用时')} value={formatElapsed(job.elapsed)} />
             </div>
-            {job.error && <p className="mt-2 text-red-400 panel-note break-words">{job.error}</p>}
+            {!job.done && !job.transient && job.idle >= 20 && (
+              <p className="mt-2 text-amber-400 panel-note break-words">
+                {t('game.job_stalled', '已 {{n}} 秒没有进展；若长时间不动，可取消任务后重试', { n: job.idle })}
+              </p>
+            )}
+            {job.error && !job.transient && <p className="mt-2 text-red-400 panel-note break-words">{job.error}</p>}
+            {job.transient && (
+              <p className="mt-2 text-amber-400 panel-note break-words">
+                {job.lost
+                  ? t('game.job_lost', '与主机失联，任务状态未知；请关掉面板重新打开查看')
+                  : t('game.job_retry', '与主机失联，正在重试…')}
+              </p>
+            )}
             {!job.done && job.cancellable !== false && (
               <button
                 type="button"

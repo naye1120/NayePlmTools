@@ -23,8 +23,13 @@
  *        → 409 {error:"EBUSY", reason:"game_active"|"rest_mode"|...}
  *        → 403 {error:"EPERM"}                        已安装 PKG 没有可删的物理源
  *   GET  /game_job_status?job=<id>
- *        → { job_id, active, phase, percent, bytes_done, bytes_total,
- *            files_done, files_total, rate, elapsed, done, ok, error, reason }
+ *        → { job_id, name, active, phase, percent, bytes_done, bytes_total,
+ *            files_done, files_total, rate, elapsed, idle, done, ok, error, reason }
+ *        name = 打包任务的成品文件名（「游戏名称-打包时间戳.zip」；删除任务为空串），
+ *               <a download> 的属性值直接用它。
+ *        idle = [CN-FORK] v0.5.2.122「距上次有进展多少秒」（任务结束后恒 0）。
+ *               不动的进度条分不清「在啃 500 MB 录屏」和「线程早死了」，有了它
+ *               界面才能把「正在打包…」补成「已 45 秒没有进展」。
  *        phase: idle|preparing|measuring|packing|deleting|finalizing|done|failed|cancelled
  *               [CN-FORK] v0.5.2.115：packing = 打包任务在写 zip（后端已实现）；
  *               deleting/finalizing 是游戏删除任务的占位，还没接后端 —— 前端只把 phase
@@ -43,11 +48,18 @@
  *
  * 多媒体
  *   GET  /game_media?tid=<TID>
- *        → { tid, items:[{id,kind,name,mtime,size,w,h,duration}] }   kind: screenshot|video
- *   GET  /game_media_thumb?id=&w=320     → 图片（JPEG）
+ *        → { tid, items:[{id,kind,name,dlname,mtime,size,w,h,duration}] }  kind: screenshot|video
+ *        name   = 显示名「游戏名称-2026-10-06 12:59」（没改过名则是原文件名）
+ *        dlname = **下载**落盘用的名字「游戏名称-20261006_125900.png」。
+ *                 与 name 刻意不同：文件名里不能有空格与冒号，而显示名要给人看。
+ *                 <a download> 的属性值直接用它，浏览器就不必猜名字。
+ *   GET  /game_media_thumb?id=&w=320     → 图片（JPEG；视频没有封面帧时回占位图）
  *   GET  /game_media_file?id=            → 二进制（原图 / 原视频）
+ *   GET  /game_media_file?id=&dl=1&tid=  → 同上，但带 Content-Disposition
+ *                                        （游戏名称-截图时间.<ext>，RFC 5987 双写）
  *   POST /game_media_pack        {tid, ids:[...]|null}   null=全量 → {job_id}
- *   GET  /game_media_pack_get?job=<id>   → 二进制（zip）
+ *   GET  /game_media_pack_get?job=<id>   → 二进制（zip，Content-Disposition
+ *                                          是「游戏名称-打包时间戳.zip」）
  *   GET  /game_media_delete?tid=&id=     → {ok}
  *
  * 改名 / 换磁贴背景
@@ -225,20 +237,49 @@ export function cancelJob(jobId, opts) {
  * 1s 一次而不是更快：后端只有**一个**后台 worker（与 ShadowMountPlus 同构），
  * 高频轮询只会白烧主机的 CPU，而这个页面的进度条 1s 一跳已经足够顺。
  * 出错不抛给调用方 —— 轮询期间的网络抖动不该把已经开始的删除任务判死，
- * 由 onTick 拿到 error 字段自行决定怎么显示。 */
+ * 由 onTick 拿到 error 字段自行决定怎么显示。
+ *
+ * [CN-FORK] v0.5.2.122 两处硬化，都是冲着「打包一直卡在这个页面」去的：
+ *
+ *  ① **onTick 抛异常绝不能带走轮询。** 原版 `onTick(st)` 裸写在 try 里，catch
+ *     里又调一次 onTick —— 第二次再抛就从 async 函数里逃出去，底下那行
+ *     `setTimeout(tick, …)` 再也执行不到，**轮询当场死掉**。表现正是用户报的：
+ *     界面永远停在第一次 tick 的那份数字上（体积 0 B / 58.7 MB、用时 0 秒、
+ *     进度条定住不动），而且**一条报错都不显示** —— 因为异常是从轮询器里逃的，
+ *     不是渲染出来的。现在 onTick 一律包一层，抛了只当没这回事。
+ *
+ *  ② **连续失败要有尽头。** 主机侧真的没响应时，光靠 1s 一次的重试能把面板
+ *     无限期吊在「正在打包…」上。现在连续失败累计到 STALL_GIVE_UP_MS 就收工，
+ *     并把最后一句话交给 onTick（done:true）—— 宁可明确告诉用户「失联了，
+ *     任务状态未知」，也不要让他对着一个永远不动的进度条等下去。 */
 export function watchJob(jobId, onTick, { intervalMs = 1000 } = {}) {
   let stopped = false
   let timer = null
+  let failSince = 0          // 连续失败是从什么时候开始的（0 = 当前没有失败）
+  const STALL_GIVE_UP_MS = 60000
+
+  const safeTick = (st) => {
+    try { onTick(st) } catch { /* 回调自己的问题，不该拖死轮询 */ }
+  }
+
   const tick = async () => {
     if (stopped) return
     try {
       const st = await getJobStatus(jobId)
       if (stopped) return
-      onTick(st)
+      failSince = 0
+      safeTick(st)
       if (st && (st.done || st.active === false)) { stopped = true; return }
     } catch (e) {
       if (stopped) return
-      onTick({ job_id: jobId, done: false, active: true, error: e.message, transient: true })
+      const now = Date.now()
+      if (!failSince) failSince = now
+      const lost = now - failSince >= STALL_GIVE_UP_MS
+      safeTick({
+        job_id: jobId, done: !!lost, ok: false, active: !lost,
+        error: e.message, transient: true, lost,
+      })
+      if (lost) { stopped = true; return }
     }
     if (!stopped) timer = setTimeout(tick, intervalMs)
   }
@@ -282,7 +323,11 @@ export function mediaThumbUrl(id, w = 320) {
   return `/game_media_thumb${q({ id, w })}`
 }
 
-export function mediaFileUrl(id) {
+export function mediaFileUrl(id, opts = {}) {
+  /* dl=1 走「下载」语义：后端据此下发 Content-Disposition（游戏名称-截图时间.<ext>）。
+   * 预览（<img>/<video>）不传 —— 对预览也挂 attachment，有的浏览器就不渲染了。
+   * tid 只在 dl=1 时带：后端要用它取游戏名，取名规则与列表里的 dlname 同源。 */
+  if (opts.dl) return `/game_media_file${q({ id, dl: 1, tid: opts.tid })}`
   return `/game_media_file${q({ id })}`
 }
 

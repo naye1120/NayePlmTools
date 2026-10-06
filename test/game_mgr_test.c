@@ -70,6 +70,24 @@ void pldmgr_log(const char *fmt, ...) {
 int game_saves_count(const char *tid) { (void)tid; return 3; }
 int game_media_count(const char *tid) { (void)tid; return 7; }
 
+/* [CN-FORK] v0.5.2.118 game_title.c 改名 / 换背景时会把名字与背景登记进主机的
+ * app.db / appinfo.db（tile_db_*）。那两条链要真跑 SQL，真身是 src/tile_db.c +
+ * third_party/sqlite3 —— 9MB 的合并源码，为「列表为什么变空」这条测试连进来不值。
+ * 本测试也压根不走改名（只读列表 / 详情），所以照 pldmgr_log 的老办法给桩：
+ * 返回 -1 = 「主机端没写进去」，恰好是 game_title.c 里 best-effort 那条分支，
+ * 面板那一层照常算成功 —— 那正是它承诺的行为。
+ * 别把这里改成返回 0：那会让「写主机库」看起来成功了，而它一个字节都没写。 */
+int tile_db_set_name(const char *tid, const char *new_name, char *msg, size_t msgsz) {
+    (void)tid; (void)new_name;
+    if (msg && msgsz) snprintf(msg, msgsz, "主机测试桩：未接 app.db");
+    return -1;
+}
+int tile_db_set_bg(const char *tid, const char *dds_path, char *msg, size_t msgsz) {
+    (void)tid; (void)dds_path;
+    if (msg && msgsz) snprintf(msg, msgsz, "主机测试桩：未接 app.db");
+    return -1;
+}
+
 /* ══════════ 栈播种：本测试存在的全部理由，见文件头 ══════════ */
 static const char g_seed[] = "SEEDSEED1";
 static volatile unsigned long g_sink;

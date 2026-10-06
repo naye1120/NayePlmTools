@@ -20,6 +20,12 @@
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static gj_state_t g_job;
 static long long g_last_id;
+/* [CN-FORK] v0.5.2.122 「最后一次有进展」的时刻。
+ * 用户报的是「打包一直卡在这个页面」—— 而一个**不动的**进度条本身不说明任何事：
+ * 分不清「正在啃一个 500 MB 的录屏」和「线程早死了」。把「距上次进展多少秒」
+ * 交给前端，界面就能从「正在打包…」变成「已 45 秒无进展」，
+ * 用户和排查的人都不用再猜。写它的地方只有四处：领槽、报总量、+字节、+文件。 */
+static time_t g_last_progress;
 
 void gj_lock(void) { pthread_mutex_lock(&g_mu); }
 void gj_unlock(void) { pthread_mutex_unlock(&g_mu); }
@@ -49,6 +55,7 @@ int gj_begin(int kind, long long *out_id, char *msg, size_t msgsz) {
     g_job.error[0] = 0;
     g_job.reason[0] = 0;
     g_job.started = time(NULL);
+    g_last_progress = g_job.started;
 
     if (out_id) *out_id = id;
     return 0; /* 仍持锁 */
@@ -57,6 +64,7 @@ int gj_begin(int kind, long long *out_id, char *msg, size_t msgsz) {
 void gj_set_phase(const char *ph) {
     pthread_mutex_lock(&g_mu);
     snprintf(g_job.phase, sizeof(g_job.phase), "%s", ph ? ph : "");
+    g_last_progress = time(NULL);
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -89,6 +97,7 @@ void gj_set_totals(long long bytes, long long files) {
     pthread_mutex_lock(&g_mu);
     g_job.bytes_total = bytes;
     g_job.files_total = files;
+    g_last_progress = time(NULL);
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -102,12 +111,14 @@ int gj_cancelled(void) {
 void gj_add_bytes(long long n) {
     pthread_mutex_lock(&g_mu);
     g_job.bytes_done += n;
+    g_last_progress = time(NULL);
     pthread_mutex_unlock(&g_mu);
 }
 
 void gj_add_file(void) {
     pthread_mutex_lock(&g_mu);
     g_job.files_done++;
+    g_last_progress = time(NULL);
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -138,26 +149,42 @@ int gj_status_json(long long id, char *buf, size_t size) {
     if (g_job.done && g_job.ok) percent = 100.0;
     double rate = elapsed > 0.5 ? (double)g_job.bytes_done / elapsed : 0.0;
 
+    /* 「距上次有进展」多少秒。只在任务还活着时有意义：跑完/失败之后这个数字
+     * 只会一直涨，前端拿它当「是不是卡住了」的判据会被自己误导。 */
+    long idle = 0;
+    if (g_job.active && g_last_progress) {
+        double d = difftime(time(NULL), g_last_progress);
+        if (d > 0) idle = (long)d;
+    }
+
     /* 三个自由文本字段全部转义。reason 和 error 是同一条链上（gj_fail）传下来的，
      * 只转 error 不转 reason 等于给自己留一个「某条失败原因里出现引号就整个
      * 响应体变成非法 JSON」的洞 —— 这正是 .115 原版漏掉的那个。 */
-    char eerr[560], ph[40], rs[160];
+    char eerr[560], ph[40], rs[160], nm[640];
     pldmgr_json_escape(g_job.error, eerr, sizeof(eerr));
     pldmgr_json_escape(g_job.phase, ph, sizeof(ph));
     pldmgr_json_escape(g_job.reason, rs, sizeof(rs));
+    /* [CN-FORK] v0.5.2.122 成品 zip 的文件名（只有打包任务有；删除任务留空）。
+     * 前端 `<a download>` 拿它当 download 属性，服务端 Content-Disposition 也用它 ——
+     * 两处同源，界面上写什么名字、落盘就叫什么名字。 */
+    nm[0] = 0;
+    if (g_job.kind == GJ_KIND_PACK && g_job.aux[0]) {
+        const char *sl = strrchr(g_job.aux, '/');
+        pldmgr_json_escape(sl ? sl + 1 : g_job.aux, nm, sizeof(nm));
+    }
 
     int n = snprintf(buf, size,
-                     "{\"job_id\":%lld,\"active\":%s,\"phase\":\"%s\",\"percent\":%.1f,"
+                     "{\"job_id\":%lld,\"name\":\"%s\",\"active\":%s,\"phase\":\"%s\",\"percent\":%.1f,"
                      "\"bytes_done\":%lld,\"bytes_total\":%lld,"
                      "\"files_done\":%lld,\"files_total\":%lld,"
-                     "\"rate\":%.0f,\"elapsed\":%.1f,"
+                     "\"rate\":%.0f,\"elapsed\":%.1f,\"idle\":%ld,"
                      "\"done\":%s,\"ok\":%s,\"error\":\"%s\",\"reason\":\"%s\"}",
-                     g_job.id,
+                     g_job.id, nm,
                      g_job.active ? "true" : "false",
                      ph, percent,
                      g_job.bytes_done, g_job.bytes_total,
                      g_job.files_done, g_job.files_total,
-                     rate, elapsed,
+                     rate, elapsed, idle,
                      g_job.done ? "true" : "false",
                      g_job.ok ? "true" : "false",
                      eerr, rs);

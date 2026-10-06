@@ -487,6 +487,52 @@ static unsigned long long gm_dir_size(const char *root) {
     return gm_du(root, 0, &budget);
 }
 
+/* ── [CN-FORK] v0.5.2.118 递归 du 的进程内缓存（路径 → 体积 + 取值时刻）──
+ *
+ * 上面那句注释写的「设备目录条目很少（几十到几百），成本极低」**对列表这条路不成立**：
+ * gm_fmt_size 与 game_enum_dump 是**每重建一次列表就给每款 folder/dump 游戏各 du 一遍**，
+ * 一款完整解包的 PS5 游戏动辄上万文件，几十款就是几十万次 opendir/readdir/lstat。
+ * 真机报的「游戏列表载入超级慢」主因是它 —— 快照缓存（见 g_game_cache）修好之后，
+ * 这条仍然决定了**第一次**以及失效之后那一次要等多久。
+ *
+ * 游戏体积不是天天变的量，TTL 内直接复用；TTL 到点、或这个路径没登记过才真 du。
+ * 只在 build_game_json 里被调，而那条路全程持 g_game_mtx，所以这里不用再加锁。
+ * 与 g_game_cache 的 60s 快照**刻意不同 TTL**：快照要「刚改完名就看见名字」，
+ * 体积要的是「别为了个十进制数重扫一遍盘」，两者诉求相反，不能共用一个开关。 */
+#define GM_DU_TTL   600      /* 10 分钟：游戏体积不可能天天变，但也不能永不过期 */
+#define GM_DUCACHE  128
+static struct {
+    char root[512];
+    unsigned long long size;
+    time_t ts;
+} g_du[GM_DUCACHE];
+
+static unsigned long long gm_dir_size_cached(const char *root) {
+    if (!root || !root[0]) return 0;
+    time_t now = time(NULL);
+    int slot = -1;
+    for (int i = 0; i < GM_DUCACHE; i++) {
+        if (g_du[i].root[0] && strcmp(g_du[i].root, root) == 0) { slot = i; break; }
+    }
+    if (slot >= 0 && now >= g_du[slot].ts && now - g_du[slot].ts < GM_DU_TTL)
+        return g_du[slot].size;
+
+    unsigned long long v = gm_dir_size(root);
+    if (slot < 0) {
+        for (int i = 0; i < GM_DUCACHE; i++)
+            if (!g_du[i].root[0]) { slot = i; break; }
+        if (slot < 0) { /* 满了：轮转覆盖最老的那条 */
+            slot = 0;
+            for (int i = 1; i < GM_DUCACHE; i++)
+                if (g_du[i].ts < g_du[slot].ts) slot = i;
+        }
+    }
+    snprintf(g_du[slot].root, sizeof(g_du[slot].root), "%s", root);
+    g_du[slot].size = v;
+    g_du[slot].ts = now;
+    return v;
+}
+
 /* 游戏格式+体积：mount_img.lnk 命中 → 镜像（扩展名定档，体积=镜像文件 st_size）；
  * 仅 mount.lnk → 裸目录(folder，含 ampr_ 则 lz4，体积=有上限递归 du)；都无 → 内置 pkg（体积 0=未知）。 */
 static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out) {
@@ -499,7 +545,7 @@ static const char *gm_fmt_size(const char *tid, const char *src, unsigned long l
     }
     char root[512];
     if (gm_lnk_root(tid, root, sizeof(root))) {
-        *size_out = gm_dir_size(root);
+        *size_out = gm_dir_size_cached(root);
         DIR *dp = opendir(root);
         int lz4 = 0;
         if (dp) {
@@ -547,7 +593,7 @@ static void game_enum_dump(enum_arg_t *a) {
             unsigned long long sz;
             const char *fmt = gm_fmt_size(ent->d_name, "dump", &sz);
             if (!strcmp(fmt, "folder") && gm_dir_is_lz4(root)) fmt = "lz4";
-            if (!sz) sz = gm_dir_size(root);   /* dump 目录不在 /user/app 时按扫描根 du */
+            if (!sz) sz = gm_dir_size_cached(root);   /* dump 目录不在 /user/app 时按扫描根 du */
             gm_append_item(a, ent->d_name, name, "dump", fmt, sz);
         }
         closedir(dp);
@@ -1007,7 +1053,17 @@ int game_mgr_source(const char *tid, char *src, size_t ssz,
 
 /* ══════════════ 顶层：mutex + 60s 快照缓存，一次性拉取不轮询 ══════════════ */
 static pthread_mutex_t g_game_mtx = PTHREAD_MUTEX_INITIALIZER;
-static char    g_game_cache[131072];
+
+/* 快照缓冲必须与 http_server.c 的 RESPONSE_BUFFER_SIZE **同宽**（那边按 1MB 分响应缓冲，
+ * /game_list 就按 1MB 现造 JSON）。
+ *
+ * 原来这里是 131072（128KB）。游戏一多 JSON 就超过 128KB —— 下面
+ * `n < sizeof(g_game_cache)` 恒假，于是**每一份快照都存不进去**、g_game_cache_len
+ * 恒 0，60s 缓存等于没有：每次 /game_list 都从头重建（app.db 全库读 + 每款一次
+ * 递归 du），真机报的「游戏列表载入超级慢」另一半根因就在这。
+ * 128KB 这个数在游戏少的时候看不出问题，装到 150+ 款才炸，属于「装得越多越慢」型。 */
+#define GM_SNAPSHOT_MAX (1024 * 1024)
+static char    g_game_cache[GM_SNAPSHOT_MAX];
 static size_t  g_game_cache_len = 0;
 static time_t  g_game_cache_ts  = 0;
 

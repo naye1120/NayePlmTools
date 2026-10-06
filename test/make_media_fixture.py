@@ -77,9 +77,25 @@ put(p1, png_bytes(640, 360, (30, 90, 200)))
 put(p2, b"\x49\x49\x00\x01" + os.urandom(256))
 put(p3, png_bytes(1920, 1080, (200, 40, 40)))
 # 录屏：假 mp4（我们不解视频，只做 stat / 打包 / 直出）
-put(v1, b"\x00\x00\x00\x18ftypmp42" + os.urandom(4096))
+# ⚠️ v1 刻意给到 ~1.5 MB，**不是**为了逼真：zip_write 每次只读 256 KB，
+# 原来两个 4 KB 的文件意味着「一个分块都没读满过」—— on_bytes 只回调一次、
+# CRC 回填那两行 lseek 只在收尾走一遍，那条路等于从来没被测过。
+# 用户报的「打包卡在 0 B / 58.7 MB」正好落在这条路上，所以这里必须跨过 256 KB。
+put(v1, b"\x00\x00\x00\x18ftypmp42" + os.urandom(1536 * 1024))
 put(v2, b"\x00\x00\x00\x18ftypmp42" + os.urandom(4096))
 put(o1, png_bytes(320, 180, (10, 200, 10)))
+
+# ── v0.5.2.122 专供：录屏**有** icon_path，但那份是 .jxr（HDR 封面帧）──────────
+# 真机上录屏的封面帧就是 .jxr，而 stb 解不了 .jxr。旧代码（.120 初版）只看
+# 「icon 在不在」就走进解码分支 → 解码失败 → 回 -2 → **视频缩略图永远空白**，
+# 这正是用户复现的那个症状。这条夹具让「icon 存在且 stat 得过」与「解不动」
+# 同时成立，把「必须回占位图」这条性质钉死。单独一个 tid，免得动到主集合的计数。
+JXR_TID = "PPSA99009"
+v3 = os.path.join(VIDEO, GEN, JXR_TID, SHARD, "20261007_120000_003.mp4")
+put(v3, b"\x00\x00\x00\x18ftypmp42" + os.urandom(2048))
+ICON_JXR = os.path.join(ROOT, "av_contents", "thumbnails", "video", GEN, JXR_TID, SHARD,
+                        "20261007_120000_003.mp4.jxr")
+put(ICON_JXR, b"\x49\x49\xbc\x01" + os.urandom(512))   # 假 JXR 头 + 随机体
 
 # 副文件：同目录 <原名>.meta（JSON）与 <原名>.dat（1024B），删除时要一并干掉
 put(p1 + ".meta", b'{"ageLevel":1,"appVer":"01.00","segmentInfo":"game"}')
@@ -132,6 +148,11 @@ ROWS = [
      "", 1280, 720, 12, 0, TID, 131072, "mp4"),
     (rel("photo", GEN, OTHER, "9a1", "20261004_090000_00000001.png"),
      "", 320, 180, 0, 0, OTHER, 131083, "png"),
+    # 录屏 + .jxr 封面帧：icon_path 非空且文件真的在，但 stb 解不动 ——
+    # 缩略图必须回**占位图**（深色底 + 播放三角），不能回 404。见上面 JXR_TID 那段。
+    (rel("video", GEN, JXR_TID, SHARD, "20261007_120000_003.mp4"),
+     "/av_contents/thumbnails/video/%s/%s/%s/20261007_120000_003.mp4.jxr" % (GEN, JXR_TID, SHARD),
+     1280, 720, 0, 8000, JXR_TID, 131072, "mp4"),
 ]
 
 db = os.path.join(ROOT, "av_content.db")

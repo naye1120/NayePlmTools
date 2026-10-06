@@ -72,7 +72,10 @@
 typedef struct {
     char  content[640]; /* /av_contents/photo/…  */
     char  icon[640];    /* /av_contents/thumbnails/photo/…，可为空 */
-    char  name[256];    /* basename，用于标题与删除确认文案 */
+    char  name[256];    /* 显示名：游戏名称-截图时间（没改过名则是文件名） */
+    char  dlname[300];  /* **下载**用的文件名：游戏名称-YYYYMMDD_HHMMSS.<ext>
+                         *  与 name 刻意不同 —— 见 src/game_media.c 的 md_dlname：
+                         *  文件名里不能有空格与冒号，而显示名要给人看。 */
     char  stamp[32];    /* 本地时区 "YYYY-MM-DD HH:MM"，原样给前端 */
     long long size;     /* stat 出来的实际字节数 */
     int   w, h;
@@ -99,6 +102,13 @@ int game_media_thumb(const char *id, int want_w, unsigned char **out,
  * -1 = id 非法，-2 = 文件不存在。mime 为静态字符串。 */
 int game_media_open(const char *id, int *out_fd, off_t *out_size, const char **mime);
 
+/* [CN-FORK] v0.5.2.122 下载文件名（「游戏名称-YYYYMMDD_HHMMSS.<ext>」）。
+ * 给 /game_media_file?dl=1 下 Content-Disposition 用 —— 前端 <a download> 的
+ * download 属性在旧 WebKit 上不一定被认，服务端把名字一并给出去才稳。
+ * tid 用来取游戏名（改过名就用新名）；取不到就退回原文件名。
+ * 0 成功；-1 = 参数非法 / 文件不在。 */
+int game_media_download_name(const char *tid, const char *id, char *out, size_t osz);
+
 /* 删除：原图 + 缩略图 + .meta + .dat + 本地缩略图缓存。0 成功。
  * 只动文件不动系统库（见头注释铁律①），msg 回一句给人看的话。 */
 int game_media_delete(const char *tid, const char *id, char *msg, size_t msgsz);
@@ -116,5 +126,10 @@ int game_media_pack_status(long long job_id, char *buf, size_t size);
 int game_media_pack_cancel(long long job_id);
 /* 打开成品 zip 交给 MHD。0 成功，-1 job 不符，-2 文件不可读。 */
 int game_media_pack_open(long long job_id, int *out_fd, off_t *out_size);
+
+/* [CN-FORK] v0.5.2.122 成品 zip 的**文件名**（含 .zip），给 Content-Disposition 用。
+ * 名字在 md_pack_start 里就定好了（游戏名称-打包时间戳.zip），这里只是把 aux 的
+ * basename 取出来 —— 两边各算一次必然漂移，所以只有一处算。0 成功，-1 没这个任务。 */
+int game_media_pack_name(long long job_id, char *out, size_t osz);
 
 #endif

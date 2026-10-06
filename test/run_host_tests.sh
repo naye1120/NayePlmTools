@@ -65,6 +65,15 @@ if command -v python3 >/dev/null 2>&1; then
                 "/av_contents/video/NPXS40087/PPSA99008/18c/20261006_101112_001.mp4" \
                 "/av_contents/video/NPXS40087/PPSA99008/18c/20261006_102233_002.mp4" \
                 || fail=1
+
+            # [CN-FORK] v0.5.2.122 单条 1.5 MiB 的包：专门压 zip_write 的
+            # 「256 KB 分块 × N 次 + 条目收尾 CRC 回填」那条路（用户报的
+            # 「打包卡在 0 B / 58.7 MB」正落在这里）。CRC 由 zipfile 逐条复算，
+            # 分块累积只要错一位这里就红。
+            echo "=== media_verify zip (big, 跨 256KB 分块) ==="
+            python3 test/media_verify.py zip "$MEDIA_ROOT/pack_big.zip" "$MEDIA_ROOT" \
+                "/av_contents/video/NPXS40087/PPSA99008/18c/20261006_101112_001.mp4" \
+                || fail=1
         else
             echo "=== media_verify SKIPPED (list.json 没生成) ==="
             fail=1

@@ -30,6 +30,7 @@
 #include <sys/types.h>
 
 #include "game_media.h"
+#include "game_title.h"   /* game_title_get_name（媒体项命名 / 压缩包命名） */
 #include "zip_io.h"       /* v0.5.2.116 zip 编码器已搬出去（存档下载要共用） */
 #include "game_job.h"     /* v0.5.2.116 任务槽已搬进 game_job.c（删除任务要共用） */
 #include "pldmgr.h"       /* pldmgr_log / pldmgr_json_escape（经 utils.h） */
@@ -378,6 +379,71 @@ static void md_basename(const char *rel, char *out, size_t osz) {
     snprintf(out, osz, "%s", sl ? sl + 1 : rel);
 }
 
+/* ── 命名（v0.5.2.122）──────────────────────────────────────────────────────
+ * 用户口径：「截图下载和视频下载的命名方式是游戏名称-截图时间。压缩包也是
+ * 游戏名称-打包时间戳」。三件事因此各有一份名字，别混：
+ *
+ *   it.name   「游戏名称-2026-10-06 12:59」  界面显示（人看的，可以有空格）
+ *   it.dlname 「游戏名称-20261006_125900.png」 下载落盘（必须文件名安全）
+ *   压缩包     「游戏名称-20261006_130512.zip」 打包时间戳
+ *
+ * 为什么下载名不用显示名那版：Windows 与 PS5 的 Shell 都不接受 ':'，
+ * 而游戏名里带冒号是常态（「蜘蛛侠：迈尔斯」）；空格虽合法，但在下载目录里
+ * 与命令行里都别扭。所以落盘一律用紧凑的 YYYYMMDD_HHMMSS。 */
+
+/* 扩展名：小写、只收字母数字。取不到就给 "bin" —— 宁可后缀难看，
+ * 也不能给空后缀（浏览器会自己猜，猜成 .zip 更尴尬）。 */
+static void md_ext_of(const char *path, char *out, size_t osz) {
+    out[0] = 0;
+    const char *dot = strrchr(path, '.');
+    if (!dot || !dot[1]) { snprintf(out, osz, "bin"); return; }
+    size_t k = 0;
+    for (const char *p = dot + 1; *p && k + 1 < osz; p++) {
+        if (!isalnum((unsigned char)*p)) break;
+        out[k++] = (char)tolower((unsigned char)*p);
+    }
+    out[k] = 0;
+    if (!out[0]) snprintf(out, osz, "bin");
+}
+
+/* 把任意文本清成能当文件名的样子：空格 / 冒号 / 斜杠 / 引号 / 通配符 / 控制字符
+ * 一律换 '-'。不清就是「下载失败」而不是「名字难看」。 */
+static void md_sanitize_name(char *s) {
+    for (int i = 0; s[i]; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == ' ' || c == ':' || c == '/' || c == '\\' || c == '<' || c == '>' ||
+            c == '"' || c == '|' || c == '?' || c == '*' || c < 0x20 || c == 0x7f)
+            s[i] = '-';
+    }
+}
+
+/* 时间戳：本地时区 YYYYMMDD_HHMMSS（与列表里显示的那个时区一致，
+ * 玩家才对得上「我什么时候截的」）。 */
+static void md_stamp_compact(time_t mt, char *out, size_t osz) {
+    struct tm tmv;
+    if (localtime_r(&mt, &tmv)) strftime(out, osz, "%Y%m%d_%H%M%S", &tmv);
+    if (!out[0]) snprintf(out, osz, "unknown");
+}
+
+/* 「游戏名称-YYYYMMDD_HHMMSS.<ext>」；game 为空则退回原文件名（含扩展名）。 */
+static void md_dlname(const char *game, const char *content, time_t mt,
+                      char *out, size_t osz) {
+    if (!game || !game[0]) {
+        char base[256];
+        md_basename(content, base, sizeof(base));
+        snprintf(out, osz, "%s", base);
+        return;
+    }
+    char ext[24];
+    md_ext_of(content, ext, sizeof(ext));
+    char g[256];
+    snprintf(g, sizeof(g), "%s", game);
+    md_sanitize_name(g);
+    char ts[32] = "";
+    md_stamp_compact(mt, ts, sizeof(ts));
+    snprintf(out, osz, "%s-%s.%s", g, ts, ext);
+}
+
 /* tid 只用来做等值比较（不是 SQL，没有注入面），但仍要挡掉能把 JSON/日志打穿的字符 */
 static int md_tid_ok(const char *tid) {
     if (!tid) return 0;
@@ -397,6 +463,7 @@ typedef struct {
     md_item_cb cb;
     void *user;
     int n;
+    char name[256]; /* 游戏名称，用于媒体项命名（游戏名称-截图时间） */
 } md_scan_t;
 
 static int md_cb_row(const uint8_t *d, size_t sz, size_t rec, void *arg) {
@@ -426,14 +493,26 @@ static int md_cb_row(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     if (stat(abs, &sb) != 0 || !S_ISREG(sb.st_mode)) return 0; /* 库里有、盘上没了 → 不列表 */
 
     it.video = strncmp(it.content, "/av_contents/video/", 19) == 0;
-    md_basename(it.content, it.name, sizeof(it.name));
     it.size = (long long)sb.st_size;
+    /* ⚠️ 时间戳必须**先**算出来：下面那条命名要用它。
+     * .121 初版把这段挪到了命名之后，于是 snprintf 拼的是 memset 过的空 stamp，
+     * 每个名字都成了「游戏名称-」（尾巴空掉、只剩一个连字符）。 */
     {
         struct tm tmv;
         if (localtime_r(&sb.st_mtime, &tmv)) {
             strftime(it.stamp, sizeof(it.stamp), "%Y-%m-%d %H:%M", &tmv);
         }
     }
+    /* [CN-FORK] v0.5.2.121 媒体项命名：游戏名称-截图时间（如「宇宙机器人-2026-10-06 12:59」）。
+     * 取不到游戏名（没改过名 / name.txt 不在）就退回文件名 —— 至少能认出是哪一张。 */
+    if (s->name[0]) {
+        snprintf(it.name, sizeof(it.name), "%s-%s", s->name, it.stamp);
+    } else {
+        md_basename(it.content, it.name, sizeof(it.name));
+    }
+    /* 下载落盘用的名字（与显示名刻意不同，理由见 md_dlname 上面那段） */
+    md_dlname(s->name[0] ? s->name : NULL, it.content, sb.st_mtime,
+              it.dlname, sizeof(it.dlname));
 
     if (md_rec_col(d, sz, rec, s->cols.icon, &tp, &tl, NULL, NULL) == 2 &&
         tl && tl < sizeof(it.icon)) {
@@ -472,6 +551,10 @@ static int md_scan_locked(const char *tid, const char *find, md_item_cb cb, void
     s.cols = cols;
     s.cb = cb;
     s.user = user;
+    /* 填充游戏名称，供 md_cb_row 命名媒体项（游戏名称-截图时间） */
+    if (tid && md_tid_ok(tid)) {
+        game_title_get_name(tid, s.name, sizeof(s.name));
+    }
     /* 两次 walk，和 game_mgr.c 一模一样：page 1 只是 sqlite_master，媒体行在 root 页上 */
     md_bwalk(g_img, g_img_len, root, pgsz, 0, md_cb_row, &s);
     return 0;
@@ -491,14 +574,15 @@ typedef struct {
 
 static int md_item_to_json(const game_media_item_t *it, void *user) {
     md_json_t *j = (md_json_t *)user;
-    char epath[1400], ename[640], item[2560];
+    char epath[1400], ename[640], edl[700], item[3200];
     pldmgr_json_escape(it->content, epath, sizeof(epath));
     pldmgr_json_escape(it->name, ename, sizeof(ename));
+    pldmgr_json_escape(it->dlname, edl, sizeof(edl));
     int n = snprintf(item, sizeof(item),
-                     "%s{\"id\":\"%s\",\"kind\":\"%s\",\"name\":\"%s\",\"mtime\":\"%s\","
-                     "\"size\":%lld,\"w\":%d,\"h\":%d,\"duration\":%.1f}",
+                     "%s{\"id\":\"%s\",\"kind\":\"%s\",\"name\":\"%s\",\"dlname\":\"%s\","
+                     "\"mtime\":\"%s\",\"size\":%lld,\"w\":%d,\"h\":%d,\"duration\":%.1f}",
                      j->first ? "" : ",",
-                     epath, it->video ? "video" : "screenshot", ename, it->stamp,
+                     epath, it->video ? "video" : "screenshot", ename, edl, it->stamp,
                      it->size, it->w, it->h, it->duration);
     if (n < 0 || (size_t)n >= sizeof(item)) return 0;
     if (j->pos + (size_t)n >= j->cap) { j->overflow = 1; return 1; }
@@ -538,7 +622,10 @@ int game_media_list_json(const char *tid, char *buf, size_t size) {
  * 走的是同一把锁、同一个 md_scan_locked，只是回调换成计数 —— 不复用
  * game_media_list_json 是因为那条路要写几百 KB 的 JSON 再解析回去，
  * 详情页每次打开都白烧一遍。计数本身仍要扫全表，这是拿准确值的代价，
- * 但比「拼 JSON + 找 count 字段」省掉一次大内存分配与一次 memcpy。 */
+ * 但比「拼 JSON + 找 count 字段」省掉一次大内存分配与一次 memcpy。
+ *
+ * [CN-FORK] v0.5.2.119 加缓存：列表渲染时每个游戏都会调一次 game_media_count，
+ * 每次都扫全表会导致列表极慢。缓存 600 秒，媒体库变化时通过版本号失效。 */
 typedef struct { int count; int cap; } md_count_t;
 static int md_count_cb(const game_media_item_t *it, void *user) {
     md_count_t *c = (md_count_t *)user;
@@ -546,13 +633,67 @@ static int md_count_cb(const game_media_item_t *it, void *user) {
     c->count++;
     return c->count >= c->cap ? 1 : 0; /* 到顶就停，别为一个「够大了」的数字扫到底 */
 }
+
+#define MD_COUNT_CACHE_MAX 128
+#define MD_COUNT_CACHE_TTL 600
+
+typedef struct {
+    char tid[32];
+    int count;
+    time_t ts;
+    unsigned long long ver;
+} md_count_cache_t;
+
+static md_count_cache_t g_count_cache[MD_COUNT_CACHE_MAX];
+static int g_count_cache_n = 0;
+static unsigned long long g_media_version = 0;
+
 int game_media_count(const char *tid) {
     if (!md_tid_ok(tid)) return 0;
+    
+    /* 查缓存 */
+    time_t now = time(NULL);
+    for (int i = 0; i < g_count_cache_n; i++) {
+        if (strcmp(g_count_cache[i].tid, tid) == 0 && 
+            now - g_count_cache[i].ts < MD_COUNT_CACHE_TTL &&
+            g_count_cache[i].ver == g_media_version) {
+            return g_count_cache[i].count;
+        }
+    }
+    
+    /* 缓存未命中，扫描 */
     md_count_t c = {0, 100000};
     pthread_mutex_lock(&g_mu);
     md_scan_locked(tid, NULL, md_count_cb, &c);
     pthread_mutex_unlock(&g_mu);
+    
+    /* 更新缓存 */
+    int idx = -1;
+    for (int i = 0; i < g_count_cache_n; i++) {
+        if (strcmp(g_count_cache[i].tid, tid) == 0) { idx = i; break; }
+    }
+    if (idx < 0) {
+        if (g_count_cache_n < MD_COUNT_CACHE_MAX) {
+            idx = g_count_cache_n++;
+        } else {
+            /* 缓存满了，覆盖最旧的条目 */
+            idx = 0;
+            for (int i = 1; i < g_count_cache_n; i++) {
+                if (g_count_cache[i].ts < g_count_cache[idx].ts) idx = i;
+            }
+        }
+    }
+    snprintf(g_count_cache[idx].tid, sizeof(g_count_cache[idx].tid), "%s", tid);
+    g_count_cache[idx].count = c.count;
+    g_count_cache[idx].ts = now;
+    g_count_cache[idx].ver = g_media_version;
+    
     return c.count;
+}
+
+/* 媒体库变化时调用，使计数缓存失效 */
+static void md_count_cache_invalidate(void) {
+    g_media_version++;
 }
 
 /* ── 定位单条 ── */
@@ -607,6 +748,23 @@ int game_media_open(const char *id, int *out_fd, off_t *out_size, const char **m
     *out_size = sb.st_size;
     *mime = md_mime_of(abs);
     return 0;
+}
+
+/* [CN-FORK] v0.5.2.122 下载文件名：与列表里那份 dlname 走**同一个 md_dlname**，
+ * 免得「界面上显示的」与「下载下来的」两个名字各算各的、慢慢漂开。 */
+int game_media_download_name(const char *tid, const char *id, char *out, size_t osz) {
+    if (!out || !osz) return -1;
+    out[0] = 0;
+    if (!md_path_ok(id)) return -1;
+    char abs[700];
+    if (md_abs(id, abs, sizeof(abs)) != 0) return -1;
+    struct stat sb;
+    if (stat(abs, &sb) != 0 || !S_ISREG(sb.st_mode)) return -1;
+    char game[256];
+    game[0] = 0;
+    if (tid && md_tid_ok(tid)) game_title_get_name(tid, game, sizeof(game));
+    md_dlname(game, id, sb.st_mtime, out, osz);
+    return out[0] ? 0 : -1;
 }
 
 /* ══════════════ ③ 缩略图：系统缩略图 → 按需缩放 → 落盘缓存 ══════════════ */
@@ -756,19 +914,45 @@ static void md_thumb_prune(void) {
     g_thumb_since_scan = 0;
 }
 
-/* 选解码源：优先系统缩略图；没有就只有当原图本身是浏览器认得的格式时才退回去自己解
- * （录屏是 mp4，我们不解视频 → 一律返回 -1，调用方据此回 404）。 */
+/* stbi 认得的四种位图。系统缩略图另有 .jxr 变体（HDR），那个没有解码器 ——
+ * 只按「文件在不在」就把它当解码源，等于给 HDR 缩略图判了死刑（解出来是 NULL）。 */
+static int md_is_stb_image(const char *m) {
+    return strcmp(m, "image/png") == 0 || strcmp(m, "image/jpeg") == 0 ||
+           strcmp(m, "image/bmp") == 0 || strcmp(m, "image/gif") == 0;
+}
+
+/* 选解码源：优先系统缩略图；没有（或那份是 stb 解不了的 .jxr）才退回原图本身，
+ * 而原图只有位图才解得动。
+ *
+ * 返回值三种：
+ *    0 = abs/st 是**可以直接交给 stbi 解码**的位图
+ *   -1 = 没有可解的东西，回 404（HDR 截图走这条）
+ *   -3 = 是**视频**且没有可用的封面帧 → 调用方生成占位图（深色底 + 播放三角）
+ *
+ * ⚠️ -3 的判据必须是「这条本身就是视频」，**不能是「有没有 icon_path」**：
+ * 真机上录屏的 icon_path 会指向一张 .jxr，那文件存在、stat 也过，可 stb 解不动 ——
+ * 只看存在性就会走进解码分支、失败、回 -2，占位图那条路一次都到不了。
+ * （.120 初版正是这个洞：视频缩略图依旧空白，用户复现的第二轮才暴露出来。）
+ * 另外 st 一律先清零：-3 分支拿 st_mtime 当缓存键，不清零就是拿栈上垃圾拼路径。 */
 static int md_thumb_src(const char *id, char *abs, size_t absz, struct stat *st) {
+    memset(st, 0, sizeof(*st));
+    int is_video = strncmp(id, "/av_contents/video/", 19) == 0;
     game_media_item_t it;
-    if (game_media_lookup(id, &it) == 0 && it.icon[0]) {
-        if (md_abs(it.icon, abs, absz) == 0 && stat(abs, st) == 0 && st->st_size > 0) return 0;
+    if (game_media_lookup(id, &it) == 0) {
+        if (it.video) is_video = 1;
+        if (it.icon[0] && md_abs(it.icon, abs, absz) == 0 &&
+            stat(abs, st) == 0 && st->st_size > 0 && (size_t)st->st_size <= MD_SRC_MAX &&
+            md_is_stb_image(md_mime_of(abs)))
+            return 0;
     }
     if (md_abs(id, abs, absz) != 0) return -1;
-    if (stat(abs, st) != 0 || st->st_size <= 0 || (size_t)st->st_size > MD_SRC_MAX) return -1;
-    const char *m = md_mime_of(abs);
-    if (strcmp(m, "image/png") && strcmp(m, "image/jpeg") &&
-        strcmp(m, "image/bmp") && strcmp(m, "image/gif")) return -1;
-    return 0;
+    if (stat(abs, st) != 0 || st->st_size <= 0 || (size_t)st->st_size > MD_SRC_MAX) {
+        /* 盘上原文件不在了：库里既然列得出来，视频就给占位图，别的照旧 404 */
+        memset(st, 0, sizeof(*st));
+        return is_video ? -3 : -1;
+    }
+    if (md_is_stb_image(md_mime_of(abs))) return 0;
+    return is_video ? -3 : -1;
 }
 
 int game_media_thumb(const char *id, int want_w, unsigned char **out,
@@ -778,7 +962,8 @@ int game_media_thumb(const char *id, int want_w, unsigned char **out,
 
     char src[700];
     struct stat st;
-    if (md_thumb_src(id, src, sizeof(src), &st) != 0) return -2;
+    int src_rc = md_thumb_src(id, src, sizeof(src), &st);
+    if (src_rc == -1) return -2; /* 没有可解的东西（HDR 截图）→ HTTP 侧 404 */
 
     ensure_dir_recursive(GAME_MEDIA_THUMB_DIR);
     if (g_thumb_count < 0 || g_thumb_since_scan >= MD_THUMB_MAX) md_thumb_prune();
@@ -790,7 +975,8 @@ int game_media_thumb(const char *id, int want_w, unsigned char **out,
     snprintf(cpath, sizeof(cpath), "%s/%s", GAME_MEDIA_THUMB_DIR, key);
 
     /* 命中：整张读回来。文件只有几十 KB，比再造一个 fd 响应简单，
-     * 也顺带把「缓存文件被并发删掉」的窗口收敛到一次 read。 */
+     * 也顺带把「缓存文件被并发删掉」的窗口收敛到一次 read。
+     * 占位图走的是**同一条缓存**：同一张视频封面只画一次，之后直接读盘。 */
     size_t clen = 0;
     unsigned char *cached = md_read_all(cpath, &clen, 8u << 20);
     if (cached) {
@@ -800,34 +986,68 @@ int game_media_thumb(const char *id, int want_w, unsigned char **out,
         return 0;
     }
 
-    size_t slen = 0;
-    unsigned char *sbuf = md_read_all(src, &slen, MD_SRC_MAX);
-    if (!sbuf) return -2;
-    int sw = 0, sh = 0, comp = 0;
-    unsigned char *px = stbi_load_from_memory(sbuf, (int)slen, &sw, &sh, &comp, 3);
-    free(sbuf);
-    if (!px || sw <= 0 || sh <= 0) {
-        stbi_image_free(px);
-        return -2; /* HDR .jxr 走这里：没有解码器，浏览器同样显示不了 → 404 */
-    }
-
-    int dw = want_w < sw ? want_w : sw;
-    if (dw < 64) dw = 64;
-    if (dw > sw) dw = sw;
-    int dh = (int)((long long)sh * dw / sw);
-    if (dh < 1) dh = 1;
-
-    unsigned char *rgb = px;
-    if (dw != sw || dh != sh) {
-        rgb = (unsigned char *)malloc((size_t)dw * (size_t)dh * 3);
-        if (rgb) md_resize_box(px, sw, sh, rgb, dw, dh);
-    }
-
     md_mem_t m;
     memset(&m, 0, sizeof(m));
-    if (rgb) stbi_write_jpg_to_func(md_jpg_grow, &m, dw, dh, 3, rgb, MD_THUMB_Q);
-    if (rgb != px) free(rgb);
-    stbi_image_free(px);
+
+    if (src_rc == -3) {
+        /* 视频没有可解封面帧 → 现画一张占位图（深色底 + 白色播放三角）。
+         * 缩略图格子是 16:9，所以按 16:9 出图，铺进格子不会留黑边。 */
+        int pw = want_w < 320 ? 320 : want_w;
+        int ph = (int)((long long)pw * 9 / 16);
+        if (ph < 1) ph = 1;
+        unsigned char *buf = (unsigned char *)calloc((size_t)pw * (size_t)ph, 3);
+        if (!buf) return -2;
+        for (int i = 0; i < pw * ph; i++) {
+            buf[i * 3 + 0] = 28;
+            buf[i * 3 + 1] = 28;
+            buf[i * 3 + 2] = 32;
+        }
+        /* 播放按钮三角形（指向右侧）：左顶点在 (cx,cy)，右边界在 x = ts - |y| */
+        int cx = pw / 2, cy = ph / 2;
+        int ts = (pw < ph ? pw : ph) / 4;
+        for (int y = -ts; y <= ts; y++) {
+            int ay = y < 0 ? -y : y;
+            for (int x = 0; x <= ts; x++) {
+                if (x <= ts - ay) {
+                    int px = cx + x, py = cy + y;
+                    if (px >= 0 && px < pw && py >= 0 && py < ph) {
+                        buf[(py * pw + px) * 3 + 0] = 255;
+                        buf[(py * pw + px) * 3 + 1] = 255;
+                        buf[(py * pw + px) * 3 + 2] = 255;
+                    }
+                }
+            }
+        }
+        stbi_write_jpg_to_func(md_jpg_grow, &m, pw, ph, 3, buf, MD_THUMB_Q);
+        free(buf);
+    } else {
+        size_t slen = 0;
+        unsigned char *sbuf = md_read_all(src, &slen, MD_SRC_MAX);
+        if (!sbuf) return -2;
+        int sw = 0, sh = 0, comp = 0;
+        unsigned char *px = stbi_load_from_memory(sbuf, (int)slen, &sw, &sh, &comp, 3);
+        free(sbuf);
+        if (!px || sw <= 0 || sh <= 0) {
+            stbi_image_free(px);
+            return -2; /* 解不动（HDR .jxr）→ 404，浏览器同样显示不了 */
+        }
+
+        int dw = want_w < sw ? want_w : sw;
+        if (dw < 64) dw = 64;
+        if (dw > sw) dw = sw;
+        int dh = (int)((long long)sh * dw / sw);
+        if (dh < 1) dh = 1;
+
+        unsigned char *rgb = px;
+        if (dw != sw || dh != sh) {
+            rgb = (unsigned char *)malloc((size_t)dw * (size_t)dh * 3);
+            if (rgb) md_resize_box(px, sw, sh, rgb, dw, dh);
+        }
+        if (rgb) stbi_write_jpg_to_func(md_jpg_grow, &m, dw, dh, 3, rgb, MD_THUMB_Q);
+        if (rgb != px) free(rgb);
+        stbi_image_free(px);
+    } /* 占位图 / 真缩略图：两条路都往 m 里出一张 JPEG */
+
     if (!m.p || m.len == 0) { free(m.p); return -2; }
 
     /* 落盘：先写 .tmp 再 rename —— 两个面板同时开也不会读到半张图 */
@@ -902,6 +1122,7 @@ int game_media_delete(const char *tid, const char *id, char *msg, size_t msgsz) 
 
     if (it.icon[0] && md_abs(it.icon, side, sizeof(side)) == 0) unlink(side);
     md_drop_thumbs(id);
+    md_count_cache_invalidate();  /* 删除媒体后使计数缓存失效 */
 
     pldmgr_log("[PLDMGR] media: deleted %s\n", abs);
     if (msg) snprintf(msg, msgsz, "已删除 %s", it.name);
@@ -984,6 +1205,13 @@ static int md_build_entries(const char *tid, const char *const *ids, int nids,
             paths.n++;
         }
     } else {
+        /* ⚠️ 必须持 g_mu —— 不能因为「g_img 已经加载过了」就跳过。
+         * md_scan_locked 第一句就是 md_img_locked()，而那个函数**会在库的
+         * (size, mtime) 变了时 free(g_img) 再整份重读**；一旦另一个线程
+         * （game_media_list_json / game_media_count）正拿着 g_mu 走 g_img，
+         * 这里就把它的缓冲区释放掉了 —— use-after-free。
+         * .120 把「已加载就跳过锁」当成「打包卡住」的修法，方向是错的：
+         * 它既没解掉那个症状（用户复现的第二轮仍停在 0%），又引入一条真崩溃路径。 */
         pthread_mutex_lock(&g_mu);
         int rc = md_scan_locked(tid, NULL, md_collect_cb, &paths);
         pthread_mutex_unlock(&g_mu);
@@ -1034,6 +1262,12 @@ static void md_pack_run(md_pack_req_t *req) {
     gj_unlock();
 
     md_set_phase("preparing");
+    /* 三段相变各留一条日志（v0.5.2.122）。用户报过「打包一直卡在 0%」，而
+     * /game_job_status 在 is_noisy_route 里是降噪的 —— 真机上出问题时，日志里
+     * 一行都看不到打包走到哪了，只能靠猜。有了这三行：没有 "measured" 就是卡在
+     * 扫库，没有 "writing" 就是卡在清旧包，有 "writing" 而没 "done" 就是 zip_write。
+     * 一条日志换一次「不用再猜」，值。 */
+    pldmgr_log("[PLDMGR] media: pack start (tid=%s, ids=%d)\n", req->tid, req->nids);
 
     zip_ent_t *e = NULL;
     int n = 0, skipped = 0;
@@ -1049,14 +1283,19 @@ static void md_pack_run(md_pack_req_t *req) {
 
     md_set_phase("measuring");
     gj_set_totals(total, n);
+    pldmgr_log("[PLDMGR] media: pack measured %lld bytes / %d files (skipped %d)\n",
+               total, n, skipped);
 
-    /* 顺手清掉上一包：不同文件名，不冲突；正在下旧包的连接拿着旧 inode 不受影响 */
+    /* 顺手清掉上一包：包名现在是「游戏名称-时间戳.zip」，不再是固定前缀，
+     * 所以按 .zip 后缀认（这个目录里只有我们写的包）。不同文件名本来就不冲突；
+     * 正在下旧包的连接拿着旧 inode，POSIX 下不受 unlink 影响。 */
     {
         DIR *dp = opendir(GAME_MEDIA_PACK_DIR);
         if (dp) {
             struct dirent *de;
             while ((de = readdir(dp)) != NULL) {
-                if (strncmp(de->d_name, "pack_", 5) != 0) continue;
+                size_t nl = strlen(de->d_name);
+                if (nl < 5 || strcasecmp(de->d_name + nl - 4, ".zip") != 0) continue;
                 char p[760];
                 snprintf(p, sizeof(p), "%s/%s", GAME_MEDIA_PACK_DIR, de->d_name);
                 if (strcmp(p, zip) != 0) unlink(p);
@@ -1066,6 +1305,7 @@ static void md_pack_run(md_pack_req_t *req) {
     }
 
     md_set_phase("packing");
+    pldmgr_log("[PLDMGR] media: pack writing -> %s (%d entries)\n", zip, n);
     const char *err = "打包失败";
     int w = zip_write(zip, e, n, &md_zip_hooks, &err);
     free(e);
@@ -1151,6 +1391,22 @@ static int md_pack_start(const char *tid, const char *const *ids, int nids,
         return -1;
     }
 
+    /* [CN-FORK] v0.5.2.121 压缩包命名：游戏名称-打包时间戳.zip（如「宇宙机器人-20261006_123456.zip」）。
+     * 在 gj_begin **之前**算好：gj_begin 返回时仍持任务锁，而取名要读磁盘上的
+     * name.txt（game_title_get_name）—— 把一次文件 I/O 放进任务锁里，等于让
+     * /game_job_status 陪着一起等盘。 */
+    char zipname[300];
+    {
+        char name[256];
+        name[0] = 0;
+        game_title_get_name(tid, name, sizeof(name));
+        md_sanitize_name(name);
+        if (!name[0]) snprintf(name, sizeof(name), "%s", tid);
+        char ts[32] = "";
+        md_stamp_compact(time(NULL), ts, sizeof(ts));
+        snprintf(zipname, sizeof(zipname), "%s-%s.zip", name, ts);
+    }
+
     long long id = 0;
     if (gj_begin(GJ_KIND_PACK, &id, msg, msgsz) != 0) {
         /* 已有任务在跑：槽没领到，这里必须把整份请求还回去 */
@@ -1160,8 +1416,7 @@ static int md_pack_start(const char *tid, const char *const *ids, int nids,
         return -1;
     }
     snprintf(gj_state()->phase, sizeof(gj_state()->phase), "preparing");
-    snprintf(gj_state()->aux, sizeof(gj_state()->aux),
-             "%s/pack_%lld.zip", GAME_MEDIA_PACK_DIR, id);
+    snprintf(gj_state()->aux, sizeof(gj_state()->aux), "%s/%s", GAME_MEDIA_PACK_DIR, zipname);
     gj_unlock();
 
     pthread_t th;
@@ -1285,4 +1540,16 @@ int game_media_pack_open(long long job_id, int *out_fd, off_t *out_size) {
     *out_fd = fd;
     *out_size = sb.st_size;
     return 0;
+}
+
+/* 成品 zip 的文件名。名字的唯一来源是 aux（md_pack_start 写进去的那份），
+ * 这里只做 basename —— 让路由去拼一次必然与 aux 漂开。 */
+int game_media_pack_name(long long job_id, char *out, size_t osz) {
+    if (!out || !osz) return -1;
+    out[0] = 0;
+    char zip[700];
+    if (gj_aux(job_id, GJ_KIND_PACK, zip, sizeof(zip)) != 0) return -1;
+    const char *sl = strrchr(zip, '/');
+    snprintf(out, osz, "%s", sl ? sl + 1 : zip);
+    return out[0] ? 0 : -1;
 }
