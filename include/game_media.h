@@ -19,7 +19,11 @@
  *   原图   /user/av_contents/photo/<生成器>/<TID>/<3位hex>/<时间戳_随机>.<ext>
  *   缩略图 /user/av_contents/thumbnails/photo/<同上链路>/<原名>.<原ext>.<jxr|jpeg>
  *   副文件 同目录 <原名>.meta（JSON）与 <原名>.dat（1024B 二进制）
- *   录屏在 /user/av_contents/video/… 下同构（实机当时只有截图，见 §7 待验证）
+ *   录屏   /user/av_contents/video/<生成器>/<TID>/<3位hex>/<时间戳_随机>.webm
+ *   缩略图 …/thumbnails/video/<同一链路>/<原名>.webm.jxr
+ *   —— 录屏链路已实测与 photo **同构**（`.125` 真机取证）。但录屏缩略图是
+ *      **JPEG XR**（头 `49 49 BC 01`），stb_image 解不了，所以视频封面**不走本模块**，
+ *      改由前端 `<video preload="metadata">` 从 webm 取首帧（见 §7a 与 HANDOVER §7）。
  *
  * ── 为什么以 av_content.db 为准而不是扫目录 ──
  *   `/system_data/priv/mms/av_content.db` 的 tbl_PhotoVideo 一次给出
@@ -37,10 +41,17 @@
  *   ② **绝不轮询**。列表是「打开弹窗拉一次 + 手动刷新」，缩略图靠落盘缓存，
  *      任务进度 1s 一次（gameApi.js 的 watchJob）。
  *
- * §7 待验证（下一轮拿真机取证，别当成已知事实）：
- *   a. 录屏目录层级是否与 photo 同构（/video/<生成器>/<TID>/<hex>/…）；
- *   b. 视频时长读 duration 还是 duration_ms（单位是秒还是毫秒）—— 实机还没有录屏；
- *   c. 只删文件后，媒体库再次打开是否会出现幽灵条目。
+ * §7 真机取证结果（`.125` 走 FTP `192.168.1.214:2121` 实测，别再当成待验证）：
+ *   a. **已结案：录屏目录层级与 photo 同构。** /video/<生成器>/<TID>/<3位hex>/<时间戳_随机>.webm，
+ *      缩略图在 /thumbnails/video/<同一链路>/<原名>.webm.jxr（`icon_path` 也直接指向它）。
+ *      当年猜错的方向**不是「路径」而是「格式」**：录屏封面是 **JPEG XR**（头 49 49 BC 01，
+ *      1920×1080 24bppRGB），stb_image 解不了 —— 这才是三轮封面都只能回占位图的原因；
+ *      照片封面是 `.png.jpeg`（普通 JPEG），所以只有录屏这一路坏。
+ *   b. **已结案：`duration` 是整秒、`duration_ms` 是毫秒。** 实测两条录屏分别是
+ *      duration=7 / duration_ms=7123、duration=14 / duration_ms=14531。本模块按
+ *      `duration_ms > 0 ? /1000 : duration` 取值，**是对的**。
+ *   c. **仍未验证**：只删文件后，媒体库再次打开是否会出现幽灵条目
+ *      （tbl_PhotoVideo 有 file_status 列，是否自动对账未知）。
  */
 
 #include <stddef.h>

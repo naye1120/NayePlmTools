@@ -5,7 +5,7 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-> - 版本：`MENU_VERSION = 0.5.2.124`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+> - 版本：`MENU_VERSION = 0.5.2.125`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 - 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。`.102` 是**修掉 `.101` 改名取证代码的堆溢出（整 payload 崩）+ 按钮按功能转实心六色（样张 A + I2）+ 页头去粘顶**（正式出包版 `NayePlmTools_0.5.2.102-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `be7fa8f`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 的包已过期。`.103`–`.105` 是**纯前端/文档改动、从未单独出包**（`.103` 收敛上色 + 深空黑 + 舒展留白；`.104` 账号板块按钮状态分色 + 主色换朱橙 `#F43E06`；`.105` 同步按钮补图标 + PIN 进度条重做），`.106` 把这四轮**一次性出包**（正式出包版 `NayePlmTools_0.5.2.106-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `0e9afb2`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.102` 的包已过期。`.107` 是**头像上传/裁剪四项缺陷修复**（变形 / 卡死 / 拖拽裁剪 / 拖放选图）+ **账号「登出」不再连带反激活**（备份层加来源维度，按钮 `[登出]` = 只登出、`[反激活]` = 登出并反激活，文字不变）—— 详见 §2.1.1 与 §2.2.1。正式出包版 `NayePlmTools_0.5.2.107-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `8065f19`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.106` 的包已过期。`.108` 是**账号按钮语义修正** —— 用户否掉了 `.107` 的文案（「逻辑做错了，登出 就是只登出，反激活 即 登出并反激活，**但是按钮文字不要改**」）：按钮行恒为 `[登出]` + `[反激活]`，已登录时 `[反激活]` 走 `signout-full`（登出 + 反激活一步到位），未登录时走 `deactivate`；后端契约沿用 `.107`，本轮只动前端/语言包/文档。正式出包版 `NayePlmTools_0.5.2.108-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `12e2ba5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.107` 的包已过期。`.109` 是**修掉「头像上传一直显示上传中、不报错也不结束」**（真根因在 MHD 流式状态回收的判据，见 §2.2.2；前端同时把「超时」与「用户取消」区分开）+ **通知条挪到底部居中并缩小**（见 §2.2.3）+ mock 里头像改成真闭环。正式出包版 `NayePlmTools_0.5.2.109-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `b8ea772`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.108` 的包已过期。`.110` 是**修掉电视端「确定」生效在鼠标指针位置、而不是彩色光圈所在的那个控件上**（见 §2.2.4；结论：网页无法移动系统鼠标指针，改为让 OK 的落点脱离指针）+ 新增 `?navdebug=1` 排障面板。正式出包版 `NayePlmTools_0.5.2.110-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `dcfb48b`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.109` 的包已过期。`.111` 是**四件事一起做**：① 遥控器模式下藏掉系统光标（见 §2.2.4 延伸 —— 网页无法移动指针，只能让它消失）；② **改名不再影响账号 ID**（ID 改由 uid 派生，见 §2.1.1）；③ **登入/登出/激活/改名/接口错误全部中文化**，不再报英文诊断串；④ **去掉「反激活」** —— 激活成功后那颗按钮整颗收起（见 §2.2.5）；⑤ 修掉**「第一次登出失败、第二次才成功」**（`fill_status()` 改为 uid 优先解槽位，见 §2.1.1）。正式出包版 `NayePlmTools_0.5.2.111-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `e908ef5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.110` 的包已过期。`.112` 是**游戏管理三个面板改「铺满右侧」+ 磁贴图拆成图标/背景两层 + 电视端焦点那套逻辑整体回退到上游做法**（用户口径两轮：「存档管理页面打开后铺满右边整个区域。多媒体管理也是铺满右边。修改名称也是铺满，但是你只把修改磁贴图标放出来了，还要增加一个修改背景的」/「刚才铺满的几个页面圆角全部取消，修改名称哪里将磁贴图标与游戏名称放在一行，磁贴背景放在下面，磁贴背景预览图是16:9的dds图片。图标是png图片。另外修复一个历史bug。ps5真机上焦点鼠标移动的方式最好改回跟上游一样，现在这样很别扭」）。具体：① `Modal` 新增 `layout="panel"`、四角直角、`--sidebar-w` 令牌 + `html[data-sidebar]`、`.panel-sheet` 的 `margin:0!important`（躲 `.space-y-6` 的 `> * + *`）—— 见 §2.2.6；② 磁贴两层图（**图标 1:1 PNG / 背景 16:9 1920×1080 DXT1 DDS，DDS 由后端转**，`/game_tile_icon` 与 `/game_tile_background` 拆分，`game_list` 新增 `icon` 版本号字段）；③ **电视端「光圈/光标」整层回退**：删掉自己搬焦点、抢确定键、藏光标三层，改成光圈跟着指针走 —— 见 §2.2.7；④ 修掉 `.92` 起就存在的「弹窗里按返回键连带退页」—— 见 §2.2.8；⑤ `Modal` 焦点进出独立 effect —— 见 §2.2.9。**本轮为纯前端/mock/文档改动，未出包**（后端 C 代码一行未动）。`.113` 是**三件事 + 一处版本号清账**（用户口径：「这几个铺满页面的字体太小了，跟其他父级菜单一样大。这里点击也可以上传图片，上传完要有一个应用的动作；这里的缩略图也要调大。太小了，预览都看不清。改把，改完直接打包成elf」）：① 铺满面板里的字号与侧栏菜单拉平 —— 立 `.panel-body` / `.panel-note` / `.panel-tiny` / `.panel-micro` 四条语义档，替掉 60 处硬编码 `text-[13px]` 之类的 px 字号（见 §2.2.6 末尾）；② 改名页两层图改「**点预览也能选图 + 应用才生效**」（预览本身是按钮、选图先暂存并本地预览、点「应用」才提交，另有「取消」）；③ 多媒体缩略图列宽下限由写死的 112px 改成 `--thumb-w` 令牌（移动 140 / 桌面 200 / 电视 320px）；④ 顺手清掉三处**手抄的版本号**（设置页捐赠说明、支持作者页兜底值、mock 的 `/version`）并加回归守卫。正式出包版 `NayePlmTools_0.5.2.113-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `81c42c1`，两包各 9,957,216 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.112` 的包已过期。`.114` 是**磁贴再放大 1/4（`--tile-w` 这根令牌的第三次调档：PC/手机 210px → 262.5px、电视 300px → 375px）+ 改名页「磁贴背景」块从竖排改回左右分栏**（正式出包版 `NayePlmTools_0.5.2.114-me.elf` / `-ga.elf`，短哈希 `91fa4fb`，两包各 9,957,216 字节，`.113` 的包已过期；⚠️ 这一轮**包出了文档漏了**，到 `.115` 才补上 CHANGELOG），`.115` 是**游戏管理 → 多媒体管理（截图/录屏）后端**——新增 `src/game_media.c` + `include/game_media.h`、八条路由（六条 `/game_media*` + `/game_job_status` / `/game_job_cancel`），主机关卡从 3 条增至 4 条（新 `media_scan` 98 项断言），详见 §2.1.0 与 CHANGELOG `.115`。`.116` 是**游戏管理后端一次补完 + 修掉「预览只剩顶部一条 / 打包下载失败」** —— 新增 19 条端点与六个模块（`game_title` / `game_saves` / `game_runtime` / `game_job` / `zip_io` / `inflate`，详见 §2.1.2），并把**文件直出从 `MHD_create_response_from_fd64` 换成自写 32KB 回调 `gr_file_response()`**（fd 直出那条分支在真机上会把 Content-Length 报全、字节发短，导致图片只剩顶部一条、zip 下载判失败；三个调用点一起换），出包版 `NayePlmTools_0.5.2.116-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.115` 的包已过期。`.117` 是**修真机报的「游戏管理的列表变空了」** —— 根因是 `.116` 给 `enum_arg_t` 加了 `want`，而 `build_game_json` 仍逐字段赋值**漏了它**，`want` 成栈上垃圾、`gm_append_item` 第一行 `if (a->want)` 把每个条目都早退、`count` 恒 0（症状「先好后坏」，跑过一次 `/game_detail` 才把非空指针留在栈上）；同轮另修**详情页 5 个字段读错列**（`st_cb_row` 拿 `GM_DB_*` 枚举序号当列号，把 `gm_sql_col_index` 的解析结果整个丢掉）与 **`version` 吐栈上垃圾**。同时**把「三道门为什么拦不住」补上**：`src/game_mgr.c` 第一次能在主机上编译（`test/host_mnt_compat.h` 顶掉 `getmntinfo` 三个 BSD 符号 + `GAME_MGR_APPDB_PATH` 加 `#ifndef` + 合成 app.db 夹具），新增 `game_mgr` 主机关卡 **65 项断言**，核心手法是 `seed_stack()` **主动把栈播种成非空指针**（见 §2.1.3）。出包版 `NayePlmTools_0.5.2.117-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.116` 的包已过期。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。
 - 近期定型（.64 → .100）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
@@ -403,6 +403,73 @@
 >   `media: cover dir MISSING <path>` / `media: cover dir <path> has N entries [names…]` /
 >   `media: no decodable cover for <id>` —— 这三行会**直接告诉真机上录屏缩略图到底在哪个
 >   目录**，§7a 那条「待验证」就能一次问清（已经猜错两轮了，别再猜第三次）。
+
+
+> **`.125`（2026-10-06）—— 打包的真因在前端构建产物里；封面是 JPEG XR**
+> 起因仍是「**打包下载还不好用。视频封面也没有。**」，第三轮。这一版**不再猜**，
+> 改成自己去真机取证：FTP（`192.168.1.214:2121`，anonymous）拉日志 / 目录树 /
+> `av_content.db`，再用 HTTP 直连 8911 拉一次成品包。**取证把前两轮的判断推翻了一半。**
+>
+> - **① 「打包下载」的真因在后端之外 —— 后端从头到尾都是好的。**
+>   真机日志（`/data/nayeplmtools/pldmgr.log`）：
+>   `pack measured 61518012 bytes / 3 files (+1ms)` → `pack writing … .part` →
+>   `pack job done -> …/宇宙机器人-20261006_231804.zip (61518012 bytes, +1179ms)`。
+>   **1.2 秒打完。** 成品在盘上 61,518,688 字节；HTTP 取它 `Content-Length` 正确、
+>   **0.5 秒完整收全 61,518,688 字节**、`zipfile.testzip()` 无错、三个条目尺寸都对。
+>   → 「打包」与「下载」本身**没有任何问题**。
+> - **② 真因：前端构建产物里 `watchJob` 的 `setTimeout(tick, …)` 中 `tick` 是悬空标识符。**
+>   构建 target 是 `['es2015','safari12']`，es2015 没有 async，Babel 要把 `async` 降级成
+>   generator 包装；对**自引用的 const 箭头函数**（`const tick = async () => { …
+>   setTimeout(tick, …) … }`），Babel 会把整个 `const tick = …` 换成一个**立即调用并丢弃的
+>   IIFE**，却**不重写函数体里的那个自引用**。于是第一次 `/game_job_status` 正常返回，
+>   紧接着 `setTimeout` 抛 `ReferenceError: tick is not defined`，**轮询永久停摆**。
+>   界面停在「正在打包… 0%」、下载按钮永不出现 —— 正是用户报的「一直是正在计算中」，
+>   也正好解释日志里**只有 `status poll #1`、一条 `pack_get` 都没有**。
+>   **修法：自引用的 async 函数一律写成函数声明**（名字绑在外层作用域，降级后仍有效）。
+>   同一个文件里既有的 `async function poll()`（App 的自动加载轮询）本来就是这么写的、
+>   真机一直正常 —— 现成的反证。同类隐患一并修：`StorageHub.fetchRemote`（24h 过期刷新
+>   自引用）、`App.refreshPayloads`（失败重试自引用）。
+> - **③ 为什么 177 项回归全绿却漏了 —— 回归体系的盲区（本轮最重要的方法论收获）。**
+>   `game112.mjs` 跑的是 **vite dev server**，发出去的是原生 ESM，`async/await` 不降级；
+>   真机跑的是 Babel 降级后的**构建产物**。这条 bug 只存在于后者。
+>   → 新增 `serve_dist.mjs`（`frontend/dist` 静态 + 其余反代到 mock，5200）与
+>   `pack125.mjs`（**跑在产物上**：断言无未捕获异常、`/game_job_status` 轮询 ≥2 次、
+>   面板进终态、出现「下载打包文件」、下载端点真回字节）。
+>   **已用回退验证它能抓住这个 bug**：把修复 stash 掉重新构建后该回归 **5 项红**，
+>   报错正是 `ReferenceError: tick is not defined`，面板停在「正在打包… 正在计算体积… 0%」。
+> - **④ 封面：PS5 给的是 JPEG XR，载荷解不了（三轮封面失败的真正原因）。**
+>   真机取证拿到目录树 + `av_content.db` + 封面文件本身：录屏封面在
+>   `/user/av_contents/thumbnails/video/<生成方>/<TID>/<hex>/<名>.webm.jxr`，
+>   文件头 `49 49 BC 01` = **JPEG XR**（1920×1080 24bppRGB，约 75:1，DCT 编码）。
+>   载荷里只有 stb_image，**解不了 jxr**，所以怎么改都只能回占位图。
+>   照片那条路没事：照片封面是 `.png.jpeg`（普通 JPEG）。
+>   → 不往载荷里塞 JXR 解码器，改成**让浏览器从 webm 取帧**：视频格子直接渲染
+>   `<video preload="metadata" muted playsInline>`。真机实测（ASTRO BOT 那条 43MB 的 webm）：
+>   `readyState=4`、3840×2160，画到 canvas 取像素 avg=57 / max=242 —— 有画面的首帧。
+>   **刻意不 seek**：文件直出没有 Range 支持，Chrome 判该媒体不可定位
+>   （实测 `currentTime` 设不动、`seekable` 为空），写 seek 只是死代码。
+> - **⑤ 顺手修掉 mock 的一处「假绿」**：mock 的下载端点用中文文件名直接
+>   `res.setHeader('Content-Disposition', …)`，Node 遇到非 ASCII 抛 `ERR_INVALID_CHAR`、
+>   express 回 500 —— mock 上「下载」这条路**从来没被真正跑通过**。这不只是测试缺口：
+>   真机那个 bug 本来「点一下下载」就能立刻暴露，是被这里先 500 掩盖掉的。
+>   改成与后端 `add_disposition` 同口径的 ASCII 兜底 + RFC 5987 `filename*` 双写。
+> - **验证口径**：主机套件 `overall: PASS`（`media_scan` 163 / `game_saves` 88 /
+>   `game_mgr` 65）；变异测试三项全红（`==== 变异测试: PASS ====`）；
+>   浏览器回归 `game112` **177/177**、`pack125` **10/10**（连跑三次稳定）；
+>   两个 ELF 各 10,785,872 字节、titleId NAYE00001/NAYE00004、内嵌页与
+>   `frontend/dist/index.html` **逐字节相同**、内嵌标题 `(7d5540d, …)` 非 DEV、
+>   `.122`–`.124` 版本号残留 0；payload 编译 `-Os -Wall` 零警告。
+> - **出包**：`NayePlmTools_0.5.2.125-me.elf` / `-ga.elf`。**仍未实机（PS5）验收。**
+> - **给下一轮的抓手**：真机上先看两件事 ——
+>   ① 打包完**有没有出现「下载打包文件」按钮**（`.124` 及以前永远不出现）；
+>   ② 视频格子**是不是真画面**（`.124` 及以前是深色占位图）。
+>   若封面仍是占位图，那就是 **PS5 的浏览器解不了 webm**，届时再评估给载荷加 JXR 解码器
+>   （`third_party` 里塞 jxrlib）——**那是另一个量级的工程，不要顺手做**。
+> - **明确没做（见 CHANGELOG 同名小节）**：文件直出的 **Range 支持**。它能一次解决三件事
+>   （封面可 seek 到更代表的一帧、封面只需拉几百 KB、视频预览可拖进度条），
+>   但它要动 `gr_file_response` 这条**被打包下载复用**的路 —— 刚把下载修好，
+>   不宜在同一版里再动它。另外 `<video>` 走 `preload="metadata"` 在没有 Range 的服务器上
+>   会把整个录屏拉完（43MB 那条实测如此），这一点在加 Range 之前无法避免。
 
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
@@ -847,10 +914,24 @@ bash tools/build_tiles.sh   # 双磁贴变体一次出齐：-me(NAYE00001 媒体
 ```bash
 wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/run_host_tests.sh"
 # slot_resolve 23/23 + offact_genid 13/13 + safety_origin 39/39
-# + media_scan 161/161 + game_saves 88/88 + game_mgr 65/65
+# + media_scan 163/163 + game_saves 88/88 + game_mgr 65/65
 # + media_verify 的 json 与 3 次 zip 校验（子集 2 / 全量 5 / 大文件跨分块）
 # clang -Wall -Wextra 零告警
 ```
+
+**构建产物上的浏览器回归（`.125` 起，出包前跑一次）**：
+```bash
+cd frontend && node mock-server.js &          # mock 8081
+node serve_dist.mjs &                          # frontend/dist 静态 + 其余反代到 mock，5200
+node pack125.mjs                               # 断言：无未捕获异常 / 轮询 ≥2 次 / 进终态 / 出下载按钮 / 下载端点真回字节
+```
+> **为什么必须另起这一套**：`game112.mjs` / `nav112.mjs` 跑的是 **vite dev server**，
+> 发出去的是原生 ESM（`async/await` 不降级）；而真机跑的是 Babel 降级后的**构建产物**。
+> `.125` 那个「打包完但下载按钮永不出现」的 bug **只存在于产物里**，
+> 177 项回归全绿也照样漏。凡是「构建期改写」引出的行为，都必须在产物上验。
+> 两个脚本都在 `~/.workbuddy-ai/binaries/node/workspace/`（与 `game112.mjs` 同目录）。
+> 本机环境挂着 `HTTP_PROXY`，跑浏览器回归要给 Chrome 加 `--no-proxy-server`、
+> 给 node 设 `NO_PROXY=127.0.0.1,localhost`，否则连 127.0.0.1 都会被绕出去。
 
 **变异测试（`.124` 起，出包前手动跑一次）**：
 ```bash
@@ -1032,29 +1113,76 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
     因为「解开了」这件事给张纯黑图也能过。
   - **改了关键分支就顺手做一次变异测试**（把那段代码掐掉，确认测试真的会红）——
     `test/mutation_check_media.sh` 就是干这个的。用例不红，等于没写。
+- **自引用的 async 函数一律写成函数声明，不要写成自引用的 const 箭头函数**（`.125`，
+  这一条是**构建期**的坑，源码看着完全正确、dev server 跑着也完全正确，只有产物坏）：
+  ```js
+  // ✗ 产物里 setTimeout(tick, a) 的 tick 是悬空标识符 → ReferenceError，轮询永久停摆
+  const tick = async () => { …; timer = setTimeout(tick, intervalMs) }
+  // ✓ 函数声明的名字绑在外层作用域，降级后自引用仍然有效
+  async function tick() { …; timer = setTimeout(tick, intervalMs) }
+  ```
+  原因：`build.target` 是 `['es2015','safari12']`，es2015 没有 async，Babel 要把 async 降级成
+  generator 包装；对**自引用的 const 箭头函数**，Babel 会把整个 `const f = …` 换成一个
+  **立即调用并丢弃的 IIFE**，却**不重写函数体里的那个自引用**。产物里留下的是一句
+  `setTimeout(tick, a)`，而 `tick` 这个绑定已经不存在了。
+  **同一类写法还包括**：`const f = async () => { … await f(true) … }`（递归重试）、
+  `const f = async () => { … setTimeout(() => f(n + 1), 1000) … }`（包在嵌套箭头里也算）。
+  仓库里已按此修正的三处：`utils/gameApi.js` 的 `tick`、`StorageHub.jsx` 的 `fetchRemote`、
+  `App.jsx` 的 `refreshPayloads`。**`App.jsx` 里既有的 `async function poll()` 一直是好的，
+  就是现成的对照。** 新增自引用 async 函数时，先按这条自查一遍。
+- **回归跑 vite dev server 会漏掉「构建期改写」引出的整类 bug**（`.125`）：
+  `game112.mjs` / `nav112.mjs` 打的是 dev server（原生 ESM，`async/await` 不降级），
+  真机打的是 Babel 降级后的**构建产物**。`.125` 那个「打包完但下载按钮永不出现」的 bug
+  在 dev server 上**根本不存在**，所以 177 项全绿也照样漏。
+  **凡是与「构建期改写」有关的行为（async 降级、可选链/空值合并降级、terser 压缩、
+  `drop_console`、`define` 注入的常量、单文件内联），都必须在产物上验** ——
+  用 `serve_dist.mjs` + `pack125.mjs` 这一套。
+- **PS5 的录屏封面是 JPEG XR（`.jxr`），stb_image 解不了**（`.125`，三轮封面失败的真正原因）：
+  真机路径 `/user/av_contents/thumbnails/video/<生成方>/<TID>/<hex>/<名>.webm.jxr`，
+  文件头 `49 49 BC 01`，1920×1080 24bppRGB，约 75:1（DCT 频域编码）。
+  **照片封面是 `.png.jpeg`（普通 JPEG），所以照片那条路一直是好的** ——
+  这也是为什么「照片能出图、录屏不能」看起来像路径问题，其实**是格式问题**。
+  现在的做法是**不解析**：视频格子直接用 `<video preload="metadata">` 让浏览器从 webm 取帧。
+  若哪天要真的解 jxr，那是在 `third_party` 里塞 jxrlib 的工程量，**不要顺手做**。
+- **没有 Range 支持时，浏览器会把媒体判成「不可定位」**（`.125`）：
+  实测 `<video>` 拿到 `readyState=4`、尺寸正常、能画帧，但 `currentTime` **设不动**
+  （`seekable` 为空、赋值后立刻还是 0），而且会把整个录屏拉完（43MB 那条实测如此）。
+  所以：① 不要写「seek 到第 1 秒再截图」这种代码，它在当前后端上是**死代码**；
+  ② 想省流量、想拖进度条，前提是给文件直出加 `Range` —— 见 §7。
+- **Node 的 `res.setHeader` 遇到非 ASCII 头值会抛 `ERR_INVALID_CHAR`**（`.125`）：
+  mock 的下载端点原来写 `attachment; filename="<中文名>.zip"`，于是**每次下载都 500** ——
+  「下载」这条路在 mock 上从来没被真正跑通过，也因此**掩盖了真机上那个下载按钮的 bug**。
+  正确做法与后端 `add_disposition` 同口径：一份 ASCII 兜底（非 ASCII 换 `_`）+
+  一份 RFC 5987 的 `filename*=UTF-8''…`。**mock 与后端在「响应头」上也要对齐**，
+  不然测试会给出一片假绿。
 
 ## 7. 接手后的下一步（待定，非阻塞）
-- **`.124` 出包后第一件要验的**（用户报的「打包下载还不好用。视频封面也没有。」）：
-  1. **视频缩略图必须是视频里的真画面**，不是深底 + 播放三角的占位图，更不是**空白**。
-     ⚠️ 这一条 `.122`/`.123` 连续两轮都没做成：`.122` 回占位图（用户：「应该是视频里面
-     某一帧画面」），`.123` 按 `id` 推目录 + 只看扩展名 → 真机上**连占位图都没了**
-     （挑中不可解码的候选 → `-2` → 404 → 空白）。`.124` 改认 `dirname(icon_path)`
-     + 文件头魔数，且**视频永不 404**。
-     **若仍不对，先看日志**（界面「日志」页 / `/data/nayeplmtools/pldmgr.log`）里这三行：
-     - `media: cover dir MISSING <path>` → 连候选目录都没有；
-     - `media: cover dir <path> has N entries [names…]` → **真机上录屏缩略图到底在哪个
-       目录、里面叫什么名字**，这三行会一次把 §7a 那条「待验证」问清（已经猜错两轮了，
-       别再猜第三次）；
-     - `media: no decodable cover for <id>` → 目录在、名字也对，但没有一份能解码。
+- **`.125` 出包后第一件要验的**（用户报的「打包下载还不好用。视频封面也没有。」）：
+  0. **先看这两条，一眼就能分出「修好了没」**：
+     - 打包跑完后**有没有出现「下载打包文件（N 项）」按钮**？`.124` 及以前**永远不出现**
+       （轮询第 1 次之后就抛 `ReferenceError: tick is not defined` 停摆了，见 §6）。
+       → 出现了就说明本轮的构建期修复在真机上也成立。
+     - 视频格子**是不是真画面**？`.124` 及以前是「深底 + 播放三角」的占位图。
+       → 是真画面就说明 PS5 的浏览器能解 webm。
+  1. **视频缩略图必须是视频里的真画面**，不是占位图、更不是**空白**。
+     `.122`/`.123`/`.124` 连续三轮都没做成，**真正的原因是格式**：PS5 给录屏生成的封面是
+     `.webm.jxr`（**JPEG XR**），而载荷里只有 stb_image，**解不了**；照片封面是普通 JPEG，
+     所以只有录屏这一路坏。`.125` 不再解析它，改成视频格子直接 `<video preload="metadata">`
+     让浏览器从 webm 取帧（真机实测 43MB 那条：`readyState=4`、3840×2160、帧像素
+     avg=57/max=242）。
+     **若仍是占位图** → 说明 **PS5 的浏览器解不了 webm**。那时再评估两条路：
+     ① 给载荷塞 jxrlib（`third_party`，工程量是另一个量级）；② 退回「后端出占位图」。
+     先别急着做①。
   2. **打包进度条必须真的走起来**（体积从 `0 B` 涨、文件 `n/3`、速率有数）。
-     若仍然停住，**先看 `/data/nayeplmtools/pldmgr.log` 或界面「日志」页**，按这两条一刀切：
-     - 有没有 `media: STALL job=… phase=… idle=…s bytes=…/… files=…/…`？
-       **有** → 后端确实卡住，`phase` 直接指出卡在哪一段：
-       `preparing` = 扫库 / `measuring` = 清旧包那一段 / `packing` = `zip_write`。
-       **没有**（且 `status poll` 还在涨）→ 后端没事，问题在前端渲染那一侧。
+     ⚠️ 本轮已用真机证据确认**后端 1.2 秒就能把 61MB 的包打完并落盘、HTTP 取包 0.5 秒
+     完整收全、zip 校验无错** —— 所以「卡住」如果还出现，**只可能是前端那一侧**，
+     先看下面这两条，别再去翻 `zip_write`：
      - `media: status poll #N` 有没有继续往上涨？
-       **停在第 1 条不动** → 前端的轮询停了或连接被堵（这一版新增的 `job_stale`
-       提示也会在 15 秒后自己冒出来）；**一直涨** → 轮询是通的，是状态本身没变。
+       **停在第 1 条不动** → 前端的轮询停了（本轮修的就是这个，若仍复现说明还有第二处）；
+       **一直涨** → 轮询是通的，是状态本身没变。
+     - 有没有 `media: STALL job=… phase=… idle=…s bytes=…/… files=…/…`？
+       **有** → 后端确实卡住，`phase` 指出卡在哪一段
+       （`preparing` = 扫库 / `measuring` = 清旧包 / `packing` = `zip_write`）。
   3. **打包下载下来必须是完整 zip**（`.124` 的正面验收）：`.124` 起取成品这条路上每一步
      都有日志 —— `pack_get job=N not ready (state=…)` / `open failed: <path>` /
      `serving <N> bytes (<path>)`。下载失败时先看这几行，再看 HTTP 状态码：
@@ -1065,13 +1193,26 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
      与列表上给人看的 `游戏名称-YYYY-MM-DD HH:MM` 刻意不同）。
   5. 界面在长时间没进展时应出现**琥珀色**提示：后端尺子（`idle`）报「已 N 秒没有进展」，
      本机尺子报「已 N 秒没有收到主机的新数据」—— 两条都该能在真机上被触发到。
-- **「打包卡住」的根因至今仍未定位（`.122` 修三处、`.123` 修一处、`.124` 加了取成品侧
-  的日志，都没能证明就是它）**：已知边界条件（截图反推）是 worker 走到 `gj_set_totals`
-  之后停住、且前端此后再没有成功的轮询、也没有出现 `transient` 的失联提示。
-  **下一步必须先拿到上面第 2 条那两行日志**，再决定往哪个方向修；在没有日志之前不要再改
-  逻辑 —— `.120`/`.122` 两次「猜根因」的修法一次是错的（`.120` 还引入了一条 use-after-free），
-  这条教训已写进 §6。`.124` 只是**顺手堵掉了同一条路上一个能证实的独立成因**
-  （残包可被取走），**不等于**修掉了「卡住」。
+- **「打包卡住」这条，`.125` 用真机证据结案了：后端从来没卡过。**
+  `.122` 修三处、`.123` 修一处、`.124` 修一处，四轮都在后端找 —— 而真机日志显示
+  `pack measured (+1ms)` → `pack writing` → `pack job done (+1179ms)`，
+  61,518,012 字节的包 1.2 秒打完、HTTP 取包 0.5 秒完整收全、zip 校验无错。
+  **「卡住」是前端轮询停摆**（构建产物里 `setTimeout(tick, …)` 的 `tick` 是悬空标识符，
+  见 §6），界面因此永远停在 `正在打包… 0%`，看起来就像后端卡死。
+  → 所以「先拿到日志再改逻辑」这条纪律是**对**的：日志一到手，四轮猜测立刻收敛。
+  `.120`/`.122` 那两次「猜根因」的修法一次是错的（`.120` 还引入了一条 use-after-free），
+  这条教训已写进 §6；`.124` 顺手堵掉的「残包可被取走」是**同一条路上另一个独立成因**，
+  真实存在、但不是「卡住」。
+- **文件直出没有 Range 支持（`.125` 明确记下，本轮有意不做）**：
+  现状后果 —— `<video preload="metadata">` 只能显示首帧（`currentTime` 设不动、
+  `seekable` 为空），而且浏览器会把整个录屏拉完（43MB 那条实测如此）。
+  加 Range 能一次解决三件事：封面能 seek 到更代表的一帧、封面只需拉几百 KB、
+  视频预览可拖进度条。
+  **没做的理由**：要动 `gr_file_response`（`src/http_server.c`），而它同时被
+  **打包成品下载**复用 —— 刚把下载修好，不宜在同一版里再动它。
+  真要做的话建议**只给媒体文件那条路加**（新增 `gr_file_response_range(size, fd, start, end)`，
+  打包那条继续走原函数），把爆炸半径限制住；主机侧可以用 `media_scan` 加一条
+  「带 Range 的请求必须回 206 + 正确的 Content-Range」的断言。
 - **`.122` 遗留、至今仍未封的洞（有意留给下一轮，别当成漏改）**：任务槽是**全局单槽**，
   而「取消」只是把 `g_job.cancel` 置 1、等 worker 自己在下一次检查点读到。所以**如果 worker
   真的卡在一个不返回的 syscall 里**（`read`/`write`/`open` 上挂住），`cancel` 永远不会被看到，
@@ -1105,13 +1246,20 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
     列表 → 详情 → 存档列表 → 存档下载/上传 → 改名 → 磁贴图标 → 磁贴背景（含 PNG 预览与
     DDS 下载）→ 挂载/卸载 → 卸载 PKG。
 - **`.115` 多媒体后端的三项真机待验证**（主机测试钉的是「我们的行为」，不是「真机的语义」，
-  见 `include/game_media.h` §7）：
-  - **§7a 录屏目录层级**是否与 photo 同构（`/video/<生成器>/<TID>/<3位hex>/<时间戳_随机>.<ext>`）
-    —— 真机取证那天 `video/` 目录是空的，现在只有 photo 的实测。**一有录屏立刻验这条。**
-  - **§7b 视频时长读哪一列**（`duration` 还是 `duration_ms`，秒还是毫秒）—— 实机两列都是 0。
-    实现按 `duration_ms > 0 ? /1000 : duration` 走；主机测试把两条分支都钉住了，
-    但钉的是**我们的取值逻辑**，不是真机语义。
-  - **§7c 只删文件后系统媒体库的反应**：会不会留下幽灵条目、会不会自动对账
+  见 `include/game_media.h` §7）——**`.125` 取证后 §7a/§7b 已结案**：
+  - **§7a 录屏目录层级 —— 已证实与 photo 同构**（`.125`，FTP 实测）：
+    `/user/av_contents/video/NPXS40087/PPSA99101/314/20261006_224245_00574764.webm`
+    ↔ 缩略图 `/user/av_contents/thumbnails/video/NPXS40087/PPSA99101/314/…webm.jxr`，
+    层级完全一致，`icon_path` 也直接指向它。**当年猜错的方向不是「路径」而是「格式」**
+    （见下一条）。
+  - **§7b 视频时长 —— 已证实：`duration` 是整秒、`duration_ms` 是毫秒。**
+    `.125` 实测两条录屏分别是 `duration=7 / duration_ms=7123` 与 `duration=14 /
+    duration_ms=14531`。现实现按 `duration_ms > 0 ? /1000 : duration` 取值，**是对的**。
+  - **§7c 只删文件后系统媒体库的反应**：仍未验证。会不会留下幽灵条目、会不会自动对账
     （库里有 `file_status` 列，用途未验证）。**先在真机上删一张不心疼的截图再打开「媒体库」看。**
+  - **新增（`.125` 取证得到，供后续参考）**：真机 `av_content.db` 的 `tbl_PhotoVideo`
+    是 **67 列**，`content_type` **1 = 照片、2 = 录屏**（早期快照里只有照片，所以只见过 1）。
+    录屏封面是 **JPEG XR**（`.webm.jxr`，`49 49 BC 01`），照片封面是 `.png.jpeg`（普通 JPEG）——
+    这就是「照片能出图、录屏不能」的全部原因。
 - **`.115` 后端整体仍未上过真机**：八条路由只过了语法 + 主机关卡，真机实测顺序建议 ——
   列表 → 缩略图 → 原图/录屏预览 → 删除一张 → 打包下载（大录屏那条单独验一次）。

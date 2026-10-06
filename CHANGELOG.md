@@ -1,3 +1,102 @@
+## v0.5.2.125 (CN-FORK)
+
+> 起因还是那两句「**打包下载还不好用。视频封面也没有。**」，而且这是第三轮。
+> 所以这一版**不再猜第三次**，改成自己去真机取证 —— 走 FTP（`192.168.1.214:2121`）
+> 拉日志、拉目录树、拉 `av_content.db`，再用 HTTP 直接拉一次成品包。
+> 取证结果把前两轮的判断**推翻了一半**。
+>
+> **① 「打包下载」的真因不在后端 —— 后端一直是好的。**
+> 真机日志（`/data/nayeplmtools/pldmgr.log`）写得很清楚：
+> `pack measured 61518012 bytes / 3 files (+1ms)` → `pack writing … .part` →
+> `pack job done -> …/宇宙机器人-20261006_231804.zip (61518012 bytes, +1179ms)`。
+> **1.2 秒就打完了。** 成品在盘上 61,518,688 字节；用 HTTP 取它，
+> `Content-Length` 正确、**0.5 秒完整收全 61,518,688 字节**、`zipfile.testzip()` 无错、
+> 三个条目尺寸都对。也就是说「打包」和「下载」这两件事本身**从头到尾都是通的**。
+>
+> 挂在**前端**：构建产物里 `watchJob` 的最后一行是 `setTimeout(tick, a)`，而 `tick`
+> 是一个**悬空标识符**。原因是构建 target 是 `['es2015','safari12']`，es2015 没有
+> async，Babel 要把 `async` 降级成 generator 包装；对**自引用的 const 箭头函数**
+> （`const tick = async () => { … setTimeout(tick, …) … }`），Babel 会把整个
+> `const tick = …` 换成一个**立即调用并丢弃的 IIFE**，却**不重写函数体里的那个自引用**。
+> 于是第一次 `/game_job_status` 正常返回，紧接着 `setTimeout` 抛
+> `ReferenceError: tick is not defined`，**轮询永久停摆**。
+> 界面停在「正在打包… 0%」，「下载打包文件」按钮永远不出现 —— 这正是用户截图里的
+> 「一直是正在计算中」，也正好解释了为什么日志里**只有 `status poll #1`、一条
+> `pack_get` 都没有**（前端压根没走到点下载那一步）。
+>
+> 修法：**自引用的 async 函数一律写成函数声明**（名字绑在外层作用域，降级后仍有效）。
+> `App.jsx` 里既有的 `async function poll()`（自动加载轮询）本来就是这么写的、真机上
+> 一直是好的 —— 这是同一个工程里现成的反证。同类隐患一并修掉：`StorageHub.fetchRemote`
+> （`await fetchRemote(true)` 自引用）、`App.refreshPayloads`（失败重试里自引用）。
+>
+> **② 为什么 177 项回归全绿却漏了它 —— 回归体系的盲区。**
+> `game112.mjs` 跑的是 **vite dev server**，发出去的是原生 ESM，`async/await` 不降级；
+> 而真机跑的是 Babel 降级后的**构建产物**。这条 bug 只存在于后者。
+> 所以这一版补了 `serve_dist.mjs`（dist 静态 + 反代到 mock）与 `pack125.mjs`
+> （跑在产物上：断言轮询 ≥2 次、面板进终态、下载按钮出现、下载端点真的回字节）。
+> **已验证它能抓住这个 bug**：把修复回退、重新构建后该回归 5 项红，报错正是
+> `ReferenceError: tick is not defined`，面板文本停在「正在打包… 正在计算体积… 0%」。
+>
+> **③ 视频封面：PS5 给的是 JPEG XR，载荷解不了。**
+> 真机取证拿到了三样东西：目录树、`av_content.db`、以及封面文件本身。
+> 录屏封面在 `/user/av_contents/thumbnails/video/<生成方>/<TID>/<hex>/<名>.webm.jxr`，
+> 文件头 `49 49 BC 01` —— **JPEG XR**（1920×1080 24bppRGB，约 75:1，DCT 编码）。
+> 载荷里只有 stb_image，**解不了 jxr**，所以三轮都只能回占位图。
+> 照片那条路没事，因为照片封面是 `.png.jpeg`（普通 JPEG）。
+> 这一版不往载荷里塞 JXR 解码器，改成**让浏览器自己从 webm 取一帧** ——
+> 视频格子直接渲染 `<video preload="metadata">`，用户要的本来就是「视频里面某一帧画面」。
+> 真机实测（ASTRO BOT 那条 43MB 的 webm）：`readyState=4`、3840×2160，
+> 画到 canvas 取像素 avg=57 / max=242 —— **是有画面的首帧，不是黑帧**。
+>
+> **④ 顺手修掉 mock 的一处「假绿」。** mock 的下载端点用中文文件名直接
+> `res.setHeader('Content-Disposition', …)`，Node 遇到非 ASCII 会抛 `ERR_INVALID_CHAR`、
+> express 回 500 —— 于是 mock 上「下载」这条路**从来没被真正跑通过**。
+> 这不只是测试缺口：真机那个 bug 本来「点一下下载」就能立刻暴露，是被这里先 500 掩盖掉的。
+> 改成与后端 `add_disposition` 同口径的 ASCII 兜底 + RFC 5987 `filename*` 双写。
+>
+> 出包：`NayePlmTools_0.5.2.125-me.elf` / `-ga.elf`（`-Os -Wall` 零警告）。
+
+### 🐛 Bugfix
+
+* **`watchJob` 的轮询不再在第一次之后停摆。** 自引用的 async 函数改写成函数声明
+  （`const tick = async () => …` → `async function tick()`），绕开 Babel 在
+  `es2015/safari12` 目标下对自引用 const 箭头函数的降级缺陷。
+  症状：打包任务跑完但界面永远停在「正在打包…」、下载按钮不出现。
+* **`StorageHub.fetchRemote` / `App.refreshPayloads` 同类隐患一并修掉。**
+  两者都在函数体内自引用（前者 `await fetchRemote(true)` 的 24h 过期刷新，
+  后者失败重试 `refreshPayloads(retryCount + 1)`），同样写法会在降级后变成悬空标识符。
+* **视频封面改为从 webm 取真帧。** 视频格子渲染
+  `<video src="/game_media_file?id=…" preload="metadata" muted playsInline>`，
+  直接显示首帧；取不到（浏览器不支持该编码 / 文件读不出来）时 `onError` 记下 id，
+  退回后端占位图。**刻意不 seek**：载荷的文件直出没有 Range 支持，Chrome 会把该媒体
+  判成不可定位（实测 `currentTime` 设不动、`seekable` 为空），写 seek 只是死代码。
+* **mock 的 `Content-Disposition` 改为 ASCII + RFC 5987 双写**（新增 `disposition()`），
+  与后端 `http_server.c` 的 `add_disposition` 同口径。原先中文名直接 `setHeader`
+  会抛 `ERR_INVALID_CHAR` 回 500。
+
+### 🧪 Tests
+
+* **新增 `pack125.mjs`（跑在构建产物上的打包回归）。** 判据：无未捕获页面异常、
+  `/game_job_status` 轮询 ≥2 次、面板进入终态、出现「下载打包文件」按钮、
+  下载端点真的返回 200 且有字节。**跑法**：`node mock-server.js`（8081）+
+  `node serve_dist.mjs`（5200，dist 静态 + 反代）+ `node pack125.mjs`。
+  它是本仓库第一条**针对构建产物**的浏览器回归 —— `game112.mjs` 那条路永远看不到
+  「构建期改写」引出的问题。
+* **新增 `serve_dist.mjs`**：把 `frontend/dist/index.html` 起成可联调的服务，
+  其余请求反代到 mock。存在的理由就是上面那条盲区。
+* `game112.mjs` 177 / 177 通过（本轮改动没有影响既有行为）。
+
+### ⚠️ 已知 / 下一步
+
+* **文件直出没有 Range 支持。** 直接后果：`<video preload="metadata">` 只能显示首帧
+  （不可 seek），而且浏览器会把整个录屏拉完（43MB 那条实测如此）。
+  加 Range 支持能一次解决三件事：封面能 seek 到更代表的一帧、封面只需拉几百 KB、
+  视频预览拖动进度条可用。**本轮没做**，因为它要动 `gr_file_response` 这条
+  被打包下载复用的路 —— 刚把下载修好，不宜在同一版里再动它。
+* **打包看门狗（真正释放任务槽的那个）仍未实现**，设计留在 HANDOVER §7。
+  本轮已确认「打包本身不会卡」，所以它的优先级下降，但「任务槽被一个真卡住的任务占住」
+  这条风险还在。
+
 ## v0.5.2.124 (CN-FORK)
 
 > 起因还是真机两句话：「**打包下载还不好用。视频封面也没有。**」
