@@ -335,6 +335,12 @@
   `libSceAppInstUtil.so`，**真实 `make` 链接通过**。
 - **body 上限对着 mock 的 `express.raw({limit:…})`**：存档包 512MB、磁贴 PNG 64MB、
   JSON 1MB（`gr_post_limit()`）。前端能过、后端拒 → 用户只看到「请求失败」。
+- **19 条端点做过一轮「参数取自哪一侧」的对照审计**（方法/路径/状态码/字段名 +
+  tid/save/job 到底在 query 还是 body），方法是把 `gameApi.js` 的 29 处调用与
+  `mock-server.js` 的 handler 并排读。**踩到两个坑**：`/game_save_auto` 的 tid
+  原来从 query 取（前端塞在 body 里 → 必 400）；`auto.http` 只回 `token_set`，
+  而前端按 `has_${f.key}` 拼提示，读不到 `has_token` 就永远不显示「已保存过」。
+  **以后加端点先查这一侧** —— 这类错编译期看不出来，只有真机点一下才会暴露。
 
 ##### `gr_file_response()` —— 文件直出为什么不走 `MHD_create_response_from_fd64`
 

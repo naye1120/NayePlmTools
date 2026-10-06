@@ -333,8 +333,15 @@ static void gs_auto_json(cJSON *src, char *buf, size_t size) {
     cJSON *hs = src ? cJSON_GetObjectItem(src, "http") : NULL;
     cJSON *http = cJSON_AddObjectToObject(o, "http");
     if (http) {
+        int tok = gs_field_str(hs, "token", "")[0] != 0;
         gs_put_str(http, "url", gs_field_str(hs, "url", ""));
-        gs_put_bool(http, "token_set", gs_field_str(hs, "token", "")[0] != 0);
+        gs_put_bool(http, "token_set", tok); /* 契约里写的是这个名（gameApi.js 文件头） */
+        /* 但前端 SaveManagerModal 那句「已保存过；留空则保持不变」是按 `has_${f.key}`
+         * 通用拼出来的（secret 字段 = smb/ftp 的 password、http 的 token），只给
+         * token_set 它永远读不到 has_token，于是令牌栏的提示一直不出现 ——
+         * smb/ftp 的密码都有、就这一栏没有，用户会以为令牌没存上。两个名一起给：
+         * 契约不破，前端也不用改一行。 */
+        gs_put_bool(http, "has_token", tok);
     }
 
     char *s = cJSON_PrintUnformatted(o);

@@ -275,11 +275,19 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
     }
 
     if (strcmp(url, ROUTE_GAME_SAVE_AUTO) == 0) {
-        char msg[192];
+        char msg[192], btid[40];
         msg[0] = 0;
-        if (!tid || !*tid)
+        /* tid 走的是 **body** —— gameApi 的 setSaveAuto 是
+         * `body: { tid, ...cfg }`，mock 也从 `req.body.tid` 取。这条不能像
+         * /game_saves 那些 GET 一样去 query 拿：query 里根本没有，取到必然是
+         * NULL，结果就是用户每次点「保存配置」都撞 400「缺少 tid」，而配置
+         * 一个字都没写进去 —— 属于「接口说失败、用户不知道为什么」那种。 */
+        if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) || !btid[0]) {
+            if (tid && *tid) snprintf(btid, sizeof(btid), "%s", tid); /* 兜底：query 也认 */
+        }
+        if (!btid[0])
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
-        if (game_saves_auto_set(tid, body, len, msg, sizeof(msg)) != 0)
+        if (game_saves_auto_set(btid, body, len, msg, sizeof(msg)) != 0)
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
                                msg[0] ? msg : "参数不合法");
         *code = MHD_HTTP_OK;

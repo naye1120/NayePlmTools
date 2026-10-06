@@ -33,7 +33,8 @@
   | 运行期 | `POST /game_mount {tid,mode}`、`POST /game_unmount {tid}`、`POST /game_uninstall {tid}` |
   | 任务 | `GET /game_job_status?job=`、`GET /game_job_cancel?job=`（`.115` 已接；`.116` 起与删除任务共用同一槽，取文件路径时按 `kind` 过滤） |
 
-* **`game_mgr` 补齐详情与扫描边界**：`game_mgr_detail_json()` 按契约出 24 个字段；
+* **`game_mgr` 补齐详情与扫描边界**：`game_mgr_detail_json()` 按契约出**逐字对应的 23 个字段**
+  （`tid…title_bg_custom`，顺序也一致）；
   `game_mgr_is_scan_path()` 判「这个路径归不归游戏管理扫」（前缀后必须跟 `/`，
   否则 `/a/bc` 会被 `/a/b` 认走）；`game_mgr_invalidate()` 让改名/换图立刻穿过
   `/game_list` 那份 60s 快照 —— 不加这一下，刚设的图标会被列表缓存吞掉一分钟。
@@ -47,6 +48,19 @@
   前端能过、后端拒的后果是用户只看到一句「请求失败」，连为什么都拿不到。
 
 ### 🐛 Bugfix
+
+* **`POST /game_save_auto` 取错了 `tid` 的位置 —— 每次点「保存配置」都 400。**
+  后端从 **query** 取，而前端 `saveAutoConfig` 是 `body:{tid, ...cfg}`（`mock-server.js`
+  也是从 `req.body.tid` 拿），query 里根本没有 → 必然取到 NULL → 回 400「缺少 tid」，
+  配置一个字都没写进去。改成从 body 取、query 兜底。
+  这是 19 条端点 + 前端 29 处调用逐条对照（方法/路径/状态码/字段名/参数取自哪一侧）
+  挑出来的，**其余 8 条 POST 都核过没有同类问题**（delete/mount/unmount/uninstall
+  走 body，存档上传与磁贴两层走 query，rename 走 body）。
+
+* **`auto.http` 补一个 `has_token`**：前端那句「已保存过；留空则保持不变」是按
+  `has_${f.key}` 通用拼的（secret 字段 = smb/ftp 的 `password`、http 的 `token`），
+  只回契约里的 `token_set` 它永远读不到 `has_token` —— 令牌栏的提示一直不出现，
+  而 smb/ftp 两栏都有，用户会以为令牌没存上。两个名一起给，契约不破、前端一行不改。
 
 * **多媒体「预览图片只显示最顶部的一条」+「打包下载失败」—— 两个症状一个根：
   `MHD_create_response_from_fd64`。**
