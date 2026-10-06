@@ -55,6 +55,18 @@
 > 改成与后端 `add_disposition` 同口径的 ASCII 兜底 + RFC 5987 `filename*` 双写。
 >
 > 出包：`NayePlmTools_0.5.2.125-me.elf` / `-ga.elf`（`-Os -Wall` 零警告）。
+>
+> **⑤ 已实机（PS5）验收 —— 12/12 PASS。** 这是本项目第一次「推包 + 自测 + 出结论」
+> 全流程自己走完：`GET /shutdown` 停旧 → Python socket 灌 `192.168.1.214:9021`（elfldr；
+> 环境里没有 socat/docker，故不走 `deploy.sh`）→ `/version` 回 `0.5.2.125`。
+> 验收脚本 `device125.mjs` **跑在真机内嵌的那份构建产物上**（既含 Babel 降级产物、
+> 又接真后端，比 `pack125.mjs` 更接近用户实际看到的东西）：
+> - **打包**：轮询 **3 次**（`.124` 是 1 次就停）、面板进终态「打包完成」、出现
+>   「下载打包文件（3 项）」；全程 `pageerror` **0**，尤其没有 `tick is not defined`；
+>   下载端点 HTTP 200 / `Content-Length=61518688` / 实收 61518688 / `PK` 魔数。
+> - **封面**：网格 `video=1 / img=2`，`readyState=4`、`3840×2160`、`duration=7.1`，
+>   canvas 采样 `avg=57 / max=242` → **是有画面的真帧**，不是占位图也不是黑帧。
+> - 截图：`D:/pldmanager/.shots/device125/{panel,pack}.png`。
 
 ### 🐛 Bugfix
 
@@ -84,6 +96,10 @@
   「构建期改写」引出的问题。
 * **新增 `serve_dist.mjs`**：把 `frontend/dist/index.html` 起成可联调的服务，
   其余请求反代到 mock。存在的理由就是上面那条盲区。
+* **新增 `device125.mjs`（真机验收）**：打真机 `192.168.1.214:8911`，12 条断言 ——
+  真机版本号 / 视频格子渲染 `<video>` 且真的解出帧（`videoWidth>0` + canvas 采样非全黑）/
+  打包轮询 ≥2 次 / 无未捕获异常 / 无 `tick is not defined` / 出现下载链接 /
+  面板进终态 / 下载端点 200 + 字节数对齐 + `PK` 魔数。**12/12 PASS。**
 * `game112.mjs` 177 / 177 通过（本轮改动没有影响既有行为）。
 
 ### ⚠️ 已知 / 下一步
