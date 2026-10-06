@@ -97,6 +97,26 @@ ICON_JXR = os.path.join(ROOT, "av_contents", "thumbnails", "video", GEN, JXR_TID
                         "20261007_120000_003.mp4.jxr")
 put(ICON_JXR, b"\x49\x49\xbc\x01" + os.urandom(512))   # 假 JXR 头 + 随机体
 
+# ── v0.5.2.123 专供：录屏的封面帧**两份都在**（.jxr + .jpeg）──────────────────
+# 用户口径：「视频的预览图不对，应该是视频里面某一帧画面」。
+# 真机缩略图的命名约定是 `<原名>.<原ext>.<jxr|jpeg>`（见 include/game_media.h 头注释）：
+# 同一个录屏旁边**可能同时躺着两份封面帧** —— 一份 HDR 的 .jxr、一份普通 .jpeg。
+# 而库里 icon_path 只指其中一份，指到 .jxr 时 stb 解不动，旧代码直接回占位图
+# （深底 + 播放三角），用户看到的就是「预览图不对」。
+# 正确的行为：icon 那份解不动时，去**同一个缩略图目录**里翻一份 stb 认得的位图。
+# 这条夹具把「.jxr 在但解不动」与「同目录还有一份 .jpeg」同时摆出来，
+# 钉死「必须挑到那份真封面帧，而不是占位图」这条性质。
+# .jpeg 本体由 test/media_scan_test.c 的 write_cover_jpeg() 现写（Python 造不出 JPEG）。
+# 单独一个 tid，免得动到主集合的计数。
+COVER_TID = "PPSA99010"
+v4 = os.path.join(VIDEO, GEN, COVER_TID, SHARD, "20261008_090000_004.mp4")
+put(v4, b"\x00\x00\x00\x18ftypmp42" + os.urandom(4096))
+ICON_HDR = os.path.join(ROOT, "av_contents", "thumbnails", "video", GEN, COVER_TID, SHARD,
+                        "20261008_090000_004.mp4.jxr")
+put(ICON_HDR, b"\x49\x49\xbc\x01" + os.urandom(512))   # HDR 那份：存在、stat 得过、解不动
+# 同目录的真封面帧（.jpeg）由 C 侧 write_cover_jpeg() 写进同一个目录
+# （put 已经把目录建出来了）。
+
 # 副文件：同目录 <原名>.meta（JSON）与 <原名>.dat（1024B），删除时要一并干掉
 put(p1 + ".meta", b'{"ageLevel":1,"appVer":"01.00","segmentInfo":"game"}')
 put(p1 + ".dat", os.urandom(1024))
@@ -153,6 +173,11 @@ ROWS = [
     (rel("video", GEN, JXR_TID, SHARD, "20261007_120000_003.mp4"),
      "/av_contents/thumbnails/video/%s/%s/%s/20261007_120000_003.mp4.jxr" % (GEN, JXR_TID, SHARD),
      1280, 720, 0, 8000, JXR_TID, 131072, "mp4"),
+    # 录屏 + **两份**封面帧（.jxr 解不动 + .jpeg 能解）：icon_path 指向 .jxr，
+    # 缩略图必须落到同目录那份 .jpeg 的**真画面**上，不是占位图。见 COVER_TID 那段。
+    (rel("video", GEN, COVER_TID, SHARD, "20261008_090000_004.mp4"),
+     "/av_contents/thumbnails/video/%s/%s/%s/20261008_090000_004.mp4.jxr" % (GEN, COVER_TID, SHARD),
+     1280, 720, 0, 6000, COVER_TID, 131072, "mp4"),
 ]
 
 db = os.path.join(ROOT, "av_content.db")

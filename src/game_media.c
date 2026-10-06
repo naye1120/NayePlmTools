@@ -921,7 +921,60 @@ static int md_is_stb_image(const char *m) {
            strcmp(m, "image/bmp") == 0 || strcmp(m, "image/gif") == 0;
 }
 
-/* 选解码源：优先系统缩略图；没有（或那份是 stb 解不了的 .jxr）才退回原图本身，
+/* ── 视频封面帧：去缩略图目录里翻一份**能解码**的（v0.5.2.123）───────────────
+ * 真机的缩略图命名约定是 `<原名>.<原ext>.<jxr|jpeg>`（见 include/game_media.h 的头注释），
+ * 也就是同一个录屏旁边**可能同时躺着两份封面帧**：一份 HDR 的 .jxr、一份 .jpeg。
+ * 库里 icon_path 只指其中一份，指到 .jxr 时 stb 解不动 —— 旧代码这时直接回占位图
+ * （深底 + 播放三角），用户看到的就是「视频的预览图不对，应该是视频里面某一帧画面」。
+ *
+ * 所以：icon_path 那份解不动（或压根没给）时，去**同一个缩略图目录**里按
+ * 「<原文件名>.<后缀>」找一份 stb 认得的位图。找不到才回占位图。
+ *
+ * 目录由 id 推出来，**不依赖库里那几个 title_id 列** —— 列序在固件之间会变
+ * （见 md_sql_col_index 的注释），而 id 本身就是 content_path，最可靠。
+ * 前缀匹配也顺便保证不会串到别的媒体：目录里只会以本媒体的原名开头。 */
+static int md_find_cover(const char *id, char *abs, size_t absz, struct stat *st) {
+    const char *rest = (strncmp(id, "/av_contents/", 13) == 0) ? id + 13 : NULL;
+    if (!rest || !rest[0]) return -1;
+    const char *slash = strrchr(rest, '/');
+    if (!slash || slash == rest) return -1;
+
+    /* <GAME_MEDIA_ROOT>/thumbnails/<type>/<链路…>/  —— 与 md_abs 的第 3/4 条根同构 */
+    char dir[760];
+    int dn = snprintf(dir, sizeof(dir), GAME_MEDIA_ROOT "/thumbnails/%.*s",
+                      (int)(slash - rest), rest);
+    if (dn < 0 || (size_t)dn >= sizeof(dir)) return -1;
+
+    const char *base = slash + 1;
+    size_t blen = strlen(base);
+    if (blen == 0 || blen > 200) return -1; /* 超过 NAME_MAX 的前缀不可能命中 */
+
+    DIR *dp = opendir(dir);
+    if (!dp) return -1; /* 这台机器上就没有缩略图目录 → 交给调用方回占位图 */
+    int rc = -1;
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL) {
+        /* 只认「<原文件名>.xxx」。blen 处必须是 '.'：光有前缀不算，
+         * 否则 `..._001.mp4` 会被 `..._001.mp4extra` 之类的名字误命中。 */
+        if (strncmp(de->d_name, base, blen) != 0 || de->d_name[blen] != '.') continue;
+        char cand[1400];
+        int cn = snprintf(cand, sizeof(cand), "%s/%s", dir, de->d_name);
+        if (cn < 0 || (size_t)cn >= sizeof(cand)) continue;
+        if (!md_is_stb_image(md_mime_of(cand))) continue; /* .jxr 在这里被跳过 */
+        struct stat sb;
+        if (stat(cand, &sb) != 0 || !S_ISREG(sb.st_mode) ||
+            sb.st_size <= 0 || (size_t)sb.st_size > MD_SRC_MAX) continue;
+        snprintf(abs, absz, "%s", cand);
+        *st = sb;
+        rc = 0;
+        break;
+    }
+    closedir(dp);
+    return rc;
+}
+
+/* 选解码源：优先库里那份系统缩略图；解不动（典型：录屏的封面帧是 .jxr）就去
+ * 同目录翻一份能解的（见 md_find_cover）；再没有才退回原图本身，
  * 而原图只有位图才解得动。
  *
  * 返回值三种：
@@ -945,6 +998,10 @@ static int md_thumb_src(const char *id, char *abs, size_t absz, struct stat *st)
             md_is_stb_image(md_mime_of(abs)))
             return 0;
     }
+    /* 排在「拿原图当缩略图」**之前**：原图是 4K 整图，解它又慢又占内存，
+     * 而封面帧本来就是为缩略图准备的，先找它才是对的顺序。 */
+    if (md_find_cover(id, abs, absz, st) == 0) return 0;
+
     if (md_abs(id, abs, absz) != 0) return -1;
     if (stat(abs, st) != 0 || st->st_size <= 0 || (size_t)st->st_size > MD_SRC_MAX) {
         /* 盘上原文件不在了：库里既然列得出来，视频就给占位图，别的照旧 404 */
@@ -1255,6 +1312,74 @@ typedef struct {
     int nids;
 } md_pack_req_t;
 
+/* ── 看门狗：任务不动时把「卡在哪」写进日志（v0.5.2.123）────────────────────
+ * 用户第二次报「一直是正在计算中」：面板停在「正在计算体积…」、体积 0 B / 58.7 MB、
+ * 用时 0 秒，一个字节都不动。.122 已经修掉三处「任务自己卡死」的成因
+ * （stdout 阻塞 / zip 写 0 字节自旋 / 轮询被回调异常带走），真机上仍然复现 ——
+ * 说明还有第四处，而**从界面这一侧已经看不出任何信息**：阶段定住的时候，
+ * 「正在啃一个 500 MB 的录屏」和「线程早没了」在界面上长得一模一样。
+ *
+ * 所以这一版不再靠猜。起一条极轻的守护线程：任务活着时每 5 秒看一眼
+ * 「距上次有进展多少秒」，超过 15 秒就往日志里写一行**带全部计数**的 STALL。
+ * 日志的两个去处（内存环形缓冲 → 界面「日志」页；以及 /data/nayeplmtools/pldmgr.log）
+ * **都不经过前端轮询**，所以哪怕界面完全定住，这一行照样看得到。
+ * 下次复现只要把那一行发过来：phase 是 preparing / measuring / packing
+ * 就分别指向三个不同的下一步，不必再从「卡在正在计算中」这句话反推。
+ *
+ * 常驻（5 秒一轮，每轮只取一把锁读几个字段），代价可忽略；只在第一次真的
+ * 起了打包任务时才创建 —— 只看看游戏列表的人不该被多起一条线程。 */
+static int g_wd_started;
+static pthread_mutex_t g_wd_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void *md_watchdog(void *arg) {
+    (void)arg;
+    long long last_id = 0;
+    long last_idle = 0;
+    for (;;) {
+        struct timespec nap;
+        nap.tv_sec = 5;
+        nap.tv_nsec = 0;
+        nanosleep(&nap, NULL);
+
+        long long id = 0;
+        char ph[40] = "";
+        long long bd = 0, bt = 0, fd = 0, ft = 0;
+        long idle = 0;
+        if (gj_snapshot(&id, ph, sizeof(ph), &bd, &bt, &fd, &ft, &idle) != 1) continue;
+        if (idle < 15) continue;
+        /* 同一个任务的同一段「无进展」别刷屏：首次报，之后每再涨 30 秒报一次。 */
+        if (id == last_id && idle < last_idle + 30) continue;
+        last_id = id;
+        last_idle = idle;
+        pldmgr_log("[PLDMGR] media: STALL job=%lld phase=%s idle=%lds "
+                   "bytes=%lld/%lld files=%lld/%lld\n",
+                   id, ph, idle, bd, bt, fd, ft);
+    }
+    return NULL;
+}
+
+static void md_watchdog_start(void) {
+    pthread_mutex_lock(&g_wd_mu);
+    if (!g_wd_started) {
+        g_wd_started = 1;
+        pthread_t th;
+        if (pthread_create(&th, NULL, md_watchdog, NULL) == 0) {
+            pthread_detach(th);
+        } else {
+            g_wd_started = 0; /* 起不来就下次再试：一条诊断线程不该挡住正事 */
+        }
+    }
+    pthread_mutex_unlock(&g_wd_mu);
+}
+
+/* 单调毫秒：给各阶段打时间戳。CLOCK_MONOTONIC 不受系统改时间影响 ——
+ * 日志里要的是「这一段花了多久」，不是墙上时间。 */
+static long long md_ms_now(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (long long)ts.tv_sec * 1000 + (long long)(ts.tv_nsec / 1000000);
+}
+
 static void md_pack_run(md_pack_req_t *req) {
     char zip[700];
     gj_lock();
@@ -1262,11 +1387,11 @@ static void md_pack_run(md_pack_req_t *req) {
     gj_unlock();
 
     md_set_phase("preparing");
-    /* 三段相变各留一条日志（v0.5.2.122）。用户报过「打包一直卡在 0%」，而
-     * /game_job_status 在 is_noisy_route 里是降噪的 —— 真机上出问题时，日志里
-     * 一行都看不到打包走到哪了，只能靠猜。有了这三行：没有 "measured" 就是卡在
-     * 扫库，没有 "writing" 就是卡在清旧包，有 "writing" 而没 "done" 就是 zip_write。
-     * 一条日志换一次「不用再猜」，值。 */
+    /* 三段相变各留一条日志（v0.5.2.122），v0.5.2.123 起带上**单调毫秒**：
+     * 没有 "measured" 就是卡在扫库，没有 "writing" 就是卡在清旧包，
+     * 有 "writing" 而没 "done" 就是卡在 zip_write —— 一眼定位，不用再猜。
+     * 带上毫秒还能顺带看出「慢」与「卡」：扫库 40 秒是慢，扫库 400 秒是卡。 */
+    long long t0 = md_ms_now();
     pldmgr_log("[PLDMGR] media: pack start (tid=%s, ids=%d)\n", req->tid, req->nids);
 
     zip_ent_t *e = NULL;
@@ -1281,10 +1406,11 @@ static void md_pack_run(md_pack_req_t *req) {
         return;
     }
 
+    long long t1 = md_ms_now();
     md_set_phase("measuring");
     gj_set_totals(total, n);
-    pldmgr_log("[PLDMGR] media: pack measured %lld bytes / %d files (skipped %d)\n",
-               total, n, skipped);
+    pldmgr_log("[PLDMGR] media: pack measured %lld bytes / %d files (skipped %d, +%lldms)\n",
+               total, n, skipped, t1 - t0);
 
     /* 顺手清掉上一包：包名现在是「游戏名称-时间戳.zip」，不再是固定前缀，
      * 所以按 .zip 后缀认（这个目录里只有我们写的包）。不同文件名本来就不冲突；
@@ -1304,8 +1430,10 @@ static void md_pack_run(md_pack_req_t *req) {
         }
     }
 
+    long long t2 = md_ms_now();
     md_set_phase("packing");
-    pldmgr_log("[PLDMGR] media: pack writing -> %s (%d entries)\n", zip, n);
+    pldmgr_log("[PLDMGR] media: pack writing -> %s (%d entries, +%lldms)\n",
+               zip, n, t2 - t1);
     const char *err = "打包失败";
     int w = zip_write(zip, e, n, &md_zip_hooks, &err);
     free(e);
@@ -1326,8 +1454,8 @@ static void md_pack_run(md_pack_req_t *req) {
         snprintf(m, sizeof(m), "完成，但有 %d 个文件在打包前不见了", skipped);
         gj_set_error(m);
     }
-    pldmgr_log("[PLDMGR] media: pack job done -> %s (%lld bytes, %d files)\n",
-               zip, total, n);
+    pldmgr_log("[PLDMGR] media: pack job done -> %s (%lld bytes, %d files, +%lldms)\n",
+               zip, total, n, md_ms_now() - t2);
 }
 
 static void *md_pack_thread(void *arg) {
@@ -1383,6 +1511,7 @@ static int md_pack_start(const char *tid, const char *const *ids, int nids,
     }
 
     gj_crc_init();
+    md_watchdog_start(); /* v0.5.2.123 卡死取证：见 md_watchdog 的注释 */
     if (ensure_dir_recursive(GAME_MEDIA_PACK_DIR) != 0) {
         for (int i = 0; i < req->nids; i++) free(req->ids[i]);
         free(req->ids);
@@ -1518,6 +1647,25 @@ int game_media_pack_start_json(const char *body, size_t len,
  * 但它的 aux 装的是待删源路径而不是 zip —— 不挡这道，用一个删除任务的 id 就能把
  * aux 当成文件路径去 open。 */
 int game_media_pack_status(long long job_id, char *buf, size_t size) {
+    /* [CN-FORK] v0.5.2.123 轮询心跳。
+     * /game_job_status 在 is_noisy_route() 里是降噪的（1s 一次，不能每发都记），
+     * 于是真机上「界面定住」时日志里**看不出前端到底还在不在轮询** ——
+     * 而这一条恰恰是最关键的分岔：日志里还在跳 → 后端没事，是渲染/前端那一侧；
+     * 日志里 #1 之后再没有 → 连接或后端被堵住了。所以按「首个 + 每 20 个」记一条，
+     * 约 20 秒一行，既补上这个盲区又不淹日志。 */
+    static pthread_mutex_t ph_mu = PTHREAD_MUTEX_INITIALIZER;
+    static long long ph_job = 0;
+    static long ph_n = 0;
+    long shown = 0;
+    int logit = 0;
+    pthread_mutex_lock(&ph_mu);
+    if (job_id != ph_job) { ph_job = job_id; ph_n = 0; }
+    ph_n++;
+    shown = ph_n;
+    logit = (ph_n == 1 || ph_n % 20 == 0);
+    pthread_mutex_unlock(&ph_mu);
+    if (logit) pldmgr_log("[PLDMGR] media: status poll #%ld (job=%lld)\n", shown, job_id);
+
     return gj_status_json(job_id, buf, size);
 }
 

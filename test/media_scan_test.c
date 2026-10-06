@@ -7,7 +7,8 @@
  *   ① 列表：条数 / kind / 分隔符 / JSON 能被 Python 解析 / tid 过滤 / 非法 tid
  *   ② 定位：命中、未命中、路径穿越一律 -1
  *   ③ 原图：fd + 大小 + mime，路径穿越 -1，文件缺失 -2
- *   ④ 缩略图：JPEG 图标解码 + 缩到 200x112；PNG 兜底；HDR .jxr 与 mp4 一律 -2
+ *   ④ 缩略图：JPEG 图标解码 + 缩到 200x112；PNG 兜底；HDR .jxr 回 -2（→404）；
+ *      录屏无封面帧 → 占位图；录屏封面帧是 .jxr 但同目录有 .jpeg → 挑真画面
  *   ⑤ 打包：子集 2 条 / 全量 5 条，产出交 Python zipfile 验 CRC 与内容
  *   ⑥ 删除：tid 不符 -1；成功后原图+副文件消失、库文件本身分毫未动
  *
@@ -67,8 +68,14 @@ int game_title_get_name(const char *tid, char *out, size_t osz) {
 #define C_OTH  "/av_contents/photo/NPXS40087/PPSA00001/9a1/20261004_090000_00000001.png"
 /* 录屏 + .jxr 封面帧（真机那条路，见 make_media_fixture.py 的 JXR_TID 段） */
 #define C_VIDJ "/av_contents/video/NPXS40087/PPSA99009/18c/20261007_120000_003.mp4"
+/* 录屏 + 两份封面帧（.jxr 解不动 + 同目录 .jpeg 能解）—— 见 COVER_TID 段。
+ * 用户口径：「视频的预览图不对，应该是视频里面某一帧画面」。 */
+#define C_VIDC "/av_contents/video/NPXS40087/PPSA99010/18c/20261008_090000_004.mp4"
 
 #define ICON_REL "/av_contents/thumbnails/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png.jpeg"
+/* 真封面帧：与 C_VIDC 的 .jxr 同目录、同前缀，只差后缀 —— md_find_cover 要挑的就是它。
+ * 本体由 write_cover_jpeg() 现写（Python 标准库造不出 JPEG）。 */
+#define COVER_REL "/av_contents/thumbnails/video/NPXS40087/PPSA99010/18c/20261008_090000_004.mp4.jpeg"
 
 static int g_checks, g_fails;
 
@@ -182,6 +189,64 @@ static int write_icon(void) {
     return ok ? 0 : -1;
 }
 
+/* ── 造一份**视频真封面帧**（v0.5.2.123）─────────────────────────────────────
+ * 画一张横向渐变：左边红、右边蓝、绿分量压住。这样不只是「有张能解的图」，
+ * 还能证明**画面内容真的来自这份文件** —— 左中偏红、右中偏蓝，
+ * 而占位图（深底 + 白色播放三角）两条都不满足，镜像/串图也立刻露馅。 */
+static int write_cover_jpeg(void) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s%s", ROOT, COVER_REL);
+    char dir[512];
+    snprintf(dir, sizeof(dir), "%s", path);
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = 0;
+    if (ensure_dir_recursive(dir) != 0) return -1;
+
+    int w = 640, h = 360;
+    unsigned char *px = (unsigned char *)malloc((size_t)w * (size_t)h * 3);
+    if (!px) return -1;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            unsigned char *q = px + ((size_t)y * (size_t)w + (size_t)x) * 3;
+            int t = x * 255 / (w - 1); /* 0 → 255，左到右 */
+            q[0] = (unsigned char)(255 - t); /* R 递减 */
+            q[1] = 24;                       /* G 压住，跟占位图的白色区分开 */
+            q[2] = (unsigned char)t;         /* B 递增 */
+        }
+    buf_t b;
+    memset(&b, 0, sizeof(b));
+    stbi_write_jpg_to_func(grow, &b, w, h, 3, px, 90);
+    free(px);
+    if (!b.p || b.len < 100) { free(b.p); return -1; }
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { free(b.p); return -1; }
+    int ok = 1;
+    for (size_t off = 0; off < b.len;) {
+        ssize_t n = write(fd, b.p + off, b.len - off);
+        if (n <= 0) { ok = 0; break; }
+        off += (size_t)n;
+    }
+    close(fd);
+    free(b.p);
+    return ok ? 0 : -1;
+}
+
+/* 解一张内存 JPEG，取 (fx%, fy%) 处的 RGB（0..100 的百分比坐标）。
+ * 返回 1 成功 / 0 解不动。用来断言「画面内容对不对」，不只是「解没解开」。 */
+static int sample_rgb(const unsigned char *jpg, size_t len, int fx, int fy,
+                      int *r, int *g, int *b) {
+    int iw = 0, ih = 0, ic = 0;
+    unsigned char *px = stbi_load_from_memory(jpg, (int)len, &iw, &ih, &ic, 3);
+    if (!px || iw <= 0 || ih <= 0) { stbi_image_free(px); return 0; }
+    int x = fx * (iw - 1) / 100;
+    int y = fy * (ih - 1) / 100;
+    const unsigned char *q = px + ((size_t)y * (size_t)iw + (size_t)x) * 3;
+    *r = q[0]; *g = q[1]; *b = q[2];
+    stbi_image_free(px);
+    return 1;
+}
+
 /* ── 取出 zip 产出到固定路径，交给 test/media_verify.py 验 ────────────────── */
 static int dump_fd(const char *dst, int fd, off_t sz) {
     int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -218,6 +283,7 @@ static int wait_job(long long job, char *out, size_t outsz) {
 int main(void) {
     /* ── 0. 前置条件 ─────────────────────────────────────────────────── */
     CHECK(write_icon() == 0, "icon 生成失败（stb_image_write）");
+    CHECK(write_cover_jpeg() == 0, "视频封面帧生成失败（stb_image_write）");
     CHECK(exists(ROOT "/av_content.db"), "夹具 DB 不在，先跑 test/make_media_fixture.py");
 
     struct stat dbst0;
@@ -465,6 +531,41 @@ int main(void) {
               "带 .jxr 封面帧的录屏也应是占位图，不是 404");
         CHECK(td && tlen > 100 && memcmp(td, "\xff\xd8\xff", 3) == 0,
               "带 .jxr 封面帧时产出的也应是 JPEG 占位图");
+        free(td); td = NULL;
+    }
+
+    /* ── 视频封面帧：.jxr 解不动时去同目录挑那份 .jpeg（v0.5.2.123）──────────
+     * 用户口径：「视频的预览图不对，**应该是视频里面某一帧画面**」。
+     * 真机缩略图命名是 `<原名>.<原ext>.<jxr|jpeg>` —— 同一个录屏旁边可能同时躺着
+     * 两份封面帧，库里的 icon_path 只指其中一份。指到 .jxr 时旧代码直接回占位图，
+     * 于是用户看到的是深底 + 播放三角，而不是画面。
+     *
+     * 这条夹具：icon_path 指 .jxr（存在、stat 得过、解不动），**同目录另有一份
+     * 可解的 .jpeg**。断言它落到那份真封面上，而不是占位图 ——
+     * 而且用**画面内容**判：真封面是左红右蓝的渐变，占位图是深底 + 白色三角，
+     * 两条判据互斥，判「解开了」是不够的（给张纯黑图也能解开）。 */
+    {
+        td = NULL; tlen = 0;
+        CHECK(game_media_thumb(C_VIDC, 320, &td, &tlen, &mime) == 0,
+              "同目录有可解封面帧的录屏应出真画面，不是占位图");
+        CHECK(td && tlen > 100 && memcmp(td, "\xff\xd8\xff", 3) == 0, "封面帧产出应是 JPEG");
+        if (td && tlen > 4) {
+            int iw = 0, ih = 0, ic = 0;
+            unsigned char *px = stbi_load_from_memory(td, (int)tlen, &iw, &ih, &ic, 0);
+            CHECK(px != NULL, "封面帧 JPEG 解不回来");
+            CHECK(iw == 320 && ih == 180, "封面帧尺寸 = %dx%d，应 320x180（640x360 等比缩）", iw, ih);
+            stbi_image_free(px);
+        }
+        int r1 = 0, g1 = 0, b1 = 0, r2 = 0, g2 = 0, b2 = 0;
+        CHECK(sample_rgb(td, tlen, 10, 50, &r1, &g1, &b1), "封面帧左侧取样失败");
+        CHECK(sample_rgb(td, tlen, 90, 50, &r2, &g2, &b2), "封面帧右侧取样失败");
+        /* 左红右蓝：只有真画面才可能这样。占位图中央是白、四周是深灰（28,28,32），
+         * 两侧都会是 g≈28 或 255，这里 g 必须低、且两侧红蓝分明。 */
+        CHECK(r1 > 180 && b1 < 90 && g1 < 90,
+              "封面帧左侧应偏红（真画面），实际 RGB=(%d,%d,%d)", r1, g1, b1);
+        CHECK(b2 > 180 && r2 < 90 && g2 < 90,
+              "封面帧右侧应偏蓝（真画面），实际 RGB=(%d,%d,%d)", r2, g2, b2);
+        printf("  封面帧取样 左=(%d,%d,%d) 右=(%d,%d,%d)\n", r1, g1, b1, r2, g2, b2);
         free(td); td = NULL;
     }
     /* 越界 id → -1，绝不能去 stat */

@@ -67,6 +67,11 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState('')          // '' | 'runtime' | 'uninstall'
   const [job, setJob] = useState(null)          // 删除任务进度
+  /* [CN-FORK] v0.5.2.123 与 MediaManagerModal 同一套「本机时钟」兜底：
+   * 后端的 idle 是主机那边的尺子，主机时钟一跳就会永远算成 0；本机这把不会。
+   * 两处面板必须同构 —— .122 的教训就是同一个 bug 得修两遍。 */
+  const [tickAt, setTickAt] = useState(0)
+  const [nowMs, setNowMs] = useState(0)
   const stopJobRef = useRef(null)
   const aliveRef = useRef(true)
 
@@ -96,6 +101,8 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
     setDetail(null)
     setErr('')
     setJob(null)
+    setTickAt(0)
+    setNowMs(0)
   }
 
   const load = useCallback(async () => {
@@ -124,6 +131,15 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
   useEffect(() => {
     if (!show) stopWatch()
   }, [show, stopWatch])
+
+  /* 任务在跑时挂一根本机秒针（见 tickAt/nowMs 的注释）。依赖抽成 jobRunning，
+   * 否则 exhaustive-deps 会报「依赖数组里有复杂表达式」。 */
+  const jobRunning = !!(job && !job.done)
+  useEffect(() => {
+    if (!jobRunning) return undefined
+    const iv = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [jobRunning])
 
   if (!show || !game) return null
 
@@ -158,12 +174,16 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
           }
           if (r && r.job_id) {
             setJob({ job_id: r.job_id, phase: 'preparing', percent: 0, active: true, done: false })
+            setTickAt(Date.now())
+            setNowMs(Date.now())
             stopWatch()
             stopJobRef.current = watchJob(r.job_id, (st) => {
               if (!aliveRef.current) return
               /* 失联时 onTick 拿到的是残缺对象（见 watchJob 的注释）：整体替换会把
                * 已经量出来的体积/文件数抹掉，所以 transient 时做合并。 */
               setJob((prev) => (st.transient && prev ? { ...prev, ...st } : st))
+              /* 只有**真的拿到主机数据**才算心跳：transient 是失联重试，不算。 */
+              if (!st.transient) setTickAt(Date.now())
               if (st.done) {
                 stopWatch()
                 if (st.ok) {
@@ -239,7 +259,9 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
     onClose?.()
   }
 
-  const deleting = !!(job && !job.done)
+  const deleting = jobRunning
+  /* 距上次真的收到主机数据多少秒（本机时钟）。见 tickAt/nowMs 的注释。 */
+  const staleSec = tickAt && nowMs > tickAt ? Math.floor((nowMs - tickAt) / 1000) : 0
 
   return (
     <Modal
@@ -395,6 +417,13 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
             {!job.done && !job.transient && job.idle >= 20 && (
               <p className="mt-2 text-amber-400 panel-note break-words">
                 {t('game.job_stalled', '已 {{n}} 秒没有进展；若长时间不动，可取消任务后重试', { n: job.idle })}
+              </p>
+            )}
+            {/* 本机时钟兜底：后端 idle 失效（主机时钟跳 / 时间戳落到未来）时，
+             * 至少这一条还能说话。两把尺子都不走才叫真的没在动。 */}
+            {!job.done && !job.transient && job.idle < 20 && staleSec >= 15 && (
+              <p className="mt-2 text-amber-400 panel-note break-words">
+                {t('game.job_stale', '已 {{n}} 秒没有收到主机的新数据；若长时间不动，可取消任务后重试', { n: staleSec })}
               </p>
             )}
             {job.error && !job.transient && <p className="mt-2 text-red-400 panel-note break-words">{job.error}</p>}

@@ -76,6 +76,17 @@ int gj_aux(long long id, int kind, char *out, size_t osz);
 /* 当前任务种类；没有任务返回 -1。 */
 int gj_kind_now(void);
 
+/* [CN-FORK] v0.5.2.123 诊断快照：一次拿全槽里的关键字段，**自带锁**。
+ * 给「看门狗」线程用（见 game_media.c 的 md_watchdog）：它要在任务不动时
+ * 往日志里写一行「卡在哪、多少秒没进展」，而解析 gj_status_json 的 JSON 是
+ * 给机器看的、又贵又脆 —— 这里直接给字段。
+ * 返回 1 = 有任务（active 或已结束但槽还在），0 = 槽是空的。
+ * 任何出参都可以传 NULL。idle_secs = 距上次有进展多少秒（非活动任务恒 0）。 */
+int gj_snapshot(long long *id, char *phase, size_t phsz,
+                long long *bytes_done, long long *bytes_total,
+                long long *files_done, long long *files_total,
+                long *idle_secs);
+
 /* ── CRC32（zip 与存档都要用，抽到一处免得两份表不同步） ─────────────────── */
 void     gj_crc_init(void);
 uint32_t gj_crc32(uint32_t c, const unsigned char *b, size_t n);

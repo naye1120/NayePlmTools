@@ -65,6 +65,16 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
   const [job, setJob] = useState(null)              // 打包任务
   const [packed, setPacked] = useState(null)        // {job_id, count} 打包完成后可下载
   const [busyId, setBusyId] = useState('')
+  /* [CN-FORK] v0.5.2.123 「多久没收到主机的新数据」——**用本机时钟算**。
+   *
+   * 后端已经在 status 里给了 idle（距上次有进展多少秒），但那把尺子是主机那边的：
+   * 主机的时钟一跳、或者任务槽里的 started/last_progress 落到了未来，difftime 就是
+   * 负数、被钳成 0 —— 界面于是永远显示「用时 0 秒、没有任何异常提示」，正是用户报的
+   * 「一直是正在计算中」。本机时钟不会跟着主机跑偏，所以这里再挂一把：
+   * tickAt = 最近一次**真的收到**主机数据的时刻（transient 的那些不算），
+   * 只要它不再往前走，面板就自己把话说出来。两把尺子谁先发现谁报。 */
+  const [tickAt, setTickAt] = useState(0)
+  const [nowMs, setNowMs] = useState(0)
   const stopJobRef = useRef(null)
   const aliveRef = useRef(true)
 
@@ -101,6 +111,8 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
     setPreview(null)
     setJob(null)
     setPacked(null)
+    setTickAt(0)
+    setNowMs(0)
   }
 
   useEffect(() => {
@@ -108,6 +120,17 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 打开/换游戏时拉一次截图与视频列表
     load()
   }, [show, tid, load])
+
+  /* 任务在跑时挂一根本机秒针：只为让「已 N 秒没有收到主机的新数据」自己往上走。
+   * 不在跑就停掉 —— 空转的 1s 定时器在电视端浏览器上也是白烧。
+   * 依赖抽成 jobRunning 这个布尔量：直接写 `[job && !job.done]` 会让
+   * react-hooks/exhaustive-deps 报「依赖数组里有复杂表达式」。 */
+  const jobRunning = !!(job && !job.done)
+  useEffect(() => {
+    if (!jobRunning) return undefined
+    const iv = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [jobRunning])
 
   const items = useMemo(() => (data && data.items) || [], [data])
   const shown = useMemo(
@@ -144,6 +167,8 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
         return
       }
       setJob({ job_id: r.job_id, phase: 'preparing', percent: 0, active: true, done: false })
+      setTickAt(Date.now())
+      setNowMs(Date.now())
       if (stopJobRef.current) stopJobRef.current()
       stopJobRef.current = watchJob(r.job_id, (st) => {
         if (!aliveRef.current) return
@@ -152,6 +177,8 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
          * 恰恰在最需要「最后停在哪」的时候把证据丢掉。所以只在 transient 时做合并，
          * 正常 tick 一律整体替换。 */
         setJob((prev) => (st.transient && prev ? { ...prev, ...st } : st))
+        /* 只有**真的拿到主机数据**才算「心跳」：transient 是失联重试，不算。 */
+        if (!st.transient) setTickAt(Date.now())
         if (st.done) {
           if (stopJobRef.current) { stopJobRef.current(); stopJobRef.current = null }
           /* name 是后端定下的成品文件名（游戏名称-打包时间戳.zip）。存下来给
@@ -186,7 +213,10 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
     )
   }
 
-  const packing = !!(job && !job.done)
+  const packing = jobRunning
+  /* 距上次真的收到主机数据多少秒（本机时钟）。tickAt/nowMs 都是 0 时算 0 ——
+   * 任务还没起来，不该报「没收到数据」。 */
+  const staleSec = tickAt && nowMs > tickAt ? Math.floor((nowMs - tickAt) / 1000) : 0
 
   /* [CN-FORK] v0.5.2.112 面板形态（用户：「多媒体管理也是铺满右边」）。
    * 这一块最吃宽度：缩略图网格是 `minmax(112px,1fr)` 自适应列，面板一铺满，
@@ -307,11 +337,20 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
                       <Stat label={t('game.job_elapsed', '用时')} value={formatElapsed(job.elapsed)} />
                     </div>
                   )}
-                  {/* 卡住与否交给**时间**说话：idle 是后端算的「距上次有进展多少秒」。
-                   * 没有它，一个不动的进度条分不清「在啃大文件」和「线程早没了」。 */}
+                  {/* 卡住与否交给**时间**说话。两把尺子：
+                   *  ① 后端的 idle —— 距上次有进展多少秒（正常路径，最准）；
+                   *  ② 本机的 staleSec —— 距上次**真的收到主机数据**多少秒。
+                   * ② 是给 ① 失效时兜底的：主机的时钟跳一下、或槽里的时间戳落到未来，
+                   * difftime 被钳成 0，idle 永远是 0，界面上就永远只有「正在计算中」。
+                   * 两把尺子都不走，才说明真的没在动。 */}
                   {!job.done && !job.transient && job.idle >= 20 && (
                     <p className="mt-2 text-amber-400 panel-note break-words">
                       {t('game.job_stalled', '已 {{n}} 秒没有进展；若长时间不动，可取消任务后重试', { n: job.idle })}
+                    </p>
+                  )}
+                  {!job.done && !job.transient && job.idle < 20 && staleSec >= 15 && (
+                    <p className="mt-2 text-amber-400 panel-note break-words">
+                      {t('game.job_stale', '已 {{n}} 秒没有收到主机的新数据；若长时间不动，可取消任务后重试', { n: staleSec })}
                     </p>
                   )}
                   {job.error && !job.transient && <p className="mt-2 text-red-400 panel-note break-words">{job.error}</p>}

@@ -221,6 +221,34 @@ int gj_kind_now(void) {
     return k;
 }
 
+/* [CN-FORK] v0.5.2.123 看门狗用的诊断快照，见 game_job.h 的注释。 */
+int gj_snapshot(long long *id, char *phase, size_t phsz,
+                long long *bytes_done, long long *bytes_total,
+                long long *files_done, long long *files_total,
+                long *idle_secs) {
+    pthread_mutex_lock(&g_mu);
+    if (!g_job.id) {
+        pthread_mutex_unlock(&g_mu);
+        return 0;
+    }
+    if (id) *id = g_job.id;
+    if (phase && phsz) snprintf(phase, phsz, "%s", g_job.phase);
+    if (bytes_done) *bytes_done = g_job.bytes_done;
+    if (bytes_total) *bytes_total = g_job.bytes_total;
+    if (files_done) *files_done = g_job.files_done;
+    if (files_total) *files_total = g_job.files_total;
+    if (idle_secs) {
+        long v = 0;
+        if (g_job.active && g_last_progress) {
+            double d = difftime(time(NULL), g_last_progress);
+            if (d > 0) v = (long)d;
+        }
+        *idle_secs = v;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return 1;
+}
+
 /* ── CRC32 ────────────────────────────────────────────────────────────────
  * 只有一份实现（原在 game_media.c 里），打包与存档共用，避免两份表不同步。 */
 static uint32_t g_crc_table[256];

@@ -24,12 +24,22 @@ static volatile int server_active_flag = 0;
 
 /* [CN-FORK] 日志落盘：实机死机排查之前完全没有证据可查 —— 日志只进内存环形缓冲 + SSE，
  * 一断电全没。这里追加写 /data/nayeplmtools/pldmgr.log 并带时间戳，每行 fflush，
- * 保证死机前最后一条还在。调用方已持 log_mutex，log_fp 的并发由它串行。 */
+ * 保证死机前最后一条还在。
+ *
+ * ⚠️ v0.5.2.123：**落盘改用独立的 file_mutex，不再挂在 log_mutex 上。**
+ * 原版把 fopen/fprintf/fflush 全放在 log_mutex 里（注释还写着「调用方已持 log_mutex」），
+ * 于是「一次慢盘写」＝「全进程的日志一起堵」：log_mutex 是所有 pldmgr_log 的必经之路，
+ * 而 pldmgr_log 又长在后台打包 worker 的路径上 —— 盘一卡，打包线程就停在某一行的
+ * 日志上不再往下走，界面看到的就是「阶段定住、字节一个不动」。
+ * 这与 stdout 那条（见 log_stdout）是**同一类**的错：把一件可能无限期阻塞的 I/O
+ * 放进了别人必须经过的临界区。环形缓冲与 SSE 的通知留在 log_mutex 里（纯内存，快），
+ * 磁盘那份挪到锁外单独串行 —— 最坏情况只是日志文件落后，绝不再拖住任何人。 */
 #define PLDMGR_LOG_PATH "/data/nayeplmtools/pldmgr.log"
 #define PLDMGR_LOG_MAX_BYTES (512 * 1024)
 static FILE *log_fp = NULL;
 static long  log_bytes = 0;
 static int   log_dir_tried = 0;
+static pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void log_append_file(const char *line) {
     if (log_fp && log_bytes > PLDMGR_LOG_MAX_BYTES) {
@@ -113,8 +123,13 @@ void pldmgr_log(const char *fmt, ...) {
     /* Signal SSE clients */
     log_updated++;
     pthread_cond_broadcast(&log_cond);
-    log_append_file(line); /* [CN-FORK] 同一把锁下写盘，保证死机前最后一条已落盘 */
     pthread_mutex_unlock(&log_mutex);
+
+    /* 落盘：**锁外**，只与别的落盘串行（见 log_append_file 的注释）。
+     * 放在 log_mutex 外面是这一版的关键改动 —— 磁盘 I/O 慢不能变成全进程的日志慢。 */
+    pthread_mutex_lock(&file_mutex);
+    log_append_file(line);
+    pthread_mutex_unlock(&file_mutex);
 }
 
 ssize_t log_stream_callback(void *cls, uint64_t pos, char *buf, size_t max) {
