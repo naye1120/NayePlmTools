@@ -73,6 +73,15 @@ int gj_cancel(long long id, char *msg, size_t msgsz);
  * 0 = 匹配，-1 = 任务不存在或 kind 不符。删除任务不该能靠 job id 取到打包产物。 */
 int gj_aux(long long id, int kind, char *out, size_t osz);
 
+/* [CN-FORK] v0.5.2.124 取成品前的门禁：id 对上、kind 对上、而且**已经成功收尾**。
+ * 为什么非要有这道门：成品 zip 以前是直接写成品名的，写到一半时那个路径就是个
+ * size>0 的残包 —— 而 game_media_pack_open 只看「文件在不在、大小 > 0」，
+ * 于是一次并发（或用户手快重按）的 /game_media_pack_get 就会把半截包当成品发出去，
+ * 浏览器拿到的是坏 zip。.124 起 zip 先写 .part 再 rename（成品路径上不再有残包），
+ * 这里再加一道状态校验，两头都不漏。
+ * 返回 1 = 可取；0 = 还没好（state 回 "running"/"failed"/"cancelled" 之类，供报错用）。 */
+int gj_ready(long long id, int kind, char *state, size_t statesz);
+
 /* 当前任务种类；没有任务返回 -1。 */
 int gj_kind_now(void);
 

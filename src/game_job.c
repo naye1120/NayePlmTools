@@ -221,6 +221,24 @@ int gj_kind_now(void) {
     return k;
 }
 
+/* [CN-FORK] v0.5.2.124 取成品门禁，理由见 game_job.h。 */
+int gj_ready(long long id, int kind, char *state, size_t statesz) {
+    pthread_mutex_lock(&g_mu);
+    int match = (g_job.id && id == g_job.id && g_job.kind == kind);
+    int ok = (match && g_job.done && g_job.ok) ? 1 : 0;
+    if (state && statesz) {
+        state[0] = 0;
+        if (!match) snprintf(state, statesz, "unknown");
+        else if (!g_job.done) snprintf(state, statesz, "%s",
+                                       g_job.active ? "running" : "pending");
+        else if (!g_job.ok) snprintf(state, statesz, "%s",
+                                     g_job.reason[0] ? g_job.reason : "failed");
+        else snprintf(state, statesz, "done");
+    }
+    pthread_mutex_unlock(&g_mu);
+    return ok;
+}
+
 /* [CN-FORK] v0.5.2.123 看门狗用的诊断快照，见 game_job.h 的注释。 */
 int gj_snapshot(long long *id, char *phase, size_t phsz,
                 long long *bytes_done, long long *bytes_total,

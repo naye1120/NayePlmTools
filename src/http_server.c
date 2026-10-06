@@ -1831,9 +1831,15 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         int prc = game_media_pack_open(pid, &pfd, &psz);
         if (prc == -1)
             return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "任务不存在或已过期");
+        /* [CN-FORK] v0.5.2.124 「还没好」与「文件没了」要分开：
+         * 前者回 409（前端据此继续等，或提示「还没打包完」），后者才是 404。
+         * 以前两者都回 404 —— 于是「打包进行中点下载」看起来像「任务凭空消失」，
+         * 排查时也分不清是状态问题还是文件问题。 */
+        if (prc == -2)
+            return queue_json_error(conn, MHD_HTTP_CONFLICT, "EBUSY", "还没打包完，请稍候");
         if (prc != 0)
             return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT",
-                                    "打包还没完成，或产出文件已被清理");
+                                    "打包产出文件已被清理");
         resp = gr_file_response(psz, pfd); /* 失败时 fd 已被 gr_file_response 收掉 */
         if (!resp)
             return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO", "无法读取打包文件");

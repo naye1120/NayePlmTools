@@ -8,8 +8,12 @@
  *   ② 定位：命中、未命中、路径穿越一律 -1
  *   ③ 原图：fd + 大小 + mime，路径穿越 -1，文件缺失 -2
  *   ④ 缩略图：JPEG 图标解码 + 缩到 200x112；PNG 兜底；HDR .jxr 回 -2（→404）；
- *      录屏无封面帧 → 占位图；录屏封面帧是 .jxr 但同目录有 .jpeg → 挑真画面
- *   ⑤ 打包：子集 2 条 / 全量 5 条，产出交 Python zipfile 验 CRC 与内容
+ *      录屏无封面帧 → 占位图；录屏封面帧是 .jxr 时**去 icon_path 所在目录**挑那份
+ *      .jpeg 的真画面（该目录与录屏目录**刻意不同构**，按 id 推必落空）；
+ *      同目录只有「后缀像 JPEG 的假图」时跳过它回占位图（不是 404）+ 诊断日志落盘
+ *   ⑤ 打包：子集 2 条 / 全量 5 条，产出交 Python zipfile 验 CRC 与内容；
+ *      任务跑的同时高频取包 → 未完成必须 -2、完成后字节数恒定（绝不发半截包）；
+ *      产出目录不留 .part 临时包
  *   ⑥ 删除：tid 不符 -1；成功后原图+副文件消失、库文件本身分毫未动
  *
  * 不断言的部分（真机未验证，见 game_media.h §7）：录屏目录层级、duration 单位、
@@ -31,14 +35,29 @@
 #include "stb_image_write.h"
 
 /* log_server.c 的头要 microhttpd.h，主机上没有 —— 这里给个等价实现。
- * 默认静音（72 条路径日志会把断言冲掉），要看就 export MEDIA_TEST_VERBOSE=1。 */
+ * 默认静音（72 条路径日志会把断言冲掉），要看就 export MEDIA_TEST_VERBOSE=1。
+ *
+ * 顺带**攒一份副本**：找不到封面帧时 game_media.c 会把「两个候选目录的内容」
+ * 写进日志（md_log_cover_dirs）—— 那是下一轮真机取证**唯一**的线索，而且已经
+ * 猜错两轮了。攒下来就能断言这条诊断路径没被无声重构掉。 */
+static char g_log[8192];
+static size_t g_log_len;
+
 void pldmgr_log(const char *fmt, ...) {
-    if (!getenv("MEDIA_TEST_VERBOSE")) return;
     va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(g_log + g_log_len, sizeof(g_log) - g_log_len, fmt, ap);
+    va_end(ap);
+    if (n > 0 && (size_t)n < sizeof(g_log) - g_log_len) g_log_len += (size_t)n;
+
+    if (!getenv("MEDIA_TEST_VERBOSE")) return;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
 }
+
+static void log_reset(void) { g_log[0] = 0; g_log_len = 0; }
+static int log_has(const char *needle) { return strstr(g_log, needle) != NULL; }
 
 /* [CN-FORK] v0.5.2.121 game_media.c 的「游戏名称-截图时间」命名要问
  * game_title_get_name。真身在 src/game_title.c，而那个文件会拖进
@@ -68,14 +87,23 @@ int game_title_get_name(const char *tid, char *out, size_t osz) {
 #define C_OTH  "/av_contents/photo/NPXS40087/PPSA00001/9a1/20261004_090000_00000001.png"
 /* 录屏 + .jxr 封面帧（真机那条路，见 make_media_fixture.py 的 JXR_TID 段） */
 #define C_VIDJ "/av_contents/video/NPXS40087/PPSA99009/18c/20261007_120000_003.mp4"
-/* 录屏 + 两份封面帧（.jxr 解不动 + 同目录 .jpeg 能解）—— 见 COVER_TID 段。
- * 用户口径：「视频的预览图不对，应该是视频里面某一帧画面」。 */
+/* 录屏 + 封面帧目录**与录屏目录不同构**（缩略图少一层生成器）—— 见 make_media_fixture.py
+ * 的 COVER_TID 段。用户口径：「视频的预览图不对，应该是视频里面某一帧画面」。
+ * ⚠️ 这条刻意让 icon_path 的目录 ≠ 按 id 推出来的目录：.123 就是栽在「按 id 推」上，
+ * 而 .123 的夹具把两者摆成同一个目录，所以它测不出这条差别。 */
 #define C_VIDC "/av_contents/video/NPXS40087/PPSA99010/18c/20261008_090000_004.mp4"
+/* 录屏 + 同目录只有一份「后缀像 JPEG、内容不是」的诱饵 —— 见 BADC_TID 段。
+ * 必须跳过诱饵回占位图，不能挑中它 → 解码失败 → 404（那在界面上就是「一块空白」）。 */
+#define C_VIDB "/av_contents/video/NPXS40087/PPSA99011/18c/20261009_100000_005.mp4"
 
 #define ICON_REL "/av_contents/thumbnails/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png.jpeg"
 /* 真封面帧：与 C_VIDC 的 .jxr 同目录、同前缀，只差后缀 —— md_find_cover 要挑的就是它。
+ * ⚠️ 目录里**没有** NPXS40087 那一段（故意与 C_VIDC 的目录不同构），所以这条只有
+ * 「认 icon_path 所在目录」才找得到，「按 id 推」必落空。
  * 本体由 write_cover_jpeg() 现写（Python 标准库造不出 JPEG）。 */
-#define COVER_REL "/av_contents/thumbnails/video/NPXS40087/PPSA99010/18c/20261008_090000_004.mp4.jpeg"
+#define COVER_REL "/av_contents/thumbnails/video/PPSA99010/18c/20261008_090000_004.mp4.jpeg"
+/* 「按 id 推」出来的那个目录 —— 必须**不存在**，用来证明上面那份封面帧不是从这儿找到的。 */
+#define COVER_FAKE_DIR ROOT "/av_contents/thumbnails/video/NPXS40087/PPSA99010/18c"
 
 static int g_checks, g_fails;
 
@@ -123,6 +151,25 @@ static int count_files(const char *dir) {
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
         if (de->d_name[0] == '.') continue;
+        char p[700];
+        snprintf(p, sizeof(p), "%s/%s", dir, de->d_name);
+        struct stat st;
+        if (stat(p, &st) == 0 && S_ISREG(st.st_mode)) n++;
+    }
+    closedir(d);
+    return n;
+}
+
+/* 数目录里以某后缀结尾的文件（打包目录里有没有残留 .part，靠它断言） */
+static int count_files_ext(const char *dir, const char *ext) {
+    DIR *d = opendir(dir);
+    if (!d) return -1;
+    size_t el = strlen(ext);
+    int n = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        size_t nl = strlen(de->d_name);
+        if (nl < el || strcmp(de->d_name + nl - el, ext) != 0) continue;
         char p[700];
         snprintf(p, sizeof(p), "%s/%s", dir, de->d_name);
         struct stat st;
@@ -534,20 +581,29 @@ int main(void) {
         free(td); td = NULL;
     }
 
-    /* ── 视频封面帧：.jxr 解不动时去同目录挑那份 .jpeg（v0.5.2.123）──────────
-     * 用户口径：「视频的预览图不对，**应该是视频里面某一帧画面**」。
+    /* ── 视频封面帧：去 icon_path 所在目录挑那份 .jpeg（v0.5.2.123 → .124）──────
+     * 用户口径：「视频的预览图不对，**应该是视频里面某一帧画面**」→ 下一轮「视频封面也没有」。
      * 真机缩略图命名是 `<原名>.<原ext>.<jxr|jpeg>` —— 同一个录屏旁边可能同时躺着
      * 两份封面帧，库里的 icon_path 只指其中一份。指到 .jxr 时旧代码直接回占位图，
      * 于是用户看到的是深底 + 播放三角，而不是画面。
      *
-     * 这条夹具：icon_path 指 .jxr（存在、stat 得过、解不动），**同目录另有一份
-     * 可解的 .jpeg**。断言它落到那份真封面上，而不是占位图 ——
-     * 而且用**画面内容**判：真封面是左红右蓝的渐变，占位图是深底 + 白色三角，
-     * 两条判据互斥，判「解开了」是不够的（给张纯黑图也能解开）。 */
+     * ⚠️ `.123` 第一版栽了两处，这条夹具正是冲着它们来的：
+     *   ① 目录**不能按 id 推**。§7a 白纸黑字「录屏目录层级是否与 photo 同构」未验证。
+     *      这条夹具里缩略图目录少一层生成器 —— 「按 id 推」必落空，只有认 icon_path 才行。
+     *   ② 扩展名**不等于能解码**（下面 C_VIDB 那条专门压这个）。
+     *
+     * 断言用**画面内容**判：真封面是左红右蓝的渐变，占位图是深底 + 白色三角，
+     * 两条判据互斥 —— 判「解开了」是不够的（给张纯黑图也能解开）。 */
     {
+        /* 先钉住前提：「按 id 推」的那个目录**根本不存在**。
+         * 不先钉这条，下面就算挑中了真封面也说不清是从哪条路找到的（.123 就是这么绿的）。 */
+        struct stat fsb;
+        CHECK(stat(COVER_FAKE_DIR, &fsb) != 0,
+              "夹具前提不成立：按 id 推的目录竟然存在（%s），这条测不出「认 icon_path」", COVER_FAKE_DIR);
+
         td = NULL; tlen = 0;
         CHECK(game_media_thumb(C_VIDC, 320, &td, &tlen, &mime) == 0,
-              "同目录有可解封面帧的录屏应出真画面，不是占位图");
+              "icon_path 所在目录有可解封面帧的录屏应出真画面，不是占位图");
         CHECK(td && tlen > 100 && memcmp(td, "\xff\xd8\xff", 3) == 0, "封面帧产出应是 JPEG");
         if (td && tlen > 4) {
             int iw = 0, ih = 0, ic = 0;
@@ -567,6 +623,41 @@ int main(void) {
               "封面帧右侧应偏蓝（真画面），实际 RGB=(%d,%d,%d)", r2, g2, b2);
         printf("  封面帧取样 左=(%d,%d,%d) 右=(%d,%d,%d)\n", r1, g1, b1, r2, g2, b2);
         free(td); td = NULL;
+    }
+
+    /* ── 诱饵：后缀像 JPEG、内容不是（v0.5.2.124）──────────────────────────────
+     * `.123` 只按扩展名放行候选，于是挑中这个诱饵 → stbi 解不动 → -2 → HTTP 404 →
+     * 界面从「占位图」退化成「一块空白」。这正是用户第二轮「视频封面也没有」的形态。
+     * `.124` 按文件头魔数认：必须**跳过诱饵**、回落到占位图（rc=0 + 深底白三角）。
+     * 同时把「找不到封面帧时把目录内容写进日志」这条诊断也钉住 —— 下一轮真机取证
+     * 全靠它，已经猜错两轮了，不能再被无声重构掉。 */
+    {
+        log_reset();
+        td = NULL; tlen = 0;
+        CHECK(game_media_thumb(C_VIDB, 320, &td, &tlen, &mime) == 0,
+              "封面帧是「后缀像 JPEG 的假图」时应回占位图，**不是** 404");
+        CHECK(td && tlen > 100 && memcmp(td, "\xff\xd8\xff", 3) == 0, "应产出 JPEG 占位图");
+        if (td && tlen > 4) {
+            int iw = 0, ih = 0, ic = 0;
+            unsigned char *px = stbi_load_from_memory(td, (int)tlen, &iw, &ih, &ic, 0);
+            CHECK(px != NULL, "占位图 JPEG 解不回来");
+            CHECK(iw == 320 && ih == 180, "占位图尺寸 = %dx%d，应 320x180", iw, ih);
+            if (px && iw == 320 && ih == 180) {
+                int ts = (iw < ih ? iw : ih) / 4;
+                int sx = iw / 2 + ts / 2, sy = ih / 2;
+                const unsigned char *c = px + ((size_t)sy * (size_t)iw + (size_t)sx) * 3;
+                CHECK(c[0] > 200 && c[1] > 200 && c[2] > 200,
+                      "占位图中央应有白色播放三角，实际 RGB=(%d,%d,%d)", c[0], c[1], c[2]);
+            }
+            stbi_image_free(px);
+        }
+        free(td); td = NULL;
+
+        /* 诊断必须真的落日志：目录条目 + 「没有可解码的封面」。 */
+        CHECK(log_has("cover dir ") && log_has("has "),
+              "找不到封面帧时未把候选目录的内容写进日志（下一轮真机取证就瞎了）");
+        CHECK(log_has("no decodable cover for " C_VIDB),
+              "找不到封面帧时未写 `no decodable cover for <id>`");
     }
     /* 越界 id → -1，绝不能去 stat */
     CHECK(game_media_thumb("/etc/passwd", 320, &td, &tlen, &mime) == -1, "越界缩略图应 -1");
@@ -634,6 +725,12 @@ int main(void) {
         close(fd);
     }
 
+    /* 门禁的「任务不存在」那一态：-1（HTTP 侧 404）。kind 过滤（删除任务的 id 不能
+     * 取到打包产物）在 gj_aux 里，那要 DELETE 任务，属 game_runtime 的测试范围。 */
+    fd = -1; sz = 0;
+    CHECK(game_media_pack_open(999999999LL, &fd, &sz) == -1, "不存在的 job 应回 -1");
+    CHECK(game_media_pack_name(999999999LL, msg, sizeof(msg)) == -1, "不存在的 job 不该有包名");
+
     /* ── 大文件：跨过 zip_write 的 256 KB 分块边界 ───────────────────────────
      * 用户报的「打包卡在 0 B / 58.7 MB」正落在这条路上，而夹具里的录屏原来只有
      * 4 KB —— 一个分块都读不满，on_bytes 只回调一次，CRC 回填那两行 lseek 也只在
@@ -644,6 +741,43 @@ int main(void) {
         job = 0;
         n = game_media_pack_start_json(body, strlen(body), &job, msg, sizeof(msg));
         CHECK(n == 0, "大文件打包启动失败 rc=%d msg=%s", n, msg);
+
+        /* ── 打包门禁：**成品路径上永远不能被取走半截包**（v0.5.2.124）──────────
+         * 用户报的「打包下载还不好用」有一半出在这儿：以前 zip 直接写成品名，
+         * 写到一半那个路径就是个 size>0 的残包，而 pack_open 只看「在不在、大小>0」
+         * —— 一次并发（或用户手快重按下载）就把半截包当成品发走了，浏览器拿到坏 zip。
+         * 现在两头堵：zip 先写 .part 再 rename；pack_open 还要问 gj_ready。
+         *
+         * 判据（注意顺序：先取包再查状态，这样**不会**被「取包与查状态之间任务刚好跑完」
+         * 这种竞态误判）：
+         *   · rc == 0  → 这一刻任务必然已 done，且之后每次取到的字节数必须一模一样；
+         *   · rc == -2 → 任务还没成功收尾（正常）；
+         *   · 其它 rc / 大小前后不一致 → 门禁被击穿。 */
+        int gate_bad = 0, gate_ok_calls = 0, gate_busy_calls = 0;
+        off_t gate_size = -1;
+        for (int i = 0; i < 400; i++) {
+            int tfd = -1; off_t tsz = 0;
+            int rc = game_media_pack_open(job, &tfd, &tsz);
+            if (rc == 0) {
+                gate_ok_calls++;
+                if (tfd >= 0) close(tfd);
+                if (gate_size < 0) gate_size = tsz;
+                else if (tsz != gate_size) gate_bad++;
+                break;
+            }
+            if (rc == -2) { gate_busy_calls++; usleep(25000); continue; }
+            gate_bad++; /* -1 / -3 都不该在这时出现 */
+            break;
+        }
+        CHECK(gate_bad == 0, "打包门禁被击穿（取到半截包 / 前后大小不一致 / 状态码异常）");
+        CHECK(gate_ok_calls == 1, "任务跑完后取不到成品包");
+        /* 打包 1.5 MB 至少要毫秒级，而上面第一次取包发生在 pack_start_json 刚返回时，
+         * 差着三个数量级 —— 所以这条必须真的走到过「还没好」那条分支，
+         * 否则说明整个循环在自证空转。 */
+        CHECK(gate_busy_calls > 0, "循环没走到「还没打包完」那条分支，这条用例是空转的");
+        printf("  打包门禁：未完成时 %d 次全 -2，完成后 %lld 字节\n",
+               gate_busy_calls, (long long)gate_size);
+
         CHECK(wait_job(job, sbuf, sizeof(sbuf)) == 0, "大文件任务没跑完: %s", sbuf);
         CHECK(strstr(sbuf, "\"ok\":true") != NULL, "大文件任务失败: %s", sbuf);
         CHECK(strstr(sbuf, "\"files_total\":1") != NULL, "大文件 files_total 应 1: %s", sbuf);
@@ -656,6 +790,9 @@ int main(void) {
             CHECK(dump_fd(ROOT "/pack_big.zip", fd, sz) == 0, "写出大文件包失败");
             close(fd);
         }
+        /* 发布是 rename，成品目录里不该留 .part（留了就是「写临时名」那段漏了收尾）。 */
+        CHECK(count_files_ext(ROOT "/pack", ".part") == 0,
+              "打包目录里残留了 .part 临时包，共 %d 个", count_files_ext(ROOT "/pack", ".part"));
     }
 
     /* 全量：5 条 */

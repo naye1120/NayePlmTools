@@ -921,46 +921,56 @@ static int md_is_stb_image(const char *m) {
            strcmp(m, "image/bmp") == 0 || strcmp(m, "image/gif") == 0;
 }
 
-/* ── 视频封面帧：去缩略图目录里翻一份**能解码**的（v0.5.2.123）───────────────
- * 真机的缩略图命名约定是 `<原名>.<原ext>.<jxr|jpeg>`（见 include/game_media.h 的头注释），
+/* ── 视频封面帧：去缩略图目录里翻一份**真能解码**的（v0.5.2.123 / .124）─────
+ * 真机的缩略图命名约定是 `<原名>.<原ext>.<jxr|jpeg>`（见 include/game_media.h 头注释），
  * 也就是同一个录屏旁边**可能同时躺着两份封面帧**：一份 HDR 的 .jxr、一份 .jpeg。
  * 库里 icon_path 只指其中一份，指到 .jxr 时 stb 解不动 —— 旧代码这时直接回占位图
  * （深底 + 播放三角），用户看到的就是「视频的预览图不对，应该是视频里面某一帧画面」。
  *
- * 所以：icon_path 那份解不动（或压根没给）时，去**同一个缩略图目录**里按
- * 「<原文件名>.<后缀>」找一份 stb 认得的位图。找不到才回占位图。
+ * ⚠️ `.123` 第一版有两处错，真机上直接表现为「视频封面也没有」（格子全白）：
  *
- * 目录由 id 推出来，**不依赖库里那几个 title_id 列** —— 列序在固件之间会变
- * （见 md_sql_col_index 的注释），而 id 本身就是 content_path，最可靠。
- * 前缀匹配也顺便保证不会串到别的媒体：目录里只会以本媒体的原名开头。 */
-static int md_find_cover(const char *id, char *abs, size_t absz, struct stat *st) {
-    const char *rest = (strncmp(id, "/av_contents/", 13) == 0) ? id + 13 : NULL;
-    if (!rest || !rest[0]) return -1;
-    const char *slash = strrchr(rest, '/');
-    if (!slash || slash == rest) return -1;
+ *   ① **目录不该由 id 推。** 第一版按 `GAME_MEDIA_ROOT/thumbnails/<id 去掉前缀>` 推
+ *      同构目录 —— 可 `game_media.h` §7a 白纸黑字写着「录屏目录层级是否与 photo 同构」
+ *      **尚未在真机验证过**（当年取证时机器上只有截图）。而 `icon_path` 是**媒体库自己
+ *      写进库里的**，它指哪儿就是哪儿，是最权威的答案。现在先扫 `dirname(icon_path)`，
+ *      推出来的同构目录只作兜底。
+ *   ② **扩展名不等于能解码。** 第一版只按扩展名（`md_is_stb_image(md_mime_of(...))`）
+ *      放行候选，于是可能挑中一个「名字像 JPEG、内容不是」的文件；它一路传到
+ *      `stbi_load_from_memory` 失败 → 返回 -2 → HTTP 404 → **格子从「占位图」退化成
+ *      「一块空白」**。现在按**文件头魔数**认（JPEG/PNG/BMP/GIF），扩展名只用来排除 .jxr。
+ *
+ * 找不到就回 -1，由调用方回占位图；`game_media_thumb` 另有一道「视频永不 404」的兜底。 */
 
-    /* <GAME_MEDIA_ROOT>/thumbnails/<type>/<链路…>/  —— 与 md_abs 的第 3/4 条根同构 */
-    char dir[760];
-    int dn = snprintf(dir, sizeof(dir), GAME_MEDIA_ROOT "/thumbnails/%.*s",
-                      (int)(slash - rest), rest);
-    if (dn < 0 || (size_t)dn >= sizeof(dir)) return -1;
+/* 按文件头认位图，**不信任扩展名**（理由见上 ②）。只读 12 字节，代价可忽略。 */
+static int md_magic_image(const char *path) {
+    unsigned char h[12];
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    ssize_t n = read(fd, h, sizeof(h));
+    close(fd);
+    if (n < 4) return 0;
+    if (h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF) return 1;              /* JPEG */
+    if (h[0] == 0x89 && h[1] == 'P' && h[2] == 'N' && h[3] == 'G') return 1; /* PNG  */
+    if (h[0] == 'B' && h[1] == 'M') return 1;                                /* BMP  */
+    if (h[0] == 'G' && h[1] == 'I' && h[2] == 'F' && h[3] == '8') return 1;  /* GIF  */
+    return 0;
+}
 
-    const char *base = slash + 1;
-    size_t blen = strlen(base);
-    if (blen == 0 || blen > 200) return -1; /* 超过 NAME_MAX 的前缀不可能命中 */
-
+/* 在 dir 里找 `<base>.<后缀>` 且**真能解码**的那一份。
+ * `blen` 处必须是 '.'：光有前缀不算，否则 `..._001.mp4` 会被 `..._001.mp4extra` 误命中。 */
+static int md_scan_cover_dir(const char *dir, const char *base, size_t blen,
+                             char *abs, size_t absz, struct stat *st) {
     DIR *dp = opendir(dir);
-    if (!dp) return -1; /* 这台机器上就没有缩略图目录 → 交给调用方回占位图 */
+    if (!dp) return -1;
     int rc = -1;
     struct dirent *de;
     while ((de = readdir(dp)) != NULL) {
-        /* 只认「<原文件名>.xxx」。blen 处必须是 '.'：光有前缀不算，
-         * 否则 `..._001.mp4` 会被 `..._001.mp4extra` 之类的名字误命中。 */
         if (strncmp(de->d_name, base, blen) != 0 || de->d_name[blen] != '.') continue;
         char cand[1400];
         int cn = snprintf(cand, sizeof(cand), "%s/%s", dir, de->d_name);
         if (cn < 0 || (size_t)cn >= sizeof(cand)) continue;
-        if (!md_is_stb_image(md_mime_of(cand))) continue; /* .jxr 在这里被跳过 */
+        if (!md_is_stb_image(md_mime_of(cand))) continue; /* .jxr 在这一步被排除 */
+        if (!md_magic_image(cand)) continue;              /* 再按魔数确认一次 */
         struct stat sb;
         if (stat(cand, &sb) != 0 || !S_ISREG(sb.st_mode) ||
             sb.st_size <= 0 || (size_t)sb.st_size > MD_SRC_MAX) continue;
@@ -971,6 +981,77 @@ static int md_find_cover(const char *id, char *abs, size_t absz, struct stat *st
     }
     closedir(dp);
     return rc;
+}
+
+/* 一个都没找到时，把目录内容写进日志 —— 这是**唯一能一次问清真机布局**的办法。
+ * `game_media.h` §7a 至今没验证过录屏的缩略图层级，之前两轮都是靠猜（猜错两轮）。
+ * 只对视频做，且「找不到封面帧」本身是罕见事件，不会刷屏。 */
+static void md_log_cover_dirs(const char *id, const char *d1, const char *d2) {
+    const char *names[2];
+    names[0] = d1;
+    names[1] = d2;
+    for (int i = 0; i < 2; i++) {
+        if (!names[i] || !names[i][0]) continue;
+        DIR *dp = opendir(names[i]);
+        if (!dp) {
+            pldmgr_log("[PLDMGR] media: cover dir MISSING %s\n", names[i]);
+            continue;
+        }
+        char list[600];
+        size_t off = 0;
+        int shown = 0, total = 0;
+        struct dirent *de;
+        while ((de = readdir(dp)) != NULL) {
+            if (de->d_name[0] == '.') continue;
+            total++;
+            if (shown >= 6) continue;
+            int w = snprintf(list + off, sizeof(list) - off, "%s%s",
+                             shown ? ", " : "", de->d_name);
+            if (w > 0 && (size_t)w < sizeof(list) - off) off += (size_t)w;
+            shown++;
+        }
+        closedir(dp);
+        list[sizeof(list) - 1] = 0;
+        pldmgr_log("[PLDMGR] media: cover dir %s has %d entries [%s]\n",
+                   names[i], total, list);
+    }
+    pldmgr_log("[PLDMGR] media: no decodable cover for %s\n", id);
+}
+
+static int md_find_cover(const char *id, const char *icon,
+                         char *abs, size_t absz, struct stat *st) {
+    const char *rest = (strncmp(id, "/av_contents/", 13) == 0) ? id + 13 : NULL;
+    if (!rest || !rest[0]) return -1;
+    const char *slash = strrchr(rest, '/');
+    if (!slash || slash == rest) return -1;
+
+    const char *base = slash + 1;
+    size_t blen = strlen(base);
+    if (blen == 0 || blen > 200) return -1; /* 超过 NAME_MAX 的前缀不可能命中 */
+
+    /* ① 权威答案：icon_path 所在的那个目录（媒体库自己写进库的，不靠我们推）。 */
+    char d1[760];
+    d1[0] = 0;
+    if (icon && icon[0]) {
+        char ip[700];
+        if (md_abs(icon, ip, sizeof(ip)) == 0) {
+            char *sl = strrchr(ip, '/');
+            if (sl && sl != ip) {
+                *sl = 0;
+                snprintf(d1, sizeof(d1), "%s", ip);
+                if (md_scan_cover_dir(d1, base, blen, abs, absz, st) == 0) return 0;
+            }
+        }
+    }
+
+    /* ② 兜底：按 id 推同构目录（photo/video 两条链路）。§7a 未验证，所以只当兜底。 */
+    char d2[760];
+    d2[0] = 0;
+    snprintf(d2, sizeof(d2), GAME_MEDIA_ROOT "/thumbnails/%.*s", (int)(slash - rest), rest);
+    if (d2[0] && md_scan_cover_dir(d2, base, blen, abs, absz, st) == 0) return 0;
+
+    md_log_cover_dirs(id, d1, d2);
+    return -1;
 }
 
 /* 选解码源：优先库里那份系统缩略图；解不动（典型：录屏的封面帧是 .jxr）就去
@@ -990,25 +1071,40 @@ static int md_find_cover(const char *id, char *abs, size_t absz, struct stat *st
 static int md_thumb_src(const char *id, char *abs, size_t absz, struct stat *st) {
     memset(st, 0, sizeof(*st));
     int is_video = strncmp(id, "/av_contents/video/", 19) == 0;
+    /* it 必须先清零：查不到时它整块都是栈上垃圾，而下面要把 it.icon 带出去用。 */
     game_media_item_t it;
+    memset(&it, 0, sizeof(it));
+    const char *icon = NULL;
     if (game_media_lookup(id, &it) == 0) {
         if (it.video) is_video = 1;
+        if (it.icon[0]) icon = it.icon;
         if (it.icon[0] && md_abs(it.icon, abs, absz) == 0 &&
             stat(abs, st) == 0 && st->st_size > 0 && (size_t)st->st_size <= MD_SRC_MAX &&
             md_is_stb_image(md_mime_of(abs)))
             return 0;
     }
     /* 排在「拿原图当缩略图」**之前**：原图是 4K 整图，解它又慢又占内存，
-     * 而封面帧本来就是为缩略图准备的，先找它才是对的顺序。 */
-    if (md_find_cover(id, abs, absz, st) == 0) return 0;
+     * 而封面帧本来就是为缩略图准备的，先找它才是对的顺序。
+     * 这里把 icon_path 一起递进去 —— 封面帧该去哪个目录翻，媒体库自己写进库的
+     * icon_path 才是最权威的答案，比我们按 id 推同构目录可靠（.123 栽在这上面）。 */
+    if (md_find_cover(id, icon, abs, absz, st) == 0) return 0;
 
-    if (md_abs(id, abs, absz) != 0) return -1;
+    /* md_abs 失败也要看是不是视频：以前无条件回 -1，视频就跟着走了 404 那条路，
+     * 界面从占位图退化成空白 —— 正是 .123 真机上的表现。 */
+    if (md_abs(id, abs, absz) != 0) {
+        memset(st, 0, sizeof(*st));
+        return is_video ? -3 : -1;
+    }
     if (stat(abs, st) != 0 || st->st_size <= 0 || (size_t)st->st_size > MD_SRC_MAX) {
         /* 盘上原文件不在了：库里既然列得出来，视频就给占位图，别的照旧 404 */
         memset(st, 0, sizeof(*st));
         return is_video ? -3 : -1;
     }
     if (md_is_stb_image(md_mime_of(abs))) return 0;
+    /* 到这里是「原文件在、但不是能解的位图」—— 录屏就是这条（mp4 解不了）。
+     * st 也要清零：占位图的缓存键必须与「真封面帧」的键分得开，否则两者 mtime
+     * 撞上就互相串图（夹具里同一个脚本先后写的文件就在同一秒，当场复现过）。 */
+    memset(st, 0, sizeof(*st));
     return is_video ? -3 : -1;
 }
 
@@ -1414,14 +1510,18 @@ static void md_pack_run(md_pack_req_t *req) {
 
     /* 顺手清掉上一包：包名现在是「游戏名称-时间戳.zip」，不再是固定前缀，
      * 所以按 .zip 后缀认（这个目录里只有我们写的包）。不同文件名本来就不冲突；
-     * 正在下旧包的连接拿着旧 inode，POSIX 下不受 unlink 影响。 */
+     * 正在下旧包的连接拿着旧 inode，POSIX 下不受 unlink 影响。
+     * `.zip.part` 也一起扫：那是上一次被打断的打包留下的临时名（见下面那段），
+     * 不扫的话它会一直躺在盘上，还会让「按后缀认」的规则漏掉一个半截包。 */
     {
         DIR *dp = opendir(GAME_MEDIA_PACK_DIR);
         if (dp) {
             struct dirent *de;
             while ((de = readdir(dp)) != NULL) {
                 size_t nl = strlen(de->d_name);
-                if (nl < 5 || strcasecmp(de->d_name + nl - 4, ".zip") != 0) continue;
+                int is_zip = (nl >= 5 && strcasecmp(de->d_name + nl - 4, ".zip") == 0);
+                int is_part = (nl >= 10 && strcasecmp(de->d_name + nl - 5, ".part") == 0);
+                if (!is_zip && !is_part) continue;
                 char p[760];
                 snprintf(p, sizeof(p), "%s/%s", GAME_MEDIA_PACK_DIR, de->d_name);
                 if (strcmp(p, zip) != 0) unlink(p);
@@ -1432,19 +1532,41 @@ static void md_pack_run(md_pack_req_t *req) {
 
     long long t2 = md_ms_now();
     md_set_phase("packing");
+
+    /* ⚠️ 先写临时名、写完再 rename（v0.5.2.124）。以前直接写成品名：
+     * 写到一半时**成品路径上就是一个 size>0 的残包**，而 /game_media_pack_get
+     * 只看「文件在不在、大小 > 0」—— 一次并发（或用户手快重按下载）就会把半截包
+     * 当成品发出去，浏览器拿到的是坏 zip，表现就是「打包下载还不好用」。
+     * rename 在同一文件系统内是原子的：成品路径上要么是完整的包，要么什么都没有。
+     * 临时名带上 job id：单槽只有一个 worker，但这样也不会与上一次的残留撞上。 */
+    char part[760];
+    int pn = snprintf(part, sizeof(part), "%s.part", zip);
+    if (pn < 0 || (size_t)pn >= sizeof(part)) {
+        free(e);
+        md_pack_fail("failed", "打包路径过长");
+        return;
+    }
     pldmgr_log("[PLDMGR] media: pack writing -> %s (%d entries, +%lldms)\n",
-               zip, n, t2 - t1);
+               part, n, t2 - t1);
     const char *err = "打包失败";
-    int w = zip_write(zip, e, n, &md_zip_hooks, &err);
+    int w = zip_write(part, e, n, &md_zip_hooks, &err);
     free(e);
     req->ids = NULL;
     req->nids = 0;
 
     if (w == 1) {
+        unlink(part);
         md_pack_fail("cancelled", "任务已取消");
         return;
     }
-    if (w != 0) { md_pack_fail("failed", err); return; }
+    if (w != 0) { unlink(part); md_pack_fail("failed", err); return; }
+
+    /* 发布。rename 失败（跨设备 / 目录没了）就得把临时包收掉，不能留着误导下一轮。 */
+    if (rename(part, zip) != 0) {
+        unlink(part);
+        md_pack_fail("failed", "无法发布打包文件");
+        return;
+    }
 
     /* 先收尾、再补提示：md_pack_ok_done 会把 error 清空，反过来写等于白写一句
      * 「有 N 个文件不见了」（原版就是这个顺序，那句话一直没显示出来过）。 */
@@ -1673,20 +1795,41 @@ int game_media_pack_cancel(long long job_id) {
     return gj_cancel(job_id, NULL, 0);
 }
 
+/* 返回值三态（v0.5.2.124 起细分，HTTP 侧按这个映射）：
+ *   -1 = 任务不存在 / kind 不符        → 404「任务不存在或已过期」
+ *   -2 = 任务在、但**还没成功收尾**     → 409「还没打包完」（不是 404！）
+ *   -3 = 收尾了、成品却不在 / 是 0 字节 → 404「产出文件已被清理」
+ *
+ * ⚠️ 为什么必须问 gj_ready：光看「文件在不在、大小 > 0」挡不住**残包**。
+ * 用户报的「打包下载还不好用」有一半就出在这儿 —— 打包进行到一半时成品路径上
+ * 已经有个 size>0 的半截包，一次并发下载就把它当成品发走了。 */
 int game_media_pack_open(long long job_id, int *out_fd, off_t *out_size) {
     if (!out_fd || !out_size) return -1;
     char zip[700];
     if (gj_aux(job_id, GJ_KIND_PACK, zip, sizeof(zip)) != 0) return -1;
 
+    char st[40];
+    if (!gj_ready(job_id, GJ_KIND_PACK, st, sizeof(st))) {
+        pldmgr_log("[PLDMGR] media: pack_get job=%lld not ready (state=%s)\n", job_id, st);
+        return -2;
+    }
+
     int fd = open(zip, O_RDONLY);
-    if (fd < 0) return -2;
+    if (fd < 0) {
+        pldmgr_log("[PLDMGR] media: pack_get job=%lld open failed: %s\n", job_id, zip);
+        return -3;
+    }
     struct stat sb;
     if (fstat(fd, &sb) != 0 || !S_ISREG(sb.st_mode) || sb.st_size <= 0) {
         close(fd);
-        return -2;
+        pldmgr_log("[PLDMGR] media: pack_get job=%lld bad output (not a file or 0 bytes)\n",
+                   job_id);
+        return -3;
     }
     *out_fd = fd;
     *out_size = sb.st_size;
+    pldmgr_log("[PLDMGR] media: pack_get job=%lld serving %lld bytes (%s)\n",
+               job_id, (long long)sb.st_size, zip);
     return 0;
 }
 

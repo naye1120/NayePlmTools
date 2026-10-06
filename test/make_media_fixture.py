@@ -97,25 +97,39 @@ ICON_JXR = os.path.join(ROOT, "av_contents", "thumbnails", "video", GEN, JXR_TID
                         "20261007_120000_003.mp4.jxr")
 put(ICON_JXR, b"\x49\x49\xbc\x01" + os.urandom(512))   # 假 JXR 头 + 随机体
 
-# ── v0.5.2.123 专供：录屏的封面帧**两份都在**（.jxr + .jpeg）──────────────────
-# 用户口径：「视频的预览图不对，应该是视频里面某一帧画面」。
-# 真机缩略图的命名约定是 `<原名>.<原ext>.<jxr|jpeg>`（见 include/game_media.h 头注释）：
-# 同一个录屏旁边**可能同时躺着两份封面帧** —— 一份 HDR 的 .jxr、一份普通 .jpeg。
-# 而库里 icon_path 只指其中一份，指到 .jxr 时 stb 解不动，旧代码直接回占位图
-# （深底 + 播放三角），用户看到的就是「预览图不对」。
-# 正确的行为：icon 那份解不动时，去**同一个缩略图目录**里翻一份 stb 认得的位图。
-# 这条夹具把「.jxr 在但解不动」与「同目录还有一份 .jpeg」同时摆出来，
-# 钉死「必须挑到那份真封面帧，而不是占位图」这条性质。
-# .jpeg 本体由 test/media_scan_test.c 的 write_cover_jpeg() 现写（Python 造不出 JPEG）。
-# 单独一个 tid，免得动到主集合的计数。
+# ── v0.5.2.124 专供①：封面帧的目录**只有 icon_path 知道**，不能靠 id 推 ────────
+# 用户口径（第二、第三轮）：「视频的预览图不对，应该是视频里面某一帧画面」→「视频封面也没有」。
+# .123 第一版按 id 推同构目录（/thumbnails/<与 id 同链路>），可 include/game_media.h
+# §7a 白纸黑字写着「录屏目录层级是否与 photo 同构」**尚未在真机验证过**（取证时机器上
+# 只有截图）。而 icon_path 是**媒体库自己写进库里的**，它指哪儿就是哪儿，最权威。
+# 这条夹具刻意让两者**不一致**：录屏在 .../video/<GEN>/<TID>/<shard>/ 下，
+# 而它的缩略图在 .../thumbnails/video/<TID>/<shard>/ 下（**少了生成器那一段**）。
+# 于是「按 id 推」必落空，只有「认 icon_path 所在目录」才找得到 —— 这正是 .124 的修法。
+# （.123 的夹具把两份路径摆成同一个目录，所以它测不出这条差别，白绿了一场。）
 COVER_TID = "PPSA99010"
 v4 = os.path.join(VIDEO, GEN, COVER_TID, SHARD, "20261008_090000_004.mp4")
 put(v4, b"\x00\x00\x00\x18ftypmp42" + os.urandom(4096))
-ICON_HDR = os.path.join(ROOT, "av_contents", "thumbnails", "video", GEN, COVER_TID, SHARD,
-                        "20261008_090000_004.mp4.jxr")
+# 缩略图目录：**没有** GEN 这一层，与录屏目录不同构
+ICON_DIR_C = os.path.join(ROOT, "av_contents", "thumbnails", "video", COVER_TID, SHARD)
+ICON_HDR = os.path.join(ICON_DIR_C, "20261008_090000_004.mp4.jxr")
 put(ICON_HDR, b"\x49\x49\xbc\x01" + os.urandom(512))   # HDR 那份：存在、stat 得过、解不动
 # 同目录的真封面帧（.jpeg）由 C 侧 write_cover_jpeg() 写进同一个目录
 # （put 已经把目录建出来了）。
+
+# ── v0.5.2.124 专供②：**扩展名骗人** —— 同目录只有一份「名字像 JPEG、内容不是」──
+# .123 只按扩展名（md_is_stb_image(md_mime_of(...))）放行候选，于是会挑中这个文件；
+# 它一路传到 stbi_load_from_memory 失败 → 返回 -2 → HTTP 404 → 界面从「占位图」
+# 退化成「一块空白」。.124 按**文件头魔数**认，必须跳过它、回落到占位图
+# （rc=0 + 深底白三角），**不能**是 404。
+# 只放一份诱饵（不放真图），命中与否才是确定的 —— readdir 顺序不参与判定。
+BADC_TID = "PPSA99011"
+v5 = os.path.join(VIDEO, GEN, BADC_TID, SHARD, "20261009_100000_005.mp4")
+put(v5, b"\x00\x00\x00\x18ftypmp42" + os.urandom(4096))
+ICON_DIR_B = os.path.join(ROOT, "av_contents", "thumbnails", "video", GEN, BADC_TID, SHARD)
+put(os.path.join(ICON_DIR_B, "20261009_100000_005.mp4.jxr"),
+    b"\x49\x49\xbc\x01" + os.urandom(512))             # 解不动的那份
+put(os.path.join(ICON_DIR_B, "20261009_100000_005.mp4.jpeg"),
+    b"this is plainly not a JPEG\n" * 8)               # 诱饵：后缀骗人，内容不是图
 
 # 副文件：同目录 <原名>.meta（JSON）与 <原名>.dat（1024B），删除时要一并干掉
 put(p1 + ".meta", b'{"ageLevel":1,"appVer":"01.00","segmentInfo":"game"}')
@@ -173,11 +187,17 @@ ROWS = [
     (rel("video", GEN, JXR_TID, SHARD, "20261007_120000_003.mp4"),
      "/av_contents/thumbnails/video/%s/%s/%s/20261007_120000_003.mp4.jxr" % (GEN, JXR_TID, SHARD),
      1280, 720, 0, 8000, JXR_TID, 131072, "mp4"),
-    # 录屏 + **两份**封面帧（.jxr 解不动 + .jpeg 能解）：icon_path 指向 .jxr，
-    # 缩略图必须落到同目录那份 .jpeg 的**真画面**上，不是占位图。见 COVER_TID 那段。
+    # 录屏 + 封面帧，但**缩略图目录与录屏目录不同构**（缩略图少一层生成器）：
+    # icon_path 指到 .jxr，缩略图必须落到 icon_path 所在目录里那份 .jpeg 的**真画面**上。
+    # 「按 id 推同构目录」在这条上必落空 —— 见 COVER_TID 那段。
     (rel("video", GEN, COVER_TID, SHARD, "20261008_090000_004.mp4"),
-     "/av_contents/thumbnails/video/%s/%s/%s/20261008_090000_004.mp4.jxr" % (GEN, COVER_TID, SHARD),
+     "/av_contents/thumbnails/video/%s/%s/20261008_090000_004.mp4.jxr" % (COVER_TID, SHARD),
      1280, 720, 0, 6000, COVER_TID, 131072, "mp4"),
+    # 录屏 + 同目录只有一份「后缀像 JPEG、内容不是」的诱饵：必须跳过诱饵回占位图，
+    # 不能挑中它 → 解码失败 → 404。见 BADC_TID 那段。
+    (rel("video", GEN, BADC_TID, SHARD, "20261009_100000_005.mp4"),
+     "/av_contents/thumbnails/video/%s/%s/%s/20261009_100000_005.mp4.jxr" % (GEN, BADC_TID, SHARD),
+     1280, 720, 0, 9000, BADC_TID, 131072, "mp4"),
 ]
 
 db = os.path.join(ROOT, "av_content.db")
