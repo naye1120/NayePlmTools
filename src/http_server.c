@@ -166,7 +166,12 @@ static enum MHD_Result reply_file(struct MHD_Connection *conn, const char *path,
     if (fd >= 0) {
         struct stat st;
         if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+            /* 从这一行起 fd 的所有权交出去了 —— gr_file_response 无论成败都自己收尸
+             *（calloc 失败 close(fd)，create 失败走 gr_file_free），所以这里必须把
+             * fd 置 -1：再 close 一次就是关掉一个已经归它管的描述符，关到别的
+             * 文件头上就是数据串台。 */
             struct MHD_Response *r = gr_file_response(st.st_size, fd);
+            fd = -1;
             if (r) {
                 MHD_add_response_header(r, "Content-Type", mime);
                 if (disposition) MHD_add_response_header(r, "Content-Disposition", disposition);
@@ -178,7 +183,7 @@ static enum MHD_Result reply_file(struct MHD_Connection *conn, const char *path,
                 return ret;
             }
         }
-        close(fd);
+        if (fd >= 0) close(fd); /* 只关还没交出去的那几条（fstat 失败 / 非普通文件 / 0 字节） */
     }
     /* 失败也一并清掉临时包（成功那条分支已经 unlinks 过，再 unlink 一次只是
      * 白得一个 ENOENT，但换来「任何退出路径都不留垃圾」这条不会忘的性质）。 */
