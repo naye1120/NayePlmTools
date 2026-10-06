@@ -74,6 +74,9 @@ int game_title_get_name(const char *tid, char *out, size_t osz) {
     if (!tid) return 0;
     if (strcmp(tid, "PPSA99008") == 0) { snprintf(out, osz, "宇宙机器人"); return 1; }
     if (strcmp(tid, "PPSA00001") == 0) { snprintf(out, osz, "另一个游戏"); return 1; }
+    /* v0.5.2.126 同一秒连拍那一对要用它：没有游戏名时下载名会退回原始文件名，
+     * 两个随机数不同就撞不上了，去重那条用例会变成空转。 */
+    if (strcmp(tid, "PPSA99012") == 0) { snprintf(out, osz, "同秒游戏"); return 1; }
     return 0;
 }
 
@@ -95,6 +98,10 @@ int game_title_get_name(const char *tid, char *out, size_t osz) {
 /* 录屏 + 同目录只有一份「后缀像 JPEG、内容不是」的诱饵 —— 见 BADC_TID 段。
  * 必须跳过诱饵回占位图，不能挑中它 → 解码失败 → 404（那在界面上就是「一块空白」）。 */
 #define C_VIDB "/av_contents/video/NPXS40087/PPSA99011/18c/20261009_100000_005.mp4"
+/* v0.5.2.126 同一秒连拍两张（文件名里的时刻相同 → 夹具把 mtime 也钉成同一秒）。
+ * 压缩包摊平到「游戏编码-游戏名称/」之后，这两条的下载名必然撞 → 必须去重。 */
+#define C_DUP1 "/av_contents/photo/NPXS40087/PPSA99012/18c/20261010_120000_010.png"
+#define C_DUP2 "/av_contents/photo/NPXS40087/PPSA99012/18c/20261010_120000_011.png"
 
 #define ICON_REL "/av_contents/thumbnails/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png.jpeg"
 /* 真封面帧：与 C_VIDC 的 .jxr 同目录、同前缀，只差后缀 —— md_find_cover 要挑的就是它。
@@ -315,6 +322,39 @@ static int dump_fd(const char *dst, int fd, off_t sz) {
     }
     close(out);
     return ok ? 0 : -1;
+}
+
+/* 把整个文件读进内存（\0 结尾，方便当字符串找子串）。失败返回 NULL。 */
+static char *slurp(const char *path, size_t *out_len) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size <= 0) { close(fd); return NULL; }
+    char *b = (char *)malloc((size_t)st.st_size + 1);
+    if (!b) { close(fd); return NULL; }
+    size_t got = 0;
+    while (got < (size_t)st.st_size) {
+        ssize_t n = read(fd, b + got, (size_t)st.st_size - got);
+        if (n <= 0) break;
+        got += (size_t)n;
+    }
+    close(fd);
+    if (got != (size_t)st.st_size) { free(b); return NULL; }
+    b[got] = 0;
+    if (out_len) *out_len = got;
+    return b;
+}
+
+/* 子串出现次数。压缩包里的条目名**各存两份**（本地头 + 中央目录），
+ * 所以「出现 10 次」正好等于「5 个条目都带上了这个名字」。 */
+static int count_sub(const char *hay, size_t hlen, const char *needle) {
+    size_t nl = strlen(needle);
+    if (!nl || hlen < nl) return 0;
+    int c = 0;
+    for (size_t i = 0; i + nl <= hlen; i++) {
+        if (hay[i] == needle[0] && memcmp(hay + i, needle, nl) == 0) c++;
+    }
+    return c;
 }
 
 static int wait_job(long long job, char *out, size_t outsz) {
@@ -822,9 +862,78 @@ int main(void) {
         close(fd);
     }
 
+    /* ── 压缩包内的目录结构（v0.5.2.126）────────────────────────────────────
+     * 用户口径：「压缩包下级文件夹是 游戏编码-游戏名称，这个文件夹里面直接就是
+     * 截图和视频」。这一条**只能在这里钉**：media_verify.py 拿 zipfile 能验
+     * 「每个条目名长什么样」，但「所有条目共用同一个顶层目录、且下面不再有子目录」
+     * 这条**结构性质**要在这里看原始字节才踏实（那边的期望值是从夹具 mtime 现算的，
+     * 时间戳没法写死）。两边各守一半。
+     *
+     * ⚠️ 别把这几条删了换成「namelist 长度 == 5」—— 那对目录结构一点约束都没有，
+     * 变异测试里 noplain 那条就抓不到了。 */
+    {
+        size_t zl = 0;
+        char *zb = slurp(ROOT "/pack_all.zip", &zl);
+        CHECK(zb != NULL, "读不出 pack_all.zip");
+        if (zb) {
+            /* 条目名各存两份（本地头 + 中央目录）→ 5 条 × 2 = 10 次 */
+            int nf = count_sub(zb, zl, "PPSA99008-宇宙机器人/");
+            CHECK(nf == 10, "顶层文件夹「PPSA99008-宇宙机器人/」出现 %d 次，应为 10（5 条目 × 2 处）", nf);
+            CHECK(count_sub(zb, zl, "photo/NPXS40087/") == 0,
+                  "旧布局（photo/<生成器>/… 平铺）不该再出现");
+            CHECK(count_sub(zb, zl, "video/NPXS40087/") == 0,
+                  "旧布局（video/<生成器>/… 平铺）不该再出现");
+            /* 文件夹下面**直接**就是文件：紧跟「游戏名称-」，中间不再夹一层目录。
+             * 文件名那一段与「单独下载」的 dlname 同源，所以前缀必然相同。 */
+            int nf2 = count_sub(zb, zl, "PPSA99008-宇宙机器人/宇宙机器人-");
+            CHECK(nf2 == 10, "文件夹下应直接是「游戏名称-时间戳.ext」，实际匹配 %d 次（应 10）", nf2);
+            free(zb);
+        }
+    }
+
     /* 任务跑完后状态仍然可查（active=false），取消已结束的不该报错 */
     CHECK(game_media_pack_status(job, sbuf, sizeof(sbuf)) > 0, "结束后状态仍应可查");
     CHECK(strstr(sbuf, "\"active\":false") != NULL, "结束后 active 应 false: %s", sbuf);
+
+    /* ── 同一秒连拍两张 → 压缩包里必须去重（v0.5.2.126）──────────────────────
+     * 摊平到「游戏编码-游戏名称/」之后，条目名只剩「游戏名称-YYYYMMDD_HHMMSS.ext」，
+     * 原文件名里那截随机数被丢掉了 —— 同一秒的两张必然撞名。zip 里两条**同名**条目
+     * 在 Windows 资源管理器里解压是互相覆盖：那是**静默丢文件**。
+     * 夹具里这两张的 mtime 都是 12:00:00（同秒、不同随机数），所以必然撞。
+     * ⚠️ 放在上面那两条状态断言**之后** —— 它会换掉 job。 */
+    {
+        const char *body = "{\"tid\":\"PPSA99012\"}";
+        job = 0;
+        n = game_media_pack_start_json(body, strlen(body), &job, msg, sizeof(msg));
+        CHECK(n == 0, "同秒打包启动失败 rc=%d msg=%s", n, msg);
+        CHECK(wait_job(job, sbuf, sizeof(sbuf)) == 0, "同秒任务没跑完: %s", sbuf);
+        CHECK(strstr(sbuf, "\"ok\":true") != NULL, "同秒任务失败: %s", sbuf);
+        CHECK(strstr(sbuf, "\"files_total\":2") != NULL, "同秒 files_total 应 2: %s", sbuf);
+
+        fd = -1; sz = 0;
+        CHECK(game_media_pack_open(job, &fd, &sz) == 0, "取同秒包失败");
+        if (fd >= 0) {
+            CHECK(dump_fd(ROOT "/pack_dup.zip", fd, sz) == 0, "写出同秒包失败");
+            close(fd);
+        }
+
+        size_t zl = 0;
+        char *zb = slurp(ROOT "/pack_dup.zip", &zl);
+        CHECK(zb != NULL, "读不出 pack_dup.zip");
+        if (zb) {
+            /* 顶层文件夹：2 条目 × 2 处 = 4 次 */
+            int nf = count_sub(zb, zl, "PPSA99012-同秒游戏/");
+            CHECK(nf == 4, "同秒包顶层文件夹应出现 4 次，实际 %d", nf);
+            /* 第一条保持干净名字、第二条被补成 -2：各在本地头 + 中央目录各一次 → 各 2 次。
+             * 去掉去重的话两条同名：-2 那串变 0 次 → 这条立刻红。
+             * （"-20261010_120000.png" 不是 "-20261010_120000-2.png" 的子串，两串互不干扰。） */
+            int a = count_sub(zb, zl, "-20261010_120000.png");
+            int b = count_sub(zb, zl, "-20261010_120000-2.png");
+            CHECK(a == 2, "第一条应保持干净名字（…-20261010_120000.png），实际 %d 次（应 2）", a);
+            CHECK(b == 2, "同秒的第二条应被补成 …-20261010_120000-2.png，实际 %d 次（应 2）", b);
+            free(zb);
+        }
+    }
 
     /* ── ⑥ 删除 ─────────────────────────────────────────────────────── */
     CHECK(exists(ROOT C_OTH), "另一个游戏的截图不在，夹具缺文件");

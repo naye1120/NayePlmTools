@@ -51,14 +51,19 @@ if command -v python3 >/dev/null 2>&1; then
             echo "=== media_verify json ==="
             python3 test/media_verify.py json "$MEDIA_ROOT/list.json" 5 || fail=1
 
+            # v0.5.2.126 起 zip 模式多两个参数：tid + 游戏名称。
+            # 条目名 = <tid>-<游戏名>/<游戏名>-<时间戳>.<ext>，校验脚本会**独立算一遍**再比。
+            # 游戏名与 test/media_scan_test.c 里 game_title_get_name 桩钉的那个一致。
             echo "=== media_verify zip (subset 2) ==="
             python3 test/media_verify.py zip "$MEDIA_ROOT/pack_subset.zip" "$MEDIA_ROOT" \
+                PPSA99008 宇宙机器人 \
                 "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png" \
                 "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_170000_00474348.jxr" \
                 || fail=1
 
             echo "=== media_verify zip (all 5) ==="
             python3 test/media_verify.py zip "$MEDIA_ROOT/pack_all.zip" "$MEDIA_ROOT" \
+                PPSA99008 宇宙机器人 \
                 "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_165454_00474347.png" \
                 "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_170000_00474348.jxr" \
                 "/av_contents/photo/NPXS40087/PPSA99008/18c/20261005_180000_00474349.png" \
@@ -72,7 +77,18 @@ if command -v python3 >/dev/null 2>&1; then
             # 分块累积只要错一位这里就红。
             echo "=== media_verify zip (big, 跨 256KB 分块) ==="
             python3 test/media_verify.py zip "$MEDIA_ROOT/pack_big.zip" "$MEDIA_ROOT" \
+                PPSA99008 宇宙机器人 \
                 "/av_contents/video/NPXS40087/PPSA99008/18c/20261006_101112_001.mp4" \
+                || fail=1
+
+            # v0.5.2.126 同一秒连拍两张：摊平后条目名必然撞，必须去重成 …-2。
+            # ids 的顺序**必须与包内条目顺序一致**（谁拿干净名字取决于顺序），
+            # 这里是 DB 行序 = 010 在前、011 在后。
+            echo "=== media_verify zip (同一秒去重) ==="
+            python3 test/media_verify.py zip "$MEDIA_ROOT/pack_dup.zip" "$MEDIA_ROOT" \
+                PPSA99012 同秒游戏 \
+                "/av_contents/photo/NPXS40087/PPSA99012/18c/20261010_120000_010.png" \
+                "/av_contents/photo/NPXS40087/PPSA99012/18c/20261010_120000_011.png" \
                 || fail=1
         else
             echo "=== media_verify SKIPPED (list.json 没生成) ==="

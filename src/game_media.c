@@ -417,6 +417,17 @@ static void md_sanitize_name(char *s) {
     }
 }
 
+/* [CN-FORK] v0.5.2.126 按 UTF-8 字符边界截断（不是按字节）。
+ * 用途只有一个：给压缩包顶层文件夹名兜个长度上限。直接 s[max]=0 会把一个汉字
+ * 劈成半个（解压出来是乱码），所以先退到不是 0b10xxxxxx 的那个字节上。 */
+static void md_utf8_cap(char *s, size_t max) {
+    size_t n = strlen(s);
+    if (n <= max) return;
+    n = max;
+    while (n > 0 && ((unsigned char)s[n] & 0xc0) == 0x80) n--;
+    s[n] = 0;
+}
+
 /* 时间戳：本地时区 YYYYMMDD_HHMMSS（与列表里显示的那个时区一致，
  * 玩家才对得上「我什么时候截的」）。 */
 static void md_stamp_compact(time_t mt, char *out, size_t osz) {
@@ -1327,6 +1338,38 @@ static int md_zc(void *u) { (void)u; return gj_cancelled(); }
 static const zip_hooks_t md_zip_hooks = { NULL, md_zc, md_zb, md_zf };
 
 
+/* [CN-FORK] v0.5.2.126 摊平之后**必须去重**。
+ *
+ * 下载名只精确到秒（游戏名称-YYYYMMDD_HHMMSS.ext），原文件名里那截随机数被丢掉了
+ * —— 同一秒里连拍两张就必然撞名，而 zip 里两条**同名**条目在 Windows 资源管理器里
+ * 解压是互相覆盖：那是**静默丢文件**，比名字难看严重得多。
+ * 所以撞了就补 -2 / -3 …；只有真的撞上才动手，常见情况仍是干净的名字。
+ *
+ * 只与**已经排在前面的**条目比（e[0..n-1]），所以同一批里第二次出现的那个改名，
+ * 第一次出现的那个保持原样 —— 顺序变了名字会变，但**同一批永远是同一个结果**。 */
+static void md_zname_unique(char *out, size_t osz, const char *folder,
+                            const char *dl, const zip_ent_t *e, int n) {
+    char stem[300], ext[40];
+    ext[0] = 0;
+    const char *dot = strrchr(dl, '.');
+    if (dot && dot != dl) {
+        snprintf(stem, sizeof(stem), "%.*s", (int)(dot - dl), dl);
+        snprintf(ext, sizeof(ext), "%s", dot); /* 含那个 '.' */
+    } else {
+        snprintf(stem, sizeof(stem), "%s", dl);
+    }
+
+    snprintf(out, osz, "%s/%s%s", folder, stem, ext);
+    for (int k = 2; k < 1000; k++) {
+        int dup = 0;
+        for (int i = 0; i < n; i++) {
+            if (strcmp(e[i].zname, out) == 0) { dup = 1; break; }
+        }
+        if (!dup) return;
+        snprintf(out, osz, "%s/%s-%d%s", folder, stem, k, ext);
+    }
+}
+
 /* ── 收集待打包的路径 ── */
 typedef struct { char **v; int n, cap; } md_paths_t;
 
@@ -1393,6 +1436,32 @@ static int md_build_entries(const char *tid, const char *const *ids, int nids,
     zip_ent_t *e = (zip_ent_t *)calloc((size_t)paths.n, sizeof(zip_ent_t));
     if (!e) { md_paths_free(&paths); return -1; }
 
+    /* ── 压缩包内的顶层文件夹（v0.5.2.126）───────────────────────────────────
+     * 用户口径：「压缩包下级文件夹是 游戏编码-游戏名称，这个文件夹里面直接就是
+     * 截图和视频」。也就是 zip 里**只有一层**目录，截图/录屏直接躺在里面 ——
+     * 不再复刻 /av_contents/photo/<生成器>/<TID>/<hex>/ 那套磁盘层级
+     * （那是我们的实现细节，对用户是噪音，还会把同一批图拆进不同目录）。
+     *
+     * 名字要当**文件夹名**用，所以按文件名的规则清一遍：游戏名里带冒号是常态
+     * （「蜘蛛侠：迈尔斯」），不清就会解出一个奇怪的目录，甚至被当成路径分隔。
+     * 再按 UTF-8 边界兜一个长度上限 —— 不能让 folder + "/" + dlname 撑爆
+     * zip_ent_t.zname[512]，更不能把一个汉字劈成半个。 */
+    char gname[256] = "";
+    if (tid && md_tid_ok(tid)) game_title_get_name(tid, gname, sizeof(gname));
+    char folder[192];
+    {
+        char gs[160];
+        snprintf(gs, sizeof(gs), "%s", gname);
+        md_sanitize_name(gs);
+        md_utf8_cap(gs, 120);
+        if (gs[0] && tid && md_tid_ok(tid))
+            snprintf(folder, sizeof(folder), "%s-%s", tid, gs);
+        else if (tid && md_tid_ok(tid))
+            snprintf(folder, sizeof(folder), "%s", tid);
+        else
+            snprintf(folder, sizeof(folder), "media");
+    }
+
     int n = 0;
     long long total = 0;
     for (int i = 0; i < paths.n; i++) {
@@ -1404,8 +1473,14 @@ static int md_build_entries(const char *tid, const char *const *ids, int nids,
             continue;
         }
         snprintf(e[n].abs, sizeof(e[n].abs), "%s", abs);
-        /* zip 内名字 = content_path 去掉 "/av_contents/" —— 跨分片也唯一，且可读 */
-        snprintf(e[n].zname, sizeof(e[n].zname), "%s", paths.v[i] + 13);
+        /* zip 内名字 = <游戏编码-游戏名称>/<游戏名称-时间戳>.<ext>。
+         * 文件名那一段与「单独下载」那份 dlname **同源**（同一个 md_dlname）——
+         * 压缩包里外两套名字只会让人对不上号。
+         * 撞名（同一秒连拍两张）由 md_zname_unique 补 -2 / -3，别让两条同名条目
+         * 在解压时互相覆盖。 */
+        char dl[300];
+        md_dlname(gname[0] ? gname : NULL, paths.v[i], sb.st_mtime, dl, sizeof(dl));
+        md_zname_unique(e[n].zname, sizeof(e[n].zname), folder, dl, e, n);
         e[n].size = (long long)sb.st_size;
         total += e[n].size;
         n++;

@@ -82,5 +82,25 @@ run_mutant nolgate src/game_job.c \
   's#^    int ok = (match \&\& g_job.done \&\& g_job.ok) ? 1 : 0;#    int ok = match; /*MUT_nolgate*/#' \
   1 || fail=1
 
+echo "=== 变异测试：压缩包顶层文件夹 ==="
+
+# ④ 把条目名退回 .124 的平铺布局（content_path 去掉 /av_contents/），
+#    也就是「游戏编码-游戏名称/」这一层整个不存在。
+#    期望：media_scan_test.c 里那组结构断言全红 —— 顶层文件夹出现 0 次（应 10）、
+#    旧布局 photo/… 与 video/… 又冒出来、文件夹下直接跟文件名那条也不再匹配、
+#    同秒那一对的两条名字也对不上。
+#    用户口径：「压缩包下级文件夹是 游戏编码-游戏名称，这个文件夹里面直接就是截图和视频」。
+run_mutant noplain src/game_media.c \
+  's#^\( *\)md_zname_unique(e\[n\]\.zname, sizeof(e\[n\]\.zname), folder, dl, e, n);#\1snprintf(e[n].zname, sizeof(e[n].zname), "%s", paths.v[i] + 13); /*MUT_noplain*/#' \
+  4 || fail=1
+
+# ⑤ 掐掉去重（同一秒的两张直接同名）。
+#    期望：夹具里那对同秒文件的断言红 —— 干净名字那条变 1 次（少了一条）、
+#    -2 那条变 0 次；而**没有去重的话 zip 里会有两条同名条目**，Windows 解压互相覆盖。
+#    用户口径：「这个文件夹里面直接就是截图和视频」—— 摊平就必须承担撞名的风险。
+run_mutant nodedup src/game_media.c \
+  's#^\( *\)md_zname_unique(e\[n\]\.zname, sizeof(e\[n\]\.zname), folder, dl, e, n);#\1snprintf(e[n].zname, sizeof(e[n].zname), "%s/%s", folder, dl); /*MUT_nodedup*/#' \
+  1 || fail=1
+
 echo "==== 变异测试: $([ $fail -eq 0 ] && echo PASS || echo FAIL) ===="
 exit $fail

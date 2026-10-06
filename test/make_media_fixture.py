@@ -16,10 +16,12 @@
 # 环境：python3 + 标准库（sqlite3 / zlib / struct），无第三方依赖。
 
 import os
+import re
 import shutil
 import sqlite3
 import struct
 import sys
+import time
 import zlib
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/pldmgr_media_test"
@@ -49,10 +51,26 @@ def png_bytes(w, h, rgb):
             + chunk(b"IEND", b""))
 
 
+def mtime_of(path):
+    """文件名里的 YYYYMMDD_HHMMSS → 本地时间戳（取不到就返回 None）。
+
+    ⚠️ **夹具必须把 mtime 钉死**（v0.5.2.126）。zip 内条目名用的是文件**真实 mtime**
+    （下载名精确到秒），不钉的话每次跑出来的名字都不一样 —— C 侧那条「同一秒的两张
+    要被去重成 …-2」就没法断言了（会时红时绿，比不测更糟）。
+    钉成文件名里那个时间还有额外好处：下载名与原始文件名里的时刻终于对得上。"""
+    m = re.search(r"(\d{8})_(\d{6})", os.path.basename(path))
+    if not m:
+        return None
+    return time.mktime(time.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S"))
+
+
 def put(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         f.write(data)
+    ts = mtime_of(path)
+    if ts is not None:
+        os.utime(path, (ts, ts))
     return path
 
 
@@ -131,6 +149,21 @@ put(os.path.join(ICON_DIR_B, "20261009_100000_005.mp4.jxr"),
 put(os.path.join(ICON_DIR_B, "20261009_100000_005.mp4.jpeg"),
     b"this is plainly not a JPEG\n" * 8)               # 诱饵：后缀骗人，内容不是图
 
+# ── v0.5.2.126 专供：同一秒连拍两张 → 压缩包里会撞名 ────────────────────────
+# 用户口径：「压缩包下级文件夹是 游戏编码-游戏名称，这个文件夹里面直接就是截图和视频」。
+# 摊平到这一层之后，条目名只剩「游戏名称-YYYYMMDD_HHMMSS.ext」——原文件名里那截
+# 随机数被丢掉了，于是**同一秒的两张必然同名**。zip 里两条同名条目在 Windows
+# 资源管理器里解压是互相覆盖：那是**静默丢文件**，比名字难看严重得多。
+# 所以 md_zname_unique 要给后一条补 -2。这条夹具给的就是「同秒、不同随机数」那一对
+# （文件名里的时刻相同 → mtime 也被钉成同一秒）。
+# ⚠️ 它必须**带游戏名**（见 media_scan_test.c 的桩）：没有游戏名时下载名会退回原始
+# 文件名，两个随机数不同就撞不上了，这条夹具也就白摆了。
+DUP_TID = "PPSA99012"
+put(os.path.join(PHOTO, GEN, DUP_TID, SHARD, "20261010_120000_010.png"),
+    png_bytes(320, 180, (11, 22, 33)))
+put(os.path.join(PHOTO, GEN, DUP_TID, SHARD, "20261010_120000_011.png"),
+    png_bytes(320, 180, (44, 55, 66)))
+
 # 副文件：同目录 <原名>.meta（JSON）与 <原名>.dat（1024B），删除时要一并干掉
 put(p1 + ".meta", b'{"ageLevel":1,"appVer":"01.00","segmentInfo":"game"}')
 put(p1 + ".dat", os.urandom(1024))
@@ -198,6 +231,11 @@ ROWS = [
     (rel("video", GEN, BADC_TID, SHARD, "20261009_100000_005.mp4"),
      "/av_contents/thumbnails/video/%s/%s/%s/20261009_100000_005.mp4.jxr" % (GEN, BADC_TID, SHARD),
      1280, 720, 0, 9000, BADC_TID, 131072, "mp4"),
+    # 同一秒连拍两张：压缩包摊平后必然撞名，必须去重（见上面 DUP_TID 那段）。
+    (rel("photo", GEN, DUP_TID, SHARD, "20261010_120000_010.png"),
+     "", 320, 180, 0, 0, DUP_TID, 131083, "png"),
+    (rel("photo", GEN, DUP_TID, SHARD, "20261010_120000_011.png"),
+     "", 320, 180, 0, 0, DUP_TID, 131083, "png"),
 ]
 
 db = os.path.join(ROOT, "av_content.db")
