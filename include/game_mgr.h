@@ -50,8 +50,14 @@ int game_mgr_sce_sys_dir(const char *tid, char *out, size_t osz);
  * 0 成功（out 已填），非 0 失败（out 置空）。存档槽的显示名用它。 */
 int game_mgr_sfo_text(const char *path, const char *key, char *out, size_t osz);
 
-/* [CN-FORK] app.db 路径统一出口：游戏列表枚举与「常用入口」磁贴链接同步共用。 */
+/* [CN-FORK] app.db 路径统一出口：游戏列表枚举与「常用入口」磁贴链接同步共用。
+ * #ifndef 与 test/run_host_tests.sh 里 -DGAME_MGR_APPDB_PATH 那条同一个手法
+ * （game_media.h / game_saves.h 已经是这么写的），给 game_mgr.c 留一个能在主机上跑的
+ * 口子 —— v0.5.2.116「游戏列表整个空掉」的 bug 就卡在这个文件主机编不过、一条断言都没有。
+ * 别去掉 #ifndef，默认值保持原样。 */
+#ifndef GAME_MGR_APPDB_PATH
 #define GAME_MGR_APPDB_PATH "/system_data/priv/mms/app.db"
+#endif
 
 /* [CN-FORK] deeplink 枚举回调：tid/titleId 原样（不做游戏前缀过滤，自制磁贴也可能收录）、
  * name 取不到时回落 tid、uri 保证以 http:// 或 https:// 开头才回调。返回非 0 提前停止遍历。 */

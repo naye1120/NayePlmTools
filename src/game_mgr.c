@@ -736,6 +736,12 @@ static int st_cb_master_cols(const uint8_t *d, size_t sz, size_t rec, void *arg)
 
 typedef struct {
     const char *tid;
+    /* gm_sql_col_index 从建表 SQL 里解析出来的**真实列序**（GM_DB_* 下标 → 记录列号）。
+     * st_cb_row 必须按它取列：固件间 tbl_contentinfo 列序会变，这正是 gm_db_row 要
+     * 现查一遍列名的理由。原来这里直接拿 GM_DB_* **枚举序号**当列号用，等于把上面
+     * 那套解析整个丢掉 —— content_id 读成第 0 列（titleId）、install_time 读到整型列、
+     * appdb_size 读到文本列，详情页那 5 个字段在真机上全部错位。 */
+    int col[GM_DB_NCOL];
     char content_id[80];
     char install[40];
     char last[40];
@@ -757,20 +763,21 @@ static int st_cb_row(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     r->found = 1;
 
     uint64_t num = 0;
-    if (st_rec_col(d, sz, rec, GM_DB_CONTENTID, &tp, &tl, NULL) == 2 && tl && tl < sizeof(r->content_id)) {
+    /* 一律按 r->col[GM_DB_*]（现查出来的列序）取，**不能**直接用 GM_DB_* 枚举值当列号。 */
+    if (st_rec_col(d, sz, rec, r->col[GM_DB_CONTENTID], &tp, &tl, NULL) == 2 && tl && tl < sizeof(r->content_id)) {
         memcpy(r->content_id, tp, tl);
         r->content_id[tl] = 0;
     }
-    if (st_rec_col(d, sz, rec, GM_DB_INSTALL, &tp, &tl, NULL) == 2 && tl && tl < sizeof(r->install)) {
+    if (st_rec_col(d, sz, rec, r->col[GM_DB_INSTALL], &tp, &tl, NULL) == 2 && tl && tl < sizeof(r->install)) {
         memcpy(r->install, tp, tl);
         r->install[tl] = 0;
     }
-    if (st_rec_col(d, sz, rec, GM_DB_ACCESS, &tp, &tl, NULL) == 2 && tl && tl < sizeof(r->last)) {
+    if (st_rec_col(d, sz, rec, r->col[GM_DB_ACCESS], &tp, &tl, NULL) == 2 && tl && tl < sizeof(r->last)) {
         memcpy(r->last, tp, tl);
         r->last[tl] = 0;
     }
-    if (st_rec_col(d, sz, rec, GM_DB_SIZE, NULL, NULL, &num) == 3) r->db_size = (long long)num;
-    if (st_rec_col(d, sz, rec, GM_DB_UNINSTALL, NULL, NULL, &num) == 3) r->uninstallable = (int)num;
+    if (st_rec_col(d, sz, rec, r->col[GM_DB_SIZE], NULL, NULL, &num) == 3) r->db_size = (long long)num;
+    if (st_rec_col(d, sz, rec, r->col[GM_DB_UNINSTALL], NULL, NULL, &num) == 3) r->uninstallable = (int)num;
     return 1; /* 主键行，命中即停 */
 }
 
@@ -800,7 +807,10 @@ static void gm_db_row(const char *tid, gm_row_t *r) {
     st_bwalk(d, (size_t)rd, 1, pgsz, 0, st_cb_master_cols, &m);
     int all_ok = 1;
     for (int i = 0; i < GM_DB_NCOL; i++) if (m.c[i] < 0) all_ok = 0;
-    if (m.root && all_ok) st_bwalk(d, (size_t)rd, m.root, pgsz, 0, st_cb_row, r);
+    if (m.root && all_ok) {
+        for (int i = 0; i < GM_DB_NCOL; i++) r->col[i] = m.c[i];
+        st_bwalk(d, (size_t)rd, m.root, pgsz, 0, st_cb_row, r);
+    }
     free(d);
 }
 
@@ -912,6 +922,9 @@ int game_mgr_detail_json(const char *tid, char *buf, size_t size) {
     gm_db_row(tid, &row);
 
     char content_id[80], ecid[200], version[40], ev[100], install[40], last[40];
+    /* version 只有读到 param.sfo 时才被写 —— 下面 sfo_path 为 NULL 那条路一个字节
+     * 都不会碰它，不显式清空就直接把栈上垃圾 pldmgr_json_escape 进 JSON 了。 */
+    version[0] = 0;
     snprintf(content_id, sizeof(content_id), "%s", row.content_id);
 
     /* 内容 ID 与版本号都不在 app.db 的这五列里，一律回 param.sfo 取：
@@ -1002,7 +1015,24 @@ static size_t build_game_json(char *buf, size_t size) {
     size_t pos = snprintf(buf, size, "{\"games\":[");
     if (pos >= size) return size - 1;
     enum_arg_t a;
-    a.buf = buf; a.size = size; a.pos = pos; a.count = 0; a.overflow = 0;
+    /* **整体清零，别逐字段挑** —— 这一行就是「游戏列表整个空掉」的根。
+     *
+     * v0.5.2.116 给这个结构体加了 want（详情模式：非 NULL 时只认这一个 tid、
+     * 一个字节都不写 buf），而这里一直沿用逐字段赋值，漏了它 → want 成了栈上垃圾。
+     * gm_append_item 第一行是 `if (a->want)`，垃圾非空时**每一个条目都早退**，
+     * /game_list 于是回 {"games":[],"count":0}。
+     *
+     * 最迷惑的是它「先好后坏」：/game_detail 走的 gm_lookup 会 memset 再把 want
+     * 指向 tid，同一 MHD 工作线程里跑过一次详情，这块栈就留下一个非空指针，
+     * 此后列表一直空着 —— 不是每次都复现，是用着用着才空。
+     *
+     * 当时一条断言都没有：这个文件主机上要 getmntinfo()（BSD 专有）编不过，
+     * 而报错又是「正常 200 + 空数组」不是崩，只看接口状态码根本看不出来。
+     * 同一版补了 test/host_mnt_compat.h 顶掉那三个 BSD 符号 + 合成 app.db 夹具，
+     * 现在 test/game_mgr_test.c 会**主动把这段栈播种成非空指针**再取列表 ——
+     * 拿掉 memset 那行，它那条 count==2 立刻红。 */
+    memset(&a, 0, sizeof(a));
+    a.buf = buf; a.size = size; a.pos = pos;
     game_enum_appdb(&a);   /* 已安装优先（格式经 gm_fmt 读 mount.lnk/mount_img.lnk 判定） */
     game_enum_dump(&a);    /* 再补扫描到的 dump，tid 去重 */
     pos = a.pos;

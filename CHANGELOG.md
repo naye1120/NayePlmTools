@@ -1,3 +1,64 @@
+## v0.5.2.117 (CN-FORK)
+
+> 起因是真机一句话：「**游戏管理的列表变空了**」。
+> 查下来是 `.116` 引入的**静默**缺陷 —— `/game_list` 照样 200，回的却是
+> `{"games":[],"count":0}`：不崩、不报错，`make` / 主机关卡 / `npm run lint`
+> 三道门**全绿放行**。
+>
+> 本轮修掉三个，同时把「为什么三道门都拦不住」补上：`src/game_mgr.c` **第一次
+> 能在主机上编译**，新增 65 项断言的回归测试，其中「播种栈」那一步是复现条件本身。
+>
+> 本轮出包：`NayePlmTools_0.5.2.117-me.elf` / `-ga.elf`（`-Os -Wall` 零警告）。
+
+### 🐛 Bugfix
+
+* **游戏列表整个空掉（`/game_list` 回 `count:0`）。** `.116` 给 `enum_arg_t` 加了
+  `want`（详情模式：非 NULL 时只认这一个 tid、且一个字节都不写 buf），而
+  `build_game_json` 一直沿用逐字段赋值，**漏了它** → `want` 成了栈上垃圾；而
+  `gm_append_item` 第一行就是 `if (a->want)`，垃圾非空时**每一个条目都早退**，
+  `count` 恒 0。改为 `memset(&a, 0, sizeof(a))` 整体清零。
+  症状之所以是「**先好后坏、越用越空**」：栈上那份垃圾恰好为 0 时列表正常；一旦
+  跑过一次 `/game_detail`（它走 `gm_lookup`，会 memset 再把 `want` 指向 tid），
+  同一 MHD 工作线程的这块栈就留下一个非空指针，此后列表一直空 —— 不是每次都复现。
+* **详情页 5 个字段读错列。** `gm_db_row` 花力气按列名在建表 SQL 里现查列序
+  （固件间 `tbl_contentinfo` 列序会变），结果存进 `m.c[]` —— 但 `st_cb_row` 取列时
+  传的却是 `GM_DB_*` **枚举序号**，把解析结果整个丢掉。于是 `content_id` 读成第 0 列
+  （titleId）、`install_time` 读到整型列、`appdb_size` 读到文本列、`can_uninstall`
+  永远取不到值。改为按 `r->col[GM_DB_*]` 取。
+* **详情 `version` 吐栈上垃圾。** `char version[40]` 只有读到 `param.sfo` 才被写；
+  没有 sfo（dump 缺文件 / 权限不足）时一个字节都不会碰它，直接进 JSON —— 乱码还算
+  好的，混进控制字节就是非法 JSON，前端 `.json()` 一抛整个详情弹窗白掉。改为显式清空。
+
+### ✨ Features —— 测试基建
+
+* **`src/game_mgr.c` 首次可在主机上编译，新增 `game_mgr` 主机关卡（65 项断言）。**
+  这个文件以前卡在 `getmntinfo()` / `MNT_NOWAIT` / `struct statfs::f_mntonname`
+  三个 BSD 专有符号上，**游戏管理的核心（列表 + 详情）一条断言都没有** —— 这正是上面
+  那个 bug 能穿过三道门的原因。补法是**一个字都不改 `game_mgr.c` 的功能代码**：
+  | 新增 | 干什么 |
+  |---|---|
+  | `test/host_mnt_compat.h` | 仅 `-include`、不进真机；顶掉那三个 BSD 符号，主机上恒返回「0 条挂载」= 找不到沙盒图标，与真机上没这个挂载时语义一致 |
+  | `include/game_mgr.h` | `GAME_MGR_APPDB_PATH` 加 `#ifndef` 守卫（与 `game_media.h` / `game_saves.h` 同一手法，**默认值一字未改**） |
+  | `test/make_appdb_fixture.py` | 现造最小 `app.db`（列序照真库），让自研的 `st_bwalk` / `st_rec_col` 自己去读 —— 夹具不参与解析 |
+  | `test/game_mgr_test.c` | 65 项断言 |
+* **测试的核心手法是「主动播种栈」。** 那个 bug 的复现条件本身就是「栈上那段恰好非空」，
+  指望进程刚起来那点干净栈碰巧复现等于没有测试 —— 所以 `seed_stack()` 把接下来那次调用
+  要占的栈显式写成一个**合法可读的非空指针**（指向 `"SEEDSEED1"` 而不是 `0xAAAA…`，
+  为的是让 `strcmp` 读到合法内存，表现为「列表空」而不是 segfault，断言才有意义）。
+  **已验证有效**：拿掉 `memset` 那一行，65 项里 8 条立刻红，全部报 `count=0 items=0`。
+* 其余覆盖：列表项字段与 `count` 对账、60s 快照「作废后真重建 / 不作废回同一份字节」、
+  详情 23 个契约字段**按值**断言（只断言「字段存在」是抓不住读错列的）、
+  `game_mgr_source` 与列表共用同一套枚举、`game_mgr_is_scan_path` 的前缀陷阱、
+  `game_mgr_icon_path` 真走到兼容头那条分支。
+
+### ⚠️ 待真机验证
+
+- 列表是否恢复正常（多进几次游戏详情再回列表，列表必须一直是全的）。
+- 详情页 `content_id` / `install_time` / `last_launch` / `appdb_size` / `can_uninstall`
+  五个字段是否变成对的（`.116` 之前它们读的是错位列，主机夹具才把它照出来）。
+
+---
+
 ## v0.5.2.116 (CN-FORK)
 
 > 本轮按用户两句话推进：先「把游戏管理模块的后端全部完成」，收尾时又来一句

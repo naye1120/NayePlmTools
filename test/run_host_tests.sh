@@ -84,9 +84,10 @@ if command -v python3 >/dev/null 2>&1; then
     if ! python3 test/make_game_fixture.py "$SAVES_ROOT"; then
         echo "  FIXTURE FAILED"; fail=1
     else
-        # src/game_mgr.c 不进来：它要 getmntinfo()（BSD 专有），主机上编不过。
-        # 它唯一漏进来的符号 game_mgr_sfo_text 由 test/game_saves_test.c 桩掉 ——
-        # 于是 SFO 里读名字那条测不了，「读不到就用子项名」的兜底分支反而被测到。
+        # src/game_mgr.c 不进来：那是另一条测试（下方 game_mgr），它自带
+        # test/host_mnt_compat.h 顶掉 getmntinfo。这里 game_mgr_sfo_text 仍是桩 ——
+        # 桩成「读不到」正好逼出 gs_slot_name 的兜底分支，
+        # ② 里断言的就是「读不到 SFO 就用子项名」。
         run_one game_saves src/game_saves.c \
             -Iinclude -Isrc/psaccounts/third_party \
             -DGS_HOME='"/tmp/pldmgr_saves_test/home"' \
@@ -97,6 +98,30 @@ if command -v python3 >/dev/null 2>&1; then
     fi
 else
     echo "=== game_saves SKIPPED: 需要 python3 做夹具 ==="
+fi
+
+# [CN-FORK] v0.5.2.117 游戏列表**静默变空**（build_game_json 漏清 want）→ src/game_mgr.c
+# 这条是那三道门全都放行、真机才炸出来的那类 bug 的补漏：
+#   ① 这个文件以前主机上编不过（getmntinfo 是 BSD 专有）→ 由 test/host_mnt_compat.h
+#      顶成「永远 0 条挂载」，game_mgr.c 本身一个字不改；
+#   ② app.db 主机上没有 → python3 现造一张最小 tbl_contentinfo 当夹具。
+# 缺 python3 就整段跳过，不半跑。
+GM_ROOT=/tmp/pldmgr_gm_test
+if command -v python3 >/dev/null 2>&1; then
+    echo "=== appdb_fixture ==="
+    rm -rf "$GM_ROOT"
+    if ! python3 test/make_appdb_fixture.py "$GM_ROOT"; then
+        echo "  FIXTURE FAILED"; fail=1
+    else
+        run_one game_mgr src/game_mgr.c \
+            -Iinclude -Isrc/psaccounts/third_party \
+            -include test/host_mnt_compat.h \
+            -DGAME_MGR_APPDB_PATH='"/tmp/pldmgr_gm_test/app.db"' \
+            src/game_title.c src/json_helpers.c src/utils.c \
+            src/psaccounts/third_party/stb_impl.c
+    fi
+else
+    echo "=== game_mgr SKIPPED: 需要 python3 做夹具 ==="
 fi
 
 echo "==== overall: $([ $fail -eq 0 ] && echo PASS || echo FAIL) ===="
