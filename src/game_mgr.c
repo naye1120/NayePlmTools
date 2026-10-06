@@ -32,6 +32,20 @@
 
 #define MAX_GAMES   512
 
+/* [CN-FORK] v0.5.2.127 「来源类别」判定的两个根路径做成可覆盖，手法与
+ * GAME_MGR_APPDB_PATH 完全一致（game_media.h / game_saves.h 也已经是这么写的）：
+ *   · 真机 = /user/app（ShadowMount 的两个 lnk 落在这里）+ /system_ex（运行时挂载点）；
+ *   · 主机测试 = test/run_host_tests.sh 用 -D 指到 /tmp/pldmgr_gm_test 下现造的目录树，
+ *     这样「镜像/裸目录/内置 PKG 三种来源分类」在主机上就能真的跑起来。
+ * 别去掉 #ifndef，默认值保持原样 —— 写死的话这条判定就只能在真机上验，
+ * 而它恰恰是「真机上 14 款游戏全被标成已安装 PKG」那个 bug 的判据。 */
+#ifndef GAME_MGR_APP_BASE
+#define GAME_MGR_APP_BASE "/user/app"
+#endif
+#ifndef GAME_MGR_SYSTEM_EX
+#define GAME_MGR_SYSTEM_EX "/system_ex"
+#endif
+
 /* ── 游戏 titleId：9 位 alnum 且命中已知游戏前缀（PPSA/CUSA/PPJB/EMUA/PAUS）──
  * 长度不足/超长（如 DLC 的 service 后缀）或非 alnum 一律拒，兼作路径穿越防护。 */
 static int gm_tid_is_game(const char *t) {
@@ -422,6 +436,36 @@ static const char *gm_img_fmt(const char *path) {
 
 static int gm_ext_is_image(const char *path) { return gm_img_fmt(path) != NULL; }
 
+/* ── [CN-FORK] v0.5.2.127 来源类别：pkg / image / folder ────────────────────
+ *
+ * 判据必须**只看真实物理源**（那两个 lnk 文件），绝不能看 a.d_src。
+ * a.d_src 记的是「这条是从 app.db 还是扫描路径**枚举**到的」，而 ShadowMount 的
+ * 镜像/裸目录游戏**同样会注册进 app.db**，于是它们的 d_src 也是 "installed"。
+ * 老实现拿 d_src 当来源类型，真机上 14 款 ShadowMount 游戏全被标成「已安装 PKG」，
+ * 连带物理路径（错回 /user/app/<TID>）、can_manage_source（false → 删除按钮消失）、
+ * 以及 /game_delete 的 403 EPERM 一起错。对齐 ShadowMountPlus 1.7 的
+ * resolve_game_source()：mount_img.lnk → image，mount.lnk → folder，都没有 → pkg。
+ *
+ * 判据与 gm_fmt_size 完全同源（fmt 就是那两个 lnk 解析出来的），所以直接由 fmt 推 ——
+ * 两处各写一遍一定会漂移。 */
+static const char *gm_class_of_fmt(const char *fmt) {
+    if (!strcmp(fmt, "pkg")) return "pkg";
+    if (!strcmp(fmt, "folder") || !strcmp(fmt, "lz4")) return "folder";
+    return "image";   /* ffpkg / exfat / ffpfs / ffpfsc */
+}
+
+/* 照 ShadowMountPlus 1.7 的 is_data_mounted()：/system_ex/app/<TID>/sce_sys/param.json
+ * 存在 = 这个游戏此刻正被挂进系统（真的在跑）。
+ * **不能**拿「runtime_path 存在」当判据：裸目录游戏的 mount.lnk 直接指向源目录，
+ * 那目录**一直都在**，会让「已挂载」对所有裸目录游戏永远亮着（真机 PPSA01773 就是
+ * 这样被误标成已挂载的，而 ShadowMount 自己回的是 mounted=false）。 */
+static int gm_is_data_mounted(const char *tid) {
+    char p[320];
+    if (snprintf(p, sizeof(p), "%s/app/%s/sce_sys/param.json", GAME_MGR_SYSTEM_EX, tid) >= (int)sizeof(p)) return 0;
+    struct stat st;
+    return stat(p, &st) == 0 && S_ISREG(st.st_mode);
+}
+
 /* 读文本文件首行（去尾换行）到 out；空/读不到返回 0。 */
 static int gm_read_lnk(const char *file, char *out, size_t osz) {
     FILE *f = fopen(file, "rb");
@@ -443,7 +487,7 @@ static int gm_read_lnk(const char *file, char *out, size_t osz) {
  * 未运行时不存在，此时返回 0，交由镜像逻辑处理）。 */
 static int gm_lnk_root(const char *tid, char *root, size_t rsz) {
     char f[256], line[512];
-    snprintf(f, sizeof(f), "/user/app/%s/mount.lnk", tid);
+    snprintf(f, sizeof(f), "%s/%s/mount.lnk", GAME_MGR_APP_BASE, tid);
     if (!gm_read_lnk(f, line, sizeof(line))) return 0;
     if (gm_ext_is_image(line)) return 0;
     snprintf(root, rsz, "%s", line);
@@ -538,7 +582,7 @@ static unsigned long long gm_dir_size_cached(const char *root) {
 static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out) {
     *size_out = 0;
     char f[256], line[512];
-    snprintf(f, sizeof(f), "/user/app/%s/mount_img.lnk", tid);
+    snprintf(f, sizeof(f), "%s/%s/mount_img.lnk", GAME_MGR_APP_BASE, tid);
     if (gm_read_lnk(f, line, sizeof(line))) {
         const char *fmt = gm_img_fmt(line);
         if (fmt) { *size_out = gm_file_size(line); return fmt; }
@@ -623,7 +667,7 @@ int game_mgr_sce_sys_dir(const char *tid, char *out, size_t osz) {
     char cand[768];
     struct stat st;
 
-    snprintf(cand, sizeof(cand), "/user/app/%s/sce_sys", tid);
+    snprintf(cand, sizeof(cand), "%s/%s/sce_sys", GAME_MGR_APP_BASE, tid);
     if (stat(cand, &st) == 0 && S_ISDIR(st.st_mode)) { snprintf(out, osz, "%s", cand); return 1; }
 
     char root[512];
@@ -667,7 +711,7 @@ int game_mgr_icon_path(const char *tid, char *out, size_t osz) {
     if (!gm_tid_is_game(tid)) return 0; /* 9 位 alnum，防路径穿越 */
     char cand[768];
 
-    snprintf(cand, sizeof(cand), "/user/app/%s/sce_sys/icon0.png", tid);
+    snprintf(cand, sizeof(cand), "%s/%s/sce_sys/icon0.png", GAME_MGR_APP_BASE, tid);
     if (icon_file_ok(cand)) { snprintf(out, osz, "%s", cand); return 1; }
 
     /* 该 tid 的沙盒 app0：/mnt/sandbox/<TID>_xxx/app0/sce_sys/icon0.png */
@@ -885,34 +929,38 @@ static void gm_stamp_from_mtime(const char *path, char *out, size_t osz) {
 }
 
 /* 源路径 + 运行时路径。两者含义不同（ShadowMount 语义）：
- *   path         物理源在哪 —— 已安装=app 目录，镜像=那个 .ffpkg/.exfat 文件，
- *                裸目录=mount.lnk 记的源目录，压根没注册的 dump=扫描根下的子目录；
+ *   path         物理源在哪 —— 镜像=那个 .ffpkg/.exfat/.ffpfs/.ffpfsc 文件，
+ *                裸目录=mount.lnk 记的源目录，压根没注册的 dump=扫描根下的子目录，
+ *                真·内置安装=app 目录；
  *   runtime_path ShadowMount 现在把游戏挂在哪 —— mount.lnk 的首行。
  *                没有 mount.lnk 就是空串：前端拿它显示「已挂载」徽标与按钮分工，
- *                凭空编一个 /mnt/shadowmnt/<TID> 会亮出一个点了没反应的按钮。 */
-static void gm_paths(const char *tid, const char *src,
+ *                凭空编一个 /mnt/shadowmnt/<TID> 会亮出一个点了没反应的按钮。
+ *
+ * cls 由 gm_class_of_fmt() 给（pkg / image / folder）。**不能**用 a.d_src 代替 ——
+ * ShadowMount 的游戏也注册在 app.db 里（d_src 同样是 installed），真机取证：
+ * PPSA17599 的物理源是 /mnt/ext1/PPSA17599三十三号.ffpfsc，不是 /user/app/PPSA17599。 */
+static void gm_paths(const char *tid, const char *cls,
                      char *path, size_t psz, char *runtime, size_t rsz) {
     char f[320], line[512], appdir[300];
     path[0] = 0;
     runtime[0] = 0;
-    snprintf(appdir, sizeof(appdir), "/user/app/%s", tid);
+    snprintf(appdir, sizeof(appdir), "%s/%s", GAME_MGR_APP_BASE, tid);
 
-    if (!strcmp(src, "installed")) {
+    /* 物理源优先级：镜像文件 > mount.lnk 记的裸目录 > 扫描根下的 dump 目录 > app 目录。 */
+    snprintf(f, sizeof(f), "%s/mount_img.lnk", appdir);
+    if (gm_read_lnk(f, line, sizeof(line)) && gm_ext_is_image(line)) {
+        snprintf(path, psz, "%s", line);
+    } else if (gm_lnk_root(tid, line, sizeof(line))) {
+        snprintf(path, psz, "%s", line);
+    } else if (!strcmp(cls, "pkg")) {
         snprintf(path, psz, "%s", appdir);
     } else {
-        snprintf(f, sizeof(f), "%s/mount_img.lnk", appdir);
-        if (gm_read_lnk(f, line, sizeof(line)) && gm_ext_is_image(line)) {
-            snprintf(path, psz, "%s", line);
-        } else if (gm_lnk_root(tid, line, sizeof(line))) {
-            snprintf(path, psz, "%s", line);
-        } else {
-            for (size_t i = 0; i < sizeof(GM_SCAN_PATHS) / sizeof(GM_SCAN_PATHS[0]); i++) {
-                snprintf(f, sizeof(f), "%s/%s", GM_SCAN_PATHS[i], tid);
-                struct stat st;
-                if (stat(f, &st) == 0 && S_ISDIR(st.st_mode)) { snprintf(path, psz, "%s", f); break; }
-            }
-            if (!path[0]) snprintf(path, psz, "%s", appdir);
+        for (size_t i = 0; i < sizeof(GM_SCAN_PATHS) / sizeof(GM_SCAN_PATHS[0]); i++) {
+            snprintf(f, sizeof(f), "%s/%s", GM_SCAN_PATHS[i], tid);
+            struct stat st;
+            if (stat(f, &st) == 0 && S_ISDIR(st.st_mode)) { snprintf(path, psz, "%s", f); break; }
         }
+        if (!path[0]) snprintf(path, psz, "%s", appdir);
     }
 
     snprintf(f, sizeof(f), "%s/mount.lnk", appdir);
@@ -953,14 +1001,14 @@ int game_mgr_detail_json(const char *tid, char *buf, size_t size) {
     pldmgr_json_escape(name, esc_name, sizeof(esc_name));
 
     const char *platform = gm_platform(tid);
-    const char *source_type = !strcmp(a.d_src, "installed") ? "pkg"
-                            : (!strcmp(a.d_fmt, "folder") ? "folder" : "image");
-    const char *image_type =
-        (!strcmp(a.d_fmt, "ffpkg") || !strcmp(a.d_fmt, "exfat") ||
-         !strcmp(a.d_fmt, "ffpfs") || !strcmp(a.d_fmt, "ffpfsc")) ? a.d_fmt : "";
+    /* 来源类别看**物理源**（见 gm_class_of_fmt 的注释），不看 a.d_src：
+     * ShadowMount 的游戏也在 app.db 里，用 d_src 判会把它们全标成「已安装 PKG」。 */
+    const char *source_type = gm_class_of_fmt(a.d_fmt);
+    const char *image_type = !strcmp(source_type, "image") ? a.d_fmt : "";
+    int installed_pkg = !strcmp(source_type, "pkg");
 
     char path[600], runtime[600], ep[800], er[800];
-    gm_paths(tid, a.d_src, path, sizeof(path), runtime, sizeof(runtime));
+    gm_paths(tid, source_type, path, sizeof(path), runtime, sizeof(runtime));
     pldmgr_json_escape(path, ep, sizeof(ep));
     pldmgr_json_escape(runtime, er, sizeof(er));
 
@@ -978,7 +1026,7 @@ int game_mgr_detail_json(const char *tid, char *buf, size_t size) {
      * 读不到就空串 —— 契约里那两格本来就是「可能读不到」，前端显示「—」。 */
     char sfo[768];
     const char *sfo_path = NULL;
-    if (snprintf(sfo, sizeof(sfo), "/user/app/%s/sce_sys/param.sfo", tid) < (int)sizeof(sfo) &&
+    if (snprintf(sfo, sizeof(sfo), "%s/%s/sce_sys/param.sfo", GAME_MGR_APP_BASE, tid) < (int)sizeof(sfo) &&
         access(sfo, F_OK) == 0)
         sfo_path = sfo;
     else if (snprintf(sfo, sizeof(sfo), "%s/sce_sys/param.sfo", path) < (int)sizeof(sfo) &&
@@ -993,16 +1041,19 @@ int game_mgr_detail_json(const char *tid, char *buf, size_t size) {
     pldmgr_json_escape(version, ev, sizeof(ev));
 
     gm_trim_stamp(row.install, install, sizeof(install));
+    /* 兜底两跳：先看物理源（镜像文件 / 源目录）的 mtime，再退回 app 目录 ——
+     * 只有 dump 游戏（不在 app.db、没有 app 目录）才靠第一跳，别把它的安装时间弄丢。 */
     if (!install[0]) gm_stamp_from_mtime(path, install, sizeof(install));
+    if (!install[0]) {
+        char appdir[320];
+        if (snprintf(appdir, sizeof(appdir), "%s/%s", GAME_MGR_APP_BASE, tid) < (int)sizeof(appdir))
+            gm_stamp_from_mtime(appdir, install, sizeof(install));
+    }
     gm_trim_stamp(row.last, last, sizeof(last));
 
-    int installed = !strcmp(a.d_src, "installed");
-    /* runtime_path 存在且确实是目录 = 现在挂着。空路径（没注册）天然为 0。 */
-    int mounted = 0;
-    if (runtime[0]) {
-        struct stat st;
-        mounted = (stat(runtime, &st) == 0 && S_ISDIR(st.st_mode));
-    }
+    /* 「已挂载」= 这个游戏此刻真的挂进系统了（照 ShadowMountPlus is_data_mounted）。
+     * 内置 PKG 不参与（它没有 ShadowMount 运行时挂载这回事）。 */
+    int mounted = !installed_pkg && gm_is_data_mounted(tid);
     int can_uninstall = (row.uninstallable < 0) ? 1 : (row.uninstallable != 0);
     int ic = 0, bc = 0;
     game_title_detail_flags(tid, &ic, &bc);
@@ -1022,9 +1073,9 @@ int game_mgr_detail_json(const char *tid, char *buf, size_t size) {
         ecid, ev, ep, er,
         row.db_size, install, last,
         mounted ? "true" : "false",
-        installed ? "true" : "false",
+        installed_pkg ? "true" : "false",
         can_uninstall ? "true" : "false",
-        installed ? "false" : "true",
+        installed_pkg ? "false" : "true",
         saves, media,
         ic ? "true" : "false",
         bc ? "true" : "false");
@@ -1032,9 +1083,14 @@ int game_mgr_detail_json(const char *tid, char *buf, size_t size) {
     return n;
 }
 
-/* ── 给 /game_delete 用的三元组：src（是不是已安装的 PKG）+ 源路径 + 运行时路径。
+/* ── 给 /game_delete / mount / uninstall 用的三元组：来源类别 + 源路径 + 运行时路径。
  * 路径算法与 /game_detail **共用 gm_paths**，所以「详情说可以删、真删时却找不到」
- * 这种两边算法各写一遍导致的错位不可能出现 —— 而删除是不可逆操作，值得较这个真。 */
+ * 这种两边算法各写一遍导致的错位不可能出现 —— 而删除是不可逆操作，值得较这个真。
+ *
+ * src 回的是**来源类别**（pkg / image / folder），不是枚举出处：
+ * 调用方要的就是「这是不是一个真·内置安装的 PKG」（/game_delete 拿它挡 403 EPERM）。
+ * v0.5.2.127 之前回的是 a.d_src，于是 ShadowMount 的镜像/裸目录游戏（也在 app.db 里）
+ * 被当成 PKG，**删源被 403 挡死**，同时详情里的物理路径也错回 app 目录。 */
 int game_mgr_source(const char *tid, char *src, size_t ssz,
                     char *path, size_t psz, char *runtime, size_t rsz) {
     if (src && ssz) src[0] = 0;
@@ -1043,9 +1099,10 @@ int game_mgr_source(const char *tid, char *src, size_t ssz,
     if (!tid || !gm_tid_is_game(tid)) return 0;
     enum_arg_t a;
     if (!gm_lookup(tid, &a)) return 0;
-    if (src && ssz) snprintf(src, ssz, "%s", a.d_src);
+    const char *cls = gm_class_of_fmt(a.d_fmt);
+    if (src && ssz) snprintf(src, ssz, "%s", cls);
     char tmp_p[600], tmp_r[600];
-    gm_paths(tid, a.d_src, tmp_p, sizeof(tmp_p), tmp_r, sizeof(tmp_r));
+    gm_paths(tid, cls, tmp_p, sizeof(tmp_p), tmp_r, sizeof(tmp_r));
     if (path && psz) snprintf(path, psz, "%s", tmp_p);
     if (runtime && rsz) snprintf(runtime, rsz, "%s", tmp_r);
     return 1;

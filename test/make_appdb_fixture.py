@@ -16,22 +16,74 @@
 # GM_DB_COLNAMES 那 5 个。这里照真库给全，让按名查找那条路也走一遍。
 # sqlite_master 那一侧由 st_cb_master 按 col1 == "tbl_contentinfo" 找根页，
 # 标准 CREATE TABLE 自然满足。
+# [CN-FORK] v0.5.2.127 来源类别（pkg / image / folder）的夹具。
+#
+# 判据是 ShadowMount 落在 /user/app/<TID>/ 下的两个文本文件，而 /user/app 在主机上
+# 当然没有 —— 所以 src/game_mgr.c 把这两个根做成了可覆盖宏（GAME_MGR_APP_BASE /
+# GAME_MGR_SYSTEM_EX，手法同 GAME_MGR_APPDB_PATH），本夹具就把那两棵树现造出来：
+#
+#   <root>/user_app/<TID>/mount_img.lnk  首行 = 源镜像路径（带镜像扩展名）→ image
+#   <root>/user_app/<TID>/mount.lnk      首行 = 裸目录源路径             → folder
+#   两个都没有                                                          → pkg（内置安装）
+#   <root>/system_ex/app/<TID>/sce_sys/param.json 存在 → mounted=true
+#
+# 三款游戏刚好覆盖三个类别 + mounted 的真假两支，正是真机上被标错的那批。
 import os
+import shutil
 import sqlite3
 import sys
 
 ROOT_DEFAULT = "/tmp/pldmgr_gm_test"
 
-# 与 test/game_mgr_test.c 里的 TID_PS5 / TID_PS4 一一对应，改一个就得改两个。
-TID_PS5 = "PPSA00001"
-TID_PS4 = "CUSA00002"
+# 与 test/game_mgr_test.c 里的 TID_PS5 / TID_PS4 / TID_FOLDER 一一对应，改一个就得改两个。
+TID_PS5 = "PPSA00001"     # 镜像游戏（mount_img.lnk 指向 .ffpfsc）
+TID_PS4 = "CUSA00002"     # 真·内置安装 PKG（两个 lnk 都没有）
+TID_FOLDER = "PPSA00003"  # 裸目录游戏（mount.lnk 指向外置目录），且此刻挂载中
 NAME_PS5 = "Test Game One"
 NAME_PS4 = "测试游戏二"
+NAME_FOLDER = "Test Game Three"
+
+# 镜像游戏的源镜像路径 —— 内容无所谓（主机上不存在），断言只比对字符串。
+IMG_PATH = "/mnt/ext1/%s.ffpfsc" % TID_PS5
+# 镜像游戏的运行时挂载点（mount.lnk 首行）。故意放在 /mnt/shadowmnt 下：
+# gr_running() 只认这一处为「游戏还在跑」，主机测试不碰它，但真机语义要对得上。
+IMG_RUNTIME = "/mnt/shadowmnt/%s_abcd1234" % TID_PS5
+# 裸目录游戏的源目录。
+FOLDER_PATH = "/mnt/ext1/%s-appFixture" % TID_FOLDER
+
+
+def write_lnk(path, line):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else ROOT_DEFAULT
+    # 整棵清掉再重建：上一次跑剩下的 lnk 会让「这次该是 pkg 的那款」变成 image，
+    # 断言就会时好时坏 —— 那正是最难查的一类假失败。
+    if os.path.isdir(root):
+        shutil.rmtree(root)
     os.makedirs(root, exist_ok=True)
+    app_base = os.path.join(root, "user_app")
+    system_ex = os.path.join(root, "system_ex")
+    os.makedirs(app_base, exist_ok=True)
+
+    # ① 镜像游戏：mount_img.lnk 定档，mount.lnk 指运行时挂载点（此刻没挂，文件不存在）。
+    os.makedirs(os.path.join(app_base, TID_PS5), exist_ok=True)
+    write_lnk(os.path.join(app_base, TID_PS5, "mount_img.lnk"), IMG_PATH)
+    write_lnk(os.path.join(app_base, TID_PS5, "mount.lnk"), IMG_RUNTIME)
+
+    # ② 裸目录游戏：只有 mount.lnk，直接指向源目录；再给它一个 /system_ex 挂载点
+    #    = mounted 为真的那一支（照 ShadowMountPlus is_data_mounted 的判据）。
+    os.makedirs(os.path.join(app_base, TID_FOLDER), exist_ok=True)
+    write_lnk(os.path.join(app_base, TID_FOLDER, "mount.lnk"), FOLDER_PATH)
+    mnt_sce = os.path.join(system_ex, "app", TID_FOLDER, "sce_sys")
+    os.makedirs(mnt_sce, exist_ok=True)
+    with open(os.path.join(mnt_sce, "param.json"), "w", encoding="utf-8") as f:
+        f.write("{}")
+
+    # ③ 真·内置 PKG（TID_PS4）：**什么都不建** —— 连目录都不建。
+    #    /user/app/<TID> 不存在，两个 lnk 也读不到，这才是 pkg 的完整形态。
     out = os.path.join(root, "app.db")
 
     # 连同 WAL/回滚日志一并清掉，免得上一次跑剩下的残留盖住本次的行。
@@ -63,6 +115,8 @@ def main():
                  "2026/10/05 16:54:54", 1, 42949672960, "2026/01/02 10:11:12"),
                 (TID_PS4, "up0000-TEST_0000000000000-SAVE00002", NAME_PS4,
                  "2026/10/06 10:11:12", 0, 17179869184, "2025/12/31 23:59:59"),
+                (TID_FOLDER, "up0000-TEST_0000000000000-SAVE00003", NAME_FOLDER,
+                 "2026/10/07 08:09:10", 1, 32212254720, "2026/03/04 05:06:07"),
             ],
         )
         con.commit()
@@ -75,6 +129,11 @@ def main():
     if size < 200:
         sys.exit("fixture too small: %d bytes" % size)
     print("wrote %s (%d bytes)" % (out, size))
+    print("  app_base  = %s" % app_base)
+    print("  system_ex = %s" % system_ex)
+    print("  %s -> image  (%s)" % (TID_PS5, IMG_PATH))
+    print("  %s -> pkg    (no lnk files)" % TID_PS4)
+    print("  %s -> folder (%s, mounted)" % (TID_FOLDER, FOLDER_PATH))
 
 
 if __name__ == "__main__":

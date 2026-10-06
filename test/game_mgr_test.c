@@ -100,10 +100,18 @@ static void seed_stack(int depth) {
 }
 
 /* ── 夹具常量：与 test/make_appdb_fixture.py 一一对应，改一个就得改两个 ── */
-#define TID_PS5   "PPSA00001"
-#define TID_PS4   "CUSA00002"
+#define TID_PS5    "PPSA00001"    /* 镜像游戏：mount_img.lnk → .ffpfsc */
+#define TID_PS4    "CUSA00002"    /* 真·内置安装 PKG：两个 lnk 都没有 */
+#define TID_FOLDER "PPSA00003"    /* 裸目录游戏：mount.lnk → 外置目录，且此刻挂载中 */
 #define TID_ABSENT "PPSA99999"   /* 格式合法但不在库里：走 gm_lookup 的「真没找到」 */
-#define NAME_PS5  "Test Game One"
+#define NAME_PS5   "Test Game One"
+#define NAME_FOLDER "Test Game Three"
+/* 夹具里 app.db 的行数。写成宏，加一款游戏只改这一处（下面 7 处 count 断言都用它）。 */
+#define N_GAMES 3
+/* 镜像 / 裸目录游戏的两个路径，与夹具里的字面量一致 —— 断言就是拿它们比字符串。 */
+#define IMG_PATH    "/mnt/ext1/" TID_PS5 ".ffpfsc"
+#define IMG_RUNTIME "/mnt/shadowmnt/" TID_PS5 "_abcd1234"
+#define FOLDER_PATH "/mnt/ext1/" TID_FOLDER "-appFixture"
 
 static char g_buf[262144];
 static char g_snap[262144];
@@ -141,8 +149,8 @@ int main(void) {
     n = list_fresh();
     CHECK(n > 0, "game_mgr_list_json 返回 %d", n);
     CHECK(has(g_buf, "{\"games\":["), "不是从 {\"games\":[ 开头: %.60s", g_buf);
-    CHECK(json_count(g_buf) == 2, "count=%d（该 2）", json_count(g_buf));
-    CHECK(json_items(g_buf) == 2, "数组里实际 %d 个 tid（该 2）", json_items(g_buf));
+    CHECK(json_count(g_buf) == N_GAMES, "count=%d（该 %d）", json_count(g_buf), N_GAMES);
+    CHECK(json_items(g_buf) == N_GAMES, "数组里实际 %d 个 tid（该 %d）", json_items(g_buf), N_GAMES);
     CHECK(json_count(g_buf) == json_items(g_buf),
           "count=%d 与数组里 %d 个条对不上", json_count(g_buf), json_items(g_buf));
 
@@ -164,29 +172,40 @@ int main(void) {
     /* ── ③ 反复播种：bug 是「时好时坏」，一次过了不算过 ───────────────── */
     for (int i = 0; i < 5; i++) {
         n = list_fresh();
-        CHECK(n > 0 && json_count(g_buf) == 2 && json_items(g_buf) == 2,
-              "第 %d 次播种后 count=%d items=%d（该 2/2）",
-              i + 1, json_count(g_buf), json_items(g_buf));
+        CHECK(n > 0 && json_count(g_buf) == N_GAMES && json_items(g_buf) == N_GAMES,
+              "第 %d 次播种后 count=%d items=%d（该 %d/%d）",
+              i + 1, json_count(g_buf), json_items(g_buf), N_GAMES, N_GAMES);
     }
 
     /* ── ④ 真实时序：先开详情、再回列表（这正是真机上「越用越空」的顺序） ── */
     n = game_mgr_detail_json(TID_PS5, g_buf, sizeof g_buf);
     CHECK(n > 0, "detail(%s) 返回 %d", TID_PS5, n);
     n = list_fresh();
-    CHECK(n > 0 && json_count(g_buf) == 2 && json_items(g_buf) == 2,
+    CHECK(n > 0 && json_count(g_buf) == N_GAMES && json_items(g_buf) == N_GAMES,
           "跑过详情之后列表空了：count=%d items=%d",
           json_count(g_buf), json_items(g_buf));
 
-    /* ── ⑤ 详情：23 个契约字段（与 frontend/src/utils/gameApi.js 文件头对齐） ── */
+    /* ── ⑤ 详情：23 个契约字段（与 frontend/src/utils/gameApi.js 文件头对齐） ──
+     * TID_PS5 在夹具里是**镜像游戏**（mount_img.lnk → .ffpfsc）。 */
     n = game_mgr_detail_json(TID_PS5, g_buf, sizeof g_buf);
     CHECK(n > 0, "detail(%s) 返回 %d", TID_PS5, n);
     CHECK(has(g_buf, "\"tid\":\"" TID_PS5 "\""), "详情没回这个 tid");
     CHECK(has(g_buf, "\"name\":\"" NAME_PS5 "\""), "详情里的名字不对: %.80s", g_buf);
     CHECK(has(g_buf, "\"src\":\"installed\""), "详情 src 不是 installed");
-    CHECK(has(g_buf, "\"fmt\":\""), "详情没有 fmt");
+    CHECK(has(g_buf, "\"fmt\":\"ffpfsc\""), "镜像游戏的 fmt 不是 ffpfsc: %.120s", g_buf);
     CHECK(has(g_buf, "\"platform\":\"PS5\""), "详情没有 platform=PS5");
-    CHECK(has(g_buf, "\"source_type\":\"pkg\""), "已安装的 source_type 不是 pkg");
-    CHECK(has(g_buf, "\"image_type\":"), "详情没有 image_type");
+    /* ── 来源类别：**只看物理源**，不看 src ──────────────────────────────
+     * 这条断言就是 v0.5.2.127 修的那个 bug 的看门：真机上 ShadowMount 的游戏同样
+     * 注册在 app.db 里（src 也是 installed），老实现拿 src 当来源类型，于是 14 款
+     * 游戏全被标成「已安装 PKG」。夹具这款 src=installed 但物理源是镜像文件，
+     * 必须判成 image —— 只看 src 的实现会在这里红。 */
+    CHECK(has(g_buf, "\"source_type\":\"image\""), "镜像游戏的 source_type 不是 image: %.160s", g_buf);
+    CHECK(has(g_buf, "\"image_type\":\"ffpfsc\""), "镜像游戏的 image_type 不是 ffpfsc: %.200s", g_buf);
+    CHECK(has(g_buf, "\"path\":\"" IMG_PATH "\""), "镜像游戏的物理路径不是那个镜像文件: %.320s", g_buf);
+    CHECK(has(g_buf, "\"runtime_path\":\"" IMG_RUNTIME "\""), "镜像游戏的运行时路径不对: %.400s", g_buf);
+    /* 镜像游戏不是「已安装 PKG」：installed_pkg 必须 false，且它的物理源可删。 */
+    CHECK(has(g_buf, "\"installed_pkg\":false"), "镜像游戏被当成了已安装 PKG: %.480s", g_buf);
+    CHECK(has(g_buf, "\"can_manage_source\":true"), "镜像游戏的物理源被判成不可管: %.560s", g_buf);
     /* 这 4 条是**列序**的看门：光断言字段存在是抓不住错位的（错位了字段照样在，
      * 只是值来自另一列）。值全部照 test/make_appdb_fixture.py 的夹具写死。 */
     CHECK(has(g_buf, "\"content_id\":\"up0000-TEST_0000000000000-SAVE00001\""),
@@ -201,13 +220,39 @@ int main(void) {
      * char version[40] 从来没被写过，直接进 JSON 就是一段栈上垃圾 —— 乱码还好，
      * 混进控制字节就是非法 JSON，前端 .json() 一抛整个详情弹窗白掉。 */
     CHECK(has(g_buf, "\"version\":\"\""), "version 不是空串（读不到就该是空）: %.240s", g_buf);
-    CHECK(has(g_buf, "\"mounted\":false"), "主机上不该是 mounted");
-    CHECK(has(g_buf, "\"installed_pkg\":true"), "已安装的 installed_pkg 不是 true");
-    CHECK(has(g_buf, "\"can_manage_source\":false"), "已安装的 can_manage_source 应为 false");
+    /* mounted = /system_ex/app/<TID>/sce_sys/param.json 存在（照 ShadowMountPlus
+     * is_data_mounted）。夹具这款镜像游戏没造那个挂载点 → false。
+     * **不能**用「runtime_path 存在」当判据：裸目录游戏的源目录一直都在。 */
+    CHECK(has(g_buf, "\"mounted\":false"), "镜像游戏不该是 mounted");
     CHECK(has(g_buf, "\"saves_count\":3"), "saves_count 不是桩值 3");
     CHECK(has(g_buf, "\"media_count\":7"), "media_count 不是桩值 7");
     CHECK(has(g_buf, "\"title_icon_custom\":false"), "没自定义图时该是 false");
     CHECK(has(g_buf, "\"title_bg_custom\":false"), "没自定义图时该是 false");
+
+    /* ── ⑤b 真·内置 PKG（TID_PS4，夹具里两个 lnk 都没有）────────────────── */
+    n = game_mgr_detail_json(TID_PS4, g_buf, sizeof g_buf);
+    CHECK(n > 0, "detail(%s) 返回 %d", TID_PS4, n);
+    CHECK(has(g_buf, "\"source_type\":\"pkg\""), "内置 PKG 的 source_type 不是 pkg: %.160s", g_buf);
+    CHECK(has(g_buf, "\"image_type\":\"\""), "内置 PKG 的 image_type 该是空串: %.200s", g_buf);
+    CHECK(has(g_buf, "\"installed_pkg\":true"), "内置 PKG 的 installed_pkg 不是 true: %.400s", g_buf);
+    CHECK(has(g_buf, "\"can_manage_source\":false"), "内置 PKG 不该有可管的物理源: %.480s", g_buf);
+    CHECK(has(g_buf, "\"mounted\":false"), "内置 PKG 不该是 mounted");
+    CHECK(has(g_buf, "\"platform\":\"PS4\""), "CUSA 没标成 PS4");
+    CHECK(has(g_buf, "\"appdb_size\":17179869184"), "TID_PS4 的 appdb_size 读错列了");
+
+    /* ── ⑤c 裸目录游戏（TID_FOLDER，只有 mount.lnk；且夹具造了 /system_ex 挂载点）── */
+    n = game_mgr_detail_json(TID_FOLDER, g_buf, sizeof g_buf);
+    CHECK(n > 0, "detail(%s) 返回 %d", TID_FOLDER, n);
+    CHECK(has(g_buf, "\"source_type\":\"folder\""), "裸目录游戏的 source_type 不是 folder: %.160s", g_buf);
+    CHECK(has(g_buf, "\"image_type\":\"\""), "裸目录游戏的 image_type 该是空串: %.200s", g_buf);
+    CHECK(has(g_buf, "\"path\":\"" FOLDER_PATH "\""), "裸目录游戏的物理路径不是源目录: %.320s", g_buf);
+    CHECK(has(g_buf, "\"runtime_path\":\"" FOLDER_PATH "\""), "裸目录游戏的运行时路径不对: %.400s", g_buf);
+    CHECK(has(g_buf, "\"installed_pkg\":false"), "裸目录游戏被当成了已安装 PKG: %.480s", g_buf);
+    CHECK(has(g_buf, "\"can_manage_source\":true"), "裸目录游戏的物理源被判成不可管: %.560s", g_buf);
+    /* 这一款夹具**造了** /system_ex/app/<TID>/sce_sys/param.json → 唯一 mounted=true 的样本。
+     * 没有它，「已挂载」这条判据写反了也没人发现。 */
+    CHECK(has(g_buf, "\"mounted\":true"), "已挂载的游戏没判成 mounted: %.640s", g_buf);
+    CHECK(has(g_buf, "\"name\":\"" NAME_FOLDER "\""), "TID_FOLDER 的名字不对: %.80s", g_buf);
 
     /* not-found：格式合法但不在任何一份枚举里 → -1，路由据此 404。
      * 宁可 404 也不回一份凭空拼的详情。 */
@@ -217,14 +262,29 @@ int main(void) {
     CHECK(game_mgr_detail_json("../../etc/passwd", g_buf, sizeof g_buf) < 0,
           "路径穿越式的 tid 居然回了详情");
 
-    /* ── ⑥ game_mgr_source：与列表同一套枚举，gm_lookup 内部 memset ───── */
+    /* ── ⑥ game_mgr_source：与列表同一套枚举，gm_lookup 内部 memset ─────
+     * src 回的是**来源类别**（pkg / image / folder），不是枚举出处 ——
+     * /game_delete 拿它挡 403 EPERM，判错就会把 ShadowMount 游戏的删源全挡死。 */
     {
         char src[16], path[600], runtime[600];
         CHECK(game_mgr_source(TID_PS5, src, sizeof src, path, sizeof path,
                               runtime, sizeof runtime) == 1,
               "source(%s) 没找到", TID_PS5);
-        CHECK(!strcmp(src, "installed"), "source 的 src=%s（该 installed）", src);
-        CHECK(path[0] != '\0', "source 的 path 是空的");
+        CHECK(!strcmp(src, "image"), "镜像游戏 source 的 src=%s（该 image）", src);
+        CHECK(!strcmp(path, IMG_PATH), "镜像游戏 source 的 path=%s（该 %s）", path, IMG_PATH);
+        CHECK(!strcmp(runtime, IMG_RUNTIME), "镜像游戏 source 的 runtime=%s（该 %s）",
+              runtime, IMG_RUNTIME);
+        /* 内置 PKG 才是 pkg —— 这是 /game_delete 唯一该回 403 EPERM 的一类。 */
+        CHECK(game_mgr_source(TID_PS4, src, sizeof src, path, sizeof path,
+                              runtime, sizeof runtime) == 1,
+              "source(%s) 没找到", TID_PS4);
+        CHECK(!strcmp(src, "pkg"), "内置 PKG source 的 src=%s（该 pkg）", src);
+        CHECK(game_mgr_source(TID_FOLDER, src, sizeof src, path, sizeof path,
+                              runtime, sizeof runtime) == 1,
+              "source(%s) 没找到", TID_FOLDER);
+        CHECK(!strcmp(src, "folder"), "裸目录游戏 source 的 src=%s（该 folder）", src);
+        CHECK(!strcmp(path, FOLDER_PATH), "裸目录游戏 source 的 path=%s（该 %s）",
+              path, FOLDER_PATH);
         CHECK(game_mgr_source(TID_ABSENT, src, sizeof src, path, sizeof path,
                               runtime, sizeof runtime) == 0,
               "source 查不存在的 tid 居然找到了");
@@ -234,7 +294,7 @@ int main(void) {
         /* 走完 gm_lookup（它 memset 完把 want 指向 tid）再取列表 —— 这一步
          * 就是真机上把栈留下非空 want 的那个动作。 */
         n = list_fresh();
-        CHECK(n > 0 && json_count(g_buf) == 2,
+        CHECK(n > 0 && json_count(g_buf) == N_GAMES,
               "跑过 source 之后列表空了：count=%d", json_count(g_buf));
     }
 
@@ -273,7 +333,7 @@ int main(void) {
 
     /* ── ⑩ 60s 快照：不作废就该回一模一样的字节 ───────────────────────── */
     n = list_fresh();
-    CHECK(n > 0 && json_count(g_buf) == 2, "快照前一次 count=%d", json_count(g_buf));
+    CHECK(n > 0 && json_count(g_buf) == N_GAMES, "快照前一次 count=%d", json_count(g_buf));
     memcpy(g_snap, g_buf, (size_t)n + 1);
     seed_stack(4);   /* 再播一次种：若这次没走缓存而是重建，字节该变 */
     {

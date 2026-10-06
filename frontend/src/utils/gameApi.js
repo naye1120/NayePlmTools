@@ -13,6 +13,19 @@
  *            install_time, last_launch, mounted, installed_pkg,
  *            can_uninstall, can_manage_source, saves_count, media_count,
  *            title_icon_custom, title_bg_custom }
+ *        [CN-FORK] v0.5.2.127 这几个字段的语义（对齐 ShadowMountPlus 1.7）：
+ *          src            = **从哪枚举到的**（installed=app.db / dump=扫描路径）。
+ *                           它**不是**来源类型：ShadowMount 的镜像/裸目录游戏同样
+ *                           注册在 app.db 里，src 也是 installed。只配给「已安装/转储」
+ *                           那种「列表里怎么找到它的」徽标用。
+ *          source_type    = **物理源类型**，只看 /user/app/<TID>/ 下那两个 lnk 文件：
+ *                           pkg（两个都没有）/ image（mount_img.lnk）/ folder（mount.lnk）。
+ *          image_type     = 镜像扩展名（ffpkg/exfat/ffpfs/ffpfsc），非镜像为空串。
+ *          path           = 物理源：镜像=那个镜像文件，裸目录=源目录，pkg=app 目录。
+ *          mounted        = 此刻**真的挂进系统**了（/system_ex/app/<TID>/sce_sys/param.json
+ *                           存在）。不是「runtime_path 存在」—— 裸目录游戏的源目录一直在。
+ *          installed_pkg  = 真·内置安装的 PKG（= source_type=="pkg"）。
+ *          can_manage_source = !installed_pkg，后端判定，前端只认这个字段。
  *   GET  /game_list              → { games:[{tid,name,src,fmt,size,icon?,bg?}], count, truncated }
  *        icon / bg 都是「自定义版本号」（number），有值前端才去取对应的自定义图，避免白跑 404
  *

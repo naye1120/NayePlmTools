@@ -146,9 +146,15 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
   /* 列表里已有的字段先顶上，详情到了再覆盖 —— 这样弹窗一打开就有封面和名字，
    * 不会先闪一片空白再填内容。 */
   const g = detail || game
-  const installed = g.src === 'installed'
   const platform = g.platform || (String(g.tid || '').toUpperCase().slice(0, 4) === 'CUSA' ? 'PS4' : 'PS5')
-  const sourceType = g.source_type || (installed ? 'pkg' : g.fmt === 'folder' ? 'folder' : 'image')
+  /* 来源类型看**物理源**，不看 g.src：src 记的是「从 app.db 还是扫描路径枚举到的」，
+   * 而 ShadowMount 的镜像/裸目录游戏同样注册在 app.db 里（src 也是 installed）。
+   * 后端已经给出正确的 source_type（pkg / image / folder，见 game_mgr.c 的
+   * gm_class_of_fmt），这里只做「详情还没回来」时的兜底 —— 兜底同样按 fmt 判，
+   * 不按 src，否则弹窗一打开那 200ms 会先闪一个错的「已安装 PKG」。 */
+  const isPkg = g.installed_pkg === true || (g.installed_pkg === undefined && g.fmt === 'pkg')
+  const sourceType = g.source_type
+    || (isPkg ? 'pkg' : (g.fmt === 'folder' || g.fmt === 'lz4') ? 'folder' : 'image')
   const SOURCE_LABEL = { pkg: t('game.src_pkg', '已安装 PKG'), image: t('game.src_image', '镜像'), folder: t('game.src_folder', '文件夹') }
   /* can_manage_source 由**后端**判定（ShadowMountPlus 同名字段：这个游戏的物理源能不能挂载/删除）。
    * 这里刻意**不**再用 `!installed_pkg` 覆盖一遍 —— 把后端的判断复制到前端，两边一定会漂移，
@@ -231,7 +237,7 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
     if (!showConfirm) return
     showConfirm(
       t('game.uninstall_title', '卸载游戏'),
-      installed
+      isPkg
         ? t('game.uninstall_pkg_confirm', '卸载「{{name}}」？已安装的 PKG 游戏将被删除。', { name: g.name || tid })
         : t('game.uninstall_confirm', '请求卸载「{{name}}」？\n\n源镜像或文件夹不会被删除。', { name: g.name || tid }),
       async () => {
@@ -458,7 +464,10 @@ export default function GameDetailModal({ show, game, onClose, addToast, showCon
             </span>
           </p>
         )}
-        {!canManageSource && installed && (
+        {/* 「没有可删的物理源」只对**真·内置安装的 PKG** 成立。判据用后端的
+             installed_pkg（= 物理源那两个 lnk 都没有），不用 g.src —— ShadowMount 的
+             镜像/裸目录游戏也在 app.db 里，用 src 判会给它们也挂上这句话。 */}
+        {detail && detail.installed_pkg === true && (
           <p className="mt-4 panel-tiny text-zinc-500 flex items-start gap-1.5">
             <ImageIcon className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>{t('game.pkg_no_source', '这是已安装的 PKG，没有可删除的物理源；要移除请用「卸载」。')}</span>

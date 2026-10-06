@@ -1,3 +1,95 @@
+## v0.5.2.127 (CN-FORK)
+
+> 用户口径：「**这里都标识错误，你再跟 shownmount 对比一下**」（附两张游戏详情弹窗截图），
+> 追问后明确：「**格式没错，但是他显示是已安装 pkg 是错的**」。
+>
+> **一句话：来源类别判错了，判据用错了字段。** 详情弹窗给一款 `.ffpfsc` 镜像游戏
+> （`PPSA17599` 光与影：33号远征队）和一款裸目录游戏（`PPSA01773` FF7 REMAKE）
+> 都打了「已安装 PKG」，连带一串字段一起错。
+>
+> **根因：拿 `a.d_src` 当来源类型。** `d_src` 记的是「这条是从 app.db 还是扫描路径
+> **枚举**到的」—— 而 ShadowMount 的镜像/裸目录游戏**同样会注册进 app.db**，于是它们的
+> `d_src` 也是 `installed`。真机 15 款游戏里 14 款全中招。连带错的有：
+> 物理路径（错回 `/user/app/<TID>`）、`mounted`、`installed_pkg`、`can_manage_source`
+> （→ 前端不画「删除源」按钮）、以及 `/game_delete` 的 **403 EPERM**（删源被彻底挡死）。
+>
+> **对齐参照物不是猜的 —— 是设备上真跑着的 ShadowMountPlus 1.7beta4。** 它的 Web UI
+> 就挂在 `192.168.1.214:10101`（`/api/v1/games`、`/api/v1/games/info`），字段语义
+> 也照 `1.7beta4` 的 `src/sm_api_service.c` / `sm_filesystem.c` 逐一核对过：
+>
+> | 字段 | ShadowMountPlus 1.7beta4 | 我们（修前） | 我们（修后） |
+> |---|---|---|---|
+> | `source_type` | `pkg` / `image` / `folder`（按物理源判） | 一律 `pkg` ❌ | 按物理源判 ✓ |
+> | `path`（PPSA17599） | `/mnt/ext1/PPSA17599三十三号.ffpfsc` | `/user/app/PPSA17599` ❌ | 同 SMP ✓ |
+> | `mounted`（PPSA01773） | `false` | `true` ❌ | `false` ✓ |
+> | `installed_pkg` | `false` | `true` ❌ | `false` ✓ |
+> | `can_manage_source` | `true` | `false` ❌ | `true` ✓ |
+>
+> **`mounted` 的判据换了一个**：SMP 是 `is_data_mounted()` =
+> `/system_ex/app/<TID>/sce_sys/param.json` 存在。我们原来用「`runtime_path` 存在
+> 且是目录」—— 裸目录游戏的 `mount.lnk` 直接指向源目录，那目录**一直都在**，
+> 于是「已挂载」对所有裸目录游戏永远亮着（真机上 `PPSA01773` 就是这么被误标的）。
+>
+> **没动格式命名**（用户明确「格式没错」）：磁贴与详情继续用扩展名
+> `ffpkg / exFAT / ffpfs / ffpfsc`。顺带记录一个**旧文档的错误**：`v0.5.2.74` 写的
+> 「与 ShadowMountPlus 一致的取值 `ffPKG/exFAT/ffpfs/ffpfsc`」是把**扩展名**当成了
+> SMP 的展示名 —— SMP 的 `image_type` 其实是文件系统名（`ufs` / `exfatfs` / `pfs` /
+> `pfsc`，见其 `sm_image.c` 的 `image_fs_name()`）。我们的扩展名更好认（就是磁盘上的
+> 文件名），所以保留，但**别再声称它与 SMP 一致**。
+
+### 🐛 Fixes
+
+* **来源类别改为按物理源判定**（`src/game_mgr.c` 新增 `gm_class_of_fmt()`）：
+  `mount_img.lnk` 命中镜像扩展名 → `image`；`mount.lnk` → `folder`；两者都没有 → `pkg`。
+  判据与 `gm_fmt_size()` 完全同源（直接由 `fmt` 推），不会两处漂移。
+* **`gm_paths()` 不再因「是 app.db 枚举到的」就回 `/user/app/<TID>`**：物理源优先级改为
+  镜像文件 > `mount.lnk` 的裸目录 > 扫描根下的 dump 目录 > app 目录。签名从 `src` 换成
+  `cls`（类别）。
+* **`mounted` 改用 ShadowMountPlus 的判据**（新增 `gm_is_data_mounted()`）：
+  `/system_ex/app/<TID>/sce_sys/param.json` 存在；内置 PKG 恒 `false`。
+* **`installed_pkg` / `can_manage_source` 改由类别推**（`installed_pkg = (cls=="pkg")`，
+  `can_manage_source = !installed_pkg`）。于是镜像/裸目录游戏重新拿到「删除源」按钮。
+* **`/game_delete` 的 EPERM 闸门改判类别**（`src/game_runtime.c`）：原来 `src=="installed"`
+  就 403，ShadowMount 的镜像/裸目录游戏**永远删不掉源**；现在只有真·内置 PKG 才 403。
+* **`game_mgr_source()` 回的是类别而不是枚举出处**（`src/game_mgr.h` 契约注释同步）。
+* **`/user/app` 与 `/system_ex` 做成可覆盖宏**（`GAME_MGR_APP_BASE` / `GAME_MGR_SYSTEM_EX`，
+  手法同 `GAME_MGR_APPDB_PATH`）—— 否则这条判定在主机上只走得到「没有 lnk → pkg」那一支，
+  而真机炸的正是另外两支。
+* **详情兜底安装时间加一跳**：先看物理源 mtime，再退回 app 目录（dump 游戏没有 app 目录，
+  别把它的安装时间弄丢）。
+* **前端 `GameDetailModal.jsx`**：来源类型改由 `source_type`（后端）判，兜底按 `fmt` 判
+  （**不再按 `src`**，否则弹窗打开那 200ms 会先闪一个错的「已安装 PKG」）；
+  「没有可删物理源」那句与卸载确认文案改用 `installed_pkg`，不再用 `src`。
+* **`frontend/mock-server.js`**：`buildDetail()` 的来源类别 / 物理路径 / 运行时路径 /
+  `mounted` / `installed_pkg` / `can_manage_source` 全部跟后端改成同一口径 ——
+  桩不跟着改，回归验的就是旧口径，改坏了也看不出来。
+
+### 🧪 Tests
+
+* `test/make_appdb_fixture.py`：夹具从 2 款扩到 **3 款**，刚好覆盖三个类别 ——
+  `PPSA00001` 镜像（造 `mount_img.lnk`）、`CUSA00002` 内置 PKG（两个 lnk 都不造）、
+  `PPSA00003` 裸目录（造 `mount.lnk`）+ **造 `/system_ex` 挂载点**（唯一 `mounted=true`
+  的样本）。顺带把 `<root>` 整棵清掉再建（残留的 lnk 会让断言时红时绿）。
+* `test/run_host_tests.sh`：game_mgr 那条加上 `-DGAME_MGR_APP_BASE` /
+  `-DGAME_MGR_SYSTEM_EX`。
+* `test/game_mgr_test.c`：**65 → 90 条**。新增 ⑤b（内置 PKG）/ ⑤c（裸目录 + 已挂载）
+  两块；`game_mgr_source` 那组从「src 该是 installed」改成逐类别断言
+  （image / pkg / folder 各自的 `src` 与 `path`）。
+* **新增 `test/mutation_check_game_mgr.sh`**（4 个变异体，全过）：
+  `srcdsrc`（退回看 `a.d_src`）8 条红 / `imgtype` 2 条 / `pathimg`（掐掉 mount_img.lnk
+  那支）2 条 / `mounted`（退回「runtime_path 存在即已挂载」）1 条。
+  这一层是专门防「夹具没造那两个 lnk，断言其实是空转」的。
+* `game112.mjs`：**177 → 185**。新增 2b（内置 PKG：来源类型 / 那句说明 / 无删除源）
+  与 2c（裸目录 + 「已挂载」徽标 + 有删除源）两块；第 2 块改成断言镜像游戏
+  **显示「镜像」、有「删除源」、物理路径是镜像文件、且不再谎称「这是已安装的 PKG」**。
+
+### ⚠️ 已知 / 未做
+
+* 磁贴左上角那颗「已安装 / 转储」徽标仍按 `src` 判（= 从哪枚举到的）。ShadowMount 的游戏
+  确实注册在 app.db 里，那个语义下「已安装」是对的，且它没声称自己是 PKG —— 保持不动。
+* `can_uninstall` 仍取 app.db 的 `uninstallable` 列，未与 SMP 的 `can_uninstall = installed`
+  对齐（两者在真机上目前一致）。
+
 ## v0.5.2.126 (CN-FORK)
 
 > 用户口径：「**打包的多媒体，压缩包下级文件夹是 游戏编码-游戏名称 这个文件夹里面

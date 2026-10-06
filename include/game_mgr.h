@@ -24,6 +24,9 @@ int game_mgr_list_json(char *buf, size_t size);
 int game_mgr_detail_json(const char *tid, char *buf, size_t size);
 
 /* [CN-FORK] v0.5.2.116 /game_delete 要的三元组，路径算法与 /game_detail 共用。
+ * v0.5.2.127 起 src 回的是**来源类别**（"pkg" | "image" | "folder"，由物理源那两个
+ * lnk 文件判定），**不是** a.d_src 那个「从哪枚举到的」—— ShadowMount 的游戏也在
+ * app.db 里，用 d_src 会把它们全当成内置 PKG，删源被 403 挡死。
  * 返回 1 = 找到这个游戏（src/path/runtime 均已填，runtime 可能为空串 = 没注册挂载）；
  * 返回 0 = 这个 tid 不在任何一份枚举里（路由据此 404）。 */
 int game_mgr_source(const char *tid, char *src, size_t ssz,

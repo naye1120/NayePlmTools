@@ -287,7 +287,10 @@ int game_runtime_delete(const char *body, size_t len, char *buf, size_t size, in
     if (!game_mgr_source(tid, src, sizeof(src), path, sizeof(path), runtime, sizeof(runtime)))
         return gr_err(buf, size, status, 404, "ENOENT", "主机上找不到这个游戏");
 
-    if (!strcmp(src, "installed"))
+    /* src 是**来源类别**（pkg / image / folder，见 game_mgr_source 的注释）。
+     * 只有真·内置安装的 PKG 才没有可删的物理源 —— ShadowMount 的镜像/裸目录游戏
+     * 同样在 app.db 里，但它们有物理源（镜像文件 / 外置目录），删得。 */
+    if (!strcmp(src, "pkg"))
         return gr_err(buf, size, status, 403, "EPERM",
                       "已安装的 PKG 没有可删除的物理源，请改用「卸载」");
 

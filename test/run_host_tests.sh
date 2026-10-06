@@ -138,10 +138,17 @@ if command -v python3 >/dev/null 2>&1; then
     if ! python3 test/make_appdb_fixture.py "$GM_ROOT"; then
         echo "  FIXTURE FAILED"; fail=1
     else
+        # [CN-FORK] v0.5.2.127 除了 app.db，还要把 /user/app 与 /system_ex 两棵树指到
+        # 夹具目录：来源类别（pkg / image / folder）的判据就是 /user/app/<TID>/ 下那两个
+        # lnk 文件，mounted 的判据是 /system_ex/app/<TID>/sce_sys/param.json。
+        # 不指过去的话，这条判定在主机上永远只走得到「没有 lnk → pkg」那一支 ——
+        # 而真机炸的正是另外两支（ShadowMount 的游戏被当成已安装 PKG）。
         run_one game_mgr src/game_mgr.c \
             -Iinclude -Isrc/psaccounts/third_party \
             -include test/host_mnt_compat.h \
             -DGAME_MGR_APPDB_PATH='"/tmp/pldmgr_gm_test/app.db"' \
+            -DGAME_MGR_APP_BASE='"/tmp/pldmgr_gm_test/user_app"' \
+            -DGAME_MGR_SYSTEM_EX='"/tmp/pldmgr_gm_test/system_ex"' \
             src/game_title.c src/json_helpers.c src/utils.c \
             src/psaccounts/third_party/stb_impl.c
     fi

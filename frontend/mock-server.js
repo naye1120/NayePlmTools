@@ -620,15 +620,27 @@ function jobStatus(id) {
 
 /* 详情：把列表项补齐成一份完整的详情。字段与 gameApi.js 的契约一一对应。
  * 刻意留两个 tid 没有 content_id / version（模拟读不到 app.db 行的情况），
- * 验证前端那些格子会不会正确显示成「—」而不是 undefined。 */
+ * 验证前端那些格子会不会正确显示成「—」而不是 undefined。
+ *
+ * [CN-FORK] v0.5.2.127 来源类别**按 fmt 推**，不按 src —— 与后端 game_mgr.c 的
+ * gm_class_of_fmt() 同一口径。理由（真机取证）：src 记的是「从 app.db 还是扫描路径
+ * 枚举到的」，而 ShadowMount 的镜像/裸目录游戏同样注册在 app.db 里（src 也是
+ * installed）。拿 src 当来源类型，真机上 14 款游戏全被标成「已安装 PKG」，
+ * 物理路径 / 已挂载 / can_manage_source 一起错。桩必须跟着后端一起改，
+ * 否则回归验的是旧口径，改坏了也看不出来。 */
 function buildDetail(tid) {
   const base = mockGames.find((x) => x.tid === tid);
   if (!base) return null;
-  const installed = base.src === 'installed';
   const platform = /^(CUSA|PPJB)/.test(tid) ? 'PS4' : 'PS5';
-  const sourceType = installed ? 'pkg' : base.fmt === 'folder' ? 'folder' : 'image';
-  const imgType = ['ffpkg', 'exfat', 'ffpfs', 'ffpfsc'].includes(base.fmt) ? base.fmt : '';
+  const sourceType = base.fmt === 'pkg' ? 'pkg'
+    : (base.fmt === 'folder' || base.fmt === 'lz4') ? 'folder' : 'image';
+  const isPkg = sourceType === 'pkg';
+  const imgType = sourceType === 'image' ? base.fmt : '';
   const known = tid !== 'PAUS00100' && tid !== 'EMUA90001';
+  /* 镜像游戏的物理源是那个镜像文件，裸目录游戏是源目录，内置 PKG 才是 app 目录。 */
+  const srcPath = sourceType === 'image'
+    ? `/mnt/usb0/games/${tid}.${base.fmt}`
+    : `/mnt/usb0/games/${tid}`;
   return {
     tid,
     name: gameState.renamed[tid] || base.name,
@@ -640,23 +652,26 @@ function buildDetail(tid) {
     image_type: imgType,
     content_id: known ? `${tid}-${tid}_00-${'0'.repeat(16)}` : '',
     version: known ? `0${1 + (tid.charCodeAt(8) % 3)}.00${(tid.charCodeAt(7) % 9) + 1}.000` : '',
-    path: installed
-      ? `/user/app/${tid}/app.pkg`
-      : base.fmt === 'folder'
-        ? `/mnt/usb0/games/${tid}`
-        : `/mnt/usb0/games/${tid}.${base.fmt === 'exfat' ? 'exfat' : base.fmt}`,
-    runtime_path: installed ? '' : `/mnt/shadowmnt/${tid}`,
-    appdb_size: installed ? 3145728 + (tid.charCodeAt(6) % 7) * 1048576 : 0,
+    path: isPkg ? `/user/app/${tid}` : srcPath,
+    /* 内置 PKG 没有 ShadowMount 运行时挂载；镜像游戏挂到 /mnt/shadowmnt，
+     * 裸目录游戏的 mount.lnk 直接指向源目录。 */
+    runtime_path: isPkg ? ''
+      : sourceType === 'image' ? `/mnt/shadowmnt/${tid}_d919e306` : srcPath,
+    appdb_size: isPkg ? 3145728 + (tid.charCodeAt(6) % 7) * 1048576 : 0,
     install_time: known ? '2026-09-12 21:33' : '',
     last_launch: known ? '2026-10-04 22:10' : '',
-    mounted: !installed,
-    installed_pkg: installed,
+    /* [CN-FORK] v0.5.2.127 「已挂载」= 这个游戏此刻真的挂进系统了（后端查
+     * /system_ex/app/<TID>/sce_sys/param.json）。**不是**「runtime_path 存在」——
+     * 裸目录游戏的源目录一直都在，那样「已挂载」会对它们永远亮着。
+     * 这里挑一款当「正在运行」的样本，好让这颗徽标在预览里真的能出现。 */
+    mounted: !isPkg && tid === 'PPSA02000',
+    installed_pkg: isPkg,
     can_uninstall: true,
-    /* 与真机同义：已安装的 PKG 没有可管的物理源（不能挂载、不能删源）。
-     * 前端不再自己用 installed_pkg 判一遍，完全认这个字段 —— 所以 DELETE_SPECIAL 里
+    /* 与真机同义：内置 PKG 没有可管的物理源（不能挂载、不能删源）。
+     * 前端不再自己用 src/installed_pkg 判一遍，完全认这个字段 —— 所以 DELETE_SPECIAL 里
      * 那两个「详情说可管、后端却拒绝」的样本必须是 dump 游戏，否则那两条错误路径
      * 在界面上根本走不到，桩就白做了。 */
-    can_manage_source: !installed,
+    can_manage_source: !isPkg,
     saves_count: savesFor(tid).length,
     media_count: mediaFor(tid).length,
     /* 两层各自一个布尔（v0.5.2.112）：改名弹窗靠它决定「恢复默认」该不该可点。
