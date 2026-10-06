@@ -658,6 +658,15 @@ int main(void) {
               "找不到封面帧时未把候选目录的内容写进日志（下一轮真机取证就瞎了）");
         CHECK(log_has("no decodable cover for " C_VIDB),
               "找不到封面帧时未写 `no decodable cover for <id>`");
+
+        /* 但**同一个 id 只报一次**：媒体面板一打开就给每个格子取缩略图，没封面帧的视频
+         * 每次都会走到这里 —— 不挡一下，三条诊断能把真正要紧的 STALL 行淹掉。 */
+        log_reset();
+        td = NULL; tlen = 0;
+        CHECK(game_media_thumb(C_VIDB, 320, &td, &tlen, &mime) == 0, "二次取占位图应仍成功");
+        free(td); td = NULL;
+        CHECK(!log_has("no decodable cover for " C_VIDB),
+              "同一个 id 的封面诊断只该报一次（否则会刷屏、淹掉 STALL 行）");
     }
     /* 越界 id → -1，绝不能去 stat */
     CHECK(game_media_thumb("/etc/passwd", 320, &td, &tlen, &mime) == -1, "越界缩略图应 -1");

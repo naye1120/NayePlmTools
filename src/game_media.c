@@ -985,8 +985,26 @@ static int md_scan_cover_dir(const char *dir, const char *base, size_t blen,
 
 /* 一个都没找到时，把目录内容写进日志 —— 这是**唯一能一次问清真机布局**的办法。
  * `game_media.h` §7a 至今没验证过录屏的缩略图层级，之前两轮都是靠猜（猜错两轮）。
- * 只对视频做，且「找不到封面帧」本身是罕见事件，不会刷屏。 */
+ *
+ * ⚠️ 同一个 id 只报一次。媒体面板一打开就会给**每个**格子取缩略图，而「没有可解封面帧
+ * 的视频」每次取都会走到这里 —— 不挡一下，三条诊断能把真正要紧的 `STALL` 行淹掉
+ * （日志环形缓冲有限）。只留最近 8 个 id 的哈希，代价可忽略；重启 payload 后能再报一次，
+ * 正合排查需要。 */
 static void md_log_cover_dirs(const char *id, const char *d1, const char *d2) {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    static uint64_t seen[8];
+    static int n;
+    uint64_t h = md_fnv64(id);
+    int dup = 0;
+    pthread_mutex_lock(&mu);
+    int cnt = n < 8 ? n : 8;
+    for (int i = 0; i < cnt; i++) {
+        if (seen[i] == h) { dup = 1; break; }
+    }
+    if (!dup) { seen[n % 8] = h; n++; }
+    pthread_mutex_unlock(&mu);
+    if (dup) return;
+
     const char *names[2];
     names[0] = d1;
     names[1] = d2;
@@ -1520,7 +1538,7 @@ static void md_pack_run(md_pack_req_t *req) {
             while ((de = readdir(dp)) != NULL) {
                 size_t nl = strlen(de->d_name);
                 int is_zip = (nl >= 5 && strcasecmp(de->d_name + nl - 4, ".zip") == 0);
-                int is_part = (nl >= 10 && strcasecmp(de->d_name + nl - 5, ".part") == 0);
+                int is_part = (nl >= 5 && strcasecmp(de->d_name + nl - 5, ".part") == 0);
                 if (!is_zip && !is_part) continue;
                 char p[760];
                 snprintf(p, sizeof(p), "%s/%s", GAME_MEDIA_PACK_DIR, de->d_name);
@@ -1538,7 +1556,8 @@ static void md_pack_run(md_pack_req_t *req) {
      * 只看「文件在不在、大小 > 0」—— 一次并发（或用户手快重按下载）就会把半截包
      * 当成品发出去，浏览器拿到的是坏 zip，表现就是「打包下载还不好用」。
      * rename 在同一文件系统内是原子的：成品路径上要么是完整的包，要么什么都没有。
-     * 临时名带上 job id：单槽只有一个 worker，但这样也不会与上一次的残留撞上。 */
+     * 临时名固定是成品名 + `.part`（单槽只有一个 worker，不会撞；上一次的残留由上面
+     * 那段清理扫描收掉）。 */
     char part[760];
     int pn = snprintf(part, sizeof(part), "%s.part", zip);
     if (pn < 0 || (size_t)pn >= sizeof(part)) {
