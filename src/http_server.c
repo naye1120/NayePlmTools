@@ -274,7 +274,12 @@ static void add_disposition(struct MHD_Response *resp, const char *name) {
 /* [CN-FORK] v0.5.2.116 这条 POST 要收多少字节的请求体；0 = 不归我们管。
  * 上限不是随手定的，逐条对着 mock-server.js 的 express.raw({limit:…})：
  *   存档包 512mb、磁贴 PNG 64mb、其余 JSON 1MB。
- * 前端能过、后端拒的后果是用户只看到一句「请求失败」，连为什么都拿不到。 */
+ * 前端能过、后端拒的后果是用户只看到一句「请求失败」，连为什么都拿不到。
+ *
+ * ⚠ 加了新 POST 路由**必须同时**在这里登记（`.137` 的教训）：这个返回值就是
+ * 收请求体的闸门 —— 返回 0 时上面的分发根本不建 PostStatus，`gr_dispatch_post`
+ * 永不触发，客户端看到的是**连接被直接关掉**（RemoteDisconnected），
+ * 而不是 404 / 500，在真机上极难从现象反推回这里。 */
 static size_t gr_post_limit(const char *url) {
     if (strcmp(url, ROUTE_GAME_SAVE_UPLOAD) == 0) return (size_t)512 << 20;
     if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0 ||
@@ -284,6 +289,7 @@ static size_t gr_post_limit(const char *url) {
         strcmp(url, ROUTE_GAME_SAVE_AUTO) == 0 ||
         strcmp(url, ROUTE_GAME_SAVE_TEST) == 0 ||
         strcmp(url, ROUTE_GAME_RENAME) == 0 ||
+        strcmp(url, ROUTE_GAME_SYNC) == 0 ||
         strcmp(url, ROUTE_GAME_MOUNT) == 0 ||
         strcmp(url, ROUTE_GAME_UNMOUNT) == 0 ||
         strcmp(url, ROUTE_GAME_UNINSTALL) == 0)
@@ -724,7 +730,7 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             return MHD_YES;
         }
 
-        /* [CN-FORK] v0.5.2.116 游戏管理的 POST 请求体：七条 JSON + 两条裸字节
+        /* [CN-FORK] v0.5.2.116 游戏管理的 POST 请求体：八条 JSON + 两条裸字节
          * （磁贴 PNG、存档包）共用同一个 PostStatus 累加器。三条 JSON 的语义
          * 在**收完之后**才分岔（见下方 gr_dispatch_post），所以这里只认路由不认内容。 */
         if (strcmp(method, "POST") == 0 && gr_post_limit(url) != 0) {

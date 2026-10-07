@@ -16,6 +16,14 @@ run_one() {
     "/tmp/${name}_test" || fail=1
 }
 
+# [CN-FORK] v0.5.2.138 静态守卫：POST 路由的「分发表」与「限长表」必须一致。
+# 放在最前面 —— 它毫秒级，抓的是主机套件完全看不见的那类错：路由在
+# gr_dispatch_post 里分发了、却漏登记 gr_post_limit，于是请求体根本不收、
+# 客户端看到连接被直接关掉（`.137` 的真机原形）。mock 里没有这一层，
+# 214 项前端回归照样全绿，所以只能靠静态检查。
+echo "=== check_post_routes (静态守卫) ==="
+bash tools/check_post_routes.sh || fail=1
+
 run_one slot_resolve   src/psaccounts/npsignin.c
 run_one offact_genid   src/psaccounts/offact.c
 # safety.c really creates SAFETY_DIR, so point it at a temp dir on the host.

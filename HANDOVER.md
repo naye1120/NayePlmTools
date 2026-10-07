@@ -5,7 +5,7 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-> - 版本：`MENU_VERSION = 0.5.2.136`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+> - 版本：`MENU_VERSION = 0.5.2.138`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 - 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。`.102` 是**修掉 `.101` 改名取证代码的堆溢出（整 payload 崩）+ 按钮按功能转实心六色（样张 A + I2）+ 页头去粘顶**（正式出包版 `NayePlmTools_0.5.2.102-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `be7fa8f`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 的包已过期。`.103`–`.105` 是**纯前端/文档改动、从未单独出包**（`.103` 收敛上色 + 深空黑 + 舒展留白；`.104` 账号板块按钮状态分色 + 主色换朱橙 `#F43E06`；`.105` 同步按钮补图标 + PIN 进度条重做），`.106` 把这四轮**一次性出包**（正式出包版 `NayePlmTools_0.5.2.106-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `0e9afb2`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.102` 的包已过期。`.107` 是**头像上传/裁剪四项缺陷修复**（变形 / 卡死 / 拖拽裁剪 / 拖放选图）+ **账号「登出」不再连带反激活**（备份层加来源维度，按钮 `[登出]` = 只登出、`[反激活]` = 登出并反激活，文字不变）—— 详见 §2.1.1 与 §2.2.1。正式出包版 `NayePlmTools_0.5.2.107-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `8065f19`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.106` 的包已过期。`.108` 是**账号按钮语义修正** —— 用户否掉了 `.107` 的文案（「逻辑做错了，登出 就是只登出，反激活 即 登出并反激活，**但是按钮文字不要改**」）：按钮行恒为 `[登出]` + `[反激活]`，已登录时 `[反激活]` 走 `signout-full`（登出 + 反激活一步到位），未登录时走 `deactivate`；后端契约沿用 `.107`，本轮只动前端/语言包/文档。正式出包版 `NayePlmTools_0.5.2.108-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `12e2ba5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.107` 的包已过期。`.109` 是**修掉「头像上传一直显示上传中、不报错也不结束」**（真根因在 MHD 流式状态回收的判据，见 §2.2.2；前端同时把「超时」与「用户取消」区分开）+ **通知条挪到底部居中并缩小**（见 §2.2.3）+ mock 里头像改成真闭环。正式出包版 `NayePlmTools_0.5.2.109-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `b8ea772`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.108` 的包已过期。`.110` 是**修掉电视端「确定」生效在鼠标指针位置、而不是彩色光圈所在的那个控件上**（见 §2.2.4；结论：网页无法移动系统鼠标指针，改为让 OK 的落点脱离指针）+ 新增 `?navdebug=1` 排障面板。正式出包版 `NayePlmTools_0.5.2.110-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `dcfb48b`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.109` 的包已过期。`.111` 是**四件事一起做**：① 遥控器模式下藏掉系统光标（见 §2.2.4 延伸 —— 网页无法移动指针，只能让它消失）；② **改名不再影响账号 ID**（ID 改由 uid 派生，见 §2.1.1）；③ **登入/登出/激活/改名/接口错误全部中文化**，不再报英文诊断串；④ **去掉「反激活」** —— 激活成功后那颗按钮整颗收起（见 §2.2.5）；⑤ 修掉**「第一次登出失败、第二次才成功」**（`fill_status()` 改为 uid 优先解槽位，见 §2.1.1）。正式出包版 `NayePlmTools_0.5.2.111-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `e908ef5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.110` 的包已过期。`.112` 是**游戏管理三个面板改「铺满右侧」+ 磁贴图拆成图标/背景两层 + 电视端焦点那套逻辑整体回退到上游做法**（用户口径两轮：「存档管理页面打开后铺满右边整个区域。多媒体管理也是铺满右边。修改名称也是铺满，但是你只把修改磁贴图标放出来了，还要增加一个修改背景的」/「刚才铺满的几个页面圆角全部取消，修改名称哪里将磁贴图标与游戏名称放在一行，磁贴背景放在下面，磁贴背景预览图是16:9的dds图片。图标是png图片。另外修复一个历史bug。ps5真机上焦点鼠标移动的方式最好改回跟上游一样，现在这样很别扭」）。具体：① `Modal` 新增 `layout="panel"`、四角直角、`--sidebar-w` 令牌 + `html[data-sidebar]`、`.panel-sheet` 的 `margin:0!important`（躲 `.space-y-6` 的 `> * + *`）—— 见 §2.2.6；② 磁贴两层图（**图标 1:1 PNG / 背景 16:9 1920×1080 DXT1 DDS，DDS 由后端转**，`/game_tile_icon` 与 `/game_tile_background` 拆分，`game_list` 新增 `icon` 版本号字段）；③ **电视端「光圈/光标」整层回退**：删掉自己搬焦点、抢确定键、藏光标三层，改成光圈跟着指针走 —— 见 §2.2.7；④ 修掉 `.92` 起就存在的「弹窗里按返回键连带退页」—— 见 §2.2.8；⑤ `Modal` 焦点进出独立 effect —— 见 §2.2.9。**本轮为纯前端/mock/文档改动，未出包**（后端 C 代码一行未动）。`.113` 是**三件事 + 一处版本号清账**（用户口径：「这几个铺满页面的字体太小了，跟其他父级菜单一样大。这里点击也可以上传图片，上传完要有一个应用的动作；这里的缩略图也要调大。太小了，预览都看不清。改把，改完直接打包成elf」）：① 铺满面板里的字号与侧栏菜单拉平 —— 立 `.panel-body` / `.panel-note` / `.panel-tiny` / `.panel-micro` 四条语义档，替掉 60 处硬编码 `text-[13px]` 之类的 px 字号（见 §2.2.6 末尾）；② 改名页两层图改「**点预览也能选图 + 应用才生效**」（预览本身是按钮、选图先暂存并本地预览、点「应用」才提交，另有「取消」）；③ 多媒体缩略图列宽下限由写死的 112px 改成 `--thumb-w` 令牌（移动 140 / 桌面 200 / 电视 320px）；④ 顺手清掉三处**手抄的版本号**（设置页捐赠说明、支持作者页兜底值、mock 的 `/version`）并加回归守卫。正式出包版 `NayePlmTools_0.5.2.113-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `81c42c1`，两包各 9,957,216 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.112` 的包已过期。`.114` 是**磁贴再放大 1/4（`--tile-w` 这根令牌的第三次调档：PC/手机 210px → 262.5px、电视 300px → 375px）+ 改名页「磁贴背景」块从竖排改回左右分栏**（正式出包版 `NayePlmTools_0.5.2.114-me.elf` / `-ga.elf`，短哈希 `91fa4fb`，两包各 9,957,216 字节，`.113` 的包已过期；⚠️ 这一轮**包出了文档漏了**，到 `.115` 才补上 CHANGELOG），`.115` 是**游戏管理 → 多媒体管理（截图/录屏）后端**——新增 `src/game_media.c` + `include/game_media.h`、八条路由（六条 `/game_media*` + `/game_job_status` / `/game_job_cancel`），主机关卡从 3 条增至 4 条（新 `media_scan` 98 项断言），详见 §2.1.0 与 CHANGELOG `.115`。`.116` 是**游戏管理后端一次补完 + 修掉「预览只剩顶部一条 / 打包下载失败」** —— 新增 19 条端点与六个模块（`game_title` / `game_saves` / `game_runtime` / `game_job` / `zip_io` / `inflate`，详见 §2.1.2），并把**文件直出从 `MHD_create_response_from_fd64` 换成自写 32KB 回调 `gr_file_response()`**（fd 直出那条分支在真机上会把 Content-Length 报全、字节发短，导致图片只剩顶部一条、zip 下载判失败；三个调用点一起换），出包版 `NayePlmTools_0.5.2.116-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.115` 的包已过期。`.117` 是**修真机报的「游戏管理的列表变空了」** —— 根因是 `.116` 给 `enum_arg_t` 加了 `want`，而 `build_game_json` 仍逐字段赋值**漏了它**，`want` 成栈上垃圾、`gm_append_item` 第一行 `if (a->want)` 把每个条目都早退、`count` 恒 0（症状「先好后坏」，跑过一次 `/game_detail` 才把非空指针留在栈上）；同轮另修**详情页 5 个字段读错列**（`st_cb_row` 拿 `GM_DB_*` 枚举序号当列号，把 `gm_sql_col_index` 的解析结果整个丢掉）与 **`version` 吐栈上垃圾**。同时**把「三道门为什么拦不住」补上**：`src/game_mgr.c` 第一次能在主机上编译（`test/host_mnt_compat.h` 顶掉 `getmntinfo` 三个 BSD 符号 + `GAME_MGR_APPDB_PATH` 加 `#ifndef` + 合成 app.db 夹具），新增 `game_mgr` 主机关卡 **65 项断言**，核心手法是 `seed_stack()` **主动把栈播种成非空指针**（见 §2.1.3）。出包版 `NayePlmTools_0.5.2.117-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.116` 的包已过期。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。。`.128` **改错了地方，已回退**（用户：「退回上一版，你改错了，我要的是将游戏详情里面的按钮全部去掉，改为『去 ShadowMount 管理』」）——它删的是**磁贴下**那四颗动作按钮（存档管理 / 多媒体管理 / 名称与背景 / 待定功能），而那四颗是我们自己的功能，必须留。`.129` 把磁贴恢复到 `.127` 的样貌，把手术做到**游戏详情弹窗**里：`GameDetailModal.jsx` 515 → 250 行，改成**纯只读信息面板 + 一颗「去 ShadowMount 管理」按钮**——只读挂载 / 读写挂载 / 卸载挂载 / 卸载 / 删除源 五颗按钮全部下线，连带整条删除任务链（`busy`/`job` state、`watchJob`/`cancelJob` 轮询、删除进度面板、「取消任务」按钮、`PHASE_LABEL`/`BUSY_REASON`、`deleting`/`stopWatch`）一起删干净，不留半死代码（否则 `no-unused-vars` 与维护陷阱）。动机同 `.128` 那次：ShadowMount 挂的镜像/裸目录游戏调 `sceAppInstUtilAppUnInstall` 会删掉 app.db 注册与 `/user/app/<TID>/`（连带 `mount.lnk`）后返回非零，而 `game_runtime_uninstall()` 只在 rc==0 时清缓存，于是图标先还在、刷新后消失且**无从挂回**——外部源 `/mnt/ext1/PPSA21567-宇宙机器人` 完好、SMP 侧仍列着，但我们没有挂载/重注册能力，所以干脆撤掉挂载类入口，交给 ShadowMount 自己管；**这次详情里那颗「卸载」也一起撤了**，不再有「留着以后决定」的欠账。SMP 按钮的行为沿用 `.128` 那套（回归已验证）：点击走 `.84` 的老套路——手势内 `window.open("about:blank", "_blank")` 占位再 `win.location.replace(url)`，**目标 `http://${location.hostname}:10101/`**（用页面自己的 host，主机上 `127.0.0.1`、PC 上 `192.168.x.x` 零配置都对）。**`window.open` 第三个参数千万别加 `noopener,noreferrer`**——加了返回 `null`，兜底分支再开一个真标签页，用户看到两个标签而 `about:blank` 那个还挂着；`catch` 里要 `win.close()` 再兜底。存档 / 多媒体 两条 `GridRow`（`打开存档管理` / `打开多媒体管理`）**保留在详情里**，同时磁贴上四颗按钮也在，所以两条路都能到；「名称与背景」现在**只能从磁贴进**（`.128` 给详情加的那行 `打开名称与背景` 随回退一起没了），「待定功能」那颗空壳按钮也回来了。`GameSection.jsx` 的 `GameDetailModal` 调用点顺势收掉 `addToast` / `showConfirm` / `onChanged` 三个回调（详情不再发操作，它自己的 SMP 按钮不经过我们）；**`showConfirm` 在存档 / 多媒体两个弹窗里仍在用，别误删**。正式出包版 `NayePlmTools_0.5.2.129-me.elf` / `-ga.elf`（提交 `ead334d`，内嵌标题 `ead334d`），两包各 10,785,872 字节、titleId 自检 NAYE00001/NAYE00004 通过，`frontend/dist/index.html`（910,858 字节）与 ELF 内嵌 blob 在偏移 2007072 **逐字节一致**，`0.5.2.128` / `.127` / `.126` 残留各 0 处、`cancelJob` / `watchJob` 各 0 处；`.128` 的包已过期。回归：`game112` 171/171、`nav112` 20/20。**断言口径翻转了**：磁贴上必须**有**四颗（`length === 4` 且磁贴上没有 SMP 按钮），详情里必须**只有一颗** SMP 按钮，且挂载/卸载/删除源/取消任务**一颗都不剩**（用正则扫弹窗内所有 `<button>` 的 aria-label + text——这条反面断言是刻意加的，防止以后把按钮偷偷加回来还静默通过；`.128` 只有正向断言，就是它的教训）。负向对照：把 `GameDetailModal.jsx` checkout 回 `HEAD~1`，6 条断言立刻全红，恢复后全绿。`.129` 出包版 `NayePlmTools_0.5.2.129-me.elf` / `-ga.elf`（提交 `ead334d`），已推真机 `192.168.1.214` 验收。
 
 `.130` 是**真机验收 `.129` 时抓到的一条死链文案**：`GameSection.jsx:321` 渲染的磁贴提示还写着
@@ -781,6 +781,38 @@ worker 扫盘在锁外、收尾只取 `g_game_mtx`，无环。mock 照抄这条�
 `game_mgr` 断言 94 → **100**，`mutation_check_game_mgr.sh` 加 3 个变异体（`appdb` / `peek0` /
 `nodu`，三个都真变红）。回归 `game112` **203/203**。**本轮为纯源码/mock/测试改动，未出包。**
 
+`.137` 是**修「面板里改过的中文名，SMP 与电视主屏还显示英文原名」**（用户口径：「我现在需要让
+前端读到的和 SMP 读到的都一样，另外镜像类的也考虑」）。根因是**时序错位**、不是代码写错：
+用户那 8 次改名发生在 **10:59–11:17**（`name.txt` 的 MDTM 证据），而写**游戏源**
+`sce_sys/param.json` 的能力 **13:57** 才提交（`.132`），源文件自安装起从未被写过；之后 SMP
+重扫按源重建 `app.db`，中文名被冲回原名。`.132` 那条「SMP 重扫不回退」的真机闭环其实是用
+PPSA27836 做的、验完还还原回了原名，所以当时没暴露这条时间差。**真机三个实验把「SMP 到底读
+哪一层」钉死了**：① 改 `/user/app/<TID>/sce_sys/param.json` 对 SMP **无效**（定点替换后 60 秒
+纹丝不动、文件也没被覆盖）→ 这条路是死的；② 改**系统 `app.db`** 对 SMP **有效**，且**镜像类
+也立刻生效**（`persisted:false` 但 `title_name` 立刻变中文）；③ `POST /api/v1/scan` **不会**
+重建 app.db 的名字（中文名 120 秒内活着）→ `.132` 的「SMP 重扫会冲掉」结论归因错了。所以回填
+的**主力是 app.db 那一层**，不是游戏源。修法：新增 `game_title_sync_all()`（遍历
+`/data/nayeplmtools/titles/`，**只处理有 `name.txt` 的款**、绝不替用户决定没改过的游戏；
+逐款先写主机索引 `tile_db_set_name`，folder 类再写一次源 `param.json`，幂等靠 `td_count_differ`
+先 COUNT/SUM 比一遍）+ **启动自愈线程**（detached、延迟 25 秒、SAFE MODE 跳过）+
+路由 `POST /game_title_sync` + 前端板块右上角「同步名字到主机」按钮（跑完如实报口径 +
+强制重拉列表）。mock 把 `renamed`（name.txt）与 `hostNames`（主机 app.db）**拆成两份**，
+加 `GET /_host_names` / `POST /_host_drift` 两个钩子模拟 SMP 重扫，`game112` 第 7.7 节
+**11 条**断言断言的是「漂了 → 点同步 → 补回来」。回归 `game112` **214/214**。
+
+`.138` 是**修 `.137` 的致命漏登记**：`POST /game_title_sync` 在真机上**连接被直接关掉**
+（`RemoteDisconnected`，不是 404/500，payload 本身活着）。根因是 `http_server.c` 里
+**两张分开写的表** —— `gr_post_limit()` 决定「收不收请求体」（返回 0 = 不归我们管），
+`gr_dispatch_post()` 决定「收到之后怎么处理」；`.137` 只加了后者、漏了前者，于是那个
+`PostStatus` 累加器根本不建、`gr_dispatch_post` 永不触发。**三道门全放行**是因为
+`gr_post_limit` 要 `microhttpd.h`（主机套件编不了）、mock 里也没有「收体闸门」这一层，
+214 项前端回归照样全绿。修法：限长表补 `ROUTE_GAME_SYNC`（1 MB 档）。**新增静态守卫**
+`tools/check_post_routes.sh`（接进 `run_host_tests.sh` 最前面）：解析两个函数体，断言
+`gr_dispatch_post` 分发的每条路由都在 `gr_post_limit` 登记过；负向对照（还原那条漏登记）
+立刻点名并非零退出。**`.137` 不是全废** —— 启动自愈不走 HTTP、真机上确实跑了：
+`[PLDMGR] title: 启动自愈完成（回填 8 款：主机索引 8、名字源 5、失败 0）`，15 款面板名与
+SMP `title_name` 全部一致（含 3 款 `ffpfsc` 镜像类），坏的只有那颗按钮。
+
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
@@ -1247,8 +1279,10 @@ bash tools/build_tiles.sh   # 双磁贴变体一次出齐：-me(NAYE00001 媒体
 ```bash
 wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/run_host_tests.sh"
 # slot_resolve 23/23 + offact_genid 13/13 + safety_origin 39/39
-# + media_scan 178/178 + game_saves 88/88 + game_mgr 90/90（.127：65 → 90）
-# + media_verify 的 json 与 3 次 zip 校验（子集 2 / 全量 5 / 大文件跨分块）
+# + check_post_routes 静态守卫（.138 起，最前面）
+# + media_scan 178/178 + game_saves 88/88 + game_mgr 100/100（.127：65 → 90 → .136：100）
+# + param_rename（真机夹具，缺夹具则 SKIP）
+# + media_verify 的 json 与 4 次 zip 校验（子集 2 / 全量 5 / 大文件跨分块 / 同秒去重）
 # clang -Wall -Wextra 零告警
 # 注：game_mgr 的用例现在覆盖三类来源（pkg / image / folder），夹具见 test/make_appdb_fixture.py，
 #     它同时造 /user/app 与 /system_ex 两棵树，编译期用 -DGAME_MGR_APP_BASE / -DGAME_MGR_SYSTEM_EX
@@ -1354,6 +1388,13 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
   export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true
   ```
   出包后从二进制核对：`grep -ao 'v<ver> by naye ([0-9a-f]*' xxx.elf | tr -cd '[:print:]\n'` 应为真实短哈希，出现 `DEV` 就得重出。
+- **加了新 POST 路由，必须同时在 `gr_post_limit()` 登记**（`.137`/`.138` 的教训）：
+  `src/http_server.c` 里「收不收请求体」（`gr_post_limit`）与「收到之后怎么处理」
+  （`gr_dispatch_post`）是**两张分开写的表**。只加后者不加前者的后果**不是** 404/500，
+  而是请求体压根不收 → `gr_dispatch_post` 永不触发 → **客户端连接被直接关掉**
+  （`RemoteDisconnected`），真机上极难反推。mock 里没有这一层、主机套件也编不了
+  （要 `microhttpd.h`），所以**必须**靠静态守卫兜住 —— 已接进 `test/run_host_tests.sh`
+  最前面（毫秒级），也可单独跑：`bash tools/check_post_routes.sh`。
 - 预览电视端形态：`http://localhost:5173/?device=ps5`（`utils/helpers.js` 的 `isPS5` 认这个 query）。命中后与真机同一套分支 —— 侧栏常显、底部栏隐藏、`html[data-device="ps5"]` 抬命中区尺度、方向键空间导航接上。真机靠 UA 命中，不看该参数。
 - **前端改动的验收线是 `npm.cmd run lint` + 逐页实测，不是 `vite build`**：esbuild 不做作用域检查，漏 import / 残留已删 state / 引用越界变量在构建期全绿、运行期才炸（`v0.5.2.98` 修的四起整站死全是这类）。`mock-server.js` 里 Node `process` 的 `no-undef` 报错属 globals 配置的既有误报。
 
