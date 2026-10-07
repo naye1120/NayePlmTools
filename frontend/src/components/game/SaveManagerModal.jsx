@@ -1,169 +1,66 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  Save, RefreshCw, Download, Upload, Trash2, Plug, AlertTriangle, HardDrive, FileArchive,
+  Save, RefreshCw, Download, Upload, Trash2, AlertTriangle, HardDrive, FileArchive,
   History, RotateCcw, CloudDownload, CloudUpload, Activity,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
 import Switch from '../ui/Switch'
-import Segmented from '../ui/Segmented'
 import { Block, Chip, Field, Note, MiniEmpty, ProgressBar } from './parts'
 import { formatSizeAlways, formatStamp } from './format'
 import {
-  getSaves, saveAutoConfig, testRemote, saveDownloadUrl, uploadSave, deleteSave, snapAction,
+  getSaves, saveAutoConfig, saveDownloadUrl, uploadSave, deleteSave, snapAction,
   syncSaves,
 } from '../../utils/gameApi'
+import {
+  EMPTY_CFG, toLocalCfg, toRemoteCfg,
+  loadGlobalCfg, resolveRemoteForGame, remoteSummary, remoteOf, isRemoteConfigured,
+} from '../../utils/saveConfig'
 
 /* [CN-FORK] v0.5.2.112 存档管理弹窗（磁贴第一颗按钮）
  *
  * 用户口径：「第一个代表，存档管理，最终功能就是可以上传下载存档，还可以配置远程自动存档路径
  * 和自动存档开关。」其中「远程」是三种协议都要（SMB / FTP / HTTP）。
  *
- * 三块内容：
- *   ① 自动存档开关 —— 总开关 + 两个时机（启动时拉取 / 退出时回传）。分成三个而不是一个，
- *      是因为这三种组合在玩家侧都有真实用例（只在网吧式机器上回传、只在多机之间拉取）。
- *   ② 远程路径配置 —— SMB / FTP / HTTP 三选一，各自字段不同。用 Segmented 而不是下拉，
- *      因为电视端方向键在分段控件上左右切换比在下拉里翻更省操作。
- *   ③ 存档列表 —— 下载 / 上传覆盖 / 删除，外加「上传新存档」。
+ * ── [CN-FORK] v0.5.2.144 重新切分：远程位置配置**迁移到设置页**（ArchiveConfigModal，
+ * 存主配置键 ARCHIVE_GLOBAL_CONFIG，全局生效）。本弹窗只管**这一个游戏**的：
+ *   ① 总开关 + 两个时机（启动拉取 / 退出回传）—— 这是 per-game 的，必须留。
+ *   ② 「立即拉取 / 立即推送」按钮 —— 手动试一次，走 POST /game_save_sync，与自动同链。
+ *   ③ 本地快照块 —— 不依赖网络，per-game 的兜底，留。
+ * 远程位置类型 / host / share / 账号 / 测试连接 这些**不再是本弹窗的事**：全局在设置里配好，
+ * 这里只读出来展示（来自全局 / 本游戏已存），并把解析出的远程段合进保存请求，让「全局生效」
+ * 字面成立。改远程位置请去「设置 → 存档配置」。
  *
- * 密码字段的处理是这块最要紧的一处：后端**永远不回传密码明文**，只回 `has_password`。
- * 所以输入框留空 = 「不修改」，而不是「清空」；要清空得显式点「清除密码」。
- * 如果留空就当清空，用户改个主机地址就会顺手把密码抹掉，而且不会有任何提示。
+ * 密码字段的坑（历史）：后端不回传密码明文，per-game 回退段密码是空串，toRemoteCfg 当「不修改」，
+ * 后端保留自己存的密码。全局配置则原样存密码（见 ArchiveConfigModal 注释）。
  *
- * 本轮只做前端：所有请求打到 mock。真机上后端未实现时，弹窗会显示「主机上没有这个接口」，
- * 这是**预期行为**（接口契约见 utils/gameApi.js 顶部），不是 bug。
- *
- * ── [CN-FORK] v0.5.2.142 三处变更（自动存档从「只存配置」变成真的会跑）─────────
- *   ① **SMB 一档禁用**。SDK 那份 libcurl 8.18.0 编了 http/https/ftp/file/dict/imap/
- *      ldap/pop3/smtp，**没有 smb** —— 选它等于选一个点了保存也传不出去的协议。做法是
- *      「看得见、点不动、旁边写明原因」，而不是从选项里删掉：老用户存的就是 mode:"smb"，
- *      选项没了会变成「一个都没选中」，用户不知道发生了什么。选中的是 smb 时保存按钮
- *      也禁用（否则用户以为存上了，实际引擎每次都拒）。
- *   ② **「立即拉取 / 立即推送」**。原来只有「启动游戏时 / 退出游戏时」两个时机，用户想
- *      马上试一次没有入口 —— 而验证「路径填对没有」恰恰最需要它。走 POST /game_save_sync，
- *      与自动那条链是同一套后端代码（同一个互斥锁）。
- *   ③ **显示引擎的运行期状态**（/game_saves 的 auto_state）：此刻游戏在不在跑、上次同步
- *      是什么动作、成没成、失败原因。没有它的话「开关打开了但什么都没发生」完全没法自查。
+ * 即时推 / 拉的链路、auto_state 状态行都与 .142 / .143 一致，这里不再重复。
  */
 
-/* [CN-FORK] v0.5.2.142 SMB 标 disabled：SDK 的 libcurl 没编 smb（见文件头 ①）。
- * `disabled` 是给 Segmented 看的（那一档点不动），同时也就是 `modeBad` 的判据。
- * 三种协议的 label 都要留着 —— 回归里那条「三选一（SMB / FTP / HTTP）」钉的就是这个。 */
-const MODES = [
-  { value: 'smb', label: 'SMB', disabled: true },
-  { value: 'ftp', label: 'FTP' },
-  { value: 'http', label: 'HTTP' },
-]
-
-/* 每种协议各自的字段定义。写在一张表里而不是三段 JSX：
- * 三种协议的字段名、类型、占位符、是否密码，全在这里一处可查，加协议只改这张表。
- *
- * ⚠ **label 不在这张表里**，走下面的 FIELD_LABEL + t()。这里原来写的是中文字面量，
- * 于是英文包下「主机地址 / 端口 / 远程路径」全是中文 —— 而回归当时只钉了
- * `game.secret_saved` 那条提示，没钉字段标签，所以漏了一整轮（.142 修）。 */
-const MODE_FIELDS = {
-  smb: [
-    { key: 'host', ph: '192.168.1.10' },
-    { key: 'share', ph: 'ps5save' },
-    { key: 'sub', ph: 'PPSA01234' },
-    { key: 'user', ph: 'ps5' },
-    { key: 'password', secret: true },
-  ],
-  ftp: [
-    { key: 'host', ph: '192.168.1.10' },
-    { key: 'port', ph: '2121', numeric: true },
-    { key: 'path', ph: '/ps5save/PPSA01234' },
-    { key: 'user', ph: 'anonymous' },
-    { key: 'password', secret: true },
-  ],
-  http: [
-    { key: 'url', ph: 'http://192.168.1.10:8099/save' },
-    { key: 'token', secret: true },
-  ],
-}
-
-/* 字段标签的 i18n 键与中文兜底（t() 的第二参）。ph 里那几条示例地址是语言中立的，
- * 留在 MODE_FIELDS 里；只有「留空表示不修改」需要翻译（两个密钥字段共用一条）。 */
-const FIELD_LABEL = {
-  host: '主机地址',
-  share: '共享名',
-  sub: '子路径',
-  user: '用户名',
-  password: '密码',
-  port: '端口',
-  path: '远程路径',
-  url: '上传地址',
-  token: '访问令牌',
-}
-
-const EMPTY_CFG = {
+/* per-game 可编辑的那一份（远程段不在此，来自全局 / 回退）。 */
+const PG_EMPTY = {
   enabled: false,
-  /* [CN-FORK] v0.5.2.142 默认从 smb 改成 ftp，与后端 gs_auto_defaults 一致 ——
-   * 两边不一致的话，没配过的游戏在界面上显示一个协议、引擎按另一个走。 */
-  mode: 'ftp',
   on_launch: true,
   on_exit: true,
-  smb: { host: '', share: '', sub: '', user: '', password: '' },
-  ftp: { host: '', port: '', path: '', user: '', password: '' },
-  http: { url: '', token: '' },
-  /* [CN-FORK] v0.5.2.140 本地快照。默认值必须与后端 gs_auto_defaults 一致。 */
-  snap: { enabled: false, interval: 1800, keep: 5 },
+  snap: { enabled: false, interval: EMPTY_CFG.snap.interval, keep: EMPTY_CFG.snap.keep },
 }
 
-/* 后端 → 本地编辑态。密码一律清空（后端不发明文），是否已保存由 has_password 标记。 */
-function toLocalCfg(auto) {
-  if (!auto) return { ...EMPTY_CFG }
-  return {
-    enabled: !!auto.enabled,
-    mode: auto.mode || 'ftp',
-    on_launch: auto.on_launch !== false,
-    on_exit: auto.on_exit !== false,
-    smb: { ...EMPTY_CFG.smb, ...(auto.smb || {}), password: '' },
-    ftp: { ...EMPTY_CFG.ftp, ...(auto.ftp || {}), password: '' },
-    http: { ...EMPTY_CFG.http, ...(auto.http || {}), token: '' },
-    snap: { ...EMPTY_CFG.snap, ...(auto.snap || {}) },
-  }
-}
-
-/* 本地编辑态 → 后端。**空字符串的密码/token 一律剔除**（见文件头：留空 = 不修改）。
- * 其它字段照发，包括空串 —— 用户把共享名清空是有意义的（改回根目录）。 */
-function toRemoteCfg(cfg) {
-  const out = {
-    enabled: cfg.enabled,
-    mode: cfg.mode,
-    on_launch: cfg.on_launch,
-    on_exit: cfg.on_exit,
-    snap: {
-      enabled: !!cfg.snap.enabled,
-      interval: Number(cfg.snap.interval) || EMPTY_CFG.snap.interval,
-      keep: Number(cfg.snap.keep) || EMPTY_CFG.snap.keep,
-    },
-  }
-  Object.keys(MODE_FIELDS).forEach((m) => {
-    out[m] = { ...cfg[m] }
-    MODE_FIELDS[m].forEach((f) => {
-      if (f.secret && !out[m][f.key]) delete out[m][f.key]
-    })
-  })
-  return out
-}
-
-export default function SaveManagerModal({ show, game, onClose, addToast, showConfirm }) {
+export default function SaveManagerModal({ show, game, onClose, addToast, showConfirm, config }) {
   const { t } = useTranslation()
   const tid = game && game.tid
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
-  const [cfg, setCfg] = useState(EMPTY_CFG)
+  const [pg, setPg] = useState(PG_EMPTY)
+  const [remote, setRemote] = useState(null)     // {mode, smb, ftp, http} 只读展示
+  const [remoteFrom, setRemoteFrom] = useState('none') // 'global' | 'game' | 'none'
   const [saving, setSaving] = useState(false)
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState(null)
   const [busyId, setBusyId] = useState('')
   const [uploading, setUploading] = useState(null)   // {name, percent|null}
   const [snapping, setSnapping] = useState(false)    // 「立即备份」进行中
   const [busySnap, setBusySnap] = useState('')       // `${uid}/${ts}`，该行正在还原/删除
   const [syncing, setSyncing] = useState('')         // '' | 'push' | 'pull'：立即同步进行中
   /* 间隔用**分钟**给用户看/填，但存的是秒（后端口径）。做成独立的文本 state：
-   * 直接由 cfg.snap.interval 反推的话，用户清空输入框准备重填时会被立刻弹回原值。 */
+   * 直接由 pg.snap.interval 反推的话，用户清空输入框准备重填时会被立刻弹回原值。 */
   const [snapMin, setSnapMin] = useState('30')
   const fileRef = useRef(null)
   const pendingSlot = useRef(null)                   // null = 新存档；字符串 = 覆盖该槽
@@ -185,24 +82,36 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     }
     if (!aliveRef.current) return
     if (d) {
+      const lc = toLocalCfg(d.auto)
       setData(d)
-      setCfg(toLocalCfg(d.auto))
-      const iv = (d.auto && d.auto.snap && d.auto.snap.interval) || EMPTY_CFG.snap.interval
+      setPg({
+        enabled: lc.enabled,
+        on_launch: lc.on_launch,
+        on_exit: lc.on_exit,
+        snap: lc.snap,
+      })
+      /* 远程位置：优先全局（全局已填目标），否则回退到这个游戏自己已存的远程段。 */
+      const g = loadGlobalCfg(config)
+      const useGlobal = isRemoteConfigured(g)
+      setRemote(useGlobal ? resolveRemoteForGame(g, d.auto) : remoteOf(toLocalCfg(d.auto)))
+      setRemoteFrom(useGlobal ? 'global' : (isRemoteConfigured(lc) ? 'game' : 'none'))
+      const iv = (lc.snap && lc.snap.interval) || EMPTY_CFG.snap.interval
       setSnapMin(String(Math.max(1, Math.round(iv / 60))))
       setErr('')
     }
     if (failed) setErr(failed)
-  }, [tid, t])
+  }, [tid, t, config])
 
-  /* 打开 / 换游戏时把配置、列表、测试结果、上传状态全部归零。
+  /* 打开 / 换游戏时把配置、列表、上传状态全部归零。
    * 写在**渲染期**（键为 tid）而不是 effect 里：effect 体里同步 setState 会引发级联渲染，
    * 而「prop 变了就把这几个 state 重置」本来就属于 React 官方说的「渲染期调整 state」。 */
   const openKey = show && tid ? tid : ''
   const [loadedKey, setLoadedKey] = useState('')
   if (openKey !== loadedKey) {
     setLoadedKey(openKey)
-    setData(null); setErr(''); setCfg(EMPTY_CFG)
-    setTestResult(null); setBusyId(''); setUploading(null); setSaving(false); setTesting(false)
+    setData(null); setErr(''); setPg(PG_EMPTY)
+    setRemote(null); setRemoteFrom('none')
+    setBusyId(''); setUploading(null); setSaving(false)
     setSnapping(false); setBusySnap(''); setSnapMin('30'); setSyncing('')
   }
 
@@ -216,18 +125,9 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
 
   const saves = (data && data.saves) || []
   const snapshots = (data && data.snapshots) || []
-  const mode = cfg.mode
-  const fields = MODE_FIELDS[mode] || []
-  const modeCfg = cfg[mode] || {}
-  const hasStored = (f) => !!(data && data.auto && data.auto[mode] && data.auto[mode][`has_${f.key}`])
-  /* [CN-FORK] v0.5.2.142 选中的协议这个 SDK 编不出来（目前只有 smb）。见文件头 ①：
-   * 字段与保存按钮一起禁用 —— 半禁比全禁更糟（用户会以为改了一半生效了）。 */
-  const modeBad = !!(MODES.find((m) => m.value === mode) || {}).disabled
   /* auto_state 是后端**只读**的运行期状态；没接后端时是 {}，一律当「没有状态」。 */
   const st = (data && data.auto_state) || {}
   const last = st.last || null
-
-  const setModeField = (key, val) => setCfg((c) => ({ ...c, [mode]: { ...c[mode], [key]: val } }))
 
   /* [CN-FORK] v0.5.2.142 立即推 / 拉。与自动那条链走的是同一套后端代码（同一个互斥锁），
    * 所以「手动点」和「游戏退出时自动推」不会互相把对方的目录删掉。
@@ -254,33 +154,27 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   }
 
   const onSaveCfg = async () => {
-    /* 选中的协议这个 SDK 不支持（smb）—— 存下去只会让引擎每次都拒，不如当场说清。 */
-    if (modeBad) {
-      addToast?.(t('game.mode_unsupported_toast', 'SMB 当前不支持，请改用 FTP 或 HTTP'), 'error')
-      return
-    }
     setSaving(true)
-    setTestResult(null)
     try {
-      await saveAutoConfig(tid, toRemoteCfg(cfg))
+      /* 远程段来自全局（优先）或本游戏已存的回退段；per-game 只决定开关与时机。 */
+      const resolved = resolveRemoteForGame(loadGlobalCfg(config), data && data.auto)
+      const body = toRemoteCfg({
+        enabled: pg.enabled,
+        mode: resolved.mode,
+        on_launch: pg.on_launch,
+        on_exit: pg.on_exit,
+        smb: resolved.smb,
+        ftp: resolved.ftp,
+        http: resolved.http,
+        snap: pg.snap,
+      })
+      await saveAutoConfig(tid, body)
       addToast?.(t('game.auto_saved', '自动存档设置已保存'))
       await load()
     } catch (e) {
       addToast?.(e.message || t('game.auto_save_fail', '保存失败'), 'error')
     }
     setSaving(false)
-  }
-
-  const onTest = async () => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      const r = await testRemote(tid, toRemoteCfg(cfg))
-      if (aliveRef.current) setTestResult({ ok: true, latency: r && r.latency_ms })
-    } catch (e) {
-      if (aliveRef.current) setTestResult({ ok: false, message: e.message })
-    }
-    setTesting(false)
   }
 
   /* 选文件 → 上传。两种入口共用一条路径：pendingSlot 为 null 是「新存档」，
@@ -396,7 +290,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     setSnapMin(v)
     const m = parseInt(v, 10)
     if (Number.isFinite(m) && m > 0) {
-      setCfg((c) => ({ ...c, snap: { ...c.snap, interval: Math.min(1440, m) * 60 } }))
+      setPg((c) => ({ ...c, snap: { ...c.snap, interval: Math.min(1440, m) * 60 } }))
     }
   }
 
@@ -408,9 +302,8 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
       layout="panel"
     >
       {/* [CN-FORK] v0.5.2.112 面板形态（用户：「存档管理页面打开后铺满右边整个区域」）。
-       * 两块内容在宽屏上并排：左边是「配置」（开关 + 远程位置），右边是「存档列表」。
-       * 这两件事本来就是**一边配置一边对着列表看**的关系（比如照着实测路径填 SMB 子路径），
-       * 竖着排会让用户在两屏之间来回滚。窄屏（<1280px）自动退回单列。 */}
+       * 两块内容在宽屏上并排：左边是「配置」（开关 + 远程位置摘要），右边是「存档列表」。
+       * 窄屏（<1280px）自动退回单列。 */}
       <div className="panel-body leading-relaxed font-normal flex flex-col gap-5">
         <p className="text-zinc-500 panel-note">
           {game.name || tid}
@@ -428,7 +321,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
 
         {data && (
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] gap-5 items-start">
-            {/* ── ① 自动存档 ── */}
+            {/* ── ① 自动存档（per-game 只管开关 + 时机）── */}
             <Block
               className="min-w-0"
               title={t('game.auto_title', '自动存档')}
@@ -443,7 +336,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                       {t('game.running', '游戏运行中')}
                     </Chip>
                   )}
-                  <Chip tone={cfg.enabled ? 'ok' : 'muted'}>{cfg.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}</Chip>
+                  <Chip tone={pg.enabled ? 'ok' : 'muted'}>{pg.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}</Chip>
                 </>
               }
             >
@@ -455,124 +348,90 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                   </p>
                 </div>
                 <Switch
-                  checked={cfg.enabled}
-                  onChange={(v) => setCfg((c) => ({ ...c, enabled: v }))}
+                  checked={pg.enabled}
+                  onChange={(v) => setPg((c) => ({ ...c, enabled: v }))}
                   label={t('game.auto_enable', '启用自动存档')}
                 />
               </div>
 
-              {/* 同步时机：两个独立开关，可以只开一个 */}
-              <div className={cfg.enabled ? 'mt-4' : 'mt-4 opacity-50 pointer-events-none'}>
+              {/* 同步时机：两个独立开关，可以只开一个；自动关掉时这一档灰掉 */}
+              <div className={pg.enabled ? 'mt-4' : 'mt-4 opacity-50 pointer-events-none'}>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <TimingRow
                     label={t('game.auto_on_launch', '启动游戏时拉取')}
                     hint={t('game.auto_on_launch_hint', '把远程的存档下载到主机，覆盖本地')}
-                    checked={cfg.on_launch}
-                    onChange={(v) => setCfg((c) => ({ ...c, on_launch: v }))}
+                    checked={pg.on_launch}
+                    onChange={(v) => setPg((c) => ({ ...c, on_launch: v }))}
                   />
                   <TimingRow
                     label={t('game.auto_on_exit', '退出游戏时回传')}
                     hint={t('game.auto_on_exit_hint', '把主机的存档上传到远程位置')}
-                    checked={cfg.on_exit}
-                    onChange={(v) => setCfg((c) => ({ ...c, on_exit: v }))}
+                    checked={pg.on_exit}
+                    onChange={(v) => setPg((c) => ({ ...c, on_exit: v }))}
                   />
                 </div>
+              </div>
 
-                <div className="mt-4">
-                  <span className="block panel-tiny font-semibold text-zinc-400 mb-1.5">{t('game.remote_kind', '远程位置类型')}</span>
-                  <Segmented
-                    options={MODES}
-                    value={mode}
-                    onChange={(v) => { setCfg((c) => ({ ...c, mode: v })); setTestResult(null) }}
-                    label={t('game.remote_kind', '远程位置类型')}
-                    className="w-full sm:w-auto"
-                  />
-                  {/* SMB 看得见、点不动，旁边写明原因 —— 见文件头 ①。
-                      老用户存的就是 smb，所以这一段在真机上**一定会被看到**，不是死代码。 */}
-                  {modeBad && (
-                    <Note tone="error" icon={AlertTriangle} className="mt-2">
-                      {t('game.mode_unsupported',
-                        '当前 SDK 不支持 SMB 传输（内置的 curl 没编这个协议），请改用 FTP 或 HTTP。')}
-                    </Note>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-                  {fields.map((f) => (
-                    <Field
-                      key={f.key}
-                      label={t(`game.sf_${f.key}`, FIELD_LABEL[f.key] || f.key)}
-                      className={f.key === 'path' || f.key === 'url' || f.key === 'sub' ? 'sm:col-span-2' : undefined}
-                      hint={f.secret && hasStored(f) ? t('game.secret_saved', '已保存过；留空则保持不变') : undefined}
-                    >
-                      <input
-                        className="field"
-                        type={f.secret ? 'password' : 'text'}
-                        inputMode={f.numeric ? 'numeric' : undefined}
-                        autoComplete="off"
-                        disabled={modeBad}
-                        placeholder={f.secret ? t('game.ph_secret', '留空表示不修改') : f.ph}
-                        value={modeCfg[f.key] || ''}
-                        onChange={(e) => setModeField(f.key, e.target.value)}
-                      />
-                    </Field>
-                  ))}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 mt-4">
-                  <button type="button" className="btn btn-primary" disabled={saving || modeBad} onClick={onSaveCfg}>
-                    {saving ? t('game.saving', '保存中…') : t('game.save_settings', '保存设置')}
-                  </button>
-                  <button type="button" className="btn btn-outline" disabled={testing || modeBad} onClick={onTest}>
-                    <Plug className="w-4 h-4" />
-                    <span>{testing ? t('game.testing', '测试中…') : t('game.test_conn', '测试连接')}</span>
-                  </button>
-                  {/* [CN-FORK] v0.5.2.142 立即推 / 拉。**不受上面的总开关影响** ——
-                      手动就是手动，用户想试一次不该被迫先把自动打开（开了反而会
-                      在下次启动游戏时按他没想好的配置动作）。也**不需要先保存**：
-                      后端读的是它自己那份已保存的配置，界面上改了没存是另一回事。 */}
-                  <button
-                    type="button"
-                    className="btn btn-outline"
-                    disabled={!!syncing || modeBad}
-                    onClick={() => onSync('pull')}
-                  >
-                    <CloudDownload className="w-4 h-4" />
-                    <span>{syncing === 'pull' ? t('game.syncing', '同步中…') : t('game.sync_pull', '立即拉取')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-outline"
-                    disabled={!!syncing || modeBad}
-                    onClick={() => onSync('push')}
-                  >
-                    <CloudUpload className="w-4 h-4" />
-                    <span>{syncing === 'push' ? t('game.syncing', '同步中…') : t('game.sync_push', '立即推送')}</span>
-                  </button>
-                </div>
-
-                {/* 引擎上次干了什么。没有这一段的话，「开关打开了但什么都没发生」完全没法自查。 */}
-                {last && (
-                  <p className={`panel-tiny mt-2 ${last.ok ? 'text-zinc-500' : 'text-amber-400/90'}`}>
-                    {t('game.last_sync', '上次：{{act}} · {{at}}{{why}}', {
-                      act: last.action === 'push' ? t('game.act_push', '推送') : t('game.act_pull', '拉取'),
-                      at: last.at || '',
-                      why: last.ok ? '' : ` · ${last.message || t('game.failed', '失败')}`,
-                    })}
-                  </p>
-                )}
-
-                {testResult && (
-                  <Note
-                    tone={testResult.ok ? 'ok' : 'error'}
-                    className="mt-3"
-                  >
-                    {testResult.ok
-                      ? t('game.test_ok', '连接成功{{lat}}', { lat: testResult.latency ? `（${testResult.latency} ms）` : '' })
-                      : t('game.test_fail', '连接失败：{{why}}', { why: testResult.message })}
+              {/* 远程位置：来自全局（设置页「存档配置」），本弹窗只读展示，不再编辑。
+               * 想去改它，提示用户到设置页。这样「全局生效」是字面意义。 */}
+              <div className="mt-4">
+                <span className="block panel-tiny font-semibold text-zinc-400 mb-1.5">{t('game.remote_location', '远程位置')}</span>
+                {remote && remoteFrom !== 'none' ? (
+                  <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
+                    <p className="text-white panel-note font-semibold">{remoteSummary(remote)}</p>
+                    <p className="panel-tiny text-zinc-500 mt-0.5">
+                      {remoteFrom === 'global'
+                        ? t('game.remote_from_global', '（来自全局设置）')
+                        : t('game.remote_from_game', '（本游戏已配置）')}
+                    </p>
+                  </div>
+                ) : (
+                  <Note tone="warn">
+                    {t('game.remote_unset', '尚未配置远程位置，请到「设置 → 存档配置」填写。')}
                   </Note>
                 )}
+                <p className="panel-tiny text-zinc-500 mt-1.5">
+                  {t('game.remote_global_hint', '远程位置在「设置 → 存档配置」中统一设置，对所有游戏生效。')}
+                </p>
               </div>
+
+              <div className="flex flex-wrap items-center gap-2 mt-4">
+                <button type="button" className="btn btn-primary" disabled={saving} onClick={onSaveCfg}>
+                  {saving ? t('game.saving', '保存中…') : t('game.save_settings', '保存设置')}
+                </button>
+                {/* [CN-FORK] v0.5.2.142 立即推 / 拉。**不受上面的总开关影响** ——
+                    手动就是手动，用户想试一次不该被迫先把自动打开。也**不需要先保存**：
+                    后端读的是它自己那份已保存的配置，界面上改了没存是另一回事。 */}
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  disabled={!!syncing}
+                  onClick={() => onSync('pull')}
+                >
+                  <CloudDownload className="w-4 h-4" />
+                  <span>{syncing === 'pull' ? t('game.syncing', '同步中…') : t('game.sync_pull', '立即拉取')}</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  disabled={!!syncing}
+                  onClick={() => onSync('push')}
+                >
+                  <CloudUpload className="w-4 h-4" />
+                  <span>{syncing === 'push' ? t('game.syncing', '同步中…') : t('game.sync_push', '立即推送')}</span>
+                </button>
+              </div>
+
+              {/* 引擎上次干了什么。没有这一段的话，「开关打开了但什么都没发生」完全没法自查。 */}
+              {last && (
+                <p className={`panel-tiny mt-2 ${last.ok ? 'text-zinc-500' : 'text-amber-400/90'}`}>
+                  {t('game.last_sync', '上次：{{act}} · {{at}}{{why}}', {
+                    act: last.action === 'push' ? t('game.act_push', '推送') : t('game.act_pull', '拉取'),
+                    at: last.at || '',
+                    why: last.ok ? '' : ` · ${last.message || t('game.failed', '失败')}`,
+                  })}
+                </p>
+              )}
             </Block>
 
             {/* ── ② 存档列表 ── */}
@@ -677,8 +536,8 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
             icon={History}
             actions={
               <>
-                <Chip tone={cfg.snap.enabled ? 'ok' : 'muted'}>
-                  {cfg.snap.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
+                <Chip tone={pg.snap.enabled ? 'ok' : 'muted'}>
+                  {pg.snap.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
                 </Chip>
                 <button
                   type="button"
@@ -701,13 +560,13 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                 </p>
               </div>
               <Switch
-                checked={cfg.snap.enabled}
-                onChange={(v) => setCfg((c) => ({ ...c, snap: { ...c.snap, enabled: v } }))}
+                checked={pg.snap.enabled}
+                onChange={(v) => setPg((c) => ({ ...c, snap: { ...c.snap, enabled: v } }))}
                 label={t('game.snap_enable', '启用本地快照')}
               />
             </div>
 
-            <div className={cfg.snap.enabled ? 'mt-4' : 'mt-4 opacity-50 pointer-events-none'}>
+            <div className={pg.snap.enabled ? 'mt-4' : 'mt-4 opacity-50 pointer-events-none'}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field
                   label={t('game.snap_interval', '间隔（分钟）')}
@@ -733,8 +592,8 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                     min="1"
                     max="20"
                     inputMode="numeric"
-                    value={cfg.snap.keep}
-                    onChange={(e) => setCfg((c) => ({ ...c, snap: { ...c.snap, keep: e.target.value } }))}
+                    value={pg.snap.keep}
+                    onChange={(e) => setPg((c) => ({ ...c, snap: { ...c.snap, keep: e.target.value } }))}
                   />
                 </Field>
               </div>

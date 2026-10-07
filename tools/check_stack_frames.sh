@@ -34,7 +34,11 @@ command -v clang >/dev/null 2>&1 || { echo "=== check_stack_frames SKIPPED: 没�
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 
-INC="-Iinclude -I$SDK/target/include -Isrc/psaccounts -Isrc/psaccounts/third_party -Ithird_party/sqlite3"
+# [CN-FORK] v0.5.2.143 save_remote.c include 了 <smb2/libsmb2.h>（SMB 走 libsmb2），
+# 少了这个 -I 那个文件会整段编译失败 —— 而失败在这里是**静默的**：上面那行
+# `> /dev/null 2>&1` 会把报错吞掉，结果是这个文件的 .su 根本不生成，
+# 守卫会以为「栈帧都没问题」。所以这里必须带上，并且下面的计数要真的覆盖到它。
+INC="-Iinclude -I$SDK/target/include -Isrc/psaccounts -Isrc/psaccounts/third_party -Ithird_party/sqlite3 -Ithird_party/libsmb2/include"
 for f in src/*.c src/psaccounts/*.c; do
     clang -Os -w -fstack-usage $INC -c "$f" -o "$OUT/$(basename "$f" .c).o" >/dev/null 2>&1
 done

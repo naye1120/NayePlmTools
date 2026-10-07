@@ -1,3 +1,86 @@
+## v0.5.2.144 (CN-FORK)
+
+> **存档配置搬家：远程位置改到「设置」里配一次、全局生效；单个游戏只留「拉取 / 推送」。**
+>
+> 用户口径：「我刚刚把共享设置的功能在设置里增加了，把配置功能迁移过去，配置一个全局生效。
+> 单个游戏包开启拉取和推送按钮。」
+
+> ### 为什么要搬
+>
+> `.142` 之前，**每一款游戏**的「存档管理」里都有一整块远程位置配置（协议三选一 +
+> host / 端口 / 共享名 / 子路径 / 账号 / 密码）。而现实里**所有游戏用的是同一台 NAS /
+> 同一个 FTP** —— 于是同一份主机地址要在几十个游戏里各填一遍，改一次就要改几十处。
+> 「远程位置」本质上是**跨游戏共享的那一份配置**，就该有一个全局的家。
+>
+> 相对的，「自动存档开关 / 启动拉取 / 退出回传 / 本地快照间隔」是**每个游戏各自不同**的
+> 策略（有的游戏想每次退出都传，有的不想），仍归各自的「存档管理」。
+> **一个控件只有一个家** —— 这就是这次搬家的原则。
+
+> ### 前端
+>
+> - **新增 `frontend/src/utils/saveConfig.js`**：把 `MODES` / `MODE_FIELDS` / `FIELD_LABEL` /
+>   `EMPTY_CFG` / `toLocalCfg` / `toRemoteCfg` 从 `SaveManagerModal` 里抽出来，供两个弹窗共用；
+>   新增 `GLOBAL_KEY` / `loadGlobalCfg` / `normalizeCfg` / `isRemoteConfigured` / `remoteOf` /
+>   `resolveRemoteForGame` / `remoteSummary`。
+> - **新增 `frontend/src/components/views/ArchiveConfigModal.jsx`**：设置页「存档配置」弹窗，
+>   管**远程位置**（协议 + 字段 + 测试连接），存主配置键 `ARCHIVE_GLOBAL_CONFIG`（JSON 串）。
+> - **`SaveManagerModal.jsx` 收敛**：删掉远程位置那整块编辑 UI（Segmented / 字段 / 测试连接 /
+>   密码框），只留 ① 自动存档总开关 + 两个时机；② 立即拉取 / 立即推送 + `auto_state` 状态行；
+>   ③ 本地快照。远程位置改成**只读摘要**：优先全局，否则回退到本游戏已存的那一段，并标注
+>   来源（`（来自全局设置）` / `（本游戏已配置）`）。
+> - **保存时把解析出的远程段合进请求**（`resolveRemoteForGame`）：全局配了就按全局存，
+>   这才让「全局生效」不只是显示、而是真的落到 `POST /game_save_auto` 上。
+> - **`config` 逐层传下去**（`App → GameManageView → GameSection → SaveManagerModal`），
+>   单游戏弹窗要读 `config.ARCHIVE_GLOBAL_CONFIG`；`App` 进 `game_manage` 视图时补一次
+>   `refreshConfig()`（全局配置若是被别的途径改的，进页就能拿到最新的）。
+> - i18n：新增 `game.remote_location` / `game.remote_from_global` / `game.remote_from_game` /
+>   `game.remote_unset` / `game.remote_global_hint` / `settings.archive_saved` /
+>   `settings.archive_pergame_hint`（两份 overlay 都加）。
+>
+> ### mock
+>
+> - `/reset` 补清 `ARCHIVE_GLOBAL_CONFIG`（新增的 mock 状态必须一起清，否则上一节设的
+>   全局远程会串到下一节的单游戏弹窗）。
+>
+> ### 回归
+>
+> `game112` 第 5 节按新形态重写（**断言旧 UI 已删干净**：没有「远程位置类型 / 测试连接 /
+> 共享名 / 上传地址 / 访问令牌 / password 输入框），新增 **5d 节**验「全局配置对单游戏生效」
+> （全局配 HTTP → 单游戏摘要显示它 + 标注来源 + 保存后 per-game `mode` 真的变成 `http`）。
+> 5c（老配置 `mode=smb`）改为验证回退分支读对协议。第 10 节（英文包）同步跟上新词条。
+> 结果：`game112` **249/249**、`nav112` 20/20、`acct111` 23/23、`avatar109` 19/19、
+> `cropfix` 75/75、`pack125` 15/15。
+
+## v0.5.2.143 (CN-FORK)
+
+> **SMB 接过 `libsmb2`：.142 那句「SDK 不支持 SMB」被推翻，SMB 成为能用的一档。**
+>
+> `.142` 的推理是「SDK 那份 `libcurl` 没编 `smb` → SMB 做不了」。**错在把「libcurl 这条路
+> 不通」当成了「PS5 做不了」**：PS5 上 SMB 走的是 `libsmb2`（pacbrew 的
+> `ps5-payload-libsmb2`，上游 `ps5-payload-dev/websrv` 就在用），已用本仓库同一套工具链
+> 编成 `libsmb2.a` 并链进 ELF，代价 +约 241 KB。
+
+> ### 后端
+>
+> - **`src/save_remote.c`（+459）**：新增 `mode=="smb"` 传输分支（`smb2_open(O_CREAT)` /
+>   `smb2_write` / `smb2_fsync` / `smb2_unlink` / `smb2_mkdir` / `smb2_rename`），与
+>   ftp / http 平权；`include/save_remote.h`（+50）补接口与文件头说明。
+> - `src/game_auto.c` / `src/game_saves.c`：SMB 相关接线。
+> - `Makefile`（+11）：链 `third_party/libsmb2/libsmb2.a`。
+> - `third_party/libsmb2/`：`build_ps5.sh` + `include/` + `libsmb2-6.2.tar.gz` + `libsmb2.a`。
+>
+> ### 前端 / mock
+>
+> - `SaveManagerModal` 的 SMB 一档**解禁**（`.142` 的「看得见、点不动」作废），判据从
+>   「那一档标了 disabled」改成「认不认得出这个协议名」（认不出才禁字段与保存）。
+> - `mock-server.js`：`/game_save_sync` 对 `smb` 与其它两档一视同仁（不再回 400）。
+>
+> ### 测试
+>
+> - 宿主：`save_remote` 76 / `game_auto` 47（`test/save_remote_test.c` +60、
+>   `test/game_auto_test.c` +14）；`tools/check_stack_frames.sh` / `test/run_host_tests.sh` 同步。
+> - `game112` 5c 节验「老配置 `mode=smb`」这条路。
+
 ## v0.5.2.142 (CN-FORK)
 
 > **存档三层计划的第 3 层：自动存档执行引擎 + 远程推拉（FTP / HTTP）。**

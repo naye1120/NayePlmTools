@@ -86,6 +86,12 @@
   "app.fork.by": "Fork by {{maintainer}}",
   "settings.changelog_title": "Changelog",
   "settings.changelog_desc": "View version update history for this fork.",
+  "settings.archive_title": "Archive Config",
+  "settings.archive_desc": "Configure default auto-save and local snapshot parameters.",
+  "settings.archive_config_title": "Archive Configuration",
+  "settings.archive_config_hint": "The remote location set here (host / share / account, etc.) applies to all games: each game's save window shows it read-only, then syncs with it once saved. Auto-save toggles/timings and local snapshots are still set per game in its Save manager.",
+  "settings.archive_saved": "Global archive config saved",
+  "settings.archive_pergame_hint": "Auto-save toggles/timings and local snapshot interval/copies are set per game in its Save manager.",
   "settings.default_repo_title": "Default Cloud Repository",
   "settings.default_repo_desc": "The built-in official payload catalog. Turning it off stops every request to it, including the startup refresh; your own sources keep working.",
   "settings.default_repo_off_hint": "Default repository is off and multi-source mode is disabled: the Manage tab only lists local payloads. Turn on Multiple Payload Sources to use your own repositories.",
@@ -463,5 +469,10 @@
   "game.sync_names": "Sync names to console",
   "game.sync_names_hint": "Rewrite every name you changed in this panel to the console: first the console index (app.db / appinfo.db — this is what ShadowMount and the TV home screen read), then, for folder / LZ4 titles, the game source param.json once more. Use it after renaming on an older build, or after a ShadowMount rescan pushed the names back; titles that already match are not rewritten.",
   "game.sync_done": "Re-applied {{n}}: index {{ok}}, source {{src}}, failed {{fail}}",
-  "game.sync_fail": "Sync failed"
+  "game.sync_fail": "Sync failed",
+  "game.remote_location": "Remote location",
+  "game.remote_from_global": "(from global settings)",
+  "game.remote_from_game": "(configured for this game)",
+  "game.remote_unset": "No remote location configured yet — set it in Settings → Archive Config.",
+  "game.remote_global_hint": "The remote location is set once in Settings → Archive Config and applies to all games."
 }

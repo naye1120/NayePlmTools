@@ -10,14 +10,14 @@ import GameSection from './GameSection' /* [CN-FORK] 游戏管理板块 */
  * v0.5.2.112：把 App 级的 addToast / showConfirm 透传给板块 —— 游戏详情里的「删除源」
  * 走的就是全局那个 danger 档确认弹窗，与本项目其余破坏性操作同一条路径，
  * 不自己再造第二套确认弹窗。 */
-export default function GameManageView({ addToast, showConfirm }) {
+export default function GameManageView({ addToast, showConfirm, config }) {
   const { t } = useTranslation()
   return (
     <div className="space-y-6">
       <PageHead
         title={t('game.title', '游戏管理')}
       />
-      <GameSection addToast={addToast} showConfirm={showConfirm} />
+      <GameSection addToast={addToast} showConfirm={showConfirm} config={config} />
     </div>
   )
 }

@@ -877,12 +877,14 @@ function autoFor(tid) {
     gameState.auto[tid] = {
       enabled: false,
       /* [CN-FORK] v0.5.2.142 默认协议从 smb 改成 ftp，与后端 gs_auto_defaults 一致 ——
-       * SDK 那份 libcurl 没编 smb，默认成 smb 等于默认一个传不出去的协议。
+       * .142 的理由（「libcurl 没编 smb = 做不了」）在 .143 已被推翻：SMB 现在走
+       * libsmb2，是能用的一档。默认留 ftp 纯粹因为它最通用。
        * 想测「老用户存的是 smb」那条路，用 POST /game_save_auto {mode:'smb'} 显式造。 */
       mode: 'ftp',
       on_launch: true,
       on_exit: true,
-      smb: { host: '192.168.1.10', share: 'ps5save', sub: tid, user: 'ps5', has_password: true },
+      /* sub 留空：.143 起 <TID>/ 由后端自己加一层，mock 照同一口径摆（写 tid 会叠两层）。 */
+      smb: { host: '192.168.1.10', port: 445, share: 'ps5save', sub: '', user: 'ps5', has_password: true },
       ftp: { host: '192.168.1.10', port: 2121, path: `/ps5save/${tid}`, user: 'ps5', has_password: false },
       http: { url: '', token_set: false },
       /* [CN-FORK] v0.5.2.140 本地快照。默认值必须与后端 gs_auto_defaults 一模一样，
@@ -1100,8 +1102,9 @@ app.post('/game_save_snap', (req, res) => {
   return res.status(400).json({ error: 'EBAD', message: '未知的 action' });
 });
 
-/* [CN-FORK] v0.5.2.142 立即同步（手动推 / 拉）。与后端 /game_save_sync 同形：
- *   · 协议是 smb → 400（SDK 没编这个协议，后端也是这条）；
+/* [CN-FORK] v0.5.2.143 立即同步（手动推 / 拉）。与后端 /game_save_sync 同形：
+ *   · 三种协议（smb / ftp / http）走同一条分支 —— .142 时 smb 直接回 400，
+ *     那是「libcurl 没编 smb」留下的；.143 起 SMB 走 libsmb2，与其它两档平权；
  *   · 推送时主机上没存档 → 400（没什么可推的）；
  *   · 拉取时远端还没有 → **200 + ok:true**，note 里说明。第一次用必然遇到，
  *     后端刻意不把它算失败，mock 也必须一样（否则前端会显示一条真机不会出现的红报错）。 */
@@ -1117,13 +1120,10 @@ app.post('/game_save_sync', (req, res) => {
   if (action !== 'push' && action !== 'pull') {
     return res.status(400).json({ error: 'EBAD', message: 'action 只能是 push 或 pull' });
   }
-  const mode = autoFor(tid).mode;
-  if (mode === 'smb') {
-    return res.status(400).json({
-      error: 'EBAD',
-      message: '当前 SDK 不支持 smb 传输，请改用 FTP 或 HTTP',
-    });
-  }
+  /* .143 起 smb 与 ftp/http 平权，不再单独回 400（见本函数文件头）。
+   * autoFor 仍然要调一次：它是惰性建的，不建的话这个游戏就没有 auto 记录，
+   * 而下面 `done()` 会把 autoState 挂上去 —— 前端会看到「有状态没配置」。 */
+  autoFor(tid);
 
   const list = savesFor(tid);
   const done = (note, extra) => {
@@ -1936,6 +1936,10 @@ app.post('/reset', (req, res) => {
   progStubs.clear();
   gameState.jobs = {};
   gameState.nextJob = 1;
+  /* [CN-FORK] v0.5.2.144 全局存档配置（设置页「存档配置」写入 ARCHIVE_GLOBAL_CONFIG）。
+   * /set_config 会把它存进 mockConfig；不清的话上一节设的全局远程会串到下一节的
+   * 单游戏弹窗（显示「来自全局设置」而不是「本游戏已配置」）→ 假红。 */
+  delete mockConfig.ARCHIVE_GLOBAL_CONFIG;
   listSnap = null;
   listSnapAt = 0;
   /* 预热状态也要清：否则 reset 之后 folder 游戏已经是「预热过」的，

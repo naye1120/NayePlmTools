@@ -237,7 +237,7 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction }) {
   )
 }
 
-export default function GameSection({ addToast, showConfirm }) {
+export default function GameSection({ addToast, showConfirm, config }) {
   const { t } = useTranslation()
   const [games, setGames] = useState(null) // null=未加载；[]=已加载但无游戏
   const [count, setCount] = useState(0)
@@ -433,6 +433,7 @@ export default function GameSection({ addToast, showConfirm }) {
         onClose={closeModal}
         addToast={addToast}
         showConfirm={showConfirm}
+        config={config}
       />
       <MediaManagerModal
         show={modal?.kind === 'media'}

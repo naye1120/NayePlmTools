@@ -5,33 +5,37 @@
 
 /* [CN-FORK] v0.5.2.142 存档的远程传输层（FTP / HTTP）。
  *
- * ── 为什么当前只有这两种协议（**注意：不是「SMB 做不到」**）─────────────
+ * ── 三条协议线的来历（**别再把「libcurl 没有 smb」当成「PS5 做不了 SMB」**）──
  * SDK 里那份 libcurl 是 **8.18.0，编了
  *   http https ftp file dict imap ldap pop3 smtp
- * 而**没有 smb** —— 所以「靠 libcurl 走 SMB」这条路是死的。
- * 探测方法的坑：`strings` 默认只输出 ≥4 字符，而 `ftp` / `smb` 只有 3 字符，
- * 必须 `strings -n 3`，否则连 `ftp` 都会被判成「不存在」。
+ * 而**没有 smb**。探测方法的坑：`strings` 默认只输出 ≥4 字符，而 `ftp` / `smb`
+ * 只有 3 字符，必须 `strings -n 3`，否则连 `ftp` 都会被判成「不存在」。
  *
- * **但这不等于 PS5 上做不了 SMB。** 2026-10-07 复核过一遍，结论是：
- *   - `libsmb2`（SMB2/3 用户态客户端，sahlberg/libsmb2）是 PS5 SDK 生态的
- *     **正式包**：`ps5-payload-dev/pacbrew-repo` 里的 `ps5-payload-libsmb2`；
+ * `.142` 当时据此把 SMB 一档标成「SDK 不支持」—— **那条推论错了**，它把
+ * 「libcurl 这条路不通」当成了「PS5 做不了」。2026-10-07 复核后 `.143` 补上：
+ *   - **`libsmb2`**（SMB2/3 用户态客户端，sahlberg/libsmb2 **6.2**）是 PS5 SDK
+ *     生态的**正式包**：`ps5-payload-dev/pacbrew-repo` 里的 `ps5-payload-libsmb2`；
  *     上游 `ps5-payload-dev/websrv` 就用它（`prospero-pkg-config libsmb2 --libs`）。
- *   - 已实测：源码用**本仓库同一套工具链**（`prospero-clang` + `prospero.cmake`）
- *     能编出 `libsmb2.a`，能链进 PS5 ELF，写路径符号齐
- *     （`smb2_write` / `smb2_open(O_CREAT)` / `smb2_unlink` / `smb2_mkdir` /
- *     `smb2_rmdir` / `smb2_rename` / `smb2_fsync`），协议覆盖 SMB 2.0.2–3.1.1
- *     （含签名与加密）。代价是 payload **+约 241 KB**（约 +2.2%）。
- *   - 所以「当前 SDK 不支持 SMB」这个说法**不准确**，正确的是
- *     **「当前这个构建没有编入 SMB 支持」** —— 因为还没有把 libsmb2 链进来。
- *     真要接的时候：`src/save_remote.c` 加一条 `mode == "smb"` 分支，
- *     远端布局沿用 `<base>/<TID>/<uid>.zip`，UI 把那一档的 `disabled` 去掉。
- *     `libsmb2.h` 不是自包含的，要先 `#include <time.h>` 与 `<smb2/smb2.h>`。
+ *   - 预编译产物在 `third_party/libsmb2/`（`.a` + 头 + 源码 + `build_ps5.sh`）。
+ *     实测代价 **+约 241 KB**（约 +2.2%）。协议覆盖 SMB 2.0.2–3.1.1（含签名与加密）。
+ *   - 于是本文件现在是 **ftp / http 走 libcurl，smb 走 libsmb2**。
+ *     远端布局三种协议**完全一致**：`<base>/<TID>/<uid>.zip`。
+ *
+ * 两条 libsmb2 的坑（写进 README 一样的注释里，改代码时会撞上）：
+ *   - `libsmb2.h` **不是自包含的**：要先 `#include <time.h>` 与 `<smb2/smb2.h>`，
+ *     否则报 `unknown type name 'time_t'` / `'SMB2_GUID_SIZE'` / `'smb2_lease_key'`。
+ *   - 它**没有** `smb2_creat`，创建文件是 `smb2_open(path, O_CREAT|O_WRONLY)`；
+ *     也**没有** `O_TRUNC`，要覆盖得先写 `.tmp` 再 `smb2_rename`（正好也就是
+ *     下面「整份替换可回退」那条在远端侧的实现）。
  *
  * ── 远端布局（推与拉必须逐字一致，否则推上去的东西拉不回来）────────────
  *   <base>/<TID>/<uid>.zip
  * base 由协议决定：
  *   ftp  → ftp://<host>:<port><path>
  *   http → <url>
+ *   smb  → smb://<host>[:<port>]/<share>[/<sub>]
+ *          （`sub` 与 ftp 的 `path` 同义，都是可选的；空就是共享根 ——
+ *           于是三种协议在盘上都是 <…>/<TID>/<uid>.zip，不会叠出两层 TID）
  * 一个 tid 一个目录、一个用户一个文件。**刻意不做「一个游戏一个文件」** ——
  * 真机上同一个游戏常有两个用户各存一份（实测 PPSA01650 就是），挤在一个文件里
  * 必然互相覆盖。这一条与本地那一侧的「一个用户一条」是同一个口径。
@@ -48,18 +52,22 @@
 /* 一款游戏的远程配置。字段与 saves_auto.json 里那个 tid 对象一一对应。 */
 typedef struct {
     char mode[8];   /* "ftp" / "http" / "smb" */
-    /* ftp */
+    /* ftp / smb 共用 */
     char host[256];
-    int  port;      /* 缺省 21 */
-    char path[512]; /* 远端目录，可为空（那就是根） */
+    int  port;      /* 缺省：ftp 21、smb 445 */
+    char path[512]; /* ftp：远端目录，可为空（那就是根） */
     char user[128];
     char password[128];
     /* http */
     char url[512];
     char token[256];
+    /* smb。刻意与 ftp 的 path 分开：共享名是 SMB 协议里 tree connect 的那一层，
+     * 与「目录路径」不是一回事，混用一个字段迟早拼错。 */
+    char share[256];
+    char sub[256];  /* 共享名下的可选子目录（与 ftp 的 path 同义）；空即共享根 */
 } sr_cfg_t;
 
-/* 这一版支持哪些协议。现在只有 ftp / http —— smb 一律 0。 */
+/* 这一版支持哪些协议。ftp / http 走 libcurl，smb 走 libsmb2（见文件头）。 */
 int sr_mode_supported(const char *mode);
 
 /* sr_pull 的专用返回码：**远端还没有这个文件**。

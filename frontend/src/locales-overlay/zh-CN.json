@@ -87,6 +87,12 @@
   "app.fork.by": "由 {{maintainer}} 维护",
   "settings.changelog_title": "更新日志",
   "settings.changelog_desc": "查看本 Fork 的版本更新历史。",
+  "settings.archive_title": "存档配置",
+  "settings.archive_desc": "配置自动存档与本地快照的默认参数。",
+  "settings.archive_config_title": "存档配置",
+  "settings.archive_config_hint": "这里配置的远程位置（主机 / 共享 / 账号等）对所有游戏生效：单游戏弹窗里的「远程位置」只读显示它，保存后该游戏就按它推拉；自动存档的开关与时机、本地快照仍在该游戏的「存档管理」里单独设置。",
+  "settings.archive_saved": "全局存档配置已保存",
+  "settings.archive_pergame_hint": "自动存档的开关与时机、本地快照的间隔与保留份数，请在每个游戏的「存档管理」里单独设置。",
   "settings.default_repo_title": "默认云端仓库",
   "settings.default_repo_desc": "内置的官方 payload 目录。关掉后向它发出的请求全部停掉（含开机那一次刷新），你自己的来源照常可用。",
   "settings.default_repo_off_hint": "已关闭默认仓库且未开启多来源模式：管理页只会列出本地 payload。想继续在线安装，请打开「多来源」并添加自己的源。",
@@ -465,5 +471,10 @@
   "game.sync_names": "同步名字到主机",
   "game.sync_names_hint": "把面板里改过的名字重写到主机：先写主机索引（app.db / appinfo.db，SMP 与电视主屏读的就是它），裸目录 / LZ4 类再写一次游戏源 param.json。改名发生在旧版本、或 SMP 重扫把名字冲回去之后，点这里补一次即可（已经一致的款不会重复写）。",
   "game.sync_done": "已回填 {{n}} 款：主机索引 {{ok}}、名字源 {{src}}、失败 {{fail}}",
-  "game.sync_fail": "同步失败"
+  "game.sync_fail": "同步失败",
+  "game.remote_location": "远程位置",
+  "game.remote_from_global": "（来自全局设置）",
+  "game.remote_from_game": "（本游戏已配置）",
+  "game.remote_unset": "尚未配置远程位置，请到「设置 → 存档配置」填写。",
+  "game.remote_global_hint": "远程位置在「设置 → 存档配置」中统一设置，对所有游戏生效。"
 }

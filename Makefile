@@ -10,15 +10,24 @@ SDK      := /opt/ps5-payload-sdk
 TARGET   := $(SDK)/target
 INCLUDES := -Iinclude -I$(TARGET)/include \
            -Isrc/psaccounts -Isrc/psaccounts/third_party \
-           -Ithird_party/sqlite3
+           -Ithird_party/sqlite3 \
+           -Ithird_party/libsmb2/include
 # [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入需要的两个库（SDK 里是 .so）：
 #   -lkernel_sys     sys_lite.c 的凭据提权（kernel_set_ucred / root / jail）
 #   -lSceRemoteplay  accounts.c 生成远程游玩配对 PIN（只读，不调用即不占会话）
+# [CN-FORK] v0.5.2.143 SMB：SDK 的 libcurl 没编 smb，这里补一个用户态的 SMB2/3 客户端
+#   libsmb2（sahlberg/libsmb2 6.2，pacbrew 包名 ps5-payload-libsmb2）。
+#   注意**别以为「libcurl 没有 smb」就等于「PS5 做不了 SMB」** —— 那是 .142 犯过的错。
+#   预编译产物直接进仓，理由与 third_party/pkg-manager.elf 一样：出包不能依赖网络，
+#   而 libsmb2 是 cmake 工程，不适合像 sqlite3 那样把源码并进 $(SRCS)。
+#   要重编：bash third_party/libsmb2/build_ps5.sh（脚本内带 sha256 校验与构建步骤）。
+#   源码副本也在同目录（libsmb2-6.2.tar.gz）。实测代价：ELF +约 241 KB。
 LIBS     := $(TARGET)/lib/libcurl.a \
             $(TARGET)/lib/libmbedtls.a \
             $(TARGET)/lib/libmbedx509.a \
             $(TARGET)/lib/libmbedcrypto.a \
             $(TARGET)/lib/libmicrohttpd.a \
+            third_party/libsmb2/libsmb2.a \
             -L$(TARGET)/lib -lpthread \
             -lSceNetCtl -lSceUserService -lSceSystemService \
             -lSceAppInstUtil -lSceHttp2 -lSceSsl -lSceNet -lSceRegMgr \

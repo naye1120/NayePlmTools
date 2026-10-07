@@ -1,5 +1,6 @@
-/* [CN-FORK] v0.5.2.142 存档的远程传输层。设计（为什么只有 FTP/HTTP、远端布局、
- * 为什么文件名不带时间戳）见 include/save_remote.h 的文件头。 */
+/* [CN-FORK] v0.5.2.143 存档的远程传输层（FTP / HTTP 走 libcurl，SMB 走 libsmb2）。
+ * 设计（三条协议线的来历、远端布局、为什么文件名不带时间戳、libsmb2 的两条坑）
+ * 见 include/save_remote.h 的文件头。 */
 
 #include "save_remote.h"
 
@@ -9,6 +10,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+/* libsmb2 的头文件**不自包含**，顺序也不能换：
+ *   <stdint.h>  → 否则报 unknown type name 'uint8_t' / 'uint32_t'（smb2.h 内部用定宽类型却不带它）
+ *   <time.h>    → 否则报 unknown type name 'time_t'
+ *   <smb2/smb2.h> → 否则报 unknown type name 'SMB2_GUID_SIZE' / 'smb2_lease_key'
+ * 这三条是 6.2 的实际坑，别「顺手整理」掉。 */
+#include <fcntl.h>
+#include <stdint.h>
+#include <time.h>
+#include <smb2/smb2.h>
+#include <smb2/libsmb2.h>
 
 #include "game_saves.h"
 #include "json_helpers.h" /* ensure_dir_recursive */
@@ -27,9 +39,17 @@
 #define SR_URL_MAX 1200
 #define SR_ERR_MAX 256
 
+/* SMB 侧的额外常量。libsmb2 的超时是**每个 PDU** 的，不是整次传输 ——
+ * 一包最多 1 MB，60 秒还写不完那就是对面挂了，别等到 180 秒。 */
+#define SR_SMB_TIMEOUT 60
+#define SR_SMB_PATH_MAX 700
+#define SR_SMB_CHUNK_MAX (1024 * 1024)
+#define SR_SMB_CHUNK_MIN (64 * 1024)
+
 /* ── 协议支持 ───────────────────────────────────────────────────────────── */
 int sr_mode_supported(const char *mode) {
-    return (mode && (!strcmp(mode, "ftp") || !strcmp(mode, "http"))) ? 1 : 0;
+    return (mode && (!strcmp(mode, "ftp") || !strcmp(mode, "http") ||
+                     !strcmp(mode, "smb"))) ? 1 : 0;
 }
 
 /* 路径段闸门：tid / uid 会被拼进远端路径，**这一层就是远程侧的路径穿越防线**
@@ -46,6 +66,43 @@ static int sr_seg_ok(const char *s) {
 static void sr_trim_slash(char *s) {
     size_t n = strlen(s);
     while (n > 0 && s[n - 1] == '/') s[--n] = 0;
+}
+
+/* SMB 的共享名与子目录：用户可能敲 `/share/` 也可能敲 `share\`，
+ * 两种分隔符都认，统一去掉首尾 —— 不归一的话推上去和拉下来的路径就不是同一个，
+ * 而且两边都不报错。顺手把内部分隔符统一成反斜杠，见 smb_join。 */
+static void smb_norm(char *s) {
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == '/' || s[n - 1] == '\\')) s[--n] = 0;
+    const char *p = s;
+    while (*p == '/' || *p == '\\') p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    for (char *q = s; *q; q++)
+        if (*q == '/') *q = '\\';
+}
+
+/* 共享内相对路径的拼接。**分隔符必须是反斜杠**：libsmb2 只有 smb2_rename 会
+ * 把 '/' 转成 '\'，open / stat / mkdir / unlink 都是原样把名字发出去，
+ * 用 '/' 在不少服务器上会被当成文件名的一部分。 */
+static void smb_join(char *out, size_t osz, const char *a, const char *b) {
+    if (!out || !osz) return;
+    if (!a || !*a) snprintf(out, osz, "%s", b ? b : "");
+    else if (!b || !*b) snprintf(out, osz, "%s", a);
+    else snprintf(out, osz, "%s\\%s", a, b);
+}
+
+/* 展示用（smb:// URL）归一：去掉首尾分隔符，内部统一成**正斜杠**。
+ * 与 smb_norm 刻意分开——smb_norm 内部转反斜杠（那是给 open/stat 当线路径的，
+ * 不少服务器只认反斜杠），而 smb:// URL 按惯例用正斜杠、给用户看也更自然。
+ * 两处各用各的，别因为「长得像」就并成一个。 */
+static void smb_url_norm(char *s) {
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == '/' || s[n - 1] == '\\')) s[--n] = 0;
+    const char *p = s;
+    while (*p == '/' || *p == '\\') p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    for (char *q = s; *q; q++)
+        if (*q == '\\') *q = '/';
 }
 
 int sr_build_url(const sr_cfg_t *c, const char *tid, const char *uid,
@@ -107,10 +164,36 @@ int sr_build_url(const sr_cfg_t *c, const char *tid, const char *uid,
         return 0;
     }
 
-    if (!strcmp(c->mode, "smb"))
-        snprintf(err, errsz, "当前 SDK 不支持 SMB 传输，请改用 FTP 或 HTTP");
-    else if (err)
-        snprintf(err, errsz, "不支持的传输方式（%s）", c->mode);
+    if (!strcmp(c->mode, "smb")) {
+        if (!c->host[0]) {
+            if (err) snprintf(err, errsz, "没有填 SMB 主机地址");
+            return -1;
+        }
+        if (!c->share[0]) {
+            if (err) snprintf(err, errsz, "没有填 SMB 共享名");
+            return -1;
+        }
+        int port = (c->port > 0 && c->port < 65536) ? c->port : 445;
+        char share[300], sub[600];
+        snprintf(share, sizeof(share), "%s", c->share);
+        smb_url_norm(share);
+        sub[0] = 0;
+        if (c->sub[0]) {
+            snprintf(sub, sizeof(sub), "%s", c->sub);
+            smb_url_norm(sub);
+        }
+        /* 与 ftp 完全同构：<base>/<TID>/<uid>.zip，sub 就是 ftp 的 path。
+         * libsmb2 的 server 串支持 `<host>[:<port>]`，端口写在这里而不是另设。 */
+        int n = snprintf(out, osz, "smb://%s:%d/%s%s%s/%s/%s.zip",
+                         c->host, port, share, sub[0] ? "/" : "", sub, tid, uid);
+        if (n <= 0 || (size_t)n >= osz) {
+            if (err) snprintf(err, errsz, "地址过长");
+            return -1;
+        }
+        return 0;
+    }
+
+    if (err) snprintf(err, errsz, "不支持的传输方式（%s）", c->mode);
     return -1;
 }
 
@@ -174,6 +257,314 @@ static int sr_tmp_path(const char *what, const char *tid, const char *uid,
     return 0;
 }
 
+/* ── SMB（libsmb2）──────────────────────────────────────────────────────── */
+/* 一次推或拉对应一个 context：建连接 → 干完 → 断 → 销毁。
+ * 刻意不做长连接池 —— 自动存档是几分钟一次的事，为了省一次协商去维护
+ * 一批可能已经半死的 socket，不值当。 */
+
+typedef struct {
+    struct smb2_context *s;
+    char dir[SR_SMB_PATH_MAX]; /* 共享内的目录：<sub>\<tid>，或 <tid> */
+} smb_sess_t;
+
+/* 把一次失败翻译成 errno。libsmb2 的同步接口返回 -errno，但只有 open / connect
+ * 会把 NT 状态码留在 context 里，而 smb2_open 失败是**返回 NULL**（拿不到码）——
+ * 那种情况调用方传 rc = 0，这里就改去读 context 里的 NT 状态码。
+ * 别传 -1：errno 1 在 FreeBSD 上是 EPERM，会被误翻成「密码不对」。 */
+static int smb_errno_of(struct smb2_context *s, int rc) {
+    if (rc < 0) return -rc;
+    int nt = s ? smb2_get_nterror(s) : 0;
+    if (nt) {
+        int e = nterror_to_errno((uint32_t)nt);
+        if (e > 0) return e;
+    }
+    return 0;
+}
+
+/* 给用户的那句话。libsmb2 自己的错误串是英文 NT 状态（"Open failed with
+ * (0xc0000022) STATUS_ACCESS_DENIED."），直接塞进 toast 等于没说。 */
+static const char *smb_human(struct smb2_context *s, int rc) {
+    switch (smb_errno_of(s, rc)) {
+        case EACCES: case EPERM:    return "用户名或密码不对，或没有访问权限";
+        case ENOENT:                return "远程没有这个文件或目录";
+        case EEXIST:                return "远程已经有同名的东西";
+        case ENOTDIR:               return "远程路径上有个同名文件挡着（不是目录）";
+        case ENOSPC:                return "远程空间不足";
+        case ECONNREFUSED:          return "对方拒绝连接（检查端口）";
+        case EHOSTUNREACH: case ENETUNREACH: case ENETDOWN:
+                                    return "连不上这个地址（检查主机与端口）";
+        case ETIMEDOUT:             return "连接或传输超时";
+        case EINVAL:                return "参数不对（检查共享名与路径）";
+        case EIO:                   return "读写出错";
+        default: break;
+    }
+    const char *e = s ? smb2_get_error(s) : NULL;
+    return (e && *e) ? e : "SMB 操作失败";
+}
+
+static void smb_sess_close(smb_sess_t *ss) {
+    if (!ss || !ss->s) return;
+    smb2_disconnect_share(ss->s);
+    smb2_destroy_context(ss->s);
+    ss->s = NULL;
+}
+
+static int smb_sess_open(const sr_cfg_t *c, const char *tid, smb_sess_t *ss,
+                         char *err, size_t errsz) {
+    memset(ss, 0, sizeof(*ss));
+    if (!c->host[0]) {
+        if (err) snprintf(err, errsz, "没有填 SMB 主机地址");
+        return -1;
+    }
+    char share[300], sub[600];
+    snprintf(share, sizeof(share), "%s", c->share);
+    smb_norm(share);
+    if (!share[0]) {
+        if (err) snprintf(err, errsz, "没有填 SMB 共享名");
+        return -1;
+    }
+    sub[0] = 0;
+    if (c->sub[0]) {
+        snprintf(sub, sizeof(sub), "%s", c->sub);
+        smb_norm(sub);
+    }
+    smb_join(ss->dir, sizeof(ss->dir), sub, tid);
+
+    int port = (c->port > 0 && c->port < 65536) ? c->port : 445;
+    char server[400];
+    snprintf(server, sizeof(server), "%s:%d", c->host, port);
+
+    struct smb2_context *s = smb2_init_context();
+    if (!s) {
+        if (err) snprintf(err, errsz, "初始化 SMB 失败");
+        return -1;
+    }
+    ss->s = s;
+    smb2_set_timeout(s, SR_SMB_TIMEOUT);
+    /* 空用户名 + 空密码 = 访客共享。别因为「没填用户名」就不调 set_user，
+     * 那样 libsmb2 会去取当前用户，PS5 上取出来的名字没有意义。 */
+    smb2_set_user(s, c->user);
+    smb2_set_password(s, c->password);
+
+    int rc = smb2_connect_share(s, server, share, c->user);
+    if (rc != 0) {
+        if (err) snprintf(err, errsz, "连不上 SMB 共享：%s", smb_human(s, rc));
+        smb_sess_close(ss);
+        return -1;
+    }
+    return 0;
+}
+
+/* 逐级建目录，已存在就跳过（EEXIST 不算错）。
+ * 不自己建的话，第一次推送时 <TID>/ 必然不存在，SMB 只会回一句
+ * STATUS_OBJECT_PATH_NOT_FOUND，用户看不出是「没建目录」还是「配置错了」。 */
+static int smb_mkdirs(struct smb2_context *s, const char *dir,
+                      char *err, size_t errsz) {
+    char cur[SR_SMB_PATH_MAX];
+    const char *p = dir;
+    cur[0] = 0;
+    while (*p) {
+        const char *q = strchr(p, '\\');
+        size_t n = q ? (size_t)(q - p) : strlen(p);
+        if (n > 0) {
+            size_t used = strlen(cur);
+            if (used + n + 2 > sizeof(cur)) {
+                if (err) snprintf(err, errsz, "远程路径过长");
+                return -1;
+            }
+            if (used) cur[used++] = '\\';
+            memcpy(cur + used, p, n);
+            cur[used + n] = 0;
+            int rc = smb2_mkdir(s, cur);
+            if (rc != 0 && rc != -EEXIST) {
+                if (err) snprintf(err, errsz, "建不了远程目录（%s）：%s",
+                                  cur, smb_human(s, rc));
+                return -1;
+            }
+        }
+        if (!q) break;
+        p = q + 1;
+    }
+    return 0;
+}
+
+static int sr_smb_push(const sr_cfg_t *c, const char *tid, const char *uid,
+                       const char *local, long long *out_bytes,
+                       char *err, size_t errsz) {
+    smb_sess_t ss;
+    struct smb2fh *fh = NULL;
+    uint8_t *buf = NULL;
+    FILE *f = NULL;
+    char finalp[SR_SMB_PATH_MAX], tmpp[SR_SMB_PATH_MAX];
+    char nm[200], tnm[220];
+    long long total = 0;
+    int rc = -1;
+
+    if (smb_sess_open(c, tid, &ss, err, errsz) != 0) return -1;
+
+    snprintf(nm, sizeof(nm), "%s.zip", uid);
+    snprintf(tnm, sizeof(tnm), "%s.zip.tmp", uid);
+    smb_join(finalp, sizeof(finalp), ss.dir, nm);
+    smb_join(tmpp, sizeof(tmpp), ss.dir, tnm);
+
+    if (smb_mkdirs(ss.s, ss.dir, err, errsz) != 0) goto out;
+
+    /* 先写 .tmp 再改名：libsmb2 没有 O_TRUNC（写了也不会截断），而且
+     * 直接写正式名的话，传到一半断线就会在远端留一个半截的 <uid>.zip，
+     * 下次拉回来的是一个打不开的包。改名是原子操作，远端那份要么完整
+     * 要么还是旧的。上一轮崩溃留下的 .tmp 先清掉，失败无所谓。 */
+    smb2_unlink(ss.s, tmpp);
+    fh = smb2_open(ss.s, tmpp, O_CREAT | O_WRONLY);
+    if (!fh) {
+        if (err) snprintf(err, errsz, "在远程建不了临时文件：%s", smb_human(ss.s, 0));
+        goto out;
+    }
+
+    uint32_t chunk = smb2_get_max_write_size(ss.s);
+    if (chunk < SR_SMB_CHUNK_MIN) chunk = SR_SMB_CHUNK_MIN;
+    if (chunk > SR_SMB_CHUNK_MAX) chunk = SR_SMB_CHUNK_MAX;
+    /* 堆上分配：真机 MHD 连接线程只有 64 KB 栈，1 MB 的栈缓冲是自杀。 */
+    buf = (uint8_t *)malloc(chunk);
+    if (!buf) {
+        if (err) snprintf(err, errsz, "内存不足");
+        goto out;
+    }
+
+    f = fopen(local, "rb");
+    if (!f) {
+        if (err) snprintf(err, errsz, "打不开刚打好的包（%s）", strerror(errno));
+        goto out;
+    }
+    for (;;) {
+        size_t got = fread(buf, 1, chunk, f);
+        if (got == 0) break;
+        int w = smb2_write(ss.s, fh, buf, (uint32_t)got);
+        if (w < 0) {
+            if (err) snprintf(err, errsz, "写远程失败：%s", smb_human(ss.s, w));
+            goto out;
+        }
+        if ((size_t)w != got) {
+            if (err) snprintf(err, errsz, "写远程的字节数对不上（要 %u，实际 %d）",
+                              (unsigned)got, w);
+            goto out;
+        }
+        total += w;
+    }
+    fclose(f);
+    f = NULL;
+    smb2_fsync(ss.s, fh); /* 刷不刷得动都无所谓，改名的原子性才是关键 */
+    if (smb2_close(ss.s, fh) != 0) {
+        fh = NULL;
+        if (err) snprintf(err, errsz, "关闭远程文件失败：%s", smb_human(ss.s, 0));
+        goto out;
+    }
+    fh = NULL;
+
+    /* libsmb2 的 rename 是 replace_if_exist=0，**目标已存在会直接失败**。
+     * 所以先试着直接改名（正常第一次推就是这条路），撞上 EEXIST 才删旧的重来
+     * —— 这样绝大多数情况下远端那份旧的全程都在，只在覆盖那一瞬短暂缺失。 */
+    int r = smb2_rename(ss.s, tmpp, finalp);
+    if (r == -EEXIST) {
+        smb2_unlink(ss.s, finalp);
+        r = smb2_rename(ss.s, tmpp, finalp);
+    }
+    if (r != 0) {
+        smb2_unlink(ss.s, tmpp);
+        if (err) snprintf(err, errsz, "替换远程存档失败：%s", smb_human(ss.s, r));
+        goto out;
+    }
+    rc = 0;
+
+out:
+    if (f) fclose(f);
+    if (fh) smb2_close(ss.s, fh);
+    if (buf) free(buf);
+    smb_sess_close(&ss);
+    if (rc == 0 && out_bytes) *out_bytes = total;
+    return rc;
+}
+
+static int sr_smb_pull(const sr_cfg_t *c, const char *tid, const char *uid,
+                       const char *local, char *err, size_t errsz) {
+    smb_sess_t ss;
+    struct smb2fh *fh = NULL;
+    uint8_t *buf = NULL;
+    FILE *f = NULL;
+    char rp[SR_SMB_PATH_MAX], nm[200];
+    int rc = -1;
+
+    if (smb_sess_open(c, tid, &ss, err, errsz) != 0) return -1;
+
+    snprintf(nm, sizeof(nm), "%s.zip", uid);
+    smb_join(rp, sizeof(rp), ss.dir, nm);
+
+    /* 「远端还没有」必须单独认出来：第一次用自动存档时 <TID>/ 目录都还不存在，
+     * stat 会回 OBJECT_PATH_NOT_FOUND —— libsmb2 把它翻成 ENOENT。
+     * 不认出来的话，用户第一次开游戏就会看到一条红色的报错。 */
+    struct smb2_stat_64 st;
+    memset(&st, 0, sizeof(st));
+    int r = smb2_stat(ss.s, rp, &st);
+    if (r < 0) {
+        if (r == -ENOENT) {
+            if (err) snprintf(err, errsz, "远程还没有这个游戏的存档");
+            rc = SR_ENOTFOUND;
+        } else {
+            if (err) snprintf(err, errsz, "查不到远程存档：%s", smb_human(ss.s, r));
+        }
+        goto out;
+    }
+
+    fh = smb2_open(ss.s, rp, O_RDONLY);
+    if (!fh) {
+        if (smb_errno_of(ss.s, 0) == ENOENT) {
+            if (err) snprintf(err, errsz, "远程还没有这个游戏的存档");
+            rc = SR_ENOTFOUND;
+        } else {
+            if (err) snprintf(err, errsz, "打不开远程存档：%s", smb_human(ss.s, 0));
+        }
+        goto out;
+    }
+
+    uint32_t chunk = smb2_get_max_read_size(ss.s);
+    if (chunk < SR_SMB_CHUNK_MIN) chunk = SR_SMB_CHUNK_MIN;
+    if (chunk > SR_SMB_CHUNK_MAX) chunk = SR_SMB_CHUNK_MAX;
+    buf = (uint8_t *)malloc(chunk);
+    if (!buf) {
+        if (err) snprintf(err, errsz, "内存不足");
+        goto out;
+    }
+    f = fopen(local, "wb");
+    if (!f) {
+        if (err) snprintf(err, errsz, "建不了临时文件（%s）", strerror(errno));
+        goto out;
+    }
+    for (;;) {
+        int got = smb2_read(ss.s, fh, buf, chunk);
+        if (got < 0) {
+            if (err) snprintf(err, errsz, "读远程失败：%s", smb_human(ss.s, got));
+            goto out;
+        }
+        if (got == 0) break;
+        if (fwrite(buf, 1, (size_t)got, f) != (size_t)got) {
+            if (err) snprintf(err, errsz, "写本地文件失败（磁盘满？）");
+            goto out;
+        }
+    }
+    fclose(f);
+    f = NULL;
+    /* 读方向的 close 失败不算失败：字节都拿全了，关不掉只是远端少一次 tidy。 */
+    smb2_close(ss.s, fh);
+    fh = NULL;
+    rc = 0;
+
+out:
+    if (f) fclose(f);
+    if (fh) smb2_close(ss.s, fh);
+    if (buf) free(buf);
+    smb_sess_close(&ss);
+    return rc;
+}
+
 /* ── 推送 ───────────────────────────────────────────────────────────────── */
 int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
             long long *out_bytes, char *err, size_t errsz) {
@@ -192,6 +583,16 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
         if (err) snprintf(err, errsz, "%s", pmsg[0] ? pmsg : "打包失败");
         unlink(tmp);
         return -1;
+    }
+
+    /* SMB 不走 curl —— SDK 那份 libcurl 没编 smb，这条线是 libsmb2。
+     * 打包这一步是共用的，分岔只发生在「怎么把包送出去」。 */
+    if (!strcmp(c->mode, "smb")) {
+        long long b = 0;
+        int rc = sr_smb_push(c, tid, uid, tmp, &b, err, errsz);
+        unlink(tmp);
+        if (rc == 0 && out_bytes) *out_bytes = b;
+        return rc;
     }
 
     FILE *f = fopen(tmp, "rb");
@@ -265,6 +666,26 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
     return 0;
 }
 
+/* 三种协议下载完成后的**同一条**落盘路径：落到主机走的是与「上传存档」
+ * 完全一样的实现（整份替换、旧目录先留一手、失败能退回来）。传输层不自己写
+ * 一套落盘逻辑 —— 那必然两边慢慢走偏。tmp 由调用方保证存在，这里负责删。 */
+static int sr_finish_pull(const char *tid, const char *uid, const char *tmp,
+                          long long *out_files, long long *out_bytes,
+                          char *err, size_t errsz) {
+    char imsg[SR_ERR_MAX];
+    imsg[0] = 0;
+    long long files = 0, bytes = 0;
+    if (game_saves_import_file(tid, uid, tmp, &files, &bytes, imsg, sizeof(imsg)) != 0) {
+        unlink(tmp);
+        if (err) snprintf(err, errsz, "%s", imsg[0] ? imsg : "导入失败");
+        return -1;
+    }
+    unlink(tmp);
+    if (out_files) *out_files = files;
+    if (out_bytes) *out_bytes = bytes;
+    return 0;
+}
+
 /* ── 拉取 ───────────────────────────────────────────────────────────────── */
 int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
             long long *out_files, long long *out_bytes, char *err, size_t errsz) {
@@ -277,6 +698,15 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
 
     char tmp[SR_URL_MAX];
     if (sr_tmp_path("pull", tid, uid, tmp, sizeof(tmp), err, errsz) != 0) return -1;
+
+    if (!strcmp(c->mode, "smb")) {
+        int rc = sr_smb_pull(c, tid, uid, tmp, err, errsz);
+        if (rc != 0) {
+            unlink(tmp);
+            return rc; /* 可能是 SR_ENOTFOUND，原样往上抛 */
+        }
+        return sr_finish_pull(tid, uid, tmp, out_files, out_bytes, err, errsz);
+    }
 
     FILE *f = fopen(tmp, "wb");
     if (!f) {
@@ -351,18 +781,5 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
         return -1;
     }
 
-    /* 落到主机走的是与「上传存档」**同一条**实现（整份替换、旧目录先留一手、
-     * 失败能退回来）。传输层不自己写一套落盘逻辑 —— 那必然两边慢慢走偏。 */
-    char imsg[SR_ERR_MAX];
-    imsg[0] = 0;
-    long long files = 0, bytes = 0;
-    if (game_saves_import_file(tid, uid, tmp, &files, &bytes, imsg, sizeof(imsg)) != 0) {
-        unlink(tmp);
-        if (err) snprintf(err, errsz, "%s", imsg[0] ? imsg : "导入失败");
-        return -1;
-    }
-    unlink(tmp);
-    if (out_files) *out_files = files;
-    if (out_bytes) *out_bytes = bytes;
-    return 0;
+    return sr_finish_pull(tid, uid, tmp, out_files, out_bytes, err, errsz);
 }

@@ -108,11 +108,17 @@ static int ga_load_cfg(const char *tid, ga_cfg_t *out) {
     f = cJSON_GetObjectItem(o, "on_exit");
     if (cJSON_IsBool(f)) out->on_exit = cJSON_IsTrue(f) ? 1 : 0;
     ga_str(o, "mode", out->rc.mode, sizeof(out->rc.mode));
+    /* 端口缺省值**跟协议走**：ftp 21、smb 445。上面那个 21 只是占位，
+     * 不在这儿改的话「SMB 但没填端口」会被当成 21 —— 一个不报错、
+     * 只表现为连不上的坑（HTTP 不用端口）。 */
+    out->rc.port = strcmp(out->rc.mode, "smb") == 0 ? 445 : 21;
 
     cJSON *sub = cJSON_GetObjectItem(o, out->rc.mode);
     if (sub && cJSON_IsObject(sub)) {
         ga_str(sub, "host", out->rc.host, sizeof(out->rc.host));
         ga_str(sub, "path", out->rc.path, sizeof(out->rc.path));
+        ga_str(sub, "share", out->rc.share, sizeof(out->rc.share));
+        ga_str(sub, "sub", out->rc.sub, sizeof(out->rc.sub));
         ga_str(sub, "user", out->rc.user, sizeof(out->rc.user));
         ga_str(sub, "password", out->rc.password, sizeof(out->rc.password));
         ga_str(sub, "url", out->rc.url, sizeof(out->rc.url));

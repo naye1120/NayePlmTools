@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Terminal, ChevronRight, Globe, Languages, Palette, Heart, ScrollText, CloudDownload, Power } from 'lucide-react'
+import { Terminal, ChevronRight, Globe, Languages, Palette, Heart, ScrollText, CloudDownload, Power, Save } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../utils/helpers'
 // [CN-FORK] 外观（深/浅色）切换控件
@@ -9,6 +9,8 @@ import Section from '../ui/Section'
 import Switch from '../ui/Switch'
 import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥档位统一 */
 import Modal from '../ui/Modal'
+// [CN-FORK] v0.5.2.143 设置页「存档配置」弹窗
+import ArchiveConfigModal from './ArchiveConfigModal'
 
 const FOLLOW_BROWSER_LANGUAGE = '__auto__'
 
@@ -112,9 +114,10 @@ const CHANGELOG = [
   { v: "v0.5.1.11–.17", t: "UI 主题统一改造、分类组头、QR 页脚地址主题适配、侧栏导航优化" },
 ]
 
-const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
+const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate }) => {
   const { t, i18n } = useTranslation()
   const [showChangelog, setShowChangelog] = useState(false)
+  const [showArchiveConfig, setShowArchiveConfig] = useState(false)
   const autoOpen = config.AUTO_BROWSER_OPEN !== false
   const autoInstall = config.AUTO_INSTALL_APP !== false
   const autoloadDelay = config.AUTOLOAD_DELAY || 5
@@ -283,6 +286,21 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
         )}
       </Section>
 
+      {/* [CN-FORK] v0.5.2.143 存档配置：设置页新增入口，统一管理自动存档 / 本地快照默认参数。 */}
+      <Section
+        id="archive"
+        icon={Save}
+        title={t("settings.archive_title", "存档配置")}
+        bodyClass="grid grid-cols-1 xl:grid-cols-2 gap-4"
+      >
+        <NavRow
+          icon={Save}
+          title={t("settings.archive_title", "存档配置")}
+          description={t("settings.archive_desc", "配置自动存档与本地快照的默认参数。")}
+          onClick={() => setShowArchiveConfig(true)}
+        />
+      </Section>
+
       {/* Diagnostics */}
       <Section
         id="diagnostics"
@@ -318,6 +336,15 @@ const SettingsView = ({ config, onSaveConfig, setShowLogs, onNavigate }) => {
           danger
         />
       </Section>
+
+      {/* [CN-FORK] v0.5.2.143 存档配置弹窗 */}
+      <ArchiveConfigModal
+        show={showArchiveConfig}
+        onClose={() => setShowArchiveConfig(false)}
+        config={config}
+        onSaveConfig={onSaveConfig}
+        addToast={addToast}
+      />
 
       {/* [CN-FORK] 更新日志：走共用 Modal（Esc/返回键可关、打开即聚焦、内容长时可滚） */}
       <Modal

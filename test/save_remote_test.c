@@ -111,7 +111,9 @@ static void t_mode(void) {
     printf("-- 协议白名单\n");
     CHECK(sr_mode_supported("ftp") == 1, "ftp 应该支持");
     CHECK(sr_mode_supported("http") == 1, "http 应该支持");
-    CHECK(sr_mode_supported("smb") == 0, "smb 必须不支持（SDK 的 curl 没编）");
+    /* [CN-FORK] v0.5.2.143 smb 从「不支持」翻成「支持」：走 libsmb2，不是 libcurl。
+     * .142 那条断言（== 0）是把「libcurl 没编 smb」当成了「PS5 做不了 SMB」。 */
+    CHECK(sr_mode_supported("smb") == 1, "smb 应该支持（libsmb2）");
     CHECK(sr_mode_supported("") == 0, "空串不支持");
     CHECK(sr_mode_supported(NULL) == 0, "NULL 不支持");
     CHECK(sr_mode_supported("nfs") == 0, "没实现的协议不支持");
@@ -178,13 +180,54 @@ static void t_url(void) {
     CHECK(sr_build_url(&c, TID, UID, url, sizeof(url), err, sizeof(err)) != 0,
           "空 http 地址应该被拒");
 
+    /* [CN-FORK] v0.5.2.143 smb 走 libsmb2，与其它两档同构：<base>/<TID>/<uid>.zip,
+     * base = smb://<host>[:<port>]/<share>[/<sub>]。sub 空 = 共享根（**不会**叠两层 TID）。 */
     memset(&c, 0, sizeof(c));
     snprintf(c.mode, sizeof(c.mode), "smb");
     snprintf(c.host, sizeof(c.host), "192.168.1.10");
+    snprintf(c.share, sizeof(c.share), "ps5save");
+    CHECK(sr_build_url(&c, TID, UID, url, sizeof(url), err, sizeof(err)) == 0,
+          "smb 基础拼装失败：%s", err);
+    CHECK(!strcmp(url, "smb://192.168.1.10:445/ps5save/" TID "/" UID ".zip"),
+          "smb URL 不对（默认端口 445）：%s", url);
+
+    /* 共享名同样要归一：'/ps5save/' 与 'ps5save' 必须拼出同一个 URL */
+    snprintf(c.share, sizeof(c.share), "/ps5save/");
+    CHECK(sr_build_url(&c, TID, UID, url, sizeof(url), err, sizeof(err)) == 0,
+          "smb 归一拼装失败：%s", err);
+    CHECK(!strcmp(url, "smb://192.168.1.10:445/ps5save/" TID "/" UID ".zip"),
+          "smb 共享名没归一：%s", url);
+
+    /* sub 是可选子目录，与 ftp 的 path 同义 */
+    snprintf(c.sub, sizeof(c.sub), "saves/ps5/");
+    CHECK(sr_build_url(&c, TID, UID, url, sizeof(url), err, sizeof(err)) == 0,
+          "smb 带 sub 拼装失败：%s", err);
+    CHECK(!strcmp(url, "smb://192.168.1.10:445/ps5save/saves/ps5/" TID "/" UID ".zip"),
+          "smb 带 sub 的 URL 不对：%s", url);
+    /* 反斜杠也要认（Windows 用户会照着资源管理器敲）*/
+    snprintf(c.sub, sizeof(c.sub), "\\saves\\");
+    CHECK(sr_build_url(&c, TID, UID, url, sizeof(url), err, sizeof(err)) == 0,
+          "smb 反斜杠 sub 拼装失败：%s", err);
+    CHECK(!strcmp(url, "smb://192.168.1.10:445/ps5save/saves/" TID "/" UID ".zip"),
+          "smb 反斜杠 sub 没归一：%s", url);
+
+    c.sub[0] = 0;
+    c.port = 1445;
+    CHECK(sr_build_url(&c, TID, UID, url, sizeof(url), err, sizeof(err)) == 0,
+          "smb 自定义端口拼装失败：%s", err);
+    CHECK(!strcmp(url, "smb://192.168.1.10:1445/ps5save/" TID "/" UID ".zip"),
+          "smb 自定义端口没进去：%s", url);
+
+    /* 拒绝的两类：没填共享名、没填主机 */
+    c.port = 0;
+    c.share[0] = 0;
     CHECK(sr_build_url(&c, TID, UID, url, sizeof(url), err, sizeof(err)) != 0,
-          "smb 必须被拒");
-    CHECK(strstr(err, "SMB") != NULL || strstr(err, "不支持") != NULL,
-          "smb 的拒绝理由要说清是不支持：%s", err);
+          "smb 没填共享名必须被拒");
+    CHECK(strstr(err, "共享名") != NULL, "smb 的拒绝理由要说清是共享名：%s", err);
+    snprintf(c.share, sizeof(c.share), "ps5save");
+    c.host[0] = 0;
+    CHECK(sr_build_url(&c, TID, UID, url, sizeof(url), err, sizeof(err)) != 0,
+          "smb 没填主机必须被拒");
 
     /* 路径穿越：远端路径是拼出来的，这两个是唯一的闸门 */
     memset(&c, 0, sizeof(c));
@@ -281,13 +324,18 @@ static void t_bad_cfg(void) {
     printf("-- 配置不全 / 没有存档\n");
     char err[256];
     sr_cfg_t c;
+    /* [CN-FORK] v0.5.2.143 smb 已经不是「不支持」了 —— 这里改成验「配置不全」：
+     * 没填共享名时必须在**碰网络之前**就失败，并且说清缺的是共享名。 */
     memset(&c, 0, sizeof(c));
     snprintf(c.mode, sizeof(c.mode), "smb");
     snprintf(c.host, sizeof(c.host), "192.168.1.10");
 
     err[0] = 0;
-    CHECK(sr_push(TID, UID, &c, NULL, err, sizeof(err)) == -1, "smb 推送必须失败");
-    CHECK(strstr(err, "不支持") != NULL, "smb 的报错要说清是不支持：%s", err);
+    CHECK(sr_push(TID, UID, &c, NULL, err, sizeof(err)) == -1, "smb 没填共享名时推送必须失败");
+    CHECK(strstr(err, "共享名") != NULL, "smb 的报错要说清缺的是共享名：%s", err);
+    err[0] = 0;
+    CHECK(sr_pull(TID, UID, &c, NULL, NULL, err, sizeof(err)) == -1, "smb 没填共享名时拉取必须失败");
+    CHECK(strstr(err, "共享名") != NULL, "smb 的报错要说清缺的是共享名：%s", err);
     /* 主机上没有这个游戏的存档 → 打包那一步就该报人话，不是去连网络 */
     err[0] = 0;
     memset(&c, 0, sizeof(c));

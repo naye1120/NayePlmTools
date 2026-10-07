@@ -170,15 +170,51 @@ elif [ -f /opt/ps5-payload-sdk/target/include/curl/curl.h ]; then
     ln -sfn /opt/ps5-payload-sdk/target/include/curl /tmp/pldmgr_curl_inc/curl
     SR_CURL_INC=/tmp/pldmgr_curl_inc
 fi
+# [CN-FORK] v0.5.2.143 SMB 那一档（save_remote.c）走 libsmb2，而仓里那份
+# third_party/libsmb2/libsmb2.a 是 **FreeBSD/PS5 的目标文件**，链不进宿主的
+# glibc 可执行文件。所以宿主这边用同一份 tarball 另编一份 Linux 的：
+#   · 源码就是 third_party/libsmb2/libsmb2-6.2.tar.gz（与 PS5 那份**同一个包**，
+#     不联网、不另下，避免出现「宿主一份、真机另一份」）；
+#   · 编一次缓存到 /root/libsmb2-host —— **别放 /tmp**，WSL 的 /tmp 是 tmpfs，
+#     空闲重启会清空，于是每次跑全套都要重编两分钟。
+SR_SMB_INC=third_party/libsmb2/include
+SR_SMB_DIR=/root/libsmb2-host/libsmb2-6.2
+SR_SMB_A=""
+# 构建开关：
+#   · -DBUILD_SHARED_LIBS=OFF 不能省：默认只出 libsmb2.so（静态那条 add_library
+#     只在 PICO_BOARD 分支里），而我们要的是 build/lib/libsmb2.a —— 少了这个开关
+#     就是「编成功了但 .a 不存在」，下面整段 SKIP，症状看起来像 cmake 坏了。
+#   · -DENABLE_GSSAPI=OFF -DENABLE_LIBKRB5=OFF：宿主这边只是测传输逻辑，走的是
+#     用户名/密码（NTLM），**根本用不到 Kerberos 封装**。开着的话 .a 会链进 host
+#     系统的 libgssapi_krb5 / libkrb5，链接期报一串 undefined reference
+#     （gss_acquire_cred 等）。关掉后 .a 自包含，不依赖系统的 krb5。
+#     ⚠ 这条只影响**宿主测试**用的那份 libsmb2；PS5 真机那份由 PS5 SDK 的构建流程
+#     单独编（不带 gssapi 也好、带也好，与宿主这份互不干扰）。
+SR_SMB_FLAGS="-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DENABLE_GSSAPI=OFF -DENABLE_LIBKRB5=OFF"
+SR_SMB_MARK="$SR_SMB_DIR/build/.cn_fork_nogss"
+if [ ! -f "$SR_SMB_DIR/build/lib/libsmb2.a" ] || [ ! -f "$SR_SMB_MARK" ]; then
+    echo "=== 宿主版 libsmb2：构建（缓存到 $SR_SMB_DIR）==="
+    mkdir -p "$SR_SMB_DIR"
+    tar xzf third_party/libsmb2/libsmb2-6.2.tar.gz -C "$SR_SMB_DIR" --strip-components=1 2>/dev/null
+    rm -rf "$SR_SMB_DIR/build"
+    ( cd "$SR_SMB_DIR" && cmake $SR_SMB_FLAGS -B build -S . >/dev/null 2>&1 \
+      && make -C build -j8 >/dev/null 2>&1 && touch "$SR_SMB_MARK" )
+fi
+if [ -f "$SR_SMB_DIR/build/lib/libsmb2.a" ]; then
+    SR_SMB_A="$SR_SMB_DIR/build/lib/libsmb2.a"
+else
+    echo "=== save_remote / game_auto SKIPPED: 宿主版 libsmb2 编不出来 ==="
+fi
+
 printf 'int main(void){return 0;}\n' > /tmp/_curlprobe.c 2>/dev/null
-if [ -n "$SR_CURL_INC" ] && clang /tmp/_curlprobe.c -lcurl -o /tmp/_curlprobe 2>/dev/null; then
+if [ -n "$SR_CURL_INC" ] && [ -n "$SR_SMB_A" ] && clang /tmp/_curlprobe.c -lcurl -o /tmp/_curlprobe 2>/dev/null; then
     rm -f /tmp/_curlprobe.c /tmp/_curlprobe
     # 这两条不用 run_one：-lcurl 必须落在源文件**之后**（默认 --as-needed 下，
     # 出现在源文件之前会被直接丢掉，报一串 undefined reference）。
     rm -rf /tmp/pldmgr_sr_test
     echo "=== save_remote ==="
     if ! clang -Wall -Wextra -O0 -Iinclude -Isrc/psaccounts/third_party -Itest \
-        -I"$SR_CURL_INC" \
+        -I"$SR_CURL_INC" -I"$SR_SMB_INC" \
         -DGS_HOME='"/tmp/pldmgr_sr_test/home"' \
         -DGAME_SAVES_AUTO_PATH='"/tmp/pldmgr_sr_test/auto.json"' \
         -DGAME_SAVES_PACK_DIR='"/tmp/pldmgr_sr_test/packs"' \
@@ -187,7 +223,7 @@ if [ -n "$SR_CURL_INC" ] && clang /tmp/_curlprobe.c -lcurl -o /tmp/_curlprobe 2>
         src/save_remote.c src/curl_init.c src/game_saves.c src/game_job.c src/json_helpers.c \
         src/utils.c src/inflate.c src/zip_io.c src/psaccounts/third_party/cJSON.c \
         test/stub_servers.c test/save_remote_test.c \
-        -o /tmp/save_remote_test -lpthread -lm -lcurl; then
+        -o /tmp/save_remote_test "$SR_SMB_A" -lpthread -lm -lcurl; then
         echo "  BUILD FAILED"; fail=1
     else
         /tmp/save_remote_test || fail=1
@@ -196,7 +232,7 @@ if [ -n "$SR_CURL_INC" ] && clang /tmp/_curlprobe.c -lcurl -o /tmp/_curlprobe 2>
     rm -rf /tmp/pldmgr_ga_test
     echo "=== game_auto ==="
     if ! clang -Wall -Wextra -O0 -Iinclude -Isrc/psaccounts/third_party -Itest \
-        -I"$SR_CURL_INC" \
+        -I"$SR_CURL_INC" -I"$SR_SMB_INC" \
         -DGA_NO_LNCUTIL \
         -DROOT_DIR='"/tmp/pldmgr_ga_test"' \
         -DAUTO_PATH='"/tmp/pldmgr_ga_test/auto.json"' \
@@ -209,7 +245,7 @@ if [ -n "$SR_CURL_INC" ] && clang /tmp/_curlprobe.c -lcurl -o /tmp/_curlprobe 2>
         src/json_helpers.c src/utils.c src/inflate.c src/zip_io.c \
         src/psaccounts/third_party/cJSON.c \
         test/stub_servers.c test/game_auto_test.c \
-        -o /tmp/game_auto_test -lpthread -lm -lcurl; then
+        -o /tmp/game_auto_test "$SR_SMB_A" -lpthread -lm -lcurl; then
         echo "  BUILD FAILED"; fail=1
     else
         /tmp/game_auto_test || fail=1

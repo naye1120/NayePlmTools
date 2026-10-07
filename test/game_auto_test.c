@@ -263,13 +263,21 @@ static void t_sync(void) {
     /* 而且**不能动本地的存档** —— 拉失败把用户的存档弄没是最坏的 */
     CHECK(exists(SAVE_FILE), "拉取失败不该动本地存档");
 
-    /* ④ 不支持的协议 */
+    /* ④ 不认识的协议（smb 在 .143 起已支持，这里改用真·不认识的协议名测「不支持」） */
+    write_cfg("webdav", "192.168.1.10", 1, 1, 1);
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"push\"}", TID);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == -1,
+          "不认识的协议必须失败");
+    CHECK(strstr(msg, "不支持") != NULL, "不认识的协议报错要说清不支持：%s", msg);
+
+    /* ④b smb 已支持，但缺主机要在碰网络前就拦下来、且说清是缺主机 */
     write_cfg("smb", "", 1, 1, 1);
     snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"push\"}", TID);
     out[0] = msg[0] = 0;
     CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == -1,
-          "smb 必须失败");
-    CHECK(strstr(msg, "不支持") != NULL, "smb 的报错要说清不支持：%s", msg);
+          "smb 缺主机必须失败");
+    CHECK(strstr(msg, "主机") != NULL, "smb 缺主机报错要说清是主机：%s", msg);
 
     /* 参数不合法 */
     write_cfg("http", url, 1, 1, 1);

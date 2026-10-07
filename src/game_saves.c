@@ -483,6 +483,7 @@ static void gs_auto_json(cJSON *src, char *buf, size_t size) {
     cJSON *smb = cJSON_AddObjectToObject(o, "smb");
     if (smb) {
         gs_put_str(smb, "host", gs_field_str(ss, "host", ""));
+        gs_put_num(smb, "port", gs_field_num(ss, "port", 445));
         gs_put_str(smb, "share", gs_field_str(ss, "share", ""));
         gs_put_str(smb, "sub", gs_field_str(ss, "sub", ""));
         gs_put_str(smb, "user", gs_field_str(ss, "user", ""));

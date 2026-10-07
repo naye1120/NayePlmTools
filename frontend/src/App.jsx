@@ -422,6 +422,12 @@ function App() {
     if (view === 'autoload' || view === 'storage') {
       refreshConfig()
       refreshPayloads()
+    } else if (view === 'game_manage') {
+      /* [CN-FORK] v0.5.2.144 进游戏管理页也刷一次配置：单游戏存档弹窗要读全局存档配置
+       * （ARCHIVE_GLOBAL_CONFIG，在设置页写）。设置页保存时会自己 refreshConfig，
+       * 但若全局配置是被别的途径改的（FTP / 另一台设备），进这个页面就得重新拿一次，
+       * 否则弹窗里显示的还是上一次的远程位置。只需 config，不需要 payloads。 */
+      refreshConfig()
     }
   }, [view])
 
@@ -686,6 +692,7 @@ function App() {
             <SettingsView
               config={config}
               onSaveConfig={handleSaveConfig}
+              addToast={addToast}
               isPS5={isPS5}
               logs={logs}
               setLogs={setLogs}
@@ -716,7 +723,7 @@ function App() {
 
           {/* [CN-FORK] 常用入口 / 游戏管理 / PKG安装（内嵌 PKG Manager 界面） */}
           {view === 'common_entries' && <CommonEntriesView showConfirm={showConfirm} addToast={addToast} />}
-          {view === 'game_manage' && <GameManageView addToast={addToast} showConfirm={showConfirm} />}
+          {view === 'game_manage' && <GameManageView addToast={addToast} showConfirm={showConfirm} config={config} />}
           {view === 'pkg' && <PkgManagerFrame />}
         </main>
       </div>
