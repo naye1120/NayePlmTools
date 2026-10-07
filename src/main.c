@@ -69,7 +69,9 @@ static struct MHD_Daemon *http_daemon_start(unsigned short port) {
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, port, NULL, NULL,
         &http_on_request, NULL, MHD_OPTION_NOTIFY_COMPLETED,
         &http_on_request_completed, NULL,
-        MHD_OPTION_THREAD_STACK_SIZE, (unsigned int)HTTP_THREAD_STACK,
+        /* ⚠ 这个选项的参数类型是 size_t（MHD 那边 va_arg(ap, size_t)），
+         * 传 unsigned int 在 x86-64 变参下会读到高 32 位的垃圾。 */
+        MHD_OPTION_THREAD_STACK_SIZE, (size_t)HTTP_THREAD_STACK,
         MHD_OPTION_END);
     if (d) {
         pldmgr_log("[PLDMGR] http: 连接线程栈 %uKB\n", (unsigned)HTTP_THREAD_STACK >> 10);
