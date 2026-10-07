@@ -21,7 +21,6 @@
 #include <unistd.h>
 
 #include "cJSON.h"
-#include "game_mgr.h"
 #include "inflate.h"
 #include "json_helpers.h"
 #include "pldmgr.h"
@@ -49,8 +48,9 @@ static int gs_tid_ok(const char *tid) {
     return 1;
 }
 
-/* 槽名就是存档目录的目录名，所以规则要和目录名一致 —— 非空、不以 '.' 开头。
- * 允许点开头等于能匹配到我们自己写在同一个父目录里的 .upl_* 半成品。 */
+/* 目录名规则：非空、不以 '.' 开头。允许点开头等于能匹配到我们自己写在同一个
+ * 父目录里的 .upl_* / .old_* 半成品。**只在「检查归档自带的顶层目录名」时用**
+ * —— 那是别人给的字节，规则可以宽一点。 */
 static int gs_slot_ok(const char *s) {
     if (!s || !*s || *s == '.') return 0;
     size_t n = strlen(s);
@@ -58,6 +58,23 @@ static int gs_slot_ok(const char *s) {
     for (size_t i = 0; i < n; i++) {
         char c = s[i];
         if (c == '/' || c == '\\' || c < 0x20 || c == 0x7F) return 0;
+    }
+    return 1;
+}
+
+/* 用户标识（API 里的 save 参数）现在就是 /user/home 下的目录名。真机是 8 位
+ * 十六进制（1a1d3627），但不去绑死这个格式 —— 只要是不带路径分隔符、不带点、
+ * 不以点开头的单层名字即可。**这一层就是 save 参数的路径穿越闸门**：
+ * 拿不到 '/' 也拿不到 ".."，拼出来的路径不可能跳出 <GS_HOME>/<uid>/。 */
+static int gs_uid_ok(const char *u) {
+    if (!u || !*u || *u == '.') return 0;
+    size_t n = strlen(u);
+    if (n > 63) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = u[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+              (c >= 'A' && c <= 'Z') || c == '-' || c == '_'))
+            return 0;
     }
     return 1;
 }
@@ -107,8 +124,44 @@ static void gs_rmtree(const char *dir) {
     rmdir(dir);
 }
 
-/* ── 存档根目录 ─────────────────────────────────────────────────────────── */
-static int gs_user_homes(char homes[][256], int max) {
+/* ── 存档根目录 ───────────────────────────────────────────────────────────
+ * 真机实测布局（2026-10，192.168.1.214）：
+ *
+ *   /user/home/<uid>/savedata_prospero/<TID>/    ← **PS5 存档真正在这里**
+ *       sdimg_STARBOARD   sdimg_sce_sdmemory   sdimg_sce_bu_*  …
+ *   /user/home/<uid>/savedata/<TID>/             ← PS4 存档位
+ *   /user/home/<uid>/savedata/sce_backup2|4/     ← 系统备份槽（空的），不是游戏存档
+ *
+ * 老代码只找 <uid>/savedata/<TID> —— 真机上那个位置只有两个空的
+ * sce_backup2 / sce_backup4，于是每个游戏的 local_path 都是 ""、saves 都是 []，
+ * 存档功能**整个等于没接上**（列表空 → 下载/上传/删除全部无从下手）。
+ * 现在两个目录都扫，savedata_prospero 优先；同一个用户两处都有时只取 PS5 那份。
+ * 这条路径来自 garlic-savemgr（earthonion）的 scan_saves，它是同时扫这两个的。
+ *
+ * 粒度 =「一个用户一条」：一个 <uid>/<TID> 目录就是一份完整存档，里面的
+ * sdimg_*（含 _bu_ 备份、PS4 的 .bin 密封密钥）一起打包。用户不必去分辨
+ * 哪个 sdimg 是「当前」哪个是「备份」—— 那是主机自己的记账，照搬整份即可。
+ *
+ * 一台主机可能有多个用户都存过同一个游戏（实测 PPSA01650 在两个用户下都有），
+ * 所以返回的是**列表**：每个用户各一条，互不覆盖。老代码「取体积最大的那个」
+ * 正是为了绕开这个多用户问题，但那是把两个用户的存档拍扁成一个，会互相盖。
+ */
+#define GS_MAX_ROOTS 16
+
+typedef struct {
+    char uid[64];   /* 用户目录名，同时也是 API 里的 save 参数 */
+    char path[640]; /* 存档根：<GS_HOME>/<uid>/<dir>/<TID> */
+    char kind[8];   /* "PS5" / "PS4"，由所在目录决定（不再靠 tid 前缀猜） */
+} gs_root_t;
+
+/* readdir 的顺序是文件系统说了算的，而列表顺序必须稳定 —— 否则同一台主机上
+ * 「用户 A 的存档」和「用户 B 的存档」谁在前会随机变，前端每刷一次都换位置。
+ * 按 uid 升序排一下，顺带让 local_path（取第一条）也是确定的。 */
+static int gs_uid_cmp(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
+
+static int gs_user_ids(char ids[][64], int max) {
     DIR *d = opendir(GS_HOME);
     if (!d) return 0;
     int n = 0;
@@ -118,51 +171,98 @@ static int gs_user_homes(char homes[][256], int max) {
         char p[512];
         if (snprintf(p, sizeof(p), "%s/%s", GS_HOME, e->d_name) >= (int)sizeof(p)) continue;
         struct stat st;
-        if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) snprintf(homes[n++], 256, "%s", p);
+        if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) snprintf(ids[n++], 64, "%s", e->d_name);
     }
     closedir(d);
+    if (n > 1) qsort(ids, (size_t)n, 64, gs_uid_cmp);
     return n;
 }
 
-int game_saves_root(const char *tid, char *out, size_t osz) {
-    if (!gs_tid_ok(tid) || !out || osz < 64) return -1;
-    char homes[16][256];
-    int nh = gs_user_homes(homes, 16);
-
-    char best[640];
-    long long bestsz = -1;
-    for (int i = 0; i < nh; i++) {
-        char p[640];
-        if (snprintf(p, sizeof(p), "%s/savedata/%s", homes[i], tid) >= (int)sizeof(p)) continue;
-        struct stat st;
-        if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-        gs_stat_t acc = {0, 0, 0};
-        unsigned budget = GS_MAX_WALK;
-        gs_walk(p, &acc, 0, &budget);
-        if (acc.bytes > bestsz) { bestsz = acc.bytes; snprintf(best, sizeof(best), "%s", p); }
+static int gs_find_roots(const char *tid, gs_root_t *out, int max) {
+    if (!gs_tid_ok(tid) || !out || max <= 0) return 0;
+    char ids[16][64];
+    int nu = gs_user_ids(ids, 16);
+    static const char *const dirs[2]  = {"savedata_prospero", "savedata"};
+    static const char *const kinds[2] = {"PS5", "PS4"};
+    int n = 0;
+    for (int i = 0; i < nu && n < max; i++) {
+        for (int d = 0; d < 2 && n < max; d++) {
+            char p[640];
+            if (snprintf(p, sizeof(p), "%s/%s/%s/%s", GS_HOME, ids[i], dirs[d], tid)
+                >= (int)sizeof(p)) continue;
+            struct stat st;
+            if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+            snprintf(out[n].uid, sizeof(out[n].uid), "%s", ids[i]);
+            snprintf(out[n].path, sizeof(out[n].path), "%s", p);
+            snprintf(out[n].kind, sizeof(out[n].kind), "%s", kinds[d]);
+            n++;
+            break; /* 这个用户已命中，savedata 那一轮不再看（PS5 优先） */
+        }
     }
-    if (bestsz < 0) return -1;
-    snprintf(out, osz, "%s", best);
+    return n;
+}
+
+/* 兼容入口：第一个命中的存档根，给「只想知道这游戏存档在哪」的调用方。 */
+int game_saves_root(const char *tid, char *out, size_t osz) {
+    gs_root_t r[GS_MAX_ROOTS];
+    if (!out || osz < 64) return -1;
+    if (gs_find_roots(tid, r, GS_MAX_ROOTS) <= 0) return -1;
+    snprintf(out, osz, "%s", r[0].path);
     return 0;
 }
 
-/* 上传要往里写，所以连「一个存档都还没有」时也得把根目录定出来：取第一个用户目录。 */
-static int gs_root_or_create(const char *tid, char *out, size_t osz) {
-    if (game_saves_root(tid, out, osz) == 0) return 0;
-    if (!gs_tid_ok(tid)) return -1;
-    char homes[16][256];
-    int nh = gs_user_homes(homes, 16);
-    if (nh <= 0) return -1;
-    snprintf(out, osz, "%s/savedata/%s", homes[0], tid);
-    return ensure_dir_recursive(out) == 0 ? 0 : -1;
+/* 按 uid 找根；uid 为空则退化成第一个（上传没指定用户时用）。 */
+static int gs_root_by_uid(const char *tid, const char *uid, gs_root_t *out) {
+    gs_root_t r[GS_MAX_ROOTS];
+    int n = gs_find_roots(tid, r, GS_MAX_ROOTS);
+    if (n <= 0) return -1;
+    if (uid && *uid) {
+        for (int i = 0; i < n; i++)
+            if (!strcmp(r[i].uid, uid)) { *out = r[i]; return 0; }
+        return -1;
+    }
+    *out = r[0];
+    return 0;
+}
+
+/* 上传要往里写，所以连「这个游戏还没有存档」时也得把根定出来：
+ * 指定了 uid 就用它，否则取第一个用户目录，落在 savedata_prospero 下。 */
+static int gs_root_or_create(const char *tid, const char *uid,
+                             gs_root_t *out, char *err, size_t errsz) {
+    if (gs_root_by_uid(tid, uid, out) == 0) return 0;
+    if (!gs_tid_ok(tid)) {
+        if (err) snprintf(err, errsz, "标题 ID 不合法");
+        return -1;
+    }
+    char ids[16][64];
+    int nu = gs_user_ids(ids, 16);
+    if (nu <= 0) {
+        if (err) snprintf(err, errsz, "%s 下没有用户目录", GS_HOME);
+        return -1;
+    }
+    const char *use = (uid && *uid) ? uid : ids[0];
+    if (uid && *uid) {
+        int found = 0;
+        for (int i = 0; i < nu; i++)
+            if (!strcmp(ids[i], uid)) found = 1;
+        if (!found) {
+            if (err) snprintf(err, errsz, "主机上没有这个用户（%s）", uid);
+            return -1;
+        }
+    }
+    snprintf(out->uid, sizeof(out->uid), "%s", use);
+    snprintf(out->kind, sizeof(out->kind), "PS5");
+    snprintf(out->path, sizeof(out->path), "%s/%s/savedata_prospero/%s", GS_HOME, use, tid);
+    char parent[640];
+    snprintf(parent, sizeof(parent), "%s/%s/savedata_prospero", GS_HOME, use);
+    if (ensure_dir_recursive(parent) != 0) {
+        if (err) snprintf(err, errsz, "无法创建存档目录（%s）", strerror(errno));
+        return -1;
+    }
+    return 0;
 }
 
 /* ── 列表 ───────────────────────────────────────────────────────────────── */
-static const char *gs_kind(const char *tid) {
-    /* 与 mock 同一套口径：CUSA/PPJB 是 PS4 本体，其余按 PS5 算。 */
-    return (!strncmp(tid, "CUSA", 4) || !strncmp(tid, "PPJB", 4)) ? "PS4" : "PS5";
-}
-
 static void gs_fmt_mtime(time_t t, char *out, size_t osz) {
     struct tm tmv;
     out[0] = 0;
@@ -170,39 +270,12 @@ static void gs_fmt_mtime(time_t t, char *out, size_t osz) {
     strftime(out, osz, "%Y-%m-%d %H:%M", &tmv);
 }
 
-/* 槽显示名：优先 SFO 的 SAVEDATA_TITLE（PS5 布局），再 TITLE，都没有就用目录名。
- * PS4 那种 sdimg_<TID> 单文件没有 SFO，直接落到目录名 —— 不去猜
- * 「单文件一定对应哪种平台」这种没有依据的规则。 */
-static void gs_slot_name(const char *path, int is_dir, const char *fallback,
-                         char *out, size_t osz) {
-    snprintf(out, osz, "%s", fallback);
-    if (!is_dir) return;
-    char sfo[1100];
-    static const char *const keys[2] = {"SAVEDATA_TITLE", "TITLE"};
-    for (int i = 0; i < 2; i++) {
-        if (snprintf(sfo, sizeof(sfo), "%s/sce_sys/param.sfo", path) < (int)sizeof(sfo) &&
-            game_mgr_sfo_text(sfo, keys[i], out, osz) == 0 && out[0])
-            return;
-        if (snprintf(sfo, sizeof(sfo), "%s/param.sfo", path) < (int)sizeof(sfo) &&
-            game_mgr_sfo_text(sfo, keys[i], out, osz) == 0 && out[0])
-            return;
-    }
-    snprintf(out, osz, "%s", fallback);
-}
-
+/* 条目数 = 存过这个游戏存档的用户数（通常是 0 或 1）。给 /game_detail 用，
+ * 语义就是「这游戏有没有存档」，不再去数里面有几个 sdimg —— 那些是主机自己的
+ * 记账（当前 + _bu_ 备份 + sdmemory），数出来只会让人以为有 4 份存档。 */
 int game_saves_count(const char *tid) {
-    char root[640];
-    if (game_saves_root(tid, root, sizeof(root)) != 0) return 0;
-    DIR *d = opendir(root);
-    if (!d) return 0;
-    int n = 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (e->d_name[0] == '.') continue;
-        if (gs_slot_ok(e->d_name)) n++;
-    }
-    closedir(d);
-    return n;
+    gs_root_t r[GS_MAX_ROOTS];
+    return gs_find_roots(tid, r, GS_MAX_ROOTS);
 }
 
 /* ── 自动备份配置 ───────────────────────────────────────────────────────── */
@@ -391,10 +464,10 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
 
     char etid[32], eroot[700];
     pldmgr_json_escape(tid, etid, sizeof(etid));
-    char root[640];
-    root[0] = 0;
-    int has = (game_saves_root(tid, root, sizeof(root)) == 0);
-    pldmgr_json_escape(has ? root : "", eroot, sizeof(eroot));
+
+    gs_root_t roots[GS_MAX_ROOTS];
+    int nr = gs_find_roots(tid, roots, GS_MAX_ROOTS);
+    pldmgr_json_escape(nr > 0 ? roots[0].path : "", eroot, sizeof(eroot));
 
     char autoj[4096];
     pthread_mutex_lock(&g_auto_mu);
@@ -411,7 +484,7 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
     pthread_mutex_unlock(&g_auto_mu);
     if (!autoj[0]) snprintf(autoj, sizeof(autoj), "{}");
 
-    /* saves 单独走堆：512 条槽 × ~200B 就上百 KB，挂在栈上会把工作线程的栈顶穿。
+    /* saves 单独走堆：条目本身不多，但每条带名字，挂在栈上没必要冒这个险。
      * 线程栈是 pthread 默认值（通常 512KB~1MB），放不下 128KB 的局部数组。 */
     const size_t scap = 128u * 1024u;
     char *saves = (char *)malloc(scap);
@@ -420,40 +493,28 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
     int n = 0;
     if (gs_app(saves, scap, &spos, "[") != 0) { free(saves); return -1; }
 
-    if (has) {
-        DIR *d = opendir(root);
-        if (d) {
-            struct dirent *e;
-            while ((e = readdir(d)) != NULL && n < 512) {
-                if (e->d_name[0] == '.') continue; /* .upl_* 临时目录不进列表 */
-                if (!gs_slot_ok(e->d_name)) continue;
-                char p[700];
-                if (snprintf(p, sizeof(p), "%s/%s", root, e->d_name) >= (int)sizeof(p)) continue;
-                struct stat st;
-                if (lstat(p, &st) != 0) continue;
-                int isdir = S_ISDIR(st.st_mode);
-                if (!isdir && !S_ISREG(st.st_mode)) continue;
+    for (int i = 0; i < nr; i++) {
+        gs_stat_t acc = {0, 0, 0};
+        unsigned budget = GS_MAX_WALK;
+        gs_walk(roots[i].path, &acc, 0, &budget);
 
-                gs_stat_t acc = {0, 0, 0};
-                unsigned budget = GS_MAX_WALK;
-                if (isdir) gs_walk(p, &acc, 0, &budget);
-                else { acc.bytes = (long long)st.st_size; acc.files = 1; }
+        char mt[40];
+        mt[0] = 0;
+        struct stat st;
+        if (lstat(roots[i].path, &st) == 0) gs_fmt_mtime(st.st_mtime, mt, sizeof(mt));
 
-                char name[256], en[600], mt[40];
-                gs_slot_name(p, isdir, e->d_name, name, sizeof(name));
-                pldmgr_json_escape(name, en, sizeof(en));
-                gs_fmt_mtime(st.st_mtime, mt, sizeof(mt));
+        /* id 与 name 都是 uid：id 是下载/上传/删除要回传的 save 参数，
+         * name 是给人看的。前端自己加「用户」这类本地化前缀 —— 后端不碰 i18n。 */
+        char en[200];
+        pldmgr_json_escape(roots[i].uid, en, sizeof(en));
 
-                if (gs_app(saves, scap, &spos,
-                           "%s{\"id\":\"%s\",\"name\":\"%s\",\"kind\":\"%s\","
-                           "\"mtime\":\"%s\",\"size\":%lld,\"files\":%lld}",
-                           n ? "," : "", e->d_name, en, gs_kind(tid), mt,
-                           acc.bytes, acc.files) != 0)
-                    break;
-                n++;
-            }
-            closedir(d);
-        }
+        if (gs_app(saves, scap, &spos,
+                   "%s{\"id\":\"%s\",\"name\":\"%s\",\"kind\":\"%s\","
+                   "\"mtime\":\"%s\",\"size\":%lld,\"files\":%lld}",
+                   n ? "," : "", en, en, roots[i].kind, mt,
+                   acc.bytes, acc.files) != 0)
+            break;
+        n++;
     }
     gs_app(saves, scap, &spos, "]");
 
@@ -763,40 +824,29 @@ static void gs_pack_walk(const char *dir, const char *rel, int depth, gs_pack_t 
     closedir(d);
 }
 
+/* save = uid。整份存档打包：<uid>/<TID>/ 下所有东西（含 sdimg_sce_bu_* 备份
+ * 与 PS4 的 .bin 密封密钥）一起进 zip —— 还原时缺一样都可能让主机认不出来。
+ * zip 内的顶层目录用 **tid** 而不是 uid：包本身该像「这个游戏的存档」，
+ * 是哪个用户的由 URL 上的 save 参数决定，上传时也按它落位。 */
 int game_saves_pack(const char *tid, const char *save, const char *out_path,
                     char *msg, size_t msgsz) {
     if (msg && msgsz) msg[0] = 0;
-    if (!gs_tid_ok(tid) || !gs_slot_ok(save)) {
+    if (!gs_tid_ok(tid) || !gs_uid_ok(save)) {
         if (msg) snprintf(msg, msgsz, "参数不合法");
         return -1;
     }
-    char root[640];
-    if (game_saves_root(tid, root, sizeof(root)) != 0) {
+    gs_root_t r;
+    if (gs_root_by_uid(tid, save, &r) != 0) {
         if (msg) snprintf(msg, msgsz, "主机上还没有这个游戏的存档目录");
-        return -1;
-    }
-    char target[780];
-    if (snprintf(target, sizeof(target), "%s/%s", root, save) >= (int)sizeof(target)) return -1;
-
-    struct stat st;
-    if (lstat(target, &st) != 0) {
-        if (msg) snprintf(msg, msgsz, "找不到这个存档槽");
         return -1;
     }
 
     gs_pack_t t;
     memset(&t, 0, sizeof(t));
     t.max = (int)GAME_SAVES_MAX_ENTRIES;
-    t.prefix = save;
+    t.prefix = tid;
+    gs_pack_walk(r.path, "", 0, &t);
 
-    if (S_ISREG(st.st_mode)) {
-        gs_pack_add(&t, target, "");
-    } else if (S_ISDIR(st.st_mode)) {
-        gs_pack_walk(target, "", 0, &t);
-    } else {
-        if (msg) snprintf(msg, msgsz, "这个存档槽的类型不支持打包");
-        return -1;
-    }
     if (t.bad || t.n == 0) {
         free(t.e);
         if (msg) snprintf(msg, msgsz, t.n == 0 ? "这个存档是空的" : "存档里的文件太多（上限 4096）");
@@ -945,21 +995,31 @@ int game_saves_upload(const char *tid, const char *save,
     if (out_size) *out_size = 0;
     if (msg && msgsz) msg[0] = 0;
     if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
-    if (save && *save && !gs_slot_ok(save)) {
-        if (msg) snprintf(msg, msgsz, "存档槽名不合法");
+    if (save && *save && !gs_uid_ok(save)) {
+        if (msg) snprintf(msg, msgsz, "用户标识不合法");
         return -1;
     }
     if (!body || len == 0) { if (msg) snprintf(msg, msgsz, "文件是空的"); return -1; }
     if (len > GAME_SAVES_MAX_BYTES) { if (msg) snprintf(msg, msgsz, "文件太大"); return -1; }
 
-    char root[640];
-    if (gs_root_or_create(tid, root, sizeof(root)) != 0) {
-        if (msg) snprintf(msg, msgsz, "找不到主机上的存档目录（%s 下没有用户目录）", GS_HOME);
+    gs_root_t r;
+    char rerr[256];
+    rerr[0] = 0;
+    if (gs_root_or_create(tid, save, &r, rerr, sizeof(rerr)) != 0) {
+        if (msg) snprintf(msg, msgsz, "%s", rerr[0] ? rerr : "找不到主机上的存档目录");
         return -1;
     }
 
+    /* 临时目录放在存档根的**父目录**下：换上去是同文件系统内的 rename。
+     * 放到别处再拷回来，大存档要多花一倍时间，还可能半路失败留下残档。 */
+    char parent[640];
+    snprintf(parent, sizeof(parent), "%s", r.path);
+    char *psl = strrchr(parent, '/');
+    if (!psl) { if (msg) snprintf(msg, msgsz, "路径异常"); return -1; }
+    *psl = 0;
+
     char tmp[800];
-    snprintf(tmp, sizeof(tmp), "%s/.upl_%u_%u", root, (unsigned)getpid(), (unsigned)time(NULL));
+    snprintf(tmp, sizeof(tmp), "%s/.upl_%u_%u", parent, (unsigned)getpid(), (unsigned)time(NULL));
     gs_rmtree(tmp);
     if (ensure_dir_recursive(tmp) != 0) {
         if (msg) snprintf(msg, msgsz, "无法创建临时目录（%s）", strerror(errno));
@@ -1016,53 +1076,39 @@ int game_saves_upload(const char *tid, const char *save,
     }
     if (rc != 0) goto done;
 
-    /* 定槽位：包自带的那层目录名优先（下载→上传就该回到同一个槽） */
+    /* 剥掉归档自带的那层目录（下载出来的包是 <TID>/…，传回去不该变成 <TID>/<TID>/…） */
     char sub[256];
     sub[0] = 0;
     int has_sub = gs_single_subdir(tmp, sub, sizeof(sub));
-    char slot[160];
-    if (save && *save) {
-        snprintf(slot, sizeof(slot), "%s", save);
-    } else if (has_sub) {
-        snprintf(slot, sizeof(slot), "%s", sub);
-    } else {
-        slot[0] = 0;
-        for (int i = 1; i <= 999 && !slot[0]; i++) {
-            char cand[64], p[900];
-            snprintf(cand, sizeof(cand), "save%d", i);
-            snprintf(p, sizeof(p), "%s/%s", root, cand);
-            struct stat st;
-            if (stat(p, &st) != 0) snprintf(slot, sizeof(slot), "%s", cand);
-        }
-        if (!slot[0]) { snprintf(err, sizeof(err), "槽位编号用尽"); rc = -1; goto done; }
-    }
-    if (!gs_slot_ok(slot)) { snprintf(err, sizeof(err), "存档槽名不合法"); rc = -1; goto done; }
-
-    char target[900];
-    if (snprintf(target, sizeof(target), "%s/%s", root, slot) >= (int)sizeof(target)) {
-        snprintf(err, sizeof(err), "路径太长");
-        rc = -1;
-        goto done;
-    }
-    struct stat tst;
-    if (lstat(target, &tst) == 0) gs_rmtree(target); /* 覆盖 = 整个槽换掉（与前端提示一致） */
-
     char src[900];
     if (has_sub) snprintf(src, sizeof(src), "%s/%s", tmp, sub);
     else snprintf(src, sizeof(src), "%s", tmp);
 
-    if (rename(src, target) != 0) {
+    /* 换上去之前先把旧的改名留一手，rename 失败还能退回来。
+     * 直接 rm -rf 再 rename 的话，中途任何一步失败都等于把用户原来的存档删了。 */
+    char old[800];
+    snprintf(old, sizeof(old), "%s/.old_%u_%u", parent, (unsigned)getpid(), (unsigned)time(NULL));
+    int had_old = 0;
+    struct stat ost;
+    if (lstat(r.path, &ost) == 0) {
+        gs_rmtree(old);
+        if (rename(r.path, old) == 0) had_old = 1;
+    }
+
+    if (rename(src, r.path) != 0) {
+        if (had_old) rename(old, r.path); /* 退回去 —— 用户原来那份还在 */
         snprintf(err, sizeof(err), "无法写入存档目录（%s）", strerror(errno));
         rc = -1;
         goto done;
     }
-    /* tmp 已被整体搬走（src == tmp）或只搬走了它的子目录，剩下的壳要清掉，
-     * 否则它会在列表里以 .upl_* 的身份永远躺着（列表按 '.' 过滤，用户看不到也删不掉）。 */
+    if (had_old) gs_rmtree(old);
+    /* src == tmp 时 tmp 已被整体搬走；只搬走子目录的话剩下的壳要清掉，
+     * 否则 .upl_* 会一直躺在存档目录里（用户看不到也删不掉）。 */
     if (strcmp(src, tmp) != 0) gs_rmtree(tmp);
     rc = 0;
 
     pldmgr_log("[PLDMGR] saves: %s upload ok -> %s (%lld files, %lld bytes)\n",
-               tid, slot, u.files, u.bytes);
+               tid, r.path, u.files, u.bytes);
 
 done:
     if (rc != 0) gs_rmtree(tmp);
@@ -1076,28 +1122,29 @@ done:
 }
 
 /* ── 删除 ───────────────────────────────────────────────────────────────── */
+/* save = uid。删掉的是**这个用户在这个游戏上的整份存档**
+ * （<uid>/<dir>/<TID>/ 整个目录）—— 与「列表一行 = 一份完整存档」对齐。 */
 int game_saves_remove(const char *tid, const char *save, char *msg, size_t msgsz) {
     if (msg && msgsz) msg[0] = 0;
-    if (!gs_tid_ok(tid) || !gs_slot_ok(save)) {
+    if (!gs_tid_ok(tid) || !gs_uid_ok(save)) {
         if (msg) snprintf(msg, msgsz, "参数不合法");
         return -1;
     }
-    char root[640], target[900];
-    if (game_saves_root(tid, root, sizeof(root)) != 0) {
-        if (msg) snprintf(msg, msgsz, "主机上还没有这个游戏的存档目录");
+    gs_root_t r;
+    if (gs_root_by_uid(tid, save, &r) != 0) {
+        if (msg) snprintf(msg, msgsz, "找不到这个用户的存档");
         return -1;
     }
-    if (snprintf(target, sizeof(target), "%s/%s", root, save) >= (int)sizeof(target)) return -1;
     struct stat st;
-    if (lstat(target, &st) != 0) {
-        if (msg) snprintf(msg, msgsz, "找不到这个存档槽");
+    if (lstat(r.path, &st) != 0) {
+        if (msg) snprintf(msg, msgsz, "找不到这个用户的存档");
         return -1;
     }
-    if (S_ISDIR(st.st_mode)) gs_rmtree(target);
-    else if (unlink(target) != 0) {
+    if (S_ISDIR(st.st_mode)) gs_rmtree(r.path);
+    else if (unlink(r.path) != 0) {
         if (msg) snprintf(msg, msgsz, "删除失败（%s）", strerror(errno));
         return -1;
     }
-    pldmgr_log("[PLDMGR] saves: %s removed slot %s\n", tid, save);
+    pldmgr_log("[PLDMGR] saves: %s removed %s (%s)\n", tid, r.uid, r.path);
     return 0;
 }

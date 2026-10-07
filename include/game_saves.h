@@ -11,16 +11,28 @@
  *   POST /game_save_upload?tid=&save=   （裸 body：zip/tar/gzip/单文件）→ {ok, files, size}
  *   GET  /game_save_delete?tid=&save=   → {ok}
  *
- * ── 存档落在哪 ────────────────────────────────────────────────────────────
- * 真机路径是 /user/home/<uid>/savedata/<TID>/<槽>/，UID 没有公开的「当前用户」API，
- * 所以这里枚举 /user/home 下所有目录去找，**取总字节数最大的那个命中的** ——
- * 一台主机常有多个用户目录，其中一个空的先被扫到就全成了「这个存档 0 字节」。
+ * ── 存档落在哪（2026-10 真机实测修正）────────────────────────────────────
+ *   /user/home/<uid>/savedata_prospero/<TID>/   ← PS5 存档真正在这里
+ *   /user/home/<uid>/savedata/<TID>/            ← PS4 存档位
+ *   /user/home/<uid>/savedata/sce_backup2|4/    ← 系统备份槽（空的），不是游戏存档
  *
- * ── 槽是「顶层子项」而不是某种固定格式 ────────────────────────────────────
- * PS4 的存档是一个文件 sdimg_<TID>，PS5 的是一整个目录（里面带 sce_sys/param.sfo），
- * 中间还可能夹着别的形态。这里不去猜真机的内部布局：**一级子项即一个槽**，
- * size/files 递归统计、名字优先读 SFO 的 SAVEDATA_TITLE，读不到就用子项名。
- * 这样无论真机是哪种布局都能列出、能下、能传、能删，不会因为「没见过这种结构」直接空手。
+ * UID 没有公开的「当前用户」API，所以枚举 /user/home 下所有目录去找。
+ * **两个目录都要扫，savedata_prospero 优先。** 本文件早期版本只找 savedata/<TID>
+ * —— 真机上那个位置只有两个空的 sce_backup*，于是每个游戏都 local_path=""、
+ * saves=[]，整个存档功能等于没接上。路径规则取自 garlic-savemgr（earthonion）
+ * 的 scan_saves，它也是同时扫这两个目录的。
+ *
+ * ── 粒度：一个用户一条 ────────────────────────────────────────────────────
+ * 一个 <uid>/<TID> 目录 = 一份完整存档。里面是主机自己的记账（当前 sdimg_<名>、
+ * sdimg_sce_bu_<名> 备份、sdimg_sce_sdmemory 系统存档、PS4 的 .bin 密封密钥），
+ * 全部一起打包/还原 —— 少一样都可能让主机认不出来，用户也不必去分辨哪个是哪个。
+ *
+ * API 里的 save 参数就是**用户目录名**（真机形如 "1a1d3627"），不再是「槽名」。
+ * 一台主机可能有多个用户都存过同一个游戏（实测 PPSA01650 在两个用户下都有），
+ * 所以列表可能不止一条：每个用户各一条，互不覆盖。老版本「取体积最大的那个」
+ * 正是为了绕开多用户问题，但那是把两个用户的存档拍扁成一个，会互相盖。
+ *
+ * kind（PS5/PS4）由命中目录决定，不再按 tid 前缀猜。
  *
  * ── 传输格式 ──────────────────────────────────────────────────────────────
  * 下载 = 自研 STORE zip（src/zip_io.c）。上传的文件选择器 accept 是
@@ -46,14 +58,19 @@
 #define GAME_SAVES_MAX_BYTES (512ull << 20)
 #define GAME_SAVES_MAX_TAR_FILE (256ull << 20)
 
-/* 找这个 tid 的存档根目录。<uid>/savedata/<TID>，取体积最大的命中。
- * 返回 0 有（out 已填），-1 找不到（主机上一个存档都还没生成时是正常的）。 */
+/* 找这个 tid 的**第一个**存档根（<uid>/savedata_prospero|savedata/<TID>）。
+ * 返回 0 有（out 已填），-1 找不到（主机上一个存档都还没生成时是正常的）。
+ * 只想知道「存档在哪」的调用方用这个；要枚举全部用户请走列表接口。 */
 int game_saves_root(const char *tid, char *out, size_t osz);
 
-/* GET /game_saves：整份响应体（含 auto 与 saves）写进 buf。返回长度，<0 失败。 */
+/* GET /game_saves：整份响应体（含 auto 与 saves）写进 buf。返回长度，<0 失败。
+ * saves[] 里每条 = 一个存过这个游戏的用户：{id, name, kind, mtime, size, files}，
+ * id 与 name 都是 uid（前端自己加「用户」前缀），kind 是 "PS5"/"PS4"。 */
 int game_saves_list_json(const char *tid, char *buf, size_t size);
 
-/* /game_detail 要的存档条数（没有这个 tid 的存档 → 0）。 */
+/* /game_detail 要的存档条数 = 存过这个游戏的用户数（通常是 0 或 1）。
+ * 不再数里面的 sdimg 个数 —— 那些是主机自己的记账（当前 + _bu_ 备份 + sdmemory），
+ * 数出来只会让人以为有 4 份存档。 */
 int game_saves_count(const char *tid);
 
 /* POST /game_save_auto：body 是 JSON。0 成功（msg 给人话），-1 参数非法。 */
@@ -65,19 +82,20 @@ int game_saves_auto_set(const char *tid, const char *body, size_t len,
  * 0 → buf 写 {"ok":true,"latency_ms":N,"note":"…"}；-1 → 调用方回 400 EHOSTUNREACH。 */
 int game_saves_test(const char *body, size_t len, char *buf, size_t size);
 
-/* GET /game_save_download：把 <root>/<save> 打成 STORE zip 写到 out_path。
- * 0 成功（调用方负责流完之后 unlink）。 */
+/* GET /game_save_download：把 <uid>/<TID>/ 整份打成 STORE zip 写到 out_path。
+ * save = uid；zip 内的顶层目录用 tid。0 成功（调用方负责流完之后 unlink）。 */
 int game_saves_pack(const char *tid, const char *save, const char *out_path,
                     char *msg, size_t msgsz);
 
-/* POST /game_save_upload：body 是用户挑的那个文件原样字节。
+/* POST /game_save_upload：body 是用户挑的那个文件原样字节，save = uid
+ * （空 = 落在第一个用户下）。**整份替换**：旧的先改名留一手，换成功才删。
  * 成功 0，*out_files = 写入的文件数，*out_size = 写入的总字节。 */
 int game_saves_upload(const char *tid, const char *save,
                       const unsigned char *body, size_t len,
                       long long *out_files, long long *out_size,
                       char *msg, size_t msgsz);
 
-/* GET /game_save_delete：删掉整个槽。0 成功。 */
+/* GET /game_save_delete：删掉这个用户在这个游戏上的整份存档。0 成功。 */
 int game_saves_remove(const char *tid, const char *save, char *msg, size_t msgsz);
 
 #endif

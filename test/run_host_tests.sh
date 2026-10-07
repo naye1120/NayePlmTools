@@ -108,8 +108,10 @@ else
 fi
 
 # [CN-FORK] v0.5.2.116 游戏管理 → 存档（src/game_saves.c）
-# 夹具同样是 python3 现造（两个用户目录、两种槽形态、一个该被跳过的 .upl_），
-# 缺 python3 就整段跳过，不半跑。
+# 夹具同样是 python3 现造，**按真机实测布局**（savedata_prospero/<TID>/sdimg_*，
+# PS4 走 savedata/，多用户各一条）。缺 python3 就整段跳过，不半跑。
+# ⚠ 这份夹具曾经造的是错的布局（<uid>/savedata/<TID>/<槽>），测试全绿而真机上
+#   每个游戏的存档列表永远是空的 —— 夹具必须跟着真机走，不能跟着代码走。
 SAVES_ROOT=/tmp/pldmgr_saves_test
 if command -v python3 >/dev/null 2>&1; then
     echo "=== game_saves_fixture ==="
@@ -118,9 +120,8 @@ if command -v python3 >/dev/null 2>&1; then
         echo "  FIXTURE FAILED"; fail=1
     else
         # src/game_mgr.c 不进来：那是另一条测试（下方 game_mgr），它自带
-        # test/host_mnt_compat.h 顶掉 getmntinfo。这里 game_mgr_sfo_text 仍是桩 ——
-        # 桩成「读不到」正好逼出 gs_slot_name 的兜底分支，
-        # ② 里断言的就是「读不到 SFO 就用子项名」。
+        # test/host_mnt_compat.h 顶掉 getmntinfo。game_saves.c 现在也不再引用
+        # game_mgr_sfo_text（整目录粒度用不到 SFO 取名字），所以没有桩了。
         run_one game_saves src/game_saves.c \
             -Iinclude -Isrc/psaccounts/third_party \
             -DGS_HOME='"/tmp/pldmgr_saves_test/home"' \

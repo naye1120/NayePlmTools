@@ -751,16 +751,23 @@ function buildDetail(tid) {
   };
 }
 
-/* 存档：按 tid 生成 0~3 条，稳定（同 tid 每次一样），便于对照。 */
+/* 真机上的用户目录名（192.168.1.214 实测就是这四个）。后端「uid 必须是主机上
+ * 真实存在的用户」这条规则，在 mock 里就靠这个集合来等价表达。 */
+const MOCK_UIDS = ['1a1d3627', '1a1d3629', '1a1d362a', '1a1d362b'];
+
+/* 存档：按 tid 生成 0~3 条，**每条 = 一个存过这个游戏的用户**，稳定（同 tid
+ * 每次一样），便于对照。与真机同形：save/id 就是 uid，kind 由所在目录决定，
+ * 一台主机可以有多个用户都存过同一个游戏 → 多行，互不覆盖。 */
 function savesFor(tid) {
   if (gameState.saves[tid]) return gameState.saves[tid];
   if (tid === 'PAUS00100') return [];               // 留一个「没有存档」的样本
   const n = 1 + (tid.charCodeAt(5) % 3);
   const out = [];
   for (let i = 0; i < n; i++) {
+    const uid = MOCK_UIDS[i % MOCK_UIDS.length];
     out.push({
-      id: `slot${i}`,
-      name: i === 0 ? '自动存档' : i === 1 ? '手动存档 1' : '手动存档 2',
+      id: uid,
+      name: uid,
       kind: /^(CUSA|PPJB)/.test(tid) ? 'PS4' : 'PS5',
       mtime: `2026-10-0${(i % 4) + 2} ${10 + i}:2${i}`,
       size: 1048576 * (3 + i * 2) + (tid.charCodeAt(6) % 9) * 131072,
@@ -769,6 +776,13 @@ function savesFor(tid) {
   }
   gameState.saves[tid] = out;
   return out;
+}
+
+/* 与后端 gs_root_or_create 同语义：uid 必须是主机上真有的用户目录，
+ * 没有这个用户就拒（不许瞎建）。uid 为空 = 落在第一个用户下。 */
+function resolveSaveUser(uid) {
+  if (!uid) return MOCK_UIDS[0];
+  return MOCK_UIDS.includes(uid) ? uid : null;
 }
 
 /* 游戏显示名（改过名就用新名）—— 与后端 game_title_get_name 同源语义。 */
@@ -940,11 +954,14 @@ app.get('/game_saves', (req, res) => {
   if (!base || gameState.deleted.has(tid)) {
     return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
   }
+  const saves = savesFor(tid);
   res.json({
     tid,
-    local_path: `/user/home/1234567890abcdef/savedata/${tid}`,
+    /* 与真机同形：PS5 存档在 savedata_prospero 下；一个都没有时是空串
+     * （后端 game_saves_root 找不到就回空 —— 前端据此判「还没有存档」）。 */
+    local_path: saves.length ? `/user/home/${saves[0].id}/savedata_prospero/${tid}` : '',
     auto: autoFor(tid),
-    saves: savesFor(tid),
+    saves,
   });
 });
 
@@ -987,23 +1004,36 @@ app.get('/game_save_download', (req, res) => {
 
 app.post('/game_save_upload', express.raw({ type: () => true, limit: '512mb' }), (req, res) => {
   const tid = String(req.query.tid || '');
-  const slot = String(req.query.save || '');
+  const uid = String(req.query.save || '');
+  const user = resolveSaveUser(uid);
+  if (!user) {
+    return res.status(400).json({ error: 'EBAD', message: `主机上没有这个用户（${uid}）` });
+  }
   const list = savesFor(tid);
   const size = (req.body && req.body.length) || 1048576;
-  const name = slot ? ((list.find((s) => s.id === slot) || {}).name || slot) : `上传的存档 ${list.length + 1}`;
-  const id = slot || `slot${list.length}`;
-  const rec = { id, name, kind: 'PS5', mtime: '2026-10-05 21:00', size, files: Math.max(1, Math.round(size / 262144)) };
-  const at = list.findIndex((s) => s.id === id);
+  /* 整份替换（与后端「旧存档先改名留一手，换成功才删」同语义）。 */
+  const rec = {
+    id: user,
+    name: user,
+    kind: /^(CUSA|PPJB)/.test(tid) ? 'PS4' : 'PS5',
+    mtime: '2026-10-05 21:00',
+    size,
+    files: Math.max(1, Math.round(size / 262144)),
+  };
+  const at = list.findIndex((s) => s.id === user);
   if (at >= 0) list[at] = rec; else list.push(rec);
   res.json({ ok: true, files: rec.files, size });
 });
 
 app.get('/game_save_delete', (req, res) => {
   const tid = String(req.query.tid || '');
-  const slot = String(req.query.save || '');
+  const uid = String(req.query.save || '');
   const list = savesFor(tid);
-  const at = list.findIndex((s) => s.id === slot);
-  if (at >= 0) list.splice(at, 1);
+  const at = list.findIndex((s) => s.id === uid);
+  if (at < 0) {
+    return res.status(404).json({ error: 'ENOENT', message: '找不到这个用户的存档' });
+  }
+  list.splice(at, 1);
   res.json({ ok: true });
 });
 

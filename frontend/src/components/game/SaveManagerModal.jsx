@@ -213,7 +213,9 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     if (!showConfirm) return
     showConfirm(
       t('game.save_delete_title', '删除存档'),
-      t('game.save_delete_confirm', '删除存档「{{name}}」？此操作无法撤销。', { name: sv.name || sv.id }),
+      t('game.save_delete_confirm',
+        '删除这个游戏在「用户 {{uid}}」下的全部存档？此操作无法撤销。',
+        { uid: sv.name || sv.id }),
       async () => {
         setBusyId(sv.id)
         try {
@@ -388,7 +390,9 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-white panel-body font-semibold truncate">{sv.name || sv.id}</span>
+                          <span className="text-white panel-body font-semibold truncate">
+                            {t('game.save_user', '用户 {{uid}}', { uid: sv.name || sv.id })}
+                          </span>
                           {sv.kind && <Chip tone="info">{sv.kind}</Chip>}
                         </div>
                         <div className="panel-tiny text-zinc-500 mt-0.5 tabular-nums">
@@ -434,7 +438,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
               )}
 
               <p className="panel-tiny text-zinc-500 mt-3">
-                {t('game.save_hint', '下载与上传都是整份存档（zip）。上传覆盖会替换该槽位的全部内容。')}
+                {t('game.save_hint', '一行 = 一个用户在这个游戏上的整份存档（含主机自己的 _bu_ 备份）。下载与上传都是整份 zip，上传会整份替换。')}
               </p>
             </Block>
           </div>

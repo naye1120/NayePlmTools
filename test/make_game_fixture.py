@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-# [CN-FORK] v0.5.2.116 test/make_game_fixture.py
+# [CN-FORK] v0.5.2.139 test/make_game_fixture.py
 #
-# 给 test/game_saves_test.c 造一份存档侧的主机夹具：真机的
-# /user/home/<uid>/savedata/<TID>/<槽> 布局。
+# 给 test/game_saves_test.c 造一份存档侧的主机夹具，**按真机实测布局**
+# （2026-10，192.168.1.214）：
 #
-# 为什么非要两个用户目录、而且**第一个必须是空的**：
-# game_saves_root 的规则是「取体积最大的命中」（见 src/game_saves.c 的头注释）——
-# 一台主机常有多个用户目录，空的那个先被扫到，整个列表就会变成「这个存档 0 字节」。
-# 夹具不把这条逼出来，这个 bug 回来了也没人知道。
+#   /user/home/<uid>/savedata_prospero/<TID>/sdimg_*   ← PS5 存档真正在这里
+#   /user/home/<uid>/savedata/<TID>/sdimg_*            ← PS4 存档位
+#   /user/home/<uid>/savedata/sce_backup2|4/           ← 系统备份槽（空的）
+#
+# 为什么这份夹具非改不可：早期版本造的是 <uid>/savedata/<TID>/<槽>，而真机上
+# 那个位置只有空的 sce_backup*。测试全绿、真机上每个游戏的存档列表却永远是空的
+# —— 夹具把错的布局「证实」成了对的。**夹具必须跟着真机走，不能跟着代码走。**
+#
+# 这份夹具要逼出来的五条规则：
+#   ① 只有系统备份槽的用户不算「有存档」（00000001）
+#   ② 多个用户都存过同一个游戏 → 列表出多条，互不覆盖（00000002/03/05）
+#   ③ 同一用户两处都有 → 只取 savedata_prospero 那条（00000005）
+#   ④ PS4 走 savedata/，kind=PS4，.bin 密封密钥也计入（00000004）
+#   ⑤ <GS_HOME> 下的隐藏目录不是用户（.upl_leftover）
 #
 # 用法：python3 test/make_game_fixture.py [/tmp/pldmgr_saves_test]
 # 环境：python3 标准库，无第三方依赖。
@@ -19,18 +29,21 @@ import sys
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/pldmgr_saves_test"
 HOME = os.path.join(ROOT, "home")
 
-TID_PS4 = "CUSA12345"     # gs_kind：CUSA/PPJB 开头算 PS4
-TID_PS5 = "PPSA012345"    # 其余算 PS5
+TID_PS5 = "PPSA012345"    # PS5：savedata_prospero 下
+TID_PS4 = "CUSA12345"     # PS4：savedata 下
+TID_NONE = "PPSA99999"    # 谁都没存过 → 列表必须是空的
 
 # 下面几个数就是 test/game_saves_test.c 里的断言 —— 改了这里必须同步改那边，
 # 否则测试会「对着自己刚造的数」自证清白。
-SLOT_DIR = "SaveSlot"            # PS5 形态：一整个目录
-SLOT_DIR_BYTES = 1100            # sce_sys/param.sfo 100 + data.bin 600 + sub/nested.dat 400
-SLOT_DIR_FILES = 3
-SLOT_FILE = "sdimg_CUSA12345"    # PS4 形态：单个文件
-SLOT_FILE_BYTES = 250
-SLOT_FILE_FILES = 1
-HIDDEN = ".upl_1234567890"       # 上传的临时目录：一级子项里也必须被跳过
+U2_BYTES = 600 + 300 + 200      # sdimg_STARBOARD + sdimg_sce_sdmemory + sdimg_sce_bu_sdmemory
+U2_FILES = 3
+U3_BYTES = 400
+U3_FILES = 1
+U5_BYTES = 150                  # savedata_prospero 那份；savedata 下那 777 不该被算进来
+U5_FILES = 1
+U5_DECOY_BYTES = 777            # 只用来证明它没被算进去
+U4_BYTES = 250 + 60             # sdimg_CUSA12345 + 它的 .bin 密封密钥
+U4_FILES = 2
 
 AUTO_PATH = os.path.join(ROOT, "saves_auto.json")   # 与 -DGAME_SAVES_AUTO_PATH 对应
 
@@ -45,28 +58,39 @@ def main():
     if os.path.isdir(ROOT):
         shutil.rmtree(ROOT)
 
-    # ① 空用户目录 —— 必须输给下面那个有数据的（game_saves_root 取体积最大的命中）
-    os.makedirs(os.path.join(HOME, "00000001", "savedata", TID_PS4))
+    # ⑤ <GS_HOME> 下的隐藏目录：不能被当成用户目录
+    blob(os.path.join(HOME, ".upl_leftover", "savedata_prospero", TID_PS5, "sdimg_X"), 999)
 
-    # ② 有数据的用户目录：两种槽形态 + 一个该被跳过的隐藏目录
-    a = os.path.join(HOME, "00000002", "savedata", TID_PS4)
-    blob(os.path.join(a, SLOT_DIR, "sce_sys", "param.sfo"), 100)
-    blob(os.path.join(a, SLOT_DIR, "data.bin"), 600)
-    blob(os.path.join(a, SLOT_DIR, "sub", "nested.dat"), 400)
-    blob(os.path.join(a, SLOT_FILE), SLOT_FILE_BYTES)
-    blob(os.path.join(a, HIDDEN, "junk.bin"), 999)
+    # ① 只有系统备份槽的用户 —— 真机上每个用户都有这两个，空的不算存档
+    os.makedirs(os.path.join(HOME, "00000001", "savedata", "sce_backup2"))
+    os.makedirs(os.path.join(HOME, "00000001", "savedata", "sce_backup4"))
 
-    # ③ 另一个 tid，只为验 gs_kind 的另一条分支（CUSA=PS4，其余=PS5）
-    blob(os.path.join(HOME, "00000002", "savedata", TID_PS5, "slot1", "a.dat"), 50)
+    # ② + ④ PS5 主存档（3 个 sdimg：当前 + sdmemory + 一个 _bu_ 备份）
+    p5 = os.path.join(HOME, "00000002", "savedata_prospero", TID_PS5)
+    blob(os.path.join(p5, "sdimg_STARBOARD"), 600)
+    blob(os.path.join(p5, "sdimg_sce_sdmemory"), 300)
+    blob(os.path.join(p5, "sdimg_sce_bu_sdmemory"), 200)
+
+    # ② 第二个用户也存过同一个游戏 → 列表要出第二条
+    blob(os.path.join(HOME, "00000003", "savedata_prospero", TID_PS5, "sdimg_STARBOARD"), U3_BYTES)
+
+    # ④ PS4：savedata/ 下，单个 sdimg_ 文件 + 它的 .bin 密封密钥
+    blob(os.path.join(HOME, "00000004", "savedata", TID_PS4, "sdimg_" + TID_PS4), 250)
+    blob(os.path.join(HOME, "00000004", "savedata", TID_PS4, "sdimg_" + TID_PS4 + ".bin"), 60)
+    os.makedirs(os.path.join(HOME, "00000004", "savedata", "sce_backup2"))
+
+    # ③ 两处都有 → 只该出 savedata_prospero 那条
+    blob(os.path.join(HOME, "00000005", "savedata_prospero", TID_PS5, "sdimg_STARBOARD"), U5_BYTES)
+    blob(os.path.join(HOME, "00000005", "savedata", TID_PS5, "sdimg_STARBOARD"), U5_DECOY_BYTES)
 
     # 自动备份配置不建：夹具目录整个刚 rm 过，「默认值」这一段断言得从干净状态起。
     assert not os.path.exists(AUTO_PATH)
 
     print("fixture ready: %s" % ROOT)
-    print("  %s: root=00000002 slots=%d bytes=%d files=%d"
-          % (TID_PS4, 2, SLOT_DIR_BYTES + SLOT_FILE_BYTES,
-             SLOT_DIR_FILES + SLOT_FILE_FILES))
-    print("  %s: slots=1" % TID_PS5)
+    print("  %s: 3 users (00000002 %dB/%df, 00000003 %dB/%df, 00000005 %dB/%df)"
+          % (TID_PS5, U2_BYTES, U2_FILES, U3_BYTES, U3_FILES, U5_BYTES, U5_FILES))
+    print("  %s: 1 user  (00000004 %dB/%df, kind=PS4)" % (TID_PS4, U4_BYTES, U4_FILES))
+    print("  %s: 0 users" % TID_NONE)
 
 
 if __name__ == "__main__":

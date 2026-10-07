@@ -1,3 +1,87 @@
+## v0.5.2.139 (CN-FORK)
+
+> **存档功能从来没接上过 —— 根因是根目录扫错了。**
+>
+> 用户报「存档功能都没生效」。真机取证（FTP + 面板接口）之后发现：
+> **不只是自动存档没生效，手动存档也一直是死的。**
+>
+> ### 根因：PS5 存档在 `savedata_prospero`，代码只找了 `savedata`
+>
+> `src/game_saves.c` 的 `game_saves_root()` 只拼 `<uid>/savedata/<TID>`：
+>
+> ```
+> /user/home/<uid>/savedata/          ← 代码只扫这里
+>     sce_backup2/   sce_backup4/     ← 真机上这两个是空的系统备份槽
+> /user/home/<uid>/savedata_prospero/ ← 存档真正在这里
+>     PPSA01650/
+>         sdimg_STARBOARD            6 MB
+>         sdimg_sce_sdmemory         3 MB
+>         sdimg_sce_bu_sdmemory      3 MB
+>         sdimg_sce_bu_STARBOARD     6 MB
+> ```
+>
+> 真机实测（`.138` 上跑）：
+>
+> | 请求 | 返回 |
+> |---|---|
+> | `GET /game_saves?tid=PPSA01650` | `local_path:""`，`saves:[]` |
+> | `GET /game_saves?tid=PPSA21567` | `local_path:""`，`saves:[]` |
+> | FTP `savedata_prospero/PPSA01650/` | 4 个 `sdimg_*`，约 18 MB |
+>
+> `game_saves_root()` 回 -1 → **列表、下载、上传、删除全部建立在它上面，整条链一起死**。
+>
+> ### 为什么一直没发现：夹具造的是错的布局
+>
+> `test/make_game_fixture.py`、`frontend/mock-server.js`、`test/game_saves_test.c`
+> **全都按 `<uid>/savedata/<TID>/<槽>` 造数据** —— 测试全绿，功能全死。
+> 这是「mock 抹掉了真机的前提」这一族里最贵的一次：夹具把错的布局**证实**成了对的。
+> 教训写进夹具头注释：**夹具必须跟着真机走，不能跟着代码走。**
+>
+> ### 参照 garlic-savemgr（earthonion）取的经
+>
+> 用户点名让先看 https://github.com/earthonion/garlic-savemgr。它是 PS5 存档
+> 解密/加密/浏览工具，`src/main.c` 5560 行，同时扫 `savedata_prospero` 与 `savedata`
+> —— **`savedata_prospero` 这条路就是从它的 `scan_saves` 拿的**。另外三条：
+> 每条存档带 `uid` 保留多用户维度、跳过 `.bin` 密封密钥伴随文件、
+> `sdimg_sce_bu_*` 标记为备份。它**没有**自动存档引擎（纯手动五个页签），
+> 那块没得抄。
+>
+> ### 粒度改成「一个用户一条」
+>
+> 一个 `<uid>/<TID>` 目录 = 一份完整存档，里面的 `sdimg_*`（含 `_bu_` 备份、
+> PS4 的 `.bin` 密封密钥）一起打包/还原 —— 少一样都可能让主机认不出来。
+> API 里的 `save` 参数从「槽名」变成**用户目录名**（真机形如 `1a1d3627`）。
+>
+> 老代码「取体积最大的那个」是为了绕开多用户问题，但那是把两个用户的存档
+> **拍扁成一个，会互相盖**。真机实测 `PPSA01650` 在两个用户下都有存档，
+> 所以现在返回的是列表：**每个用户各一条，互不覆盖**（`gs_user_ids` 按 uid 升序
+> 排过，列表顺序稳定）。
+>
+> `kind`（PS5/PS4）改由**命中目录**决定，不再按 tid 前缀猜。
+>
+> ### 顺带修掉的两处
+>
+> - **上传整份替换改成可回退**：旧的先 `rename` 成 `.old_*`，换成功才删。
+>   原来是 `rm -rf` 再 `rename` —— 中途任何一步失败都等于把用户原来的存档删了。
+> - **临时目录挪到存档根的父目录**：`<uid>/savedata_prospero/.upl_*`，
+>   换上去是同文件系统内的 `rename`，不再跨目录拷贝。
+>
+> ### 测试
+>
+> - 夹具 `test/make_game_fixture.py` 整个重写为真机布局，逼出五条规则：
+>   只有系统备份槽的用户不算「有存档」/ 多用户各一条 / 两处都有时 PS5 优先 /
+>   PS4 走 `savedata/` 且 `.bin` 计入 / `<GS_HOME>` 下的隐藏目录不是用户。
+> - `test/game_saves_test.c` 断言跟着改：**95 项，0 失败**。
+> - `game112.mjs` 断言「本地存档路径」改成 `savedata_prospero`，
+>   新增一条「每行标出是哪个用户的存档」：**215 / 215 通过**（原 214 + 1）。
+>
+> 版本号 `0.5.2.138` → `0.5.2.139`。
+>
+> **尚未做**（用户已确认要做，分后续版本）：自动存档执行引擎（`on_launch` /
+> `on_exit` 目前仍只存配置不执行）、本地定时快照。已查明 **SDK 里的 curl 8.18.0
+> 没有编 SMB**（`lib/smb.c` 是空壳、无 libsmb2），所以自动存档的传输只能做
+> **FTP + HTTP**；而用户现有配置恰好是 SMB。
+
 ## v0.5.2.138 (CN-FORK)
 
 > **修掉 `.137` 的致命漏登记：`POST /game_title_sync` 在真机上根本不工作。**

@@ -1,27 +1,26 @@
-/* [CN-FORK] v0.5.2.116 test/game_saves_test.c — src/game_saves.c 的主机回归测试。
+/* [CN-FORK] v0.5.2.139 test/game_saves_test.c — src/game_saves.c 的主机回归测试。
  *
- * 夹具由 test/make_game_fixture.py 现造：两个用户目录（**第一个是空的**）、
- * 两种槽形态（PS5 目录槽 / PS4 单文件槽）、一个该被跳过的 .upl_ 临时目录，
- * 外加第二个 tid 用来验 gs_kind 的另一条分支。三个路径宏用 -D 指到
- * /tmp/pldmgr_saves_test —— 与 -DSAFETY_DIR 同一个手法。
+ * 夹具由 test/make_game_fixture.py 现造，**按真机实测布局**
+ * （/user/home/<uid>/savedata_prospero/<TID>/sdimg_*，PS4 走 savedata/）。
+ * 三个路径宏用 -D 指到 /tmp/pldmgr_saves_test —— 与 -DSAFETY_DIR 同一个手法。
+ *
+ * ⚠ 这个文件曾经整体建立在**错的布局**上（<uid>/savedata/<TID>/<槽>）：测试
+ * 全绿，真机上每个游戏的存档列表却永远是空的。夹具必须跟着真机走，不能跟着
+ * 代码走 —— 谁改布局，先去真机 FTP 上看一眼 /user/home/<uid>/ 下有什么。
  *
  * 覆盖：
- *   ① 根目录：多用户目录下取体积最大的命中（空目录先扫到也不能赢）
- *   ② 列表：槽数 / id / name / kind / size / files 递归统计 / mtime / local_path
- *   ③ 隐藏的 .upl_ 临时目录不进列表；game_saves_count 与 saves 长度一致
+ *   ① 根目录：PS5 落在 savedata_prospero 下，不取只有空 sce_backup* 的用户
+ *   ② 列表：一个用户一条；多用户各一条；两处都有时 PS5 优先；kind 由目录决定
+ *   ③ PS4：走 savedata/，kind=PS4，.bin 密封密钥也计入
  *   ④ auto 默认值 + **明文密码/令牌永远不外泄**
  *   ⑤ 保存配置：逐字段合并，没传的保持原值
  *   ⑥ 端口既认 JSON 数字也认 "2121" 这种字符串 —— 前端 <input> 出来的是字符串
  *   ⑦ token_set 与 has_token 两个名都得给（前端按 `has_${f.key}` 拼提示）
- *   ⑧ 打包成 zip / 上传单文件成新槽 / 删槽
+ *   ⑧ 打包成 zip（源不动）/ 上传整份替换（旧的可回退）/ 删除
  *
  * 测不了的部分（写在前面，免得有人以为是漏了）：
- *   - SFO 里的名字解析：game_mgr_sfo_text 住在 src/game_mgr.c，那个文件要
- *     getmntinfo()（BSD 专有），主机上根本编不过 —— 所以这里是整个链接集里
- *     **唯一**的桩。桩成「读不到」正好逼出 gs_slot_name 的兜底分支，
- *     ② 里断言的就是「读不到 SFO 就用子项名」。
  *   - HTTP 那一层（tid 到底在 query 还是 body）在 http_server.c，主机上没有
- *     microhttpd。这一层本轮靠的是把 gameApi.js 与 mock-server.js 并排读的
+ *     microhttpd。这一层靠的是把 gameApi.js 与 mock-server.js 并排读的
  *     对照审计，见 HANDOVER §2.1.2。
  *
  * 用法：由 test/run_host_tests.sh 拨起，也可单独跑（先跑 make_game_fixture.py）。
@@ -47,27 +46,27 @@ void pldmgr_log(const char *fmt, ...) {
     va_end(ap);
 }
 
-/* game_mgr_sfo_text 的桩（理由见文件头）。返回 -1 = 读不到。 */
-int game_mgr_sfo_text(const char *path, const char *key, char *out, size_t osz) {
-    (void)path;
-    (void)key;
-    if (out && osz) out[0] = '\0';
-    return -1;
-}
+#define ROOT     "/tmp/pldmgr_saves_test"
+#define HOME     ROOT "/home"
+#define TID_PS5  "PPSA012345"   /* PS5：savedata_prospero 下 */
+#define TID_PS4  "CUSA12345"    /* PS4：savedata 下 */
+#define TID_NONE "PPSA99999"    /* 谁都没存过 → 列表必须是空的 */
 
-#define ROOT   "/tmp/pldmgr_saves_test"
-#define HOME   ROOT "/home"
-#define TID_PS4 "CUSA12345"
-#define TID_PS5 "PPSA012345"
-
-/* 与 test/make_game_fixture.py 里同名常量一一对应，改一个就得改两个。 */
-#define SLOT_DIR       "SaveSlot"
-#define SLOT_DIR_BYTES 1100
-#define SLOT_DIR_FILES 3
-#define SLOT_FILE      "sdimg_CUSA12345"
-#define SLOT_FILE_BYTES 250
-#define SLOT_FILE_FILES 1
-#define HIDDEN         ".upl_1234567890"
+/* 与 test/make_game_fixture.py 里同名常量一一对应，改一个就得改两个。
+ * U* 是用户目录名，同时也是 API 里的 save 参数（不再有「槽名」这回事）。 */
+#define U2 "00000002"
+#define U3 "00000003"
+#define U4 "00000004"
+#define U5 "00000005"
+#define U2_BYTES 1100           /* 3 个 sdimg 之和（含一个 _bu_ 备份） */
+#define U2_FILES 3
+#define U3_BYTES 400
+#define U3_FILES 1
+#define U4_BYTES 310            /* sdimg_CUSA12345 + 它的 .bin 密封密钥 */
+#define U4_FILES 2
+#define U5_BYTES 150            /* savedata_prospero 那份；savedata 下的 777 不该算进来 */
+#define U5_FILES 1
+#define HIDDEN_USER ".upl_leftover"  /* <GS_HOME> 下的隐藏目录，不是用户 */
 
 static int g_checks, g_fails;
 
@@ -144,73 +143,85 @@ int main(void) {
     char root[640];
     char msg[256];
 
-    /* ── ① 根目录：多用户目录下取体积最大的命中 ─────────────────────────── */
+    /* ── ① 根目录：PS5 存档在 savedata_prospero 下 ───────────────────────── *
+     * 老代码只找 <uid>/savedata/<TID> —— 真机上那里只有空的 sce_backup*，
+     * 于是每个游戏都 local_path="" / saves=[]，整个存档功能等于没接上。 */
     memset(root, 0, sizeof(root));
-    CHECK(game_saves_root(TID_PS4, root, sizeof(root)) == 0, "game_saves_root 失败");
-    CHECK(strstr(root, "/00000002/") != NULL,
-          "根目录选错了：%s（该是有数据的那个）", root);
+    CHECK(game_saves_root(TID_PS5, root, sizeof(root)) == 0, "game_saves_root 失败");
+    CHECK(strstr(root, "/savedata_prospero/") != NULL,
+          "PS5 存档根没落在 savedata_prospero 下：%s"
+          " —— 这就是「列表永远空」的根因", root);
+    CHECK(strstr(root, "/" U2 "/") != NULL,
+          "根目录该取 uid 升序第一个：%s", root);
     CHECK(strstr(root, "/00000001/") == NULL,
-          "根目录选到了空的用户目录：%s —— 这就是头注释里那个『0 字节存档』的 bug", root);
+          "根目录选到了只有空 sce_backup* 的用户：%s", root);
 
     /* 找不到 tid 时应当明确失败，而不是空手回 0 */
-    CHECK(game_saves_root("CUSA99999", root, sizeof(root)) < 0,
+    CHECK(game_saves_root(TID_NONE, root, sizeof(root)) < 0,
           "不存在的 tid 居然找到了根目录");
 
-    /* ── ② 列表形状 ─────────────────────────────────────────────────────── */
-    cJSON *o = get_list(TID_PS4);
+    /* ── ② PS5 列表：一个用户一条，多用户各一条 ─────────────────────────── */
+    cJSON *o = get_list(TID_PS5);
     CHECK(o != NULL, "list json 解析失败: %s", g_buf);
     if (o) {
         const char *tid = jstr(NULL, o, "tid");
-        CHECK(tid && !strcmp(tid, TID_PS4), "tid 对不上: %s", tid ? tid : "(null)");
+        CHECK(tid && !strcmp(tid, TID_PS5), "tid 对不上: %s", tid ? tid : "(null)");
 
         const char *lp = jstr(NULL, o, "local_path");
-        CHECK(lp && strstr(lp, "/00000002/"),
-              "local_path 没指向有数据的用户目录: %s", lp ? lp : "(null)");
+        CHECK(lp && strstr(lp, "/savedata_prospero/"),
+              "local_path 没指向 savedata_prospero: %s", lp ? lp : "(null)");
 
         cJSON *autoo = cJSON_GetObjectItem(o, "auto");
         CHECK(cJSON_IsObject(autoo), "auto 不是对象");
         cJSON *saves = cJSON_GetObjectItem(o, "saves");
         CHECK(cJSON_IsArray(saves), "saves 不是数组");
-        CHECK(cJSON_GetArraySize(saves) == 2,
-              "槽数 = %d（该 2：目录槽 + 单文件槽；.upl_ 混进来了？）",
+        CHECK(cJSON_GetArraySize(saves) == 3,
+              "条目数 = %d（该 3：三个用户都存过这个游戏）",
               cJSON_GetArraySize(saves));
 
-        /* 目录槽：size/files 递归统计、kind、name 走 SFO 读不到的兜底 */
-        cJSON *sd = find_slot(saves, SLOT_DIR);
-        CHECK(sd != NULL, "目录槽 %s 没被列出", SLOT_DIR);
-        if (sd) {
-            CHECK(jnum(sd, "size") == SLOT_DIR_BYTES,
-                  "%s size=%lld（该 %d）", SLOT_DIR, jnum(sd, "size"), SLOT_DIR_BYTES);
-            CHECK(jnum(sd, "files") == SLOT_DIR_FILES,
-                  "%s files=%lld（该 %d）", SLOT_DIR, jnum(sd, "files"), SLOT_DIR_FILES);
-            CHECK(jnum(sd, "size") > 0, "size 是 %lld，递归统计没跑", jnum(sd, "size"));
-            const char *k = jstr(NULL, sd, "kind");
-            CHECK(k && !strcmp(k, "PS4"), "CUSA 该算 PS4，实际 %s", k ? k : "(null)");
-            const char *nm = jstr(NULL, sd, "name");
-            CHECK(nm && !strcmp(nm, SLOT_DIR),
-                  "SFO 读不到时该兜底用子项名，实际 %s", nm ? nm : "(null)");
-            const char *mt = jstr(NULL, sd, "mtime");
+        /* 主用户：整目录递归统计（含 _bu_ 备份）、kind 由所在目录决定 */
+        cJSON *u2 = find_slot(saves, U2);
+        CHECK(u2 != NULL, "用户 %s 没被列出", U2);
+        if (u2) {
+            CHECK(jnum(u2, "size") == U2_BYTES,
+                  "%s size=%lld（该 %d）", U2, jnum(u2, "size"), U2_BYTES);
+            CHECK(jnum(u2, "files") == U2_FILES,
+                  "%s files=%lld（该 %d）", U2, jnum(u2, "files"), U2_FILES);
+            const char *k = jstr(NULL, u2, "kind");
+            CHECK(k && !strcmp(k, "PS5"), "%s 该是 PS5，实际 %s", U2, k ? k : "(null)");
+            const char *nm = jstr(NULL, u2, "name");
+            CHECK(nm && !strcmp(nm, U2), "%s name 该是 uid，实际 %s", U2, nm ? nm : "(null)");
+            const char *mt = jstr(NULL, u2, "mtime");
             CHECK(mt && mt[0], "mtime 没给出");
         }
 
-        /* 单文件槽 */
-        cJSON *sf = find_slot(saves, SLOT_FILE);
-        CHECK(sf != NULL, "单文件槽 %s 没被列出", SLOT_FILE);
-        if (sf) {
-            CHECK(jnum(sf, "size") == SLOT_FILE_BYTES,
-                  "%s size=%lld（该 %d）", SLOT_FILE, jnum(sf, "size"), SLOT_FILE_BYTES);
-            CHECK(jnum(sf, "files") == SLOT_FILE_FILES,
-                  "%s files=%lld（该 %d）", SLOT_FILE, jnum(sf, "files"), SLOT_FILE_FILES);
+        /* 第二个用户：同一个游戏也必须单独一条，不能被「取体积最大」盖掉 */
+        cJSON *u3 = find_slot(saves, U3);
+        CHECK(u3 != NULL, "第二个用户 %s 被吞了 —— 多用户必须各一条", U3);
+        if (u3) {
+            CHECK(jnum(u3, "size") == U3_BYTES,
+                  "%s size=%lld（该 %d）", U3, jnum(u3, "size"), U3_BYTES);
+            CHECK(jnum(u3, "files") == U3_FILES,
+                  "%s files=%lld（该 %d）", U3, jnum(u3, "files"), U3_FILES);
         }
 
-        CHECK(find_slot(saves, HIDDEN) == NULL,
-              "上传用的 .upl_ 临时目录混进列表了");
+        /* 两处都有的用户：只取 savedata_prospero 那条 */
+        cJSON *u5 = find_slot(saves, U5);
+        CHECK(u5 != NULL, "用户 %s 没被列出", U5);
+        if (u5) {
+            CHECK(jnum(u5, "size") == U5_BYTES,
+                  "%s size=%lld（该 %d）—— 把 savedata 下那份也算进来了？"
+                  "两处都有时该只取 savedata_prospero", U5, jnum(u5, "size"), U5_BYTES);
+        }
+
+        CHECK(find_slot(saves, HIDDEN_USER) == NULL,
+              "隐藏目录被当成用户列出来了");
 
         /* count 与 saves 长度必须同口径 —— /game_detail 的 saves_count 就是它 */
-        CHECK(game_saves_count(TID_PS4) == 2,
-              "count=%d（该 2）", game_saves_count(TID_PS4));
-        CHECK(game_saves_count("CUSA99999") == 0,
-              "不存在的 tid count=%d（该 0）", game_saves_count("CUSA99999"));
+        CHECK(game_saves_count(TID_PS5) == 3,
+              "count=%d（该 3）", game_saves_count(TID_PS5));
+        CHECK(game_saves_count(TID_NONE) == 0,
+              "不存在的 tid count=%d（该 0）", game_saves_count(TID_NONE));
 
         /* ── ④ auto 默认值 + 明文不外泄 ──────────────────────────────── */
         CHECK(jbool(autoo, "enabled") == 0, "enabled 默认该 false");
@@ -245,22 +256,27 @@ int main(void) {
         cJSON_Delete(o);
     }
 
-    /* ── ②' PS5 形态的另一个 tid（gs_kind 的另一条分支） ────────────────── */
-    o = get_list(TID_PS5);
-    CHECK(o != NULL, "list(%s) 失败", TID_PS5);
-    if (o) {
-        cJSON *saves = cJSON_GetObjectItem(o, "saves");
-        CHECK(cJSON_GetArraySize(saves) == 1, "PS5 tid 槽数不该是 %d",
-              cJSON_GetArraySize(saves));
-        cJSON *s = find_slot(saves, "slot1");
-        CHECK(s != NULL, "slot1 没列出");
-        if (s) {
-            const char *k = jstr(NULL, s, "kind");
-            CHECK(k && !strcmp(k, "PS5"), "非 CUSA 该算 PS5，实际 %s", k ? k : "(null)");
-            CHECK(jnum(s, "size") == 50, "slot1 size=%lld（该 50）", jnum(s, "size"));
-            CHECK(jnum(s, "files") == 1, "slot1 files=%lld（该 1）", jnum(s, "files"));
+    /* ── ③ PS4：走 savedata/，kind=PS4，.bin 密封密钥也计入 ─────────────── */
+    cJSON *o4 = get_list(TID_PS4);
+    CHECK(o4 != NULL, "PS4 list json 解析失败: %s", g_buf);
+    if (o4) {
+        cJSON *saves = cJSON_GetObjectItem(o4, "saves");
+        CHECK(cJSON_IsArray(saves), "PS4 saves 不是数组");
+        CHECK(cJSON_GetArraySize(saves) == 1,
+              "PS4 条目数 = %d（该 1）", cJSON_GetArraySize(saves));
+        cJSON *u4 = find_slot(saves, U4);
+        CHECK(u4 != NULL, "PS4 用户 %s 没被列出", U4);
+        if (u4) {
+            CHECK(jnum(u4, "size") == U4_BYTES,
+                  "%s size=%lld（该 %d，含 .bin 密封密钥 —— 少了它还原不回去）",
+                  U4, jnum(u4, "size"), U4_BYTES);
+            CHECK(jnum(u4, "files") == U4_FILES,
+                  "%s files=%lld（该 %d）", U4, jnum(u4, "files"), U4_FILES);
+            const char *k = jstr(NULL, u4, "kind");
+            CHECK(k && !strcmp(k, "PS4"), "%s 该是 PS4（它在 savedata/ 下），实际 %s",
+                  U4, k ? k : "(null)");
         }
-        cJSON_Delete(o);
+        cJSON_Delete(o4);
     }
 
     /* ── ⑤⑥⑦ 保存配置 ──────────────────────────────────────────────────── *
@@ -357,8 +373,8 @@ int main(void) {
     CHECK(game_saves_auto_set("bad tid", body2, strlen(body2), msg, sizeof(msg)) < 0,
           "非法 tid 没被拒");
 
-    /* ── ②'' 不存在的 tid：200 + 空列表，不是报错 ───────────────────────── */
-    o = get_list("CUSA99999");
+    /* ── 不存在的 tid：200 + 空列表，不是报错 ───────────────────────────── */
+    o = get_list(TID_NONE);
     CHECK(o != NULL, "不存在的 tid 该照样回一份空列表");
     if (o) {
         const char *lp = jstr(NULL, o, "local_path");
@@ -369,10 +385,10 @@ int main(void) {
         cJSON_Delete(o);
     }
 
-    /* ── ⑧ 打包：存档下载这条路 ─────────────────────────────────────────── */
+    /* ── ⑧ 打包：整份存档下载 ───────────────────────────────────────────── */
     const char *zpath = ROOT "/out.zip";
     unlink(zpath);
-    CHECK(game_saves_pack(TID_PS4, SLOT_DIR, zpath, msg, sizeof(msg)) == 0,
+    CHECK(game_saves_pack(TID_PS5, U2, zpath, msg, sizeof(msg)) == 0,
           "打包失败: %s", msg);
     CHECK(exists_reg(zpath), "zip 没落盘");
     {
@@ -387,46 +403,58 @@ int main(void) {
                 if (got > 0) {
                     /* STORE 不压缩，文件名是明文，够用来认内容 */
                     CHECK(memcmp(zb, "PK\x03\x04", 4) == 0, "不是 zip 本地文件头");
-                    CHECK(mem_find(zb, (size_t)got, SLOT_DIR, strlen(SLOT_DIR)) != NULL,
-                          "zip 里没有槽名 %s（头几个字节: %.60s）", SLOT_DIR, zb);
-                    CHECK(mem_find(zb, (size_t)got, "data.bin", 8) != NULL,
-                          "zip 里没有 data.bin");
-                    CHECK(mem_find(zb, (size_t)got, "nested.dat", 10) != NULL,
-                          "zip 里没有子目录里的 nested.dat —— 递归收集漏了下层");
+                    /* 顶层目录用 tid 不是 uid —— 包该像「这个游戏的存档」 */
+                    CHECK(mem_find(zb, (size_t)got, TID_PS5, strlen(TID_PS5)) != NULL,
+                          "zip 里没有顶层目录 %s（头几个字节: %.60s）", TID_PS5, zb);
+                    CHECK(mem_find(zb, (size_t)got, "sdimg_STARBOARD", 15) != NULL,
+                          "zip 里没有 sdimg_STARBOARD");
+                    CHECK(mem_find(zb, (size_t)got, "sdimg_sce_bu_sdmemory", 20) != NULL,
+                          "zip 里没有 _bu_ 备份 —— 整目录打包漏了它，还原会缺件");
                 }
                 close(fd);
             }
             free(zb);
         }
     }
-    /* 打包过之后**源槽必须还活着**（边下边把自己的源写脏是当初记过的坑） */
-    CHECK(exists_reg(HOME "/00000002/savedata/" TID_PS4 "/" SLOT_DIR "/data.bin"),
+    /* 打包过之后**源必须还活着**（边下边把自己的源写脏是当初记过的坑） */
+    CHECK(exists_reg(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
           "打包把源文件弄没了");
     unlink(zpath);
 
-    /* ── ⑧' 上传：裸字节整包存成一个槽 ──────────────────────────────────── */
+    /* ── ⑧' 上传：整份替换（旧的先留一手，成功后清掉）───────────────────── */
     long long uf = 0, usz = 0;
     const unsigned char raw[] = "hello saves";
-    CHECK(game_saves_upload(TID_PS5, "slot2", raw, sizeof(raw) - 1,
+    CHECK(game_saves_upload(TID_PS5, U5, raw, sizeof(raw) - 1,
                             &uf, &usz, msg, sizeof(msg)) == 0,
           "上传失败: %s", msg);
     CHECK(uf == 1, "上传该落 1 个文件，实际 %lld", uf);
     CHECK(usz == (long long)(sizeof(raw) - 1), "上传 size=%lld（该 %zu）",
           usz, sizeof(raw) - 1);
-    CHECK(game_saves_count(TID_PS5) == 2, "上传后槽数=%d（该 2）",
+    CHECK(game_saves_count(TID_PS5) == 3, "上传后条目数=%d（该 3：用户数不变）",
           game_saves_count(TID_PS5));
-    CHECK(exists_reg(HOME "/00000002/savedata/" TID_PS5 "/slot2/data.bin"),
-          "上传的文件没落到新槽里");
+    CHECK(exists_reg(HOME "/" U5 "/savedata_prospero/" TID_PS5 "/data.bin"),
+          "上传的文件没落到目标用户下");
+    CHECK(!exists_reg(HOME "/" U5 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
+          "整份替换没生效 —— 旧文件还在（该被换掉）");
+    CHECK(exists_reg(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
+          "上传把另一个用户的存档删了");
 
-    /* ── ⑧'' 删槽 ───────────────────────────────────────────────────────── */
-    CHECK(game_saves_remove(TID_PS4, "no-such-slot", msg, sizeof(msg)) < 0,
-          "删不存在的槽居然成功了");
-    CHECK(game_saves_remove(TID_PS4, SLOT_FILE, msg, sizeof(msg)) == 0,
-          "删槽失败: %s", msg);
-    CHECK(game_saves_count(TID_PS4) == 1, "删完槽数=%d（该 1）",
-          game_saves_count(TID_PS4));
-    CHECK(exists_reg(HOME "/00000002/savedata/" TID_PS4 "/" SLOT_DIR "/data.bin"),
-          "删单文件槽把目录槽也带走了");
+    /* 主机上不存在的用户：拒绝，不许瞎建 */
+    CHECK(game_saves_upload(TID_PS5, "99999999", raw, sizeof(raw) - 1,
+                            &uf, &usz, msg, sizeof(msg)) < 0,
+          "给不存在的用户上传居然成功了");
+
+    /* ── ⑧'' 删除：删掉这个用户的整份存档 ──────────────────────────────── */
+    CHECK(game_saves_remove(TID_PS5, "no-such-user", msg, sizeof(msg)) < 0,
+          "删不存在的用户居然成功了");
+    CHECK(game_saves_remove(TID_PS5, U3, msg, sizeof(msg)) == 0,
+          "删除失败: %s", msg);
+    CHECK(game_saves_count(TID_PS5) == 2, "删完条目数=%d（该 2）",
+          game_saves_count(TID_PS5));
+    CHECK(exists_reg(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
+          "删一个用户把另一个用户的存档也带走了");
+    CHECK(!exists_reg(HOME "/" U3 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
+          "目标用户的存档没被删掉");
 
     printf("game_saves: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
