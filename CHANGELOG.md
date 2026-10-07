@@ -1,3 +1,108 @@
+## v0.5.2.137 (CN-FORK)
+
+> **面板里改过的中文名，现在会自己补回主机 —— ShadowMount 与电视主屏不再显示英文原名。**
+>
+> 用户截图：面板列表写「宇宙机器人 2」「最终幻想7：重置」，而 ShadowMount 后台与电视主屏
+> 还是 `ASTRO BOT` / `FINAL FANTASY VII REMAKE`。逐款重改一次名谁也不愿意，于是加了回填入口。
+>
+> **根因是时序错位，不是代码写错：**
+>
+> - 用户那 8 次改名发生在 **10:59–11:17**（`name.txt` 的 MDTM 证据）；
+> - 写**游戏源** `sce_sys/param.json` 的能力 **13:57** 才提交（`09c44d6` = `.132`）；
+> - 源文件自安装起**从未被写过**（PPSA21567=9/8、PPSA32786=9/18、PPSA18463=7/30、PPSA26873=7/31）；
+> - 之后 SMP 重扫按源重建 `app.db`，中文名被冲回英文原名。
+>
+> `.132` 那条「SMP 重扫不回退」的真机闭环其实是用 PPSA27836 做的、验完还**还原回了原名**
+> （源 mtime 14:49），所以当时没暴露这条时间差。
+>
+> **真机三个实验把「SMP 到底读哪一层」钉死了：**
+>
+> 1. 改 `/user/app/<TID>/sce_sys/param.json` 对 SMP **无效**（PPSA20447 定点替换后 60 秒
+>    纹丝不动，文件也没被覆盖）→ 这条路是死的；
+> 2. 改**系统 `app.db`** 对 SMP **有效**，且**镜像类也立刻生效**（`persisted:false` 但
+>    `title_name` 立刻变中文）；
+> 3. `POST /api/v1/scan` **不会**重建 app.db 的名字（中文名 120 秒内活着）→ `.132` 的
+>    「SMP 重扫会冲掉」结论归因错了。
+>
+> 所以回填的主力是 **app.db 那一层**，不是游戏源。
+>
+> **修法：**
+>
+> - **后端**（`src/game_title.c` 新增 `game_title_sync_all()` + `game_title_sync_start_daemon()`）：
+>   - 遍历 `/data/nayeplmtools/titles/<TID>/`，**只处理有 `name.txt` 的款**（绝不替用户
+>     决定没改过的游戏）；逐款 ① 写主机索引（`tile_db_set_name` → app.db 平铺名字列 +
+>     appinfo.db）② folder 类再写一次源 `param.json`（镜像 / pkg 写不了源，如实计入
+>     `persisted` 的差）；
+>   - 幂等：`tile_db.c` 的 `td_count_differ` 先 COUNT/SUM 比一遍，已一致则一次写事务都不开；
+>   - 启动自愈线程（detached，延迟 25 秒起，避开启动高峰），SAFE MODE 下跳过；
+>   - 新增路由 `POST /game_title_sync`，返回 `{ok,scanned,applied,persisted,failed,note}`。
+> - **前端**（`GameSection.jsx` + `gameApi.js` + 语言包）：
+>   - 板块右上角新增「同步名字到主机」按钮（`Tag` 图标，跑的时候 `animate-pulse`）；
+>   - 跑完 `addToast` 如实报口径（`已回填 N 款：主机索引 X、名字源 Y、失败 Z`），
+>     `failed > 0` 按 error 弹；并 `load(true)` **强制重拉**（后端改的是主机 app.db，
+>     而列表吃 60s 快照 —— 不重拉用户点完看不到变化，会以为按钮没反应）。
+> - **mock**：`gameState` 新增 `hostNames`（= 主机 app.db 名字列，与 `renamed` = name.txt
+>   **刻意分开**），`/game_rename` 同时写两份；新增 `POST /game_title_sync` 与两个测试钩子
+>   `GET /_host_names`、`POST /_host_drift`（模拟 SMP 重扫把主机名字丢掉）。
+> - **测试**：`game112.mjs` 新增第 7.7 节 11 条断言 —— 断言的是「漂了 → 点同步 → 补回来」，
+>   而不是「按钮存在」（只断言后者的话这条链在 mock 里没有任何可观察效果，等于没测）。
+>   `param_rename_test.c` 补一个 `pldmgr_utils_safe_mode` 桩（`game_title.c` 新增的启动
+>   自愈线程引了这个符号，而该测试把整个 `game_title.c` 拉进同一翻译单元，链接期就要落处）。
+> - **真机已修好（手动补一次）**：`reapply_renames.py` 用产品自己的 `POST /game_rename`
+>   把 8 款 name.txt 重放一遍，**15 款全部一致，7 款被纠正**（含 3 款镜像类）。
+>
+> 宿主测试：`game_mgr` 100/100、`param_rename` PASS、overall PASS；变异测试 7/7 全红。
+> 回归：`game112` **214/214**（原 203，新增 11 条）。
+>
+> 版本号 `0.5.2.136` → `0.5.2.137`。
+
+## v0.5.2.136 (CN-FORK)
+
+> **磁贴上的体积不再说谎。** 之前磁贴显示的是 app.db 的 `size` 列 —— 一款 132 GB 的
+> 游戏在磁贴上写 1.22 GB，跟同一个弹窗里的「体积」并排一看就矛盾。
+>
+> 用户截图：详情弹窗 `体积 132 GB` / `app.db 1.22 GB`，而右边同一款游戏的磁贴写 `1.22 GB`。
+>
+> **根因是今天三个提交叠出来的回归：**
+>
+> - `.134`（`9959b4a`）为了「列表秒开」，列表模式置 `skip_du=1` → folder 游戏 `size=0`
+>   → `formatSize(0)` 返回空串 → 磁贴没体积标签；
+> - `.135`（`2fbcb43`）为了让标签回来，前端改成 `formatSize(g.size || g.appdb_size)` ——
+>   标签是回来了，但显示的是 **app.db 的注册体积**，不是游戏体积。
+>
+> **为什么预览里没发现**：`frontend/mock-server.js` 的列表直接给 folder 游戏塞了真实
+> `size`，且只有 PKG 才有 `appdb_size` —— 「列表不扫盘、size=0」这个前提被整个抹掉了，
+> 于是这条兜底分支在本地永远是绿的，只在真机翻车。
+>
+> **修法（用户拍板「后台预热」）：**
+>
+> - **后端**（`src/game_mgr.c`）：
+>   - 体积缓存拆成 `gm_dir_size_peek`（只读缓存、不扫盘）与 `gm_dir_size_cached`
+>     （未命中才真 du 并写回），缓存表新增 `g_du_mtx` 自保（预热线程也会写它）；
+>   - `gm_fmt_size` / `game_enum_dump` 在列表模式（`skip_du=1`）只 peek：命中显示真实
+>     体积，未命中留 0，并把根目录攒进 `g_warm_roots`（上限 64，去重，只收 folder/lz4）；
+>   - `build_game_json` 结束时 `gm_warm_kick()` 起一个 detached 线程去 du 这些目录
+>     （`g_warm_running` 受 `g_game_mtx` 保护，同一时刻只允许一个），扫完填缓存并
+>     **作废 60s 快照**；列表 JSON 尾部新增 `"warming":true`；
+>   - 锁序恒为 `g_game_mtx → g_du_mtx`，worker 收尾只取 `g_game_mtx`、不套 `g_du_mtx`，无环；
+>     worker 扫盘在锁外做，不阻塞列表/详情读。
+> - **前端**（`GameSection.jsx`）：
+>   - `sizeLabel = formatSize(g.size || (g.fmt === 'pkg' ? g.appdb_size : 0))` ——
+>     `app.db` 的 size 列只给「没有物理源可扫」的内置 PKG 兜底，folder/lz4/image 一律不用；
+>   - 响应带 `warming` 时，每 4 秒自动重拉一次（上限 15 次 ≈ 1 分钟），预热一结束就停。
+>     **不是轮询**：只在预热期间临时重试，且重试走普通 `load()`（吃快照，不带 `force=1`）。
+> - **mock**：照抄真机时序（folder/lz4 列表初始 `size=0` + `warming`，3 秒后补上真实体积
+>   并作废快照；PKG 带 `appdb_size`），`/reset` 一并清预热状态 —— 让这条路径在本地能复现。
+> - **测试**：`make_appdb_fixture.py` 的裸目录源从 `/mnt/ext1/...`（主机上不存在）改成
+>   夹具根下的**真实目录树**（4096 + 1000 字节，含一个 `.hidden` 钉住「跳过点开头条目」的口径），
+>   `game_mgr_test.c` 新增 6 条断言：冷缓存下 folder 体积必须是 0（**不是** appdb_size）、
+>   必须带 `warming`、预热后必须拿到真实字节数且不再报 `warming`、内置 PKG 的 `appdb_size` 仍在。
+>   `mutation_check_game_mgr.sh` 新增 3 个变异体（`appdb` / `peek0` / `nodu`），三个都真变红。
+>
+> 宿主测试：`game_mgr` 100/100（原 94），overall PASS。回归：`game112` 203/203。
+>
+> 版本号 `0.5.2.135` → `0.5.2.136`。
+
 ## v0.5.2.133 (CN-FORK)
 
 > **刷新按钮现在真从主机重新读，不再等 60 秒快照自然过期。**

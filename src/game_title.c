@@ -3,7 +3,9 @@
 
 #include "game_title.h"
 
+#include <dirent.h>  /* [CN-FORK] v0.5.2.137 名字回填要遍历 GAME_TITLE_DIR */
 #include <errno.h>
+#include <pthread.h> /* [CN-FORK] v0.5.2.137 启动自愈线程 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +19,7 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include "tile_db.h"       /* 改名 / 背景落进主机那一步（app.db + appinfo.db） */
-#include "utils.h"         /* pldmgr_json_escape */
+#include "utils.h"         /* pldmgr_json_escape / pldmgr_utils_safe_mode */
 
 #define TT_BG_W 1920
 #define TT_BG_H 1080
@@ -446,6 +448,132 @@ int game_title_set_name(const char *tid, const char *name,
     pldmgr_log("[PLDMGR] title: %s 源持久化 %s：%s\n", tid,
                persisted_now ? "成功" : "未生效", wmsg);
     return 0;
+}
+
+/* ── [CN-FORK] v0.5.2.137 名字回填 / 启动自愈 ───────────────────────────────
+ * 契约、真机依据与「为什么主力是 app.db 而不是源」见 include/game_title.h 的
+ * game_title_sync_all 注释。这里只留实现上的两条取舍：
+ *   · 幂等：tile_db.c 的 td_count_differ 会先 COUNT/SUM 比一遍，已经一致的
+ *     一次写事务都不开，所以这条链随时跑都不心疼；
+ *   · best-effort：任何一款失败只记日志、continue 下一款 —— 回填是「补历史」，
+ *     不该因为某款镜像写不了源就把整批停掉。 */
+
+/* 启动自愈的延迟。payload 起来那几秒 app.db 常被 Shell / SMP 占着，挂载点也未必齐；
+ * 等一会儿比第一次撞锁就失败划算（tile_db.c 自己还有 5s busy_timeout）。 */
+#define TT_SYNC_DELAY_SEC 25
+
+/* 把一款游戏的名字重放到主机各层。0 = 主机索引这一层已一致或已写好，-1 = 没写成。
+ * *persisted_out：名字**源**也写成功了（只有 folder 类可能）。 */
+static int tt_sync_one(const char *tid, const char *name, int *persisted_out) {
+    if (persisted_out) *persisted_out = 0;
+
+    /* ① 面板 → 主机索引（app.db 平铺名字列 + appinfo.db）。
+     * **这一步是主力**：真机实测（v0.5.2.137 侦察）SMP 1.7beta4 的 title_name 读的就是
+     * 系统 app.db —— 改完 SMP 的 UI 立刻变名，**镜像类也一样**。 */
+    char hmsg[256];
+    if (tile_db_set_name(tid, name, hmsg, sizeof(hmsg)) != 0) {
+        pldmgr_log("[PLDMGR] title: 回填 %s 主机索引未生效：%s\n", tid,
+                   hmsg[0] ? hmsg : "见上一条日志");
+        return -1;
+    }
+
+    /* ② 面板 → 名字源（只有 folder 类可写）。这一层不改 SMP 当下的显示，改的是
+     * 「SMP 重启后重新注册」时它会读到的值 —— .132 那次真机闭环靠的就是它。
+     * image / pkg 写不了源**不算失败**：它们的主机索引已经在①里对齐了。 */
+    char kind[16], srcpath[600];
+    if (game_mgr_source_paths(tid, kind, sizeof(kind), srcpath, sizeof(srcpath)) == 1 &&
+        strcmp(kind, "folder") == 0) {
+        char sp[1000], wmsg[256];
+        snprintf(sp, sizeof(sp), "%s/sce_sys/param.json", srcpath);
+        if (tt_rename_in_param(tid, sp, name, wmsg, sizeof(wmsg)) > 0) {
+            if (persisted_out) *persisted_out = 1;
+            /* 挂载点副本跟着同步（口径与 game_title_set_name 里那段完全一致）：
+             * 它是 SMP 的产物不是输入，但同一份名字两个地方不一致纯属隐患。 */
+            char m[1000], m2[256];
+            snprintf(m, sizeof(m), "%s/%s/sce_sys/param.json", GAME_TITLE_APP_PREFIX, tid);
+            if (strcmp(m, sp) != 0 && tt_exists(m)) {
+                int h2 = tt_rename_in_param(tid, m, name, m2, sizeof(m2));
+                if (h2 <= 0)
+                    pldmgr_log("[PLDMGR] title: 回填 %s 挂载点副本未更新：%s\n", tid, m2);
+            }
+        } else {
+            pldmgr_log("[PLDMGR] title: 回填 %s 名字源未写入：%s\n", tid,
+                       wmsg[0] ? wmsg : "见上一条日志");
+        }
+    }
+    return 0;
+}
+
+int game_title_sync_all(char *msg, size_t msgsz, int *scanned, int *applied,
+                        int *persisted, int *failed) {
+    if (msg && msgsz) msg[0] = 0;
+    if (scanned) *scanned = 0;
+    if (applied) *applied = 0;
+    if (persisted) *persisted = 0;
+    if (failed) *failed = 0;
+
+    DIR *dp = opendir(GAME_TITLE_DIR);
+    if (!dp) {
+        if (msg && msgsz)
+            snprintf(msg, msgsz, "打不开 %s（%s）", GAME_TITLE_DIR, strerror(errno));
+        return 0;
+    }
+
+    int n_scan = 0, n_ok = 0, n_persist = 0, n_fail = 0;
+    struct dirent *ent;
+    while ((ent = readdir(dp)) != NULL) {
+        const char *tid = ent->d_name;
+        if (tid[0] == '.') continue;
+        if (!tt_tid_ok(tid)) continue; /* 只认合法 tid，别的目录一律不看 */
+        char d[768];
+        if (tt_dir(tid, d, sizeof(d)) != 0 || !tt_is_dir(d)) continue;
+
+        /* 没改过名的（没有 name.txt）不参与 —— 回填只负责「把用户改过的名字推下去」，
+         * 绝不替用户决定没改过的游戏该叫什么。这条也是它敢在启动时无条件跑的前提。 */
+        char name[GAME_TITLE_MAX_NAME * 4 + 1];
+        if (!game_title_get_name(tid, name, sizeof(name))) continue;
+
+        n_scan++;
+        int was_persisted = 0;
+        if (tt_sync_one(tid, name, &was_persisted) == 0) n_ok++;
+        else n_fail++;
+        if (was_persisted) n_persist++;
+    }
+    closedir(dp);
+
+    if (scanned) *scanned = n_scan;
+    if (applied) *applied = n_ok;
+    if (persisted) *persisted = n_persist;
+    if (failed) *failed = n_fail;
+    if (msg && msgsz)
+        snprintf(msg, msgsz, "回填 %d 款：主机索引 %d、名字源 %d、失败 %d",
+                 n_scan, n_ok, n_persist, n_fail);
+    return 0;
+}
+
+static void *tt_sync_main(void *arg) {
+    (void)arg;
+    sleep(TT_SYNC_DELAY_SEC);
+    char msg[256];
+    int s = 0, a = 0, p = 0, f = 0;
+    game_title_sync_all(msg, sizeof(msg), &s, &a, &p, &f);
+    pldmgr_log("[PLDMGR] title: 启动自愈完成（%s）\n", msg);
+    return NULL;
+}
+
+void game_title_sync_start_daemon(void) {
+    /* safe_mode：写主机数据库属于「死机后要能止血」的高危动作，跟装 app / 杀光盘播放器
+     * 一个级别，一律跳过（见 main.c 里 safe_mode 那段与 PLDMGR_SAFE_MODE_FLAG）。 */
+    if (pldmgr_utils_safe_mode()) {
+        pldmgr_log("[PLDMGR] title: SAFE MODE，跳过启动自愈\n");
+        return;
+    }
+    pthread_t th;
+    if (pthread_create(&th, NULL, tt_sync_main, NULL) == 0) {
+        pthread_detach(th);
+    } else {
+        pldmgr_log("[PLDMGR] title: 启动自愈线程创建失败，跳过\n");
+    }
 }
 
 int game_title_get_name(const char *tid, char *out, size_t osz) {

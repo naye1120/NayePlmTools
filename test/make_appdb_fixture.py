@@ -48,8 +48,14 @@ IMG_PATH = "/mnt/ext1/%s.ffpfsc" % TID_PS5
 # 镜像游戏的运行时挂载点（mount.lnk 首行）。故意放在 /mnt/shadowmnt 下：
 # gr_running() 只认这一处为「游戏还在跑」，主机测试不碰它，但真机语义要对得上。
 IMG_RUNTIME = "/mnt/shadowmnt/%s_abcd1234" % TID_PS5
-# 裸目录游戏的源目录。
-FOLDER_PATH = "/mnt/ext1/%s-appFixture" % TID_FOLDER
+# 裸目录游戏的源目录。**必须在夹具根之下、且真实存在** —— v0.5.2.136 起列表体积走
+# 「只读缓存 + 后台预热」这条路，测试要能验「预热前 size=0 / 预热后拿到真实体积」，
+# 所以这里真的造一棵目录树出来（原来指 /mnt/ext1，主机上根本不存在，du 恒为 0，
+# 那条断言就只验得到「没扫」，验不到「扫到了」）。
+# 两个文件的总字节数必须与 test/game_mgr_test.c 的 FOLDER_BYTES 一致。
+FOLDER_BYTES = 4096 + 1000
+def folder_path(root):
+    return os.path.join(root, "src", TID_FOLDER)
 
 
 def write_lnk(path, line):
@@ -76,7 +82,18 @@ def main():
     # ② 裸目录游戏：只有 mount.lnk，直接指向源目录；再给它一个 /system_ex 挂载点
     #    = mounted 为真的那一支（照 ShadowMountPlus is_data_mounted 的判据）。
     os.makedirs(os.path.join(app_base, TID_FOLDER), exist_ok=True)
-    write_lnk(os.path.join(app_base, TID_FOLDER, "mount.lnk"), FOLDER_PATH)
+    folder = folder_path(root)
+    write_lnk(os.path.join(app_base, TID_FOLDER, "mount.lnk"), folder)
+    # 真实内容：两个普通文件（一个在子目录里），总量 FOLDER_BYTES。
+    # gm_dir_size 只累加**普通文件**的 st_size、并跳过 '.' 开头的条目，
+    # 所以这里刻意放一个 .hidden（不算）来钉住这条口径。
+    os.makedirs(os.path.join(folder, "sub"), exist_ok=True)
+    with open(os.path.join(folder, "data.bin"), "wb") as f:
+        f.write(b"\0" * 4096)
+    with open(os.path.join(folder, "sub", "extra.bin"), "wb") as f:
+        f.write(b"\0" * 1000)
+    with open(os.path.join(folder, ".hidden"), "wb") as f:
+        f.write(b"\0" * 999)
     mnt_sce = os.path.join(system_ex, "app", TID_FOLDER, "sce_sys")
     os.makedirs(mnt_sce, exist_ok=True)
     with open(os.path.join(mnt_sce, "param.json"), "w", encoding="utf-8") as f:
@@ -133,7 +150,8 @@ def main():
     print("  system_ex = %s" % system_ex)
     print("  %s -> image  (%s)" % (TID_PS5, IMG_PATH))
     print("  %s -> pkg    (no lnk files)" % TID_PS4)
-    print("  %s -> folder (%s, mounted)" % (TID_FOLDER, FOLDER_PATH))
+    print("  %s -> folder (%s, mounted, %d bytes)"
+          % (TID_FOLDER, folder_path(root), FOLDER_BYTES))
 
 
 if __name__ == "__main__":

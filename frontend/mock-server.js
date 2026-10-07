@@ -500,16 +500,54 @@ const LIST_TTL_MS = 60 * 1000;
 let listSnap = null;
 let listSnapAt = 0;
 
+/* [CN-FORK] v0.5.2.136 模拟真机「列表不扫盘 + 后台预热体积」这条时序。
+ *
+ * 为什么必须模拟：真机上 folder/dump 游戏的真实体积只能靠递归 du（一款上万文件），
+ * 所以列表**只读体积缓存**（game_mgr.c 的 gm_dir_size_peek），未命中先留空，同时起
+ * 后台线程扫、扫完作废快照，响应里带 warming:true 让前端自动重拉。
+ * 旧 mock 直接给 folder 游戏塞了真实 size，把「列表不扫盘」这个前提整个抹掉了 ——
+ * 于是 `.135` 那个「磁贴拿 app.db 的 size 列兜底」的 bug 在本地**永远复现不出来**
+ * （真机上 132 GB 的博德之门 3 被显示成 1.22 GB，本地却一直是对的）。
+ *
+ * 这里照抄后端口径：镜像(exfat/ffpkg/ffpfsc) = 镜像文件大小（一次 stat，列表就有）；
+ * pkg = 体积 0，只有 app.db 的 size 列可兜底；folder/lz4 = 预热过才有。 */
+const warmSizes = new Map()   /* tid → 预热出来的真实体积 */
+let warmTimer = null
+
 function buildGameList() {
+  const pending = []
   const games = mockGames
     .filter((g) => !gameState.deleted.has(g.tid))
     .map((g) => {
       const out = { ...g, name: gameState.renamed[g.tid] || g.name };
       if (gameState.icon[g.tid]) out.icon = gameState.icon[g.tid];
       if (gameState.bg[g.tid]) out.bg = gameState.bg[g.tid];
+      const isPkg = g.fmt === 'pkg';
+      const isFolder = g.fmt === 'folder' || g.fmt === 'lz4';
+      /* 与 buildDetail() 同一算法：只有内置 PKG 才有 app.db 的 size 列。 */
+      out.appdb_size = isPkg ? 3145728 + (g.tid.charCodeAt(6) % 7) * 1048576 : 0;
+      if (isFolder) {
+        const real = warmSizes.get(g.tid);
+        out.size = real || 0;
+        if (!real) pending.push(g.tid);
+      } else if (isPkg) {
+        out.size = 0;
+      }
       return out;
     });
-  return { games, count: games.length };
+  if (pending.length && !warmTimer) {
+    /* 后台「扫盘」：3 秒后把真实体积填上并作废快照（对应后端预热线程收尾时
+     * g_game_cache_len=0）—— 下一次 /game_list 就带真实体积、warming=false。 */
+    warmTimer = setTimeout(() => {
+      for (const tid of pending) {
+        const g = mockGames.find((x) => x.tid === tid);
+        if (g) warmSizes.set(tid, g.size);
+      }
+      listSnap = null;
+      warmTimer = null;
+    }, 3000);
+  }
+  return { games, count: games.length, warming: pending.length > 0 };
 }
 
 app.get('/game_list', (req, res) => {
@@ -571,7 +609,13 @@ const DELETE_SPECIAL = {
 
 const gameState = {
   deleted: new Set(),   // 已删除的 tid，列表里过滤掉
-  renamed: {},          // tid -> 新名字
+  renamed: {},          // tid -> 新名字（对应真机上我们自己的 name.txt —— 面板的事实源）
+  /* [CN-FORK] v0.5.2.137 tid -> **主机索引里**的名字（真机上是 app.db/appinfo.db 的平铺名字列）。
+   * 为什么要跟 renamed 分开存：改名只在改名那一刻写主机，所以这两份**会漂**——
+   * 真机上撞到的就是「面板有中文名、app.db 被 SMP 重扫按源冲回英文原名」。
+   * /game_title_sync 干的事就是把 renamed 重放回这里。列表名仍取 renamed（面板就该显示 name.txt），
+   * 这份只给回归断言用（测试钩子 _host_names / _host_drift），产品路径不读它。 */
+  hostNames: {},
   icon: {},             // [CN-FORK] v0.5.2.112 tid -> 自定义**图标**版本号（封面那一格，替代 icon0.png）
   bg: {},               // tid -> 自定义**背景**版本号（整卡底图，图标压在它上面）
   iconBytes: {},        // tid -> 上传的图标 PNG 原始字节（自定义过之后由 /game_tile_icon 回它）
@@ -1057,6 +1101,7 @@ app.post('/game_rename', (req, res) => {
   }
   if (!name) return res.status(400).json({ error: 'EINVAL', message: '名称不能为空' });
   gameState.renamed[tid] = name;
+  gameState.hostNames[tid] = name;   /* 改名同时写主机索引（真机上是 tile_db_set_name） */
   listSnap = null; listSnapAt = 0;   /* 对齐后端 game_mgr_invalidate()：改名后快照立刻作废 */
   const fmt = mockGames.find((x) => x.tid === tid).fmt || 'pkg';
   let persisted = false;
@@ -1070,6 +1115,44 @@ app.post('/game_rename', (req, res) => {
     persist_note = '系统内置安装：没有可写的游戏源';
   }
   res.json({ ok: true, name, persisted, persist_note });
+});
+
+/* [CN-FORK] v0.5.2.137 名字回填。对应真机 POST /game_title_sync（后端 game_title_sync_all）。
+ *
+ * 语义按后端如实模拟：
+ *   scanned   = 有 name.txt 的款数（mock 里 = renamed 里有值的）
+ *   applied   = 主机索引处理成功的款数（能定位到游戏就都算成功，真机同口径：
+ *               「已写好」与「本来就一致」都计入）
+ *   persisted = 名字**源**也写成功的款数 —— 只有 folder / lz4 类可能（镜像与 pkg 写不了源），
+ *               真机上这一项就是镜像类为 0 的原因，回归要能区分出来
+ *   failed    = mock 没有写失败这条路，恒 0
+ * 幂等：后端已经一致的款一次写都不发；这里表现为重复点两次结果一样（hostNames 被覆盖成同值）。 */
+app.post('/game_title_sync', (req, res) => {
+  let scanned = 0, applied = 0, persisted = 0;
+  for (const tid of Object.keys(gameState.renamed)) {
+    const g = mockGames.find((x) => x.tid === tid);
+    if (!g) continue;                       /* 名字还在但游戏已删：与后端一样跳过 */
+    scanned++;
+    gameState.hostNames[tid] = gameState.renamed[tid];  /* ← 这条链真正做的事 */
+    applied++;
+    if (FOLDER_FMTS.has(g.fmt)) persisted++;
+  }
+  res.json({
+    ok: true, scanned, applied, persisted, failed: 0,
+    note: `回填 ${scanned} 款：主机索引 ${applied}、名字源 ${persisted}、失败 0`,
+  });
+});
+
+/* 测试钩子（不在产品契约里）：
+ *   GET  /_host_names  → 主机索引里现在的名字（真机上是 app.db 的平铺名字列）
+ *   POST /_host_drift  → 模拟「SMP 重扫按游戏源重建 app.db」，把主机索引里的名字全丢掉
+ * 有了这两个，回归才能断言「漂了之后点同步，主机索引真的被补回来」——
+ * 否则这条链在 mock 里就没有任何可观察的效果，测试等于只断言了按钮存在。 */
+app.get('/_host_names', (req, res) => res.json({ host_names: gameState.hostNames }));
+app.post('/_host_drift', (req, res) => {
+  const n = Object.keys(gameState.hostNames).length;
+  gameState.hostNames = {};
+  res.json({ ok: true, dropped: n });
 });
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -1602,6 +1685,7 @@ app.get('/events', (req, res) => {
 app.post('/reset', (req, res) => {
   gameState.deleted.clear();
   gameState.renamed = {};
+  gameState.hostNames = {};   /* v0.5.2.137 主机索引那一份也要清，否则上一节的漂移状态会串场 */
   gameState.icon = {};
   gameState.bg = {};
   gameState.iconBytes = {};
@@ -1614,6 +1698,10 @@ app.post('/reset', (req, res) => {
   gameState.nextJob = 1;
   listSnap = null;
   listSnapAt = 0;
+  /* 预热状态也要清：否则 reset 之后 folder 游戏已经是「预热过」的，
+   * 测试再想看「冷启动没有体积标签 → 几秒后补齐」这条时序就看不到了。 */
+  warmSizes.clear();
+  if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
   res.json({ ok: true });
 });
 

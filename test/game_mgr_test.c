@@ -111,12 +111,33 @@ static void seed_stack(int depth) {
 /* 镜像 / 裸目录游戏的两个路径，与夹具里的字面量一致 —— 断言就是拿它们比字符串。 */
 #define IMG_PATH    "/mnt/ext1/" TID_PS5 ".ffpfsc"
 #define IMG_RUNTIME "/mnt/shadowmnt/" TID_PS5 "_abcd1234"
-#define FOLDER_PATH "/mnt/ext1/" TID_FOLDER "-appFixture"
+/* [CN-FORK] v0.5.2.136 裸目录游戏的源目录**改成夹具根下的真实目录树**（原来指
+ * /mnt/ext1/…，主机上不存在 → du 恒 0）。理由是这一版给列表加了「只读缓存 +
+ * 后台预热」：要验「预热前 size=0、预热后拿到真实体积」就得真有一棵能扫的目录。
+ * 路径与字节数都与 test/make_appdb_fixture.py 一一对应，改一个得改两个。 */
+#define FOLDER_PATH  "/tmp/pldmgr_gm_test/src/" TID_FOLDER
+#define FOLDER_BYTES (4096 + 1000)   /* data.bin + sub/extra.bin；.hidden 不算 */
 
 static char g_buf[262144];
 static char g_snap[262144];
 
 static int has(const char *s, const char *sub) { return strstr(s, sub) != NULL; }
+
+/* 取某 tid 的列表条目里某个数值字段（size / appdb_size / icon / bg）的值。
+ * 条目内字段不会串台：`"size":` 匹配不到 `"appdb_size":`（后者 size 前面是 `_`
+ * 不是引号），所以按「先找到条目起点、再往后找第一个该字段」取就够准。
+ * 找不到条目或字段 → 返回 -1（**别返回 0**：0 是合法取值，会与「没找到」混淆）。 */
+static long long json_item_num(const char *s, const char *tid, const char *field) {
+    char needle[48];
+    snprintf(needle, sizeof(needle), "\"tid\":\"%s\"", tid);
+    const char *p = strstr(s, needle);
+    if (!p) return -1;
+    char key[24];
+    snprintf(key, sizeof(key), "\"%s\":", field);
+    const char *q = strstr(p, key);
+    if (!q) return -1;
+    return atoll(q + strlen(key));
+}
 
 /* count 字段（列表尾部那个）。找不到回 -1。 */
 static int json_count(const char *s) {
@@ -168,6 +189,17 @@ int main(void) {
      * 省掉每款游戏两次白跑的 404。 */
     CHECK(has(g_buf, "\"icon\":0"), "icon 版本号不是 0");
     CHECK(has(g_buf, "\"bg\":0"), "bg 版本号不是 0");
+
+    /* ── ②b [CN-FORK] v0.5.2.136 列表体积：冷缓存只读、不拿 appdb_size 顶 ────
+     * 真机 bug：磁贴把 app.db 的 size 列当游戏体积显示（132 GB 的博德之门 3
+     * 显示成 1.22 GB）—— 一个偏小且语义错的数，比不显示更糟。
+     * 现在的口径：列表**只读体积缓存**，未命中就留 0，同时起后台线程去扫，
+     * 并在响应里带 warming:true 让前端自动重拉。
+     * 这是全进程第一次取列表，缓存必然冷 —— 所以这两条是确定性的。 */
+    CHECK(json_item_num(g_buf, TID_FOLDER, "size") == 0,
+          "冷缓存下 folder 游戏的列表体积该是 0（不是 appdb_size）: 实得 %lld",
+          json_item_num(g_buf, TID_FOLDER, "size"));
+    CHECK(has(g_buf, "\"warming\":true"), "冷缓存列表没带 warming 标记（前端不会重拉）: %.60s", g_buf);
 
     /* ── ③ 反复播种：bug 是「时好时坏」，一次过了不算过 ───────────────── */
     for (int i = 0; i < 5; i++) {
@@ -253,6 +285,23 @@ int main(void) {
      * 没有它，「已挂载」这条判据写反了也没人发现。 */
     CHECK(has(g_buf, "\"mounted\":true"), "已挂载的游戏没判成 mounted: %.640s", g_buf);
     CHECK(has(g_buf, "\"name\":\"" NAME_FOLDER "\""), "TID_FOLDER 的名字不对: %.80s", g_buf);
+
+    /* ── ⑤d [CN-FORK] v0.5.2.136 预热之后：列表体积从缓存里出来了 ──────────
+     * ⑤c 那次详情（skip_du=0）已经真 du 过源目录、把结果写进体积缓存，所以现在
+     * 重建列表应当**直接拿到真实体积**、且不再报 warming。这正是真机上
+     * 「后台预热线程扫完 → 作废快照 → 前端重拉 → 磁贴体积补齐」那条路的终点。
+     * 少了这一条，「列表只读缓存」写死成「永远返回 0」也没人发现。 */
+    n = list_fresh();
+    CHECK(n > 0, "预热后 list 返回 %d", n);
+    CHECK(json_item_num(g_buf, TID_FOLDER, "size") == (long long)FOLDER_BYTES,
+          "预热后 folder 游戏的列表体积该是 %d: 实得 %lld",
+          (int)FOLDER_BYTES, json_item_num(g_buf, TID_FOLDER, "size"));
+    CHECK(!has(g_buf, "\"warming\":true"),
+          "体积缓存已经热了还在报 warming（前端会白重拉一轮）: %.60s", g_buf);
+    /* 内置 PKG 没有物理源可扫，前端只能拿 app.db 的 size 列兜底 —— 这个字段必须还在。 */
+    CHECK(json_item_num(g_buf, TID_PS4, "appdb_size") == 17179869184LL,
+          "内置 PKG 的列表 appdb_size 丢了（前端没有别的来源）: 实得 %lld",
+          json_item_num(g_buf, TID_PS4, "appdb_size"));
 
     /* not-found：格式合法但不在任何一份枚举里 → -1，路由据此 404。
      * 宁可 404 也不回一份凭空拼的详情。 */

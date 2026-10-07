@@ -408,5 +408,9 @@
   "game.unmount": "Unmount",
   "game.unmounted": "Runtime mount removed",
   "game.uploading": "Working…",
-  "game.media_preview": "Preview"
+  "game.media_preview": "Preview",
+  "game.sync_names": "Sync names to console",
+  "game.sync_names_hint": "Rewrite every name you changed in this panel to the console: first the console index (app.db / appinfo.db — this is what ShadowMount and the TV home screen read), then, for folder / LZ4 titles, the game source param.json once more. Use it after renaming on an older build, or after a ShadowMount rescan pushed the names back; titles that already match are not rewritten.",
+  "game.sync_done": "Re-applied {{n}}: index {{ok}}, source {{src}}, failed {{fail}}",
+  "game.sync_fail": "Sync failed"
 }

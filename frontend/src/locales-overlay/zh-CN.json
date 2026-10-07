@@ -410,5 +410,9 @@
   "game.tab_all": "全部",
   "game.tab_screenshot": "截图",
   "game.tab_video": "视频",
-  "game.media_preview": "预览"
+  "game.media_preview": "预览",
+  "game.sync_names": "同步名字到主机",
+  "game.sync_names_hint": "把面板里改过的名字重写到主机：先写主机索引（app.db / appinfo.db，SMP 与电视主屏读的就是它），裸目录 / LZ4 类再写一次游戏源 param.json。改名发生在旧版本、或 SMP 重扫把名字冲回去之后，点这里补一次即可（已经一致的款不会重复写）。",
+  "game.sync_done": "已回填 {{n}} 款：主机索引 {{ok}}、名字源 {{src}}、失败 {{fail}}",
+  "game.sync_fail": "同步失败"
 }

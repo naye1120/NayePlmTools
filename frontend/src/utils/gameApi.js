@@ -87,6 +87,13 @@
  *     **不要**把 false 当错误：面板层与主机索引层已经生效，改名本身是成功的，
  *     只是重启 SMP 之后电视主屏会回到原名。
  *
+ *   POST /game_title_sync        {} → {ok, scanned, applied, persisted, failed, note}
+ *     [CN-FORK] v0.5.2.137 名字回填：把面板里**所有**改过的名字重放到主机各层。
+ *     改名只在改名那一刻写主机，所以历史遗留（改名发生在 .132 写源之前）与
+ *     「SMP 重启重新注册把 app.db 冲回原名」都只能靠事后补 —— 这条就是那个补。
+ *     幂等（已一致的款后端一次写都不发），失败也不改变 ok:true：它是 best-effort 的重放。
+ *     真机实测 SMP 的 title_name 读的是系统 app.db，所以镜像类（源写不了）同样能对齐。
+ *
  *   磁贴图分两层（v0.5.2.112），格式与尺寸各不相同：
  *   POST /game_tile_icon?tid=        裸 body（**PNG**，1:1，前端已缩到 1024×1024） → {ok, bytes}
  *   GET  /game_tile_icon_reset?tid=  → {ok}
@@ -399,6 +406,30 @@ export function deleteMedia(tid, id, opts) {
  * 注意 /game_tile_bg 回的是 **PNG 预览**（浏览器显示不了 DDS），DDS 原始字节走 /game_tile_bg_dds。 */
 export function renameGame(tid, name, opts) {
   return request('/game_rename', { ...opts, method: 'POST', body: { tid, name } })
+}
+
+/* [CN-FORK] v0.5.2.137 名字回填：把面板里所有改过的名字（name.txt）重放到主机各层。
+ *
+ * 为什么需要它 —— 改名只在**改名那一刻**写主机，于是有两种情况主机侧会落后：
+ *   ① 改名发生在 .132（写游戏源 param.json）之前：当时只写了面板 + app.db，
+ *      之后 app.db 又被 SMP 重扫按源重建，中文名被冲回英文原名；
+ *   ② 镜像类（.ffpfsc）的源锁在镜像里，任何一次 SMP 重新注册都可能让名字回退。
+ * 两种情况用户都只看到「面板是对的、SMP 与电视主屏是错的」，而逐款手点改名谁也不愿意。
+ *
+ * 真机实测（v0.5.2.137）：SMP 1.7beta4 的 title_name 读的是系统 app.db —— 这条链写完
+ * app.db 后 SMP 的 UI 立刻跟着变，**镜像类也一样**；所以这不是「只对某类游戏有效」的补丁。
+ *
+ * 无请求体、无参数：它读的是我们自己的 name.txt，不接受外部指定要改谁（也就没法被拿来
+ * 改别人的游戏）。响应：
+ *   { ok:true, scanned, applied, persisted, failed, note }
+ *     scanned   有 name.txt 的款数
+ *     applied   主机索引（app.db/appinfo.db）已一致或已写好的款数
+ *     persisted 名字**源**（sce_sys/param.json）也写成功的款数（只有 folder 类可能）
+ *     failed    写了但失败的款数
+ *     note      一句给人话的总结，UI 直接展示即可
+ * 幂等：已经一致的款后端一次写都不发，所以可以放心反复点。 */
+export function syncTitleNames(opts) {
+  return request('/game_title_sync', { ...opts, method: 'POST', body: {} })
 }
 
 export function setTileIcon(tid, blob, opts) {

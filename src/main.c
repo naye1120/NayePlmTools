@@ -28,6 +28,7 @@
 #include "app_installer.h"
 #include "utils.h" /* [CN-FORK] pldmgr_get_local_ip 提前取 IP */
 #include "fan_control.h" /* [CN-FORK] 风扇温控常驻重发守护 */
+#include "game_title.h"  /* [CN-FORK] v0.5.2.137 启动自愈：把 name.txt 重放到主机各层 */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入：提权入口 + 远程游玩会话收尾 */
 #include "psaccounts/sys.h"
 #include "psaccounts/accounts.h"
@@ -217,6 +218,12 @@ int main(int argc, char *argv[]) {
     /* [CN-FORK] 风扇温控守护：从 config 恢复启用/生效态并常驻重发（只碰 /dev/icc_fan，
      * safe_mode 下自动跳过写入）；主进程常驻，待机唤醒不会重复起线程。 */
     fan_control_start_daemon();
+
+    /* [CN-FORK] v0.5.2.137 名字回填自愈：改名只在改名那一刻写主机，历史遗留（改名发生在
+     * .132 写源之前）与「SMP 重启重新注册把 app.db 冲回原名」都只能靠事后补。
+     * 这里起一条 detached 线程，延迟一会儿（等启动期 IO 过去）跑一次幂等重放 ——
+     * 已经一致的款一次写都不发，所以可以每次开机无条件跑。safe_mode 下整条跳过。 */
+    game_title_sync_start_daemon();
 
     if (cfg.auto_browser_open) {
         char browser_url[128];

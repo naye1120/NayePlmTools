@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Gamepad2, RefreshCw, Info } from 'lucide-react'
+import { Gamepad2, RefreshCw, Info, Tag } from 'lucide-react'
 import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import { cn } from '../../utils/helpers'
 import { formatSize } from '../game/format'
+import { syncTitleNames } from '../../utils/gameApi' /* [CN-FORK] v0.5.2.137 名字回填 */
 import { SaveManagerIcon, MediaManagerIcon, RenameTileIcon, PendingSlotIcon } from '../game/GameActionIcons'
 import GameDetailModal from '../game/GameDetailModal'
 import SaveManagerModal from '../game/SaveManagerModal'
@@ -82,7 +83,11 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction }) {
   const platform = gamePlatform(g.tid)
   const fmtInfo = FMT_LABEL[g.fmt] || FMT_LABEL[installed ? 'pkg' : 'folder']
   const fmtLabel = t(fmtInfo.k, fmtInfo.d)
-  const sizeLabel = formatSize(g.size || g.appdb_size)   /* v0.5.2.135：skip_du 时 folder 游戏 size=0，用 appdb_size 兜底 */
+  /* v0.5.2.136：folder/dump 的真实体积由后端**后台预热**后带回来（size>0 才有），
+   * 冷启动那几秒先不显示，几秒后自动补齐。
+   * app.db 的 size 列**不是游戏体积**（真机 132 GB 的博德之门 3 在这里只有 1.22 GB），
+   * 只给「没有物理源可扫」的内置 PKG 兜底 —— 见 game_mgr.c 的 gm_warm_* 注释。 */
+  const sizeLabel = formatSize(g.size || (g.fmt === 'pkg' ? g.appdb_size : 0))
   const platColor = PLAT_COLOR[platform] || '#475569'
   /* [CN-FORK] v0.5.2.112 磁贴上的图**拆成两层**（用户：「还要增加一个修改背景的」）：
    *   · icon —— 封面那一格方图。有自定义（列表项带 icon 版本号）就用 /game_tile_icon，
@@ -240,6 +245,13 @@ export default function GameSection({ addToast, showConfirm }) {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [failedIcons, setFailedIcons] = useState({})
+  /* v0.5.2.136 后台体积预热：后端列表只读体积缓存（不扫盘）→ folder/dump 游戏第一次
+   * 拿不到真实体积，先不显示标签，同时起线程去扫；扫完作废快照并回 warming=false。
+   * 这里在 warming 期间隔几秒自动再拉一次，让体积自己补齐（见下面的 effect）。 */
+  const [warming, setWarming] = useState(false)
+  const [warmTry, setWarmTry] = useState(0)
+  /* [CN-FORK] v0.5.2.137 名字回填按钮的跑动态（见 syncNames）。 */
+  const [syncing, setSyncing] = useState(false)
   /* 五个弹窗共用一个 state：{kind, game}。kind ∈ detail|saves|media|rename|pending。
    * 用对象而不是五个布尔，是因为「从详情里点『存档 3 个』跳到存档弹窗」需要在同一个游戏上
    * 换 kind —— 五个布尔得同时改两个，很容易出现两个弹窗叠在一起。 */
@@ -260,6 +272,9 @@ export default function GameSection({ addToast, showConfirm }) {
         setCount(typeof data.count === 'number' ? data.count : data.games.length)
         setTruncated(!!data.truncated)
         setFailedIcons({})
+        const w = !!data.warming
+        setWarming(w)
+        if (!w) setWarmTry(0)   /* 预热结束：重试计数归零，下次进页面从头数 */
       } else {
         setErr(t('game.read_fail', '读取失败'))
       }
@@ -278,6 +293,20 @@ export default function GameSection({ addToast, showConfirm }) {
     load()
   }, [load])
 
+  /* 预热期间自动重拉（v0.5.2.136）。**不是轮询** —— 文件头那条「不轮询」的原则仍然成立：
+   * 只在 warming=true 时临时重试，预热一结束就停，且有次数上限（15 × 4s ≈ 1 分钟），
+   * 后端万一卡住也不会无休止地打请求。
+   * 重试走普通 load()（吃 60s 快照）：预热线程扫完会**主动作废快照**，所以不必带
+   * force=1 —— 那会每次都全量重建（app.db 全库读 + 目录扫描），得不偿失。 */
+  useEffect(() => {
+    if (!warming || warmTry >= 15) return undefined
+    const id = setTimeout(() => {
+      setWarmTry((n) => n + 1)
+      load()
+    }, 4000)
+    return () => clearTimeout(id)
+  }, [warming, warmTry, load])
+
   const list = games || []
 
   /* 动作分发：四颗按钮各自开自己的弹窗。用一张表而不是 switch，
@@ -291,6 +320,36 @@ export default function GameSection({ addToast, showConfirm }) {
 
   const closeModal = useCallback(() => setModal(null), [])
 
+  /* [CN-FORK] v0.5.2.137 名字回填：把面板里**所有**改过的名字重放到主机各层。
+   *
+   * 为什么要有这颗按钮，而不是让用户逐款重改一次名：改名只在**改名那一刻**写主机，
+   * 于是主机侧有两种情况会落后 —— ① 改名发生在 .132（写游戏源）之前，当时只写了
+   * 面板 + app.db，之后 app.db 又被 SMP 重扫按源重建，中文名全被冲回英文原名；
+   * ② 镜像类（.ffpfsc）的源锁在镜像里，SMP 每次重新注册都可能让名字回退。
+   * 两种情况用户都只看到「面板对、SMP 与电视主屏错」，而逐款手点改名谁也不愿意。
+   * 详见 utils/gameApi.js 里 syncTitleNames 的契约注释。
+   *
+   * 跑完强制重拉列表（force=1）：后端改的是主机 app.db，而列表吃 60s 快照 ——
+   * 不重拉的话用户点完看不到任何变化，会以为按钮没反应（.133 那条教训）。
+   * 失败款数 > 0 时按 error 弹，让用户知道有哪几款没落上（note 里有明细）。 */
+  const syncNames = useCallback(async () => {
+    setSyncing(true)
+    try {
+      const r = await syncTitleNames()
+      const failed = r?.failed ?? 0
+      addToast(
+        t('game.sync_done', '已回填 {{n}} 款：主机索引 {{ok}}、名字源 {{src}}、失败 {{fail}}', {
+          n: r?.scanned ?? 0, ok: r?.applied ?? 0, src: r?.persisted ?? 0, fail: failed,
+        }),
+        failed > 0 ? 'error' : 'success',
+      )
+      load(true)
+    } catch (e) {
+      addToast(`${t('game.sync_fail', '同步失败')}${e && e.message ? `：${e.message}` : ''}`, 'error')
+    }
+    setSyncing(false)
+  }, [addToast, load, t])
+
   return (
     <>
       <Section
@@ -300,9 +359,22 @@ export default function GameSection({ addToast, showConfirm }) {
         count={games ? t('game.total', '共 {{n}} 款', { n: count }) : undefined}
         bodyClass="space-y-4"
         actions={
-          <button onClick={() => load(true)} disabled={loading} title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} className="icon-btn">
-            <RefreshCw className={cn(loading && 'animate-spin')} />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* [CN-FORK] v0.5.2.137 名字回填（见 syncNames 的注释）。放在刷新左边：
+                它是「补历史 / 补被冲掉的名字」，与刷新那种「重新读一遍」是两件事。 */}
+            <button
+              onClick={syncNames}
+              disabled={syncing || loading}
+              title={t('game.sync_names_hint', '把面板里改过的名字重写到主机：先写主机索引（app.db / appinfo.db，SMP 与电视主屏读的就是它），裸目录 / LZ4 类再写一次游戏源 param.json。改名发生在旧版本、或 SMP 重扫把名字冲回去之后，点这里补一次即可（已经一致的款不会重复写）。')}
+              aria-label={t('game.sync_names', '同步名字到主机')}
+              className="icon-btn"
+            >
+              <Tag className={cn(syncing && 'animate-pulse')} />
+            </button>
+            <button onClick={() => load(true)} disabled={loading} title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} className="icon-btn">
+              <RefreshCw className={cn(loading && 'animate-spin')} />
+            </button>
+          </div>
         }
       >
         {/* [CN-FORK] v0.5.2.94 页级大标题与说明上移到 <PageHead>（GameManageView），本块降为页内板块：

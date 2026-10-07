@@ -103,4 +103,37 @@ const char *game_title_override_name(const char *tid, const char *orig,
 /* 供 /game_detail 一次拿两个标志位（1 = 该层自定义过）。 */
 void game_title_detail_flags(const char *tid, int *icon_custom, int *bg_custom);
 
+/* ── [CN-FORK] v0.5.2.137 名字回填（把 name.txt 重放到主机各层）──────────────
+ *
+ * 为什么需要它：改名只在**改名那一刻**写主机。真机上撞到过一次非常典型的时序坑 ——
+ * 用户在 .132（写源 param.json）之前改的 8 款游戏，主机侧只有 name.txt + app.db；
+ * 之后 app.db 被 SMP 重扫按源重建，中文名全被冲回英文原名，而面板一直是中文。
+ * 用户看到的现象就是「面板是对的、SMP 与主屏是错的」，而重新手点 8 次改名谁也不愿意。
+ *
+ * 这条链做的是**幂等重放**：遍历 GAME_TITLE_DIR 下每一个有 name.txt 的 tid，
+ *   ① tile_db_set_name  → 主机 app.db 平铺列 + appinfo.db（**SMP 的 UI 读的就是它**）
+ *   ② folder 类再加 tt_rename_in_param → 源 sce_sys/param.json + /user/app 副本
+ * 已经一致的那些一次写都不发（tile_db.c 里那句 COUNT/SUM 先比后写），所以可以随时跑。
+ *
+ * 真机实测（v0.5.2.137 侦察）：SMP 1.7beta4 的 title_name 读的是系统 app.db，
+ * **不是**源、也不是 /user/app/<TID>/sce_sys/param.json（后者单独改过、SMP 纹丝不动）；
+ * 而 app.db 一改，SMP 的 UI 立刻跟着变，**镜像类也一样**。所以①是主力，
+ * ②只是给「SMP 重启后重新注册」那条路留的持久化，镜像类写不了源也不影响两边一致。
+ *
+ * 只碰我们自己拥有的两个库与（folder 类）游戏源，**不动镜像本体**；全程 best-effort，
+ * 任何一款失败都只记日志、不打断其余。返回 0（永远），出参给路由/日志用：
+ *   scanned   = 扫到几个有 name.txt 的 tid
+ *   applied   = 其中主机索引（app.db/appinfo.db）真的被写过或本来就一致的个数
+ *   persisted = 其中名字**源**也写成功的个数（只有 folder 类可能）
+ *   failed    = 写了但失败的个数
+ * msg 里给一句给人话的总结（路由直接回给前端）。 */
+int game_title_sync_all(char *msg, size_t msgsz, int *scanned, int *applied,
+                        int *persisted, int *failed);
+
+/* 启动自愈：起一条 detached 线程，等启动期那阵 IO 过去后跑一次 game_title_sync_all。
+ * 这一步是「重启之后名字又回去了」的兜底 —— 不依赖用户手点，也不依赖 SMP 何时重扫。
+ * safe_mode 下整条跳过（见 utils.h 的 pldmgr_utils_safe_mode）。主进程常驻，
+ * 待机唤醒不会重复起线程（与 fan_control_start_daemon 同一口径）。 */
+void game_title_sync_start_daemon(void);
+
 #endif

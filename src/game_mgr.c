@@ -258,6 +258,12 @@ typedef struct {
     /* tbl_contentinfo 的 size 列在**真实列序**里的位置（由 st_cb_master 从建表 SQL 现查）。 */
     int size_col;
     unsigned long long d_appdb_size;   /* 详情模式的 app.db size */
+    /* [CN-FORK] v0.5.2.136 后台预热：列表模式（skip_du=1）下把**体积缓存未命中**的
+     * folder/dump 根目录收集到这里，build_game_json 再交给后台线程去 du。
+     * 只有列表会填（warm 指向 g_warm_roots）；详情走 gm_lookup，memset 后 warm=NULL，
+     * gm_warm_add 直接早退。 */
+    char (*warm)[512];
+    int   warm_n;
 } enum_arg_t;
 
 /* 与 mock / 前端同口径：CUSA、PPJB 是 PS4 本体，其余按 PS5 算。 */
@@ -312,6 +318,21 @@ static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, con
 
 /* [CN-FORK] 前向声明：游戏格式与体积解析（定义见下方 ShadowMount mount.lnk 块），供 app.db 枚举回调使用。 */
 static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out, int skip_du);
+static int gm_lnk_root(const char *tid, char *root, size_t rsz);
+
+/* [CN-FORK] v0.5.2.136 后台预热队列上限（见 enum_arg_t.warm）。 */
+#define GM_WARM_MAX 64
+
+/* [CN-FORK] v0.5.2.136 记下一个「体积还没算出来」的根目录，交给后台线程补（见 gm_warm_kick）。
+ * 去重：同一根目录可能既从 app.db 又从 dump 扫到。超过上限就丢 —— 宁可少数几款体积
+ * 晚一轮出现，也不能让这张表溢出踩内存。 */
+static void gm_warm_add(enum_arg_t *a, const char *root) {
+    if (!a->warm || !root || !root[0] || a->warm_n >= GM_WARM_MAX) return;
+    for (int i = 0; i < a->warm_n; i++)
+        if (!strcmp(a->warm[i], root)) return;
+    snprintf(a->warm[a->warm_n], 512, "%s", root);
+    a->warm_n++;
+}
 
 /* tbl_contentinfo 每行：col0=titleId, col2=titleName。总返回 0 以便遍历全部行。 */
 static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
@@ -332,8 +353,17 @@ static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     if (!name[0]) snprintf(name, sizeof(name), "%s", tid);
     unsigned long long gsize;
     const char *fmt = gm_fmt_size(tid, "installed", &gsize, a->skip_du);
+    /* 列表模式且体积缓存未命中（gsize=0）→ 记下根目录交后台补算。
+     * **不在这里 du**：这款游戏上万文件，列表就卡住了。
+     * 只认 folder/lz4：镜像游戏的体积是源镜像文件一次 stat，为 0 只说明文件此刻不在
+     * （外置盘没插），去 du 它的运行时挂载点毫无意义 —— 那还会白排一条队列。 */
+    if (a->skip_du && !gsize && (!strcmp(fmt, "folder") || !strcmp(fmt, "lz4"))) {
+        char wroot[512];
+        if (gm_lnk_root(tid, wroot, sizeof(wroot))) gm_warm_add(a, wroot);
+    }
     /* app.db 的 size 列（安装包体积）：固件间列序可变，由 st_cb_master 现查 st_sql_col_index。
-     * 列表 skip_du=1 时 folder 游戏 gsize=0，前端用 appdb_size 兜底显示。 */
+     * 注意它**不是** folder 游戏的体积（真机 132 GB 的游戏这里只有 1.22 GB），
+     * 所以只在前端给「无源可扫」的 pkg 兜底，绝不拿去当 folder 的体积。 */
     unsigned long long appdb_sz = 0;
     if (a->size_col >= 0) {
         uint64_t num = 0;
@@ -564,31 +594,57 @@ static unsigned long long gm_dir_size(const char *root) {
  * 这条仍然决定了**第一次**以及失效之后那一次要等多久。
  *
  * 游戏体积不是天天变的量，TTL 内直接复用；TTL 到点、或这个路径没登记过才真 du。
- * 只在 build_game_json 里被调，而那条路全程持 g_game_mtx，所以这里不用再加锁。
  * 与 g_game_cache 的 60s 快照**刻意不同 TTL**：快照要「刚改完名就看见名字」，
- * 体积要的是「别为了个十进制数重扫一遍盘」，两者诉求相反，不能共用一个开关。 */
-#define GM_DU_TTL   86400    /* 24 小时：游戏体积不可能天天变。列表跳过 du（skip_du），
-                                * 只有详情视图才会触发 gm_dir_size_cached。缓存 24 小时
-                                * 意味着详情只在用户首次打开（或缓存过期后）做一次递归 du，
-                                * 之后一整天都是毫秒级返回。 */
+ * 体积要的是「别为了个十进制数重扫一遍盘」，两者诉求相反，不能共用一个开关。
+ *
+ * v0.5.2.136 起这张表**不只被列表/详情读**了 —— 后台预热线程（gm_warm_worker）
+ * 也往里写，所以必须自己带锁 g_du_mtx。锁只护着这张表本身，**绝不护着扫盘**：
+ * 否则后台线程一跑，列表与详情全堵在这把锁上。 */
+#define GM_DU_TTL   86400    /* 24 小时：游戏体积不可能天天变。列表只 peek 缓存，
+                                * 未命中交后台预热线程（gm_warm_*）去扫；详情照旧自己
+                                * du 一次并写回。缓存 24 小时意味着一天里只有第一次
+                                * （或过期后）真扫，之后都是毫秒级。 */
 #define GM_DUCACHE  128
 static struct {
     char root[512];
     unsigned long long size;
     time_t ts;
 } g_du[GM_DUCACHE];
+static pthread_mutex_t g_du_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-static unsigned long long gm_dir_size_cached(const char *root) {
+/* 只读缓存，**不扫盘**：命中返回体积，未命中/过期返回 0。
+ * 列表模式用它 —— 拿不到就先留空，交给后台线程补（见 gm_warm_kick）。 */
+static unsigned long long gm_dir_size_peek(const char *root) {
     if (!root || !root[0]) return 0;
     time_t now = time(NULL);
-    int slot = -1;
+    unsigned long long v = 0;
+    pthread_mutex_lock(&g_du_mtx);
     for (int i = 0; i < GM_DUCACHE; i++) {
-        if (g_du[i].root[0] && strcmp(g_du[i].root, root) == 0) { slot = i; break; }
+        if (g_du[i].root[0] && strcmp(g_du[i].root, root) == 0) {
+            if (now >= g_du[i].ts && now - g_du[i].ts < GM_DU_TTL) v = g_du[i].size;
+            break;
+        }
     }
-    if (slot >= 0 && now >= g_du[slot].ts && now - g_du[slot].ts < GM_DU_TTL)
-        return g_du[slot].size;
+    pthread_mutex_unlock(&g_du_mtx);
+    return v;
+}
 
-    unsigned long long v = gm_dir_size(root);
+/* 命中缓存直接返回；否则真 du 一次并写回。扫盘在**锁外**做（见上面那段注释）。 */
+static unsigned long long gm_dir_size_cached(const char *root) {
+    if (!root || !root[0]) return 0;
+    unsigned long long v = gm_dir_size_peek(root);
+    if (v) return v;
+
+    v = gm_dir_size(root);
+    /* 空目录 / 读不到：**不写缓存**。写 0 的话 peek 分不清「算出来就是 0」和
+     * 「还没算过」，列表会把空目录也当成未命中反复预热。 */
+    if (!v) return 0;
+
+    time_t now = time(NULL);
+    pthread_mutex_lock(&g_du_mtx);
+    int slot = -1;
+    for (int i = 0; i < GM_DUCACHE; i++)
+        if (g_du[i].root[0] && strcmp(g_du[i].root, root) == 0) { slot = i; break; }
     if (slot < 0) {
         for (int i = 0; i < GM_DUCACHE; i++)
             if (!g_du[i].root[0]) { slot = i; break; }
@@ -601,13 +657,16 @@ static unsigned long long gm_dir_size_cached(const char *root) {
     snprintf(g_du[slot].root, sizeof(g_du[slot].root), "%s", root);
     g_du[slot].size = v;
     g_du[slot].ts = now;
+    pthread_mutex_unlock(&g_du_mtx);
     return v;
 }
 
 /* 游戏格式+体积：mount_img.lnk 命中 → 镜像（扩展名定档，体积=镜像文件 st_size）；
  * 仅 mount.lnk → 裸目录(folder，含 ampr_ 则 lz4，体积=有上限递归 du)；都无 → 内置 pkg（体积 0=未知）。
- * skip_du 非 0 时（列表模式）folder 游戏跳过递归 du，size 直接返回 0 —— SMP 对 folder 也一律报 0，
- * 前端 formatSize(0) 返回空串不显示体积标签。详情模式 skip_du=0 照旧拿真实体积。 */
+ * skip_du 非 0 时（列表模式）folder 游戏**只读体积缓存、不扫盘**：命中就给真实体积，
+ * 未命中留 0，由 build_game_json 收集后交后台线程补（见 gm_warm_kick）—— 列表因此秒开，
+ * 几秒后磁贴体积自己补齐。详情模式 skip_du=0 照旧现 du 并写回缓存。
+ * 镜像游戏（mount_img.lnk）两条路都只 stat 一次镜像文件，不递归。 */
 static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out, int skip_du) {
     *size_out = 0;
     char f[256], line[512];
@@ -618,7 +677,7 @@ static const char *gm_fmt_size(const char *tid, const char *src, unsigned long l
     }
     char root[512];
     if (gm_lnk_root(tid, root, sizeof(root))) {
-        if (!skip_du) *size_out = gm_dir_size_cached(root);
+        *size_out = skip_du ? gm_dir_size_peek(root) : gm_dir_size_cached(root);
         DIR *dp = opendir(root);
         int lz4 = 0;
         if (dp) {
@@ -666,7 +725,10 @@ static void game_enum_dump(enum_arg_t *a) {
             unsigned long long sz;
             const char *fmt = gm_fmt_size(ent->d_name, "dump", &sz, a->skip_du);
             if (!strcmp(fmt, "folder") && gm_dir_is_lz4(root)) fmt = "lz4";
-            if (!a->skip_du && !sz) sz = gm_dir_size_cached(root);   /* 列表模式 skip_du=1 跳过此兜底 du */
+            /* dump 游戏不在 /user/app，gm_fmt_size 里那条 lnk 路走不到，体积全靠这里：
+             * 列表模式只 peek 缓存（不扫盘），未命中就记下来交后台补算。 */
+            if (!sz) sz = a->skip_du ? gm_dir_size_peek(root) : gm_dir_size_cached(root);
+            if (a->skip_du && !sz) gm_warm_add(a, root);
             gm_append_item(a, ent->d_name, name, "dump", fmt, sz, 0);   /* dump 游戏不在 app.db，appdb_size=0 */
         }
         closedir(dp);
@@ -1192,6 +1254,65 @@ static char    g_game_cache[GM_SNAPSHOT_MAX];
 static size_t  g_game_cache_len = 0;
 static time_t  g_game_cache_ts  = 0;
 
+/* ── [CN-FORK] v0.5.2.136 后台体积预热 ─────────────────────────────────────────
+ *
+ * 要解决的问题：folder/dump 游戏的真实体积只能靠递归 du（一款上万文件）。列表里
+ * 十几款全扫一遍就是「游戏列表载入超级慢」的主因，所以 .134 让列表跳过 du —— 磁贴
+ * 于是没有体积标签；.135 改用 app.db 的 size 列兜底，但**那不是游戏体积**（真机上
+ * 132 GB 的博德之门 3 在这里只有 1.22 GB），等于磁贴在报一个偏小且语义错的数，
+ * 比不显示更糟。
+ *
+ * 现在的做法：列表**只读体积缓存**（gm_dir_size_peek，不扫盘）—— 命中的直接显示
+ * 真实体积；未命中的先留空，同时把根目录攒进 g_warm_roots。build_game_json 结束时
+ * 起下面这个线程去把这些目录扫完（填进同一份缓存），扫完作废 60s 快照；前端凭响应
+ * 里的 "warming":true 自动重拉一次 —— 几秒后磁贴体积自己补齐，且与详情页一致。
+ *
+ * 线程与锁：g_warm_running 与 g_warm_roots 都**只**在持有 g_game_mtx 时读写
+ * （build_game_json 全程持锁；worker 只在收尾那一下取锁）。体积缓存另有 g_du_mtx。
+ * 锁序恒为 g_game_mtx → g_du_mtx，worker 收尾只取 g_game_mtx、不套 g_du_mtx，无环。 */
+static char g_warm_roots[GM_WARM_MAX][512];
+static int  g_warm_running = 0;   /* 受 g_game_mtx 保护：同一时刻只允许一个预热线程 */
+
+typedef struct { int n; char (*roots)[512]; } gm_warm_t;
+
+static void *gm_warm_worker(void *arg) {
+    gm_warm_t *w = (gm_warm_t *)arg;
+    for (int i = 0; i < w->n; i++) gm_dir_size_cached(w->roots[i]);
+    free(w->roots);
+    free(w);
+    /* 扫完作废快照：下一次 /game_list 会用刚填好的缓存重建，磁贴体积补齐。
+     * 只碰那三个变量，锁是短持有 —— 不阻塞正在读列表的请求。 */
+    pthread_mutex_lock(&g_game_mtx);
+    g_game_cache_len = 0;
+    g_game_cache_ts  = 0;
+    g_warm_running   = 0;
+    pthread_mutex_unlock(&g_game_mtx);
+    return NULL;
+}
+
+/* 在 build_game_json 里调（此时**持有** g_game_mtx）：把这一轮收集到的未命中根目录
+ * 拷给后台线程。已有线程在跑就跳过 —— 它跑完会作废快照，下一轮重建时再收集一轮。 */
+static void gm_warm_kick(const enum_arg_t *a) {
+    if (a->warm_n <= 0 || g_warm_running) return;
+    gm_warm_t *w = (gm_warm_t *)malloc(sizeof(*w));
+    if (!w) return;
+    w->roots = (char (*)[512])malloc((size_t)a->warm_n * sizeof(*w->roots));
+    if (!w->roots) { free(w); return; }
+    w->n = a->warm_n;
+    memcpy(w->roots, g_warm_roots, (size_t)w->n * sizeof(*w->roots));
+    /* 先立标志再起线程：否则线程可能已经跑完并把 running 清 0，我们再置 1，
+     * 那个 1 就永远挂着了（此后再也不预热）。持锁期间 worker 收尾那步进不来。 */
+    g_warm_running = 1;
+    pthread_t th;
+    if (pthread_create(&th, NULL, gm_warm_worker, w) != 0) {
+        g_warm_running = 0;
+        free(w->roots);
+        free(w);
+        return;
+    }
+    pthread_detach(th);
+}
+
 static size_t build_game_json(char *buf, size_t size) {
     size_t pos = snprintf(buf, size, "{\"games\":[");
     if (pos >= size) return size - 1;
@@ -1214,13 +1335,18 @@ static size_t build_game_json(char *buf, size_t size) {
      * 拿掉 memset 那行，它那条 count==2 立刻红。 */
     memset(&a, 0, sizeof(a));
     a.buf = buf; a.size = size; a.pos = pos;
-    a.skip_du = 1;   /* 列表模式：folder 游戏跳过递归 du（见 enum_arg_t.skip_du 注释） */
+    a.skip_du = 1;   /* 列表模式：folder 游戏只读体积缓存、不扫盘（见 enum_arg_t.skip_du 注释） */
+    a.warm = g_warm_roots; a.warm_n = 0;   /* 收集缓存未命中的根目录，供后台预热 */
     game_enum_appdb(&a);   /* 已安装优先（格式经 gm_fmt 读 mount.lnk/mount_img.lnk 判定） */
     game_enum_dump(&a);    /* 再补扫描到的 dump，tid 去重 */
+    gm_warm_kick(&a);      /* 有未命中的就起后台线程扫，扫完作废快照让前端重拉 */
     pos = a.pos;
     if (pos < size)
-        pos += snprintf(buf + pos, size - pos, "],\"count\":%d%s}",
-                        a.count, a.overflow ? ",\"truncated\":true" : "");
+        pos += snprintf(buf + pos, size - pos, "],\"count\":%d%s%s}",
+                        a.count, a.overflow ? ",\"truncated\":true" : "",
+                        /* 前端据此在几秒后自动重拉一次，把预热好的体积显示出来。
+                         * 没有预热在跑就不写这个字段（缺席 = false）。 */
+                        g_warm_running ? ",\"warming\":true" : "");
     if (pos >= size) pos = size - 1;
     return pos;
 }

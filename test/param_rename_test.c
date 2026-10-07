@@ -34,6 +34,11 @@
 void pldmgr_log(const char *fmt, ...) { (void)fmt; }
 void game_mgr_invalidate(void) {}
 int game_mgr_sce_sys_dir(const char *tid, char *out, size_t osz) { (void)tid; (void)out; (void)osz; return 0; }
+/* [CN-FORK] v0.5.2.137 game_title.c 多了启动自愈线程（game_title_sync_start_daemon），
+ * 里面要问一次安全模式哨兵。本测试只碰改名路径、不会启动那个线程，但它在**同一个
+ * 翻译单元**里，未定义的符号在链接期就得有落处（不像静态库会按需摘取）——
+ * 所以这里给个恒 0 的桩把链接补上，别去链整个 utils.c。 */
+int pldmgr_utils_safe_mode(void) { return 0; }
 
 static char g_kind[16] = "folder";
 static char g_srcpath[600] = "";

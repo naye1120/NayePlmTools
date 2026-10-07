@@ -421,6 +421,24 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
+    /* [CN-FORK] v0.5.2.137 名字回填：把面板里所有 name.txt 重放到主机各层。
+     * 为什么需要一条批量入口而不是让用户逐款重点一次改名 —— 见 game_title.h 的
+     * game_title_sync_all 注释（真机撞到的「改名发生在修复之前，主机侧永远追不上」）。
+     * 无请求体、无参数：它读的是我们自己的 name.txt，不接受外部指定要改谁。
+     * 返回 ok:true 恒成立（best-effort），成败都在计数与 note 里。 */
+    if (strcmp(url, ROUTE_GAME_SYNC) == 0) {
+        char smsg[256], sesc[700];
+        int scanned = 0, applied = 0, persisted = 0, failed = 0;
+        game_title_sync_all(smsg, sizeof(smsg), &scanned, &applied, &persisted, &failed);
+        pldmgr_json_escape(smsg, sesc, sizeof(sesc));
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size,
+                         "{\"ok\":true,\"scanned\":%d,\"applied\":%d,"
+                         "\"persisted\":%d,\"failed\":%d,\"note\":\"%s\"}",
+                         scanned, applied, persisted, failed, sesc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
     /* 磁贴两层图：tid 在 query（契约定的），body 是 PNG 原始字节。 */
     if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0) {
         char msg[192];

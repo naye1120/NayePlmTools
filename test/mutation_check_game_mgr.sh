@@ -89,5 +89,27 @@ run_mutant mounted \
   's#^\( *\)int mounted = !installed_pkg \&\& gm_is_data_mounted(tid);#\1int mounted = runtime[0] != 0; /*MUT_mounted*/#' \
   1 || fail=1
 
+echo "=== 变异测试：列表体积（只读缓存 + 后台预热，v0.5.2.136）==="
+
+# ⑤ 把 .135 的 bug 放回来：列表拿 app.db 的 size 列当游戏体积。
+#    期望：「冷缓存下 folder 体积该是 0」立刻红 —— 真机上这条就是
+#    132 GB 的博德之门 3 被显示成 1.22 GB。
+run_mutant appdb \
+  's#fmt, size, appdb_size,#fmt, appdb_size, appdb_size, /*MUT_appdb*/#' \
+  1 || fail=1
+
+# ⑥ 掐掉体积缓存命中（peek 恒 0）：预热过了也永远拿不到真实体积。
+#    期望：「预热后 folder 体积该是 FOLDER_BYTES」红 —— 少了它，
+#    「列表只读缓存」写成「永远返回 0」也没人发现。
+run_mutant peek0 \
+  's#now >= g_du\[i\].ts \&\& now - g_du\[i\].ts < GM_DU_TTL) v = g_du\[i\].size;#0) v = 0; /*MUT_peek0*/#' \
+  1 || fail=1
+
+# ⑦ 列表恢复「自己 du」（skip_du=0）—— 即 .134 之前那条慢路。
+#    期望：冷缓存那条（size 该是 0）+ warming 标记一起红。
+run_mutant nodu \
+  's#^\( *\)a\.skip_du = 1;#\1a.skip_du = 0; /*MUT_nodu*/#' \
+  2 || fail=1
+
 echo "==== 变异测试: $([ $fail -eq 0 ] && echo PASS || echo FAIL) ===="
 exit $fail
