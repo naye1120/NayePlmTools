@@ -20,6 +20,7 @@
  *   ⑨ 本地快照：立即备份 / 内容没变不新增 / 只改了哪个用户就只新增哪个 /
  *      保留数裁剪 / 一键还原 / 删除 / uid 与 ts 的路径穿越一律拒 /
  *      间隔与保留数的归一化（86400 不能被当成越界回落成 30 分钟）
+ *   ⑩ **整条快照链必须能在 32KB 线程栈上跑完**（真机连接线程只有 64KB 上下）
  *
  * 测不了的部分（写在前面，免得有人以为是漏了）：
  *   - HTTP 那一层（tid 到底在 query 还是 body）在 http_server.c，主机上没有
@@ -34,6 +35,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <sys/stat.h>
 
 #include "game_saves.h"
@@ -172,6 +174,50 @@ static int count_snap(cJSON *snaps, const char *uid) {
         if (u && !strcmp(u, uid)) n++;
     }
     return n;
+}
+
+/* ── ⑩ 小栈：整条快照链必须能在 32KB 线程栈上跑完 ───────────────────────────
+ *
+ * 真机 MHD 起的是 MHD_USE_THREAD_PER_CONNECTION —— 每条连接一条 pthread 线程，
+ * 栈是 pthread 的默认值，而那个默认值只有 64KB 上下。`.141` 之前这条链要 ~55KB：
+ *   http_on_request(13.1KB) → gr_dispatch_post(3.4KB) → game_saves_snap_action →
+ *   game_saves_snap_run_now(11.9KB，gs_root_t[16]) → gs_snap_take(5.0KB) →
+ *   gs_copy_tree(2.3KB) → gs_copy_file(32.9KB，char buf[32*1024])
+ * 于是「点立即备份」直接把整个面板打死（curl exit 52、/version 变 000）。
+ *
+ * 宿主上量出来的临界点：这条链要 >56KB，**≤56KB 一律 SIGSEGV、≥64KB 才活**。
+ * 这条用例取 32KB —— 比临界点还紧一档，只要有人再往这条路径上放一个大数组
+ * （或者把哪个 gs_root_t 数组挪回栈上），这里立刻崩，不用等真机。
+ *
+ * ⚠ 宿主默认跑在主线程的 8MB 栈上，这条路径在那边**根本不构成压力** ——
+ * 这就是为什么 `.141` 那个 bug 宿主 136 项全绿、真机一按就死。所以必须
+ * 显式起一条小栈线程，不能只在 main 里调一遍。 */
+#define SMALL_STACK (32u * 1024u)
+
+static char g_ss_msg[200], g_ss_msg2[200];
+static int  g_ss_made = -999, g_ss_restore = -999;
+
+static void *small_stack_worker(void *arg) {
+    (void)arg;
+    g_ss_made = game_saves_snap_run_now(TID_PS5, g_ss_msg, sizeof(g_ss_msg));
+
+    /* 还原那条链走的是同一个复制函数、方向相反，一并压一遍。 */
+    if (game_saves_list_json(TID_PS5, g_buf, sizeof(g_buf)) > 0) {
+        cJSON *o = cJSON_Parse(g_buf);
+        cJSON *s = o ? find_snap(cJSON_GetObjectItem(o, "snapshots"), U2, 0) : NULL;
+        const char *ts = s ? jstr(NULL, s, "ts") : NULL;
+        if (ts) {
+            char body[256];
+            snprintf(body, sizeof(body),
+                     "{\"tid\":\"" TID_PS5 "\",\"action\":\"restore\","
+                     "\"uid\":\"" U2 "\",\"ts\":\"%s\"}", ts);
+            g_ss_restore = game_saves_snap_action(body, strlen(body), g_buf,
+                                                  sizeof(g_buf),
+                                                  g_ss_msg2, sizeof(g_ss_msg2));
+        }
+        cJSON_Delete(o);
+    }
+    return NULL;
 }
 
 int main(void) {
@@ -665,6 +711,29 @@ int main(void) {
         CHECK(count_snap(cJSON_GetObjectItem(o, "snapshots"), U5) == 0, "U5 的快照没被删掉");
         cJSON_Delete(o);
     }
+
+    /* ⑩ 小栈。放在最后：它会动 U2 的源、也会给 U5 补一份快照（上面刚删掉），
+     * 放在前面会把 ⑨ 那几条计数断言带偏。 */
+    put_blob(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STACK", 96); /* 避开「内容没变」 */
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    if (pthread_attr_setstacksize(&at, SMALL_STACK) != 0) {
+        CHECK(0, "pthread_attr_setstacksize(%u) 失败", (unsigned)SMALL_STACK);
+    } else {
+        pthread_t th;
+        if (pthread_create(&th, &at, small_stack_worker, NULL) != 0) {
+            CHECK(0, "小栈线程创建失败");
+        } else {
+            /* 崩了就崩在这里 —— 进程直接没，下面两条 CHECK 根本不会执行。
+             * 这正是我们要的效果：真机那个 bug 的宿主等价物。 */
+            pthread_join(th, NULL);
+            CHECK(g_ss_made >= 1, "32KB 栈上「立即备份」没生成快照（rc=%d, %s）",
+                  g_ss_made, g_ss_msg);
+            CHECK(g_ss_restore == 0, "32KB 栈上「一键还原」失败（rc=%d, %s）",
+                  g_ss_restore, g_ss_msg2);
+        }
+    }
+    pthread_attr_destroy(&at);
 
     printf("game_saves: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

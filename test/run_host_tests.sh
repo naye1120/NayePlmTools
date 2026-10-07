@@ -24,6 +24,13 @@ run_one() {
 echo "=== check_post_routes (静态守卫) ==="
 bash tools/check_post_routes.sh || fail=1
 
+# [CN-FORK] v0.5.2.141 静态守卫：不许把大块内存放栈上（真机连接线程只有 64KB 栈）。
+# `.116`「改图标死机」与 `.141`「点立即备份死机」是同一个坑，两次都宿主全绿、
+# 真机必炸 —— 所以既要有这道静态粗网，也要有 game_saves 里那条 32KB 小栈用例。
+# 需要 PS5 SDK 的头（http_server.c 要 microhttpd.h）；没有就自己跳过。
+echo "=== check_stack_frames (静态守卫) ==="
+bash tools/check_stack_frames.sh || fail=1
+
 run_one slot_resolve   src/psaccounts/npsignin.c
 run_one offact_genid   src/psaccounts/offact.c
 # safety.c really creates SAFETY_DIR, so point it at a temp dir on the host.

@@ -204,27 +204,50 @@ static int gs_find_roots(const char *tid, gs_root_t *out, int max) {
     return n;
 }
 
+/* 找根，数组走堆。返回 NULL = 没找到（或分配失败），此时 *out_n 是 0。
+ * 调用方负责 free。
+ *
+ * 为什么不用 `gs_root_t r[GS_MAX_ROOTS]`：一个 gs_root_t 就是 712 字节
+ * （uid 64 + path 640 + kind 8），16 个的数组光自己 11.4KB。真机的连接线程
+ * 只有 64KB 栈，一个这样的局部数组就吃掉六分之一 —— 和 gs_copy_file 那个
+ * 32KB 缓冲是同一个病（见上面「目录复制」那段的真机事故记录）。这个数组在
+ * 5 个函数里各出现一次，能改堆的都改了。 */
+static gs_root_t *gs_roots_find(const char *tid, int *out_n) {
+    if (out_n) *out_n = 0;
+    gs_root_t *r = (gs_root_t *)malloc(sizeof(gs_root_t) * GS_MAX_ROOTS);
+    if (!r) return NULL;
+    int n = gs_find_roots(tid, r, GS_MAX_ROOTS);
+    if (n <= 0) { free(r); return NULL; }
+    if (out_n) *out_n = n;
+    return r;
+}
+
 /* 兼容入口：第一个命中的存档根，给「只想知道这游戏存档在哪」的调用方。 */
 int game_saves_root(const char *tid, char *out, size_t osz) {
-    gs_root_t r[GS_MAX_ROOTS];
     if (!out || osz < 64) return -1;
-    if (gs_find_roots(tid, r, GS_MAX_ROOTS) <= 0) return -1;
+    int n = 0;
+    gs_root_t *r = gs_roots_find(tid, &n);
+    if (!r) return -1;
     snprintf(out, osz, "%s", r[0].path);
+    free(r);
     return 0;
 }
 
 /* 按 uid 找根；uid 为空则退化成第一个（上传没指定用户时用）。 */
 static int gs_root_by_uid(const char *tid, const char *uid, gs_root_t *out) {
-    gs_root_t r[GS_MAX_ROOTS];
-    int n = gs_find_roots(tid, r, GS_MAX_ROOTS);
-    if (n <= 0) return -1;
+    int n = 0;
+    gs_root_t *r = gs_roots_find(tid, &n);
+    if (!r) return -1;
+    int rc = -1;
     if (uid && *uid) {
         for (int i = 0; i < n; i++)
-            if (!strcmp(r[i].uid, uid)) { *out = r[i]; return 0; }
-        return -1;
+            if (!strcmp(r[i].uid, uid)) { *out = r[i]; rc = 0; break; }
+    } else {
+        *out = r[0];
+        rc = 0;
     }
-    *out = r[0];
-    return 0;
+    free(r);
+    return rc;
 }
 
 /* 上传要往里写，所以连「这个游戏还没有存档」时也得把根定出来：
@@ -276,8 +299,10 @@ static void gs_fmt_mtime(time_t t, char *out, size_t osz) {
  * 语义就是「这游戏有没有存档」，不再去数里面有几个 sdimg —— 那些是主机自己的
  * 记账（当前 + _bu_ 备份 + sdmemory），数出来只会让人以为有 4 份存档。 */
 int game_saves_count(const char *tid) {
-    gs_root_t r[GS_MAX_ROOTS];
-    return gs_find_roots(tid, r, GS_MAX_ROOTS);
+    int n = 0;
+    gs_root_t *r = gs_roots_find(tid, &n);
+    free(r);
+    return n;
 }
 
 /* ── 自动备份配置 ───────────────────────────────────────────────────────── */
@@ -595,8 +620,49 @@ static int gs_snap_list_one(const char *tid, const char *uid, char ts[][24], int
     return n;
 }
 
-/* ── 目录复制 ───────────────────────────────────────────────────────────── */
-typedef struct { long long files; long long bytes; int bad; } gs_cp_t;
+/* ── 目录复制 ─────────────────────────────────────────────────────────────
+ * 复制过程用的**所有**大块内存都挂在 gs_cp_t 上，一份，由调用方在栈外备好。
+ *
+ * 为什么非要这样（`.141` 的真机事故）：MHD 起的是 MHD_USE_THREAD_PER_CONNECTION，
+ * 每条连接一条 pthread 线程，真机那条线程的栈只有 64KB 上下。这里原来是
+ *   gs_copy_file   char buf[32*1024]                → 一帧 32.9KB
+ *   gs_copy_tree   每层 char sp[1024] + dp[1024]    → 一帧 2.3KB × 递归深度
+ * 再叠上调用链
+ *   http_on_request(13.1KB) → gr_dispatch_post(3.4KB) → game_saves_snap_action →
+ *   game_saves_snap_run_now(11.9KB，gs_root_t[16]) → gs_snap_take(5.0KB)
+ * 合计 ~55KB，把 64KB 的线程栈顶穿了。现象是「点立即备份 → 面板直接死」
+ * （curl exit 52、/version 变 000），而**宿主测试全绿** —— 它跑在主线程的
+ * 8MB 栈上，这条路径在那边根本不构成压力。
+ *
+ * 宿主上量出来的临界点（test/game_saves_test.c 的 small_stack 用例就是照这个写的）：
+ * 整条链要 >56KB，≤56KB 一律 SIGSEGV，≥64KB 才活。所以这条路径的栈占用必须按
+ * 「几 KB」来设计，不能按「几十 KB」。 */
+typedef struct {
+    long long files;
+    long long bytes;
+    int bad;
+    char *io;   /* 文件内容中转，GS_CP_IO 字节 */
+    char *path; /* 每层两个路径槽，(GS_SNAP_MAX_DEPTH+2) * 2 * GS_CP_PATH */
+} gs_cp_t;
+
+#define GS_CP_IO   (64 * 1024) /* 比原来的 32KB 翻倍：syscall 少一半，且在堆上 */
+#define GS_CP_PATH 1024        /* 与原来 gs_copy_tree 的 sp/dp 同宽 */
+
+static void gs_cp_close(gs_cp_t *c) {
+    free(c->io);
+    free(c->path);
+    c->io = NULL;
+    c->path = NULL;
+}
+
+/* 备好缓冲区。失败返回 -1 —— 调用方直接放弃，别拿半个 gs_cp_t 去用。 */
+static int gs_cp_open(gs_cp_t *c) {
+    memset(c, 0, sizeof(*c));
+    c->io = (char *)malloc(GS_CP_IO);
+    c->path = (char *)malloc((size_t)(GS_SNAP_MAX_DEPTH + 2) * 2 * GS_CP_PATH);
+    if (!c->io || !c->path) { gs_cp_close(c); return -1; }
+    return 0;
+}
 
 static int gs_copy_file(const char *src, const char *dst, gs_cp_t *c, const struct stat *st) {
     int in = open(src, O_RDONLY);
@@ -604,16 +670,15 @@ static int gs_copy_file(const char *src, const char *dst, gs_cp_t *c, const stru
     int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (out < 0) { close(in); return -1; }
 
-    char buf[32 * 1024];
     long long total = 0;
     int rc = 0;
     for (;;) {
-        ssize_t n = read(in, buf, sizeof(buf));
+        ssize_t n = read(in, c->io, GS_CP_IO);
         if (n < 0) { rc = -1; break; }
         if (n == 0) break;
         ssize_t off = 0;
         while (off < n) {
-            ssize_t w = write(out, buf + off, (size_t)(n - off));
+            ssize_t w = write(out, c->io + off, (size_t)(n - off));
             if (w <= 0) { rc = -1; break; }
             off += w;
         }
@@ -639,20 +704,26 @@ static int gs_copy_file(const char *src, const char *dst, gs_cp_t *c, const stru
 }
 
 /* 递归复制。**只按 lstat 走**，符号链接 / 设备 / 套接字一律跳过：存档里不该有，
- * 跟着它走还可能绕出目录树。返回 0 成功，-1 失败（c->bad 已置位）。 */
+ * 跟着它走还可能绕出目录树。返回 0 成功，-1 失败（c->bad 已置位）。
+ *
+ * 路径缓冲按 depth 从 c->path 里取（每层两个槽），**每层不再各占 2KB 栈** ——
+ * 于是 GS_SNAP_MAX_DEPTH=24 这个上限就只是纯堆开销，栈占用与递归深度无关。
+ * 槽位够：depth 允许 0..GS_SNAP_MAX_DEPTH，分配的是 +2 个。 */
 static int gs_copy_tree(const char *src, const char *dst, gs_cp_t *c, int depth) {
     if (c->bad) return -1;
     if (depth > GS_SNAP_MAX_DEPTH) { c->bad = 1; return -1; }
     DIR *d = opendir(src);
     if (!d) { c->bad = 1; return -1; }
 
+    char *sp = c->path + (size_t)depth * 2 * GS_CP_PATH;
+    char *dp = sp + GS_CP_PATH;
+
     struct dirent *e;
-    char sp[1024], dp[1024];
     int rc = 0;
     while ((e = readdir(d)) != NULL && !c->bad) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        if (snprintf(sp, sizeof(sp), "%s/%s", src, e->d_name) >= (int)sizeof(sp) ||
-            snprintf(dp, sizeof(dp), "%s/%s", dst, e->d_name) >= (int)sizeof(dp)) {
+        if (snprintf(sp, GS_CP_PATH, "%s/%s", src, e->d_name) >= GS_CP_PATH ||
+            snprintf(dp, GS_CP_PATH, "%s/%s", dst, e->d_name) >= GS_CP_PATH) {
             c->bad = 1;
             rc = -1;
             break;
@@ -883,10 +954,19 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
         return -1;
     }
 
-    gs_cp_t c = {0, 0, 0};
-    if (gs_copy_tree(r->path, tmp, &c, 0) != 0) {
+    gs_cp_t c;
+    if (gs_cp_open(&c) != 0) {
         gs_rmtree(tmp);
-        if (note) snprintf(note, notesz, "%s", c.bad ? "复制失败（可能超过大小上限）" : "复制失败");
+        if (note) snprintf(note, notesz, "内存不足，无法复制");
+        return -1;
+    }
+    int crc = gs_copy_tree(r->path, tmp, &c, 0);
+    long long cfiles = c.files, cbytes = c.bytes;
+    int cbad = c.bad;
+    gs_cp_close(&c); /* 缓冲区用完即还，别拖到 rename 之后 */
+    if (crc != 0) {
+        gs_rmtree(tmp);
+        if (note) snprintf(note, notesz, "%s", cbad ? "复制失败（可能超过大小上限）" : "复制失败");
         return -1;
     }
 
@@ -903,7 +983,7 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
     if (out_ts && osz) snprintf(out_ts, osz, "%s", tss);
     if (note) snprintf(note, notesz, "已生成 %s", tss);
     pldmgr_log("[PLDMGR] saves: %s/%s 本地快照 %s（%lld 文件 / %lld 字节）\n",
-               tid, r->uid, tss, c.files, c.bytes);
+               tid, r->uid, tss, cfiles, cbytes);
     return 0;
 }
 
@@ -985,14 +1065,18 @@ static void gs_snap_sweep(void) {
     pthread_mutex_lock(&g_snap_mu);
     for (int i = 0; i < ng; i++) {
         if (!gs_snap_due(games[i].tid, games[i].interval)) continue;
-        gs_root_t roots[GS_MAX_ROOTS];
-        int nr = gs_find_roots(games[i].tid, roots, GS_MAX_ROOTS);
+        /* roots 走堆：这一帧原来 14.2KB（games[64] + gs_root_t[16]），
+         * 而守护线程和连接线程一样是 pthread 默认栈 —— 同样顶不住。 */
+        int nr = 0;
+        gs_root_t *roots = gs_roots_find(games[i].tid, &nr);
+        if (!roots) continue;
         for (int k = 0; k < nr; k++) {
             char ts[24], note[160];
             ts[0] = note[0] = 0;
             gs_snap_take(games[i].tid, &roots[k], games[i].keep,
                          ts, sizeof(ts), note, sizeof(note));
         }
+        free(roots);
     }
     pthread_mutex_unlock(&g_snap_mu);
 }
@@ -1007,6 +1091,12 @@ static void *gs_snap_main(void *arg) {
     return NULL;
 }
 
+/* 守护线程的栈显式给足。真机 pthread 默认栈只有 64KB 上下（宿主上量出来的
+ * 临界点是 56KB），而这条线程要跑整条复制链。栈占用现在虽然已经压到几 KB，
+ * 但「以后谁多加一个局部数组」不该再把面板打死一次 —— 一次性给 1MB。
+ * setstacksize 失败就退回默认（不要因为一个优化项把守护整条丢掉）。 */
+#define GS_SNAP_THREAD_STACK (1u << 20)
+
 void game_saves_snap_start_daemon(void) {
     /* safe_mode：与风扇、名字自愈两条守护同一原则 —— 死机后要能止血，
      * 后台的自动动作一律不做。想留档就手动点「立即备份」。 */
@@ -1014,11 +1104,16 @@ void game_saves_snap_start_daemon(void) {
         pldmgr_log("[PLDMGR] saves: SAFE MODE，跳过本地快照守护\n");
         return;
     }
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    int sized = (pthread_attr_setstacksize(&at, GS_SNAP_THREAD_STACK) == 0);
     pthread_t th;
-    if (pthread_create(&th, NULL, gs_snap_main, NULL) == 0) {
+    int rc = pthread_create(&th, sized ? &at : NULL, gs_snap_main, NULL);
+    pthread_attr_destroy(&at);
+    if (rc == 0) {
         pthread_detach(th);
-        pldmgr_log("[PLDMGR] saves: 本地快照守护已启动（首次运行延后 %ds）\n",
-                   GS_SNAP_BOOT_DELAY);
+        pldmgr_log("[PLDMGR] saves: 本地快照守护已启动（首次运行延后 %ds，栈 %uKB）\n",
+                   GS_SNAP_BOOT_DELAY, (unsigned)(GS_SNAP_THREAD_STACK >> 10));
     } else {
         pldmgr_log("[PLDMGR] saves: 本地快照守护线程创建失败\n");
     }
@@ -1032,9 +1127,11 @@ int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
     int keep = GAME_SAVES_SNAP_KEEP_DEF;
     gs_snap_cfg(tid, NULL, NULL, &keep);
 
-    gs_root_t roots[GS_MAX_ROOTS];
-    int nr = gs_find_roots(tid, roots, GS_MAX_ROOTS);
-    if (nr <= 0) {
+    /* roots 走堆 —— 这一帧原来光这个数组就 11.9KB，是「点立即备份打死面板」
+     * 那条链上第二大的贡献（最大的是 gs_copy_file 的 32KB）。 */
+    int nr = 0;
+    gs_root_t *roots = gs_roots_find(tid, &nr);
+    if (!roots) {
         if (msg) snprintf(msg, msgsz, "主机上还没有这个游戏的存档");
         return -1;
     }
@@ -1053,6 +1150,7 @@ int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
         if (rc != 0 && !first[0]) snprintf(first, sizeof(first), "%s", note);
     }
     pthread_mutex_unlock(&g_snap_mu);
+    free(roots);
 
     if (made > 0) {
         if (msg) snprintf(msg, msgsz, "已生成 %d 份快照", made);
@@ -1128,11 +1226,17 @@ static int gs_snap_restore(const char *tid, const char *uid, const char *ts,
     if (ensure_dir_recursive(tmp) != 0) {
         snprintf(err, sizeof(err), "无法创建临时目录（%s）", strerror(errno));
     } else {
-        gs_cp_t c = {0, 0, 0};
-        if (gs_copy_tree(src, tmp, &c, 0) != 0) {
-            snprintf(err, sizeof(err), "复制快照失败");
-        } else if (gs_swap_dir(parent, r.path, tmp, err, sizeof(err)) == 0) {
-            rc = 0; /* tmp 已被 rename 走，不用清 */
+        gs_cp_t c;
+        if (gs_cp_open(&c) != 0) {
+            snprintf(err, sizeof(err), "内存不足，无法复制");
+        } else {
+            int crc = gs_copy_tree(src, tmp, &c, 0);
+            gs_cp_close(&c);
+            if (crc != 0) {
+                snprintf(err, sizeof(err), "复制快照失败");
+            } else if (gs_swap_dir(parent, r.path, tmp, err, sizeof(err)) == 0) {
+                rc = 0; /* tmp 已被 rename 走，不用清 */
+            }
         }
     }
     if (rc != 0) gs_rmtree(tmp);
@@ -1198,8 +1302,10 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
     char etid[32], eroot[700];
     pldmgr_json_escape(tid, etid, sizeof(etid));
 
-    gs_root_t roots[GS_MAX_ROOTS];
-    int nr = gs_find_roots(tid, roots, GS_MAX_ROOTS);
+    /* roots 也走堆（11.4KB，见 gs_roots_find 的注释）。它在下面第一段循环里
+     * 用完就还，后面几条提前 return 都不必再惦记它。 */
+    int nr = 0;
+    gs_root_t *roots = gs_roots_find(tid, &nr);
     pldmgr_json_escape(nr > 0 ? roots[0].path : "", eroot, sizeof(eroot));
 
     char autoj[4096];
@@ -1218,13 +1324,18 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
     if (!autoj[0]) snprintf(autoj, sizeof(autoj), "{}");
 
     /* saves 单独走堆：条目本身不多，但每条带名字，挂在栈上没必要冒这个险。
-     * 线程栈是 pthread 默认值（通常 512KB~1MB），放不下 128KB 的局部数组。 */
+     *
+     * ⚠ 这里原来写的是「线程栈是 pthread 默认值（通常 512KB~1MB）」—— **错的**。
+     * 真机上 MHD_USE_THREAD_PER_CONNECTION 那条连接线程只有 64KB 上下（宿主上
+     * 量出来的临界点是 56KB，见 test/game_saves_test.c 的 small_stack 用例）。
+     * `.141` 的「点立即备份打死面板」就是照着这个错误假设把 32KB 缓冲放栈上
+     * 放出来的。大块内存一律走堆，别再拿「默认栈很大」当理由。 */
     const size_t scap = 128u * 1024u;
     char *saves = (char *)malloc(scap);
-    if (!saves) return -1;
+    if (!saves) { free(roots); return -1; }
     size_t spos = 0;
     int n = 0;
-    if (gs_app(saves, scap, &spos, "[") != 0) { free(saves); return -1; }
+    if (gs_app(saves, scap, &spos, "[") != 0) { free(saves); free(roots); return -1; }
 
     for (int i = 0; i < nr; i++) {
         gs_stat_t acc = {0, 0, 0, 0};
@@ -1250,6 +1361,7 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
         n++;
     }
     gs_app(saves, scap, &spos, "]");
+    free(roots); /* 后面不再用 —— 提前还掉，省得下面几条 return 各记一次 */
 
     /* snapshots 同样走堆。**新的在前** —— 列表第一眼该看到最近那份。 */
     const size_t kcap = 64u * 1024u;

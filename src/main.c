@@ -43,7 +43,39 @@ extern volatile int http_keep_running;
  * （首启、待机唤醒、换 IP、断网回环），账号接口的流式上传状态需要在请求结束时
  * 回收（头像传到一半关页面），补 NOTIFY_COMPLETED 必须 4 处都带上，漏一处就是
  * 只在某种重启路径下才泄漏。参数与原来完全一致，只是多一个回调。 */
+/* [CN-FORK] v0.5.2.141 连接线程的栈显式给足 1MB。
+ *
+ * MHD_USE_THREAD_PER_CONNECTION 是「一条连接一条 pthread 线程」，栈走的是
+ * 真机 pthread 的**默认值**，而那个默认值只有 64KB 上下（宿主上量出来的临界点
+ * 是 56KB：整条 http_on_request → … 的链一旦超过 56KB 就 SIGSEGV）。后果是
+ * 「某个接口的局部数组一大，整个面板就死」—— 到 `.141` 为止已经栽过两次：
+ *   `.116` 改磁贴图标/背景（tt_apply 里 64KB 栈数组）
+ *   `.141` 点「立即备份」（gs_copy_file 里 32KB 栈数组）
+ * 两次都是**只在真机上炸、宿主全绿**，因为宿主跑在主线程的 8MB 栈上。
+ *
+ * 与其等着第三次，不如把这条线程的栈一次性给足。顺带把所有「大数组放栈上」
+ * 的收益也一并消掉：真机日志里 `saves: 本地快照守护已启动` 之后会跟一行
+ * 实际生效的栈大小，下次再遇到这类问题不必靠猜。
+ *
+ * 注意这个值只覆盖**连接线程**；自己 pthread_create 出来的守护线程（快照、
+ * 风扇、名字自愈）不受它管，各自在创建处单独给栈。 */
+#define HTTP_THREAD_STACK (1u << 20)
+
 static struct MHD_Daemon *http_daemon_start(unsigned short port) {
+    /* 带栈大小先试一把：万一这个 SDK 的 MHD 不认这个选项，start_daemon 会直接
+     * 返回 NULL —— 那等于整个面板起不来。所以失败就**去掉选项重试一次**，
+     * 宁可退回默认栈，也不能因为一个优化项把服务弄没。 */
+    struct MHD_Daemon *d = MHD_start_daemon(
+        MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, port, NULL, NULL,
+        &http_on_request, NULL, MHD_OPTION_NOTIFY_COMPLETED,
+        &http_on_request_completed, NULL,
+        MHD_OPTION_THREAD_STACK_SIZE, (unsigned int)HTTP_THREAD_STACK,
+        MHD_OPTION_END);
+    if (d) {
+        pldmgr_log("[PLDMGR] http: 连接线程栈 %uKB\n", (unsigned)HTTP_THREAD_STACK >> 10);
+        return d;
+    }
+    pldmgr_log("[PLDMGR] http: 不接受 THREAD_STACK_SIZE，退回默认栈重试\n");
     return MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, port, NULL, NULL,
         &http_on_request, NULL, MHD_OPTION_NOTIFY_COMPLETED,

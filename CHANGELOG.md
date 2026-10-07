@@ -1,3 +1,90 @@
+## v0.5.2.141 (CN-FORK)
+
+> **`.140` 的快照功能在真机上一按就把面板打死 —— 根因是栈溢出。**
+>
+> `.140` 出包推送后：`GET /game_saves` 三款游戏全部正确，但一按「立即备份」
+> （`POST /game_save_snap {"tid":"PPSA27836","action":"run"}`）→ `curl exit 52`（空回复）
+> → `/version` 变 **000**，面板整个没了。
+>
+> ### 取证：快照目录里留下的半个现场
+>
+> FTP 上去看 `/data/nayeplmtools/saves_snap/PPSA27836/1a1d3627/`：
+>
+> ```
+> .tmp_226_1791374835/      ← 建出来了，但是**空的**
+> ```
+>
+> 时间戳目录没出现（说明 `rename` 没走到），临时目录里一个文件都没有（说明
+> `gs_copy_file` 连目标文件都没建出来就死了）。而源目录里是**一个 15 MB 的
+> `sdimg_SAVESERVICE-LINE-0-1Slot`**。
+>
+> ### 根因：整条链要 ~55KB 栈，而连接线程只有 64KB
+>
+> MHD 起的是 `MHD_USE_THREAD_PER_CONNECTION` —— 每条连接一条 pthread 线程，栈走
+> **pthread 默认值**，真机上那个默认值只有 64KB 上下。这条路径原来是：
+>
+> | 帧 | 字节 |
+> |---|---|
+> | `http_on_request` | 13,080 |
+> | `gr_dispatch_post` | 3,368 |
+> | `game_saves_snap_run_now`（`gs_root_t roots[16]`） | 11,928 |
+> | `gs_snap_take` | 5,000 |
+> | `gs_copy_tree`（每层 `char sp[1024]+dp[1024]`） | 2,280 |
+> | **`gs_copy_file`（`char buf[32*1024]`）** | **32,888** |
+> | 合计 | **~55 KB** |
+>
+> 再叠上 MHD 自己那几帧就顶穿了。宿主上用「小栈线程」量出来的临界点非常干净：
+> **≤56KB 一律 SIGSEGV，≥64KB 才活**。
+>
+> ⚠ 这个 bug **宿主测试 136 项全绿** —— 宿主跑在主线程的 8MB 栈上，这点数组
+> 根本不构成压力。而且**同样的坑 `.116` 已经栽过一次**（改磁贴图标/背景死机，
+> `tt_apply` 里一个 `unsigned char[65536]`），当时的结论是「别在栈上开大数组」，
+> 但只改了那一个函数，没留下任何守卫。
+>
+> ### 修复
+>
+> **① 这条路径上的大块内存全部走堆**（精确修复）
+>
+> - `gs_copy_file` 的 32KB 缓冲 → 挂在 `gs_cp_t` 上，由调用方 `malloc` **一次**、
+>   整条调用链共用（`GS_CP_IO` 64KB）。顺带把缓冲从 32KB 提到 64KB：syscall 少一半
+> - `gs_copy_tree` 的每层路径缓冲 → 改成按 `depth` 从 `gs_cp_t.path` 里取槽位，
+>   **栈占用与递归深度彻底脱钩**（`GS_SNAP_MAX_DEPTH=24` 现在只是纯堆开销）
+> - `gs_root_t roots[GS_MAX_ROOTS]`（一个 712 B，16 个 11.4 KB）出现在 5 个函数里，
+>   新增 `gs_roots_find()` 统一走堆：`game_saves_root` / `gs_root_by_uid` /
+>   `game_saves_count` / `game_saves_snap_run_now` / `gs_snap_sweep` / `game_saves_list_json`
+>
+> 结果：整条链 **~55KB → ~22KB**。`gs_copy_file` 32,888 → **120**、
+> `gs_copy_tree` 2,280 → **232**、`gs_snap_run_now` 11,928 → **536**、
+> `gs_snap_main`（守护线程）14,216 → **2,840**。
+>
+> **② 连接线程的栈一次性给足 1MB**（系统性兜底）
+>
+> `main.c` 的 `http_daemon_start()` 加 `MHD_OPTION_THREAD_STACK_SIZE = 1MB`。
+> 与其等第三次，不如把这一类问题整个消掉。**带回落**：万一这个 SDK 的 MHD 不认
+> 这个选项（`start_daemon` 会直接返回 NULL = 面板起不来），去掉选项重试一次，
+> 宁可退回默认栈也不能把服务弄没。快照守护线程是 `pthread_create` 出来的、
+> 不受这个选项管，所以在创建处单独 `pthread_attr_setstacksize(1MB)`。
+>
+> **③ 两条守卫，防止第三次**（这是这一轮最该留下的东西）
+>
+> - `test/game_saves_test.c` ⑩：**在 32KB 线程栈上跑完整条快照链**
+>   （备份 + 列表 + 一键还原）。带负向对照 —— 拿 `.140` 的 `game_saves.c` 跑，
+>   它**必 SIGSEGV(139)**；修好后 138 项 0 失败。这是真机那个 bug 的宿主等价物
+> - `tools/check_stack_frames.sh`（新）：任何函数栈帧不得超 **32KB**，
+>   已接进 `run_host_tests.sh`。这是道**粗网**，抓「单个函数吃掉几十 KB」；
+>   精确的那道是上面那条小栈用例
+>
+> 另外把 `game_saves_list_json` 里那句**错的注释**改掉了 —— 它写的是「线程栈是
+> pthread 默认值（通常 512KB~1MB）」，正是这个错误假设让 32KB 缓冲上了栈。
+>
+> ### 测试
+>
+> - 宿主：`game_saves` **136 → 138 项 0 失败**、`media_scan` 178、`game_mgr` 100、
+>   `check_post_routes` 12==12、`check_stack_frames` 全绿、`overall: PASS`
+> - 负向对照：`check_stack_frames 20000` 能报出 `config.c` 等 4 个 25~28KB 的
+>   历史帧并 exit 1（它们都在 32KB 之下，且现在也被 1MB 的连接线程栈覆盖）
+> - 前端未改动；回归见下方出包记录
+
 ## v0.5.2.140 (CN-FORK)
 
 > **存档三层计划的第 2 层：本地定时快照（不依赖网络的兜底）。**
