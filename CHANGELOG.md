@@ -1,3 +1,125 @@
+## v0.5.2.142 (CN-FORK)
+
+> **存档三层计划的第 3 层：自动存档执行引擎 + 远程推拉（FTP / HTTP）。**
+>
+> 在这之前，`saves_auto.json` 里的 `enabled` / `on_launch` / `on_exit` 三个开关
+> **只被读写、没有任何人在跑** —— 界面上的「启动游戏时拉取 / 退出游戏时回传」
+> 是三个存下来就再也没人看的字段，远程那一段（smb/ftp/http）只用于「测试连接」。
+> 这一版把它整条链补齐，并把手动推 / 拉一并放出来。
+
+> ### 一个必须先说的硬约束：SDK 的 curl 没有 SMB
+>
+> `libcurl 8.18.0` 编译时带的协议是 `http/https/ftp/file/dict/imap/ldap/pop3/smtp`，
+> **没有 `smb`**。而 `smb` 恰恰是老版本的默认值 —— 也就是说每个新用户默认配的是
+> 一个「保存得下去、传不出去」的协议。
+>
+> 处理：默认值前后端 + mock 一起改成 `ftp`；UI 上 SMB 那一档做成
+> **看得见、点不动、旁边写明原因**（而不是从选项表里删掉 —— 老用户存的就是
+> `mode:"smb"`，选项没了会变成「一个都没选中」，用户根本不知道发生了什么）。
+
+> ### 远端布局（推与拉必须逐字一致）
+>
+> ```
+> <base>/<TID>/<uid>.zip
+> ```
+>
+> - ftp 的 base = `ftp://<host>:<port><path>`；http 的 base = `<url>`。
+> - **刻意不做「一个游戏一个文件」**：真机实测一个游戏常有两个用户各存一份
+>   （PPSA01650）。一个用户一份，互不覆盖。
+> - **文件名不带时间戳**，恒定 `<uid>.zip`、每次整份覆盖 —— 要历史版本有本地快照兜着。
+> - 每个用户的候选集来自 `game_saves_uids()`（主机上存过这个游戏的 uid）。
+
+> ### 拉取时的用户枚举：本地没了才最需要它
+>
+> `game_saves_uids()` 是靠「`<uid>/savedata_prospero/<TID>` 这个目录在不在」枚举的，
+> 而**拉取要救的恰恰是本地那份已经没了的情况**（换机、误删、重装）—— 那时本地枚举
+> 必然是 0 条，用它就永远拉不回来，成了一条死路。所以新增
+> `game_saves_user_ids()`：本地枚举为空时退化成「主机上全部用户目录」，逐个去远端试
+> `<uid>.zip`，远端没有的算**跳过**而不是失败。用户目录是主机账号，不会因为删了
+> 游戏存档而消失。
+>
+> 代价是主机上用户多时会多几次 404 —— 一次局域网往返，和「救不回存档」不是一个量级。
+
+> ### 引擎（`src/game_auto.c`）
+>
+> - **探测**用 `sceLncUtilGetAppIdOfRunningBigApp()`（返回 `0xffffffff` = 没有大应用在跑）
+>   + `sceLncUtilGetAppTitleId()`。**刻意不用** `/mnt/shadowmnt/<TID>` 挂载点判据 ——
+>   那只对 ShadowMount 挂出来的游戏成立，内置 PKG 没有那个目录。
+> - `game_auto_plan()` 是**纯函数**（状态机全在这一处，宿主上穷举比在真机上试靠谱得多）：
+>   同款连着跑 → 0 步；上一款在跑且开了 `on_exit` → 推；当前款在跑且开了 `on_launch` → 拉。
+>   **换游戏时顺序恒为先推后拉**，写死才有一份可预期的日志。
+> - **第一轮只记状态、不动作**：面板可能是玩到一半才起来的，补一次拉取会用远程
+>   盖掉用户正在玩的存档。
+> - **退出后先等 5 秒再推**，给主机收尾写盘的时间；只对推送等（拉取发生在游戏刚起来时，
+>   那时存档目录还没被写过）。
+> - `g_sync_mu` 保证同一时刻只有一次同步 —— **这不是性能优化，是正确性要求**：
+>   「整份替换」是「旧的改名 → 换上去 → 删旧的」，两次并发跑同一个目录会互相把对方
+>   刚改名的目录当成垃圾删掉。守护线程（退出推送）与用户手点「立即推送」完全可能同时发生。
+> - 线程显式 `pthread_attr_setstacksize(1MB)`：这条线程要跑 curl + 打包，真机 pthread
+>   默认栈只有 64KB 上下（`.141` 的教训）。
+
+> ### 「远端还没有」不是失败
+>
+> `SR_ENOTFOUND (-2)` 把「远端还没有这个文件」与真失败分开。首次使用必然遇到，
+> 给用户一条红报错是不对的（前端回 `ok:true` + 「远程还没有这个游戏的存档」）。
+> FTP 上有两种表现都要归进来：`CURLE_REMOTE_FILE_NOT_FOUND`，以及
+> **`CURLE_REMOTE_ACCESS_DENIED`** —— 实测轨迹是 `CWD ps5save → 550 → CWD <TID> → 550`，
+> 远端根目录不存在时 libcurl 报的是后者。代价写在注释里：原始 FTP 回复都是 550，
+> 服务器自己也不区分。
+
+> ### 顺带修掉的三个真问题
+>
+> ① **`ga_do` 的判定顺序**：协议与配置先判。否则配了 smb 的用户点推送，只会看到
+> 「主机上还没有这个游戏的存档」—— 真正的原因被一条无关信息盖住。
+>
+> ② **存档弹窗的字段标签一直是写死的中文**（`MODE_FIELDS` 里的字面量），英文包下
+> 「主机地址 / 端口 / 远程路径」整片漏中文。回归当时只钉了 `game.secret_saved`
+> 那条提示，而它「碰巧」盖住了这个洞 —— 默认协议换成 ftp 之后那条提示不再渲染，
+> 断言变成永假，洞才露出来。现在标签走 `t()`，并把「密码框 placeholder」直接按
+> 属性断言。
+>
+> ③ **mock 的 `/reset` 漏清 `snaps`**（v0.5.2.140 加快照时没同步改），也没关掉
+> `/loadpayload:` 起过的 10101 桩 —— 同一个 mock 进程跑第二遍 `game112` 必红
+> （5b 那节「还没做过快照时列表是空的」、1a 那节「10101 必须真的没人监听」）。
+>
+> ### 一个静默失败的教训：重复的 i18n 键
+>
+> 新增 `game.f_path`（远程路径）时**撞上了 `GameDetailModal` 已有的 `game.f_path`
+> （物理路径）** —— JSON 与 i18next 都取最后一个，前面那条被无声吃掉，游戏详情里
+> 那一行当场变成「远程路径」。这一条是回归抓到的（`详情有「物理路径」` 变红），
+> 但抓得很偶然。所以新增一条静态守卫：**两份语言包都不许有重复键**。
+> 同时把存档的字段键挪进独立命名空间 `game.sf_*`。
+
+> ### 新增文件 / 接口
+>
+> | 文件 | 作用 |
+> |---|---|
+> | `include/save_remote.h` + `src/save_remote.c` | 传输层：FTP / HTTP 推与拉（~400 行） |
+> | `include/game_auto.h` + `src/game_auto.c` | 状态机 + 守护线程 + 手动同步入口（~450 行） |
+> | `src/curl_init.c` | `pldmgr_curl_init()` 单独一个 TU（见下） |
+> | `test/stub_servers.{c,h}` | 自己实现的极小 FTP / HTTP 服务器（真协议，不是打桩） |
+>
+> - `POST /game_save_sync {tid, action:"push"|"pull", uid?}` → `{ok, action, uids, files, size, failed, note}`
+> - `GET /game_saves` 新增 `auto_state:{running, last:{action, ok, at, message}|null}`
+>
+> **`pldmgr_curl_init()` 不能放 `utils.c`**：`utils.c` 被一大票**纯文件系统**的宿主测试
+> 链着（game_saves / media_scan / game_mgr），`curl_global_init` 一进 `utils.o` 它们立刻
+> `undefined reference` —— 等于把「存档的宿主测试不依赖 curl」这条设计从另一个方向拆掉。
+> 收进 `src/curl_init.c`，谁用谁链。
+>
+> ### 测试
+>
+> - 宿主新增两条：`save_remote` **63 项 0 失败**（含真 FTP 协议往返：轨迹确认
+>   `USER/PASS → PWD → CWD ps5save → MKD ps5save → CWD <TID> → MKD <TID> → EPSV → TYPE I → STOR`）、
+>   `game_auto` **45 项 0 失败**（`game_auto_plan` 全组合穷举 + 手动推拉端到端）
+> - 宿主全套：`game_saves` 142、`media_scan` 178、`game_mgr` 100、
+>   `check_post_routes` **13==13**、`check_stack_frames` 全绿、`overall: PASS`
+> - 前端：`game112` **232 → 248 项 0 失败**（新增 SMB 禁用 / 立即推拉 / 老配置 smb /
+>   语言包重复键 / 英文包字段标签）；`nav112` 20、`acct111` 23、`avatar109` 19、
+>   `cropfix` 75、`pack125` 15 全绿
+> - 出包：`NayePlmTools_0.5.2.142-{me,ga}.elf` 各 10,818,640 B，titleId 自检 OK，
+>   内嵌标题 `(c73ac9a)` 非 DEV，包内网页与 `frontend/dist/index.html` 逐字节一致
+
 ## v0.5.2.141 (CN-FORK)
 
 > **`.140` 的快照功能在真机上一按就把面板打死 —— 根因是栈溢出。**
