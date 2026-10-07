@@ -212,7 +212,7 @@ static int st_sql_col_index(const char *sql, size_t sl, const char *col) {
 }
 
 /* 在 sqlite_master 里定位 tbl_contentinfo 的根页 + pprDeeplinkUri 列序号（col4=建表 SQL） */
-typedef struct { uint32_t root; int deeplink_col; } st_master_arg;
+typedef struct { uint32_t root; int deeplink_col; int size_col; } st_master_arg;
 static int st_cb_master(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     st_master_arg *m = (st_master_arg *)arg;
     const uint8_t *tp;
@@ -221,8 +221,10 @@ static int st_cb_master(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     if (st_rec_col(d, sz, rec, 1, &tp, &tl, NULL) != 2 || tl != 15 || memcmp(tp, "tbl_contentinfo", 15) != 0) return 0;
     if (st_rec_col(d, sz, rec, 3, NULL, NULL, &num) != 3 || !num) return 0;
     m->root = (uint32_t)num;
-    if (st_rec_col(d, sz, rec, 4, &tp, &tl, NULL) == 2 && tl)
+    if (st_rec_col(d, sz, rec, 4, &tp, &tl, NULL) == 2 && tl) {
         m->deeplink_col = st_sql_col_index((const char *)tp, tl, "pprDeeplinkUri");
+        m->size_col    = st_sql_col_index((const char *)tp, tl, "size");
+    }
     return 1;
 }
 
@@ -249,8 +251,13 @@ typedef struct {
      * 一款完整解包的 PS5 游戏动辄上万文件，15 款就是几十万到上百万次系统调用 —— 这就是
      * 「游戏列表载入超级慢」的主因。列表不需要精确体积（SMP 也一律报 0），跳过 du 后
      * folder 游戏 size=0，前端 formatSize 对 0 返回空串、不显示体积标签。
-     * 详情模式（want 非 NULL）不设 skip_du，照旧拿真实体积。 */
+     * 详情模式（want 非 NULL）不设 skip_du，照旧拿真实体积。
+     * v0.5.2.135 补：列表 JSON 也带 appdb_size（app.db 的 size 列），前端在 size=0 时
+     * 用 appdb_size 兜底显示，避免磁贴体积标签整个消失。 */
     int skip_du;
+    /* tbl_contentinfo 的 size 列在**真实列序**里的位置（由 st_cb_master 从建表 SQL 现查）。 */
+    int size_col;
+    unsigned long long d_appdb_size;   /* 详情模式的 app.db size */
 } enum_arg_t;
 
 /* 与 mock / 前端同口径：CUSA、PPJB 是 PS4 本体，其余按 PS5 算。 */
@@ -262,15 +269,16 @@ static const char *gm_platform(const char *tid) {
  * 原来给 640，加了 platform/icon/bg 三个字段后就不够了，取 760 留余量 ——
  * 余量不足的后果是写到一半发现放不下，于是 `overflow` 与**一条被截断的 JSON**
  * 同时产生，前端解析直接失败（比少一款游戏严重得多）。 */
-#define GM_ITEM_HEADROOM 760
+#define GM_ITEM_HEADROOM 800
 
-static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, const char *src, const char *fmt, unsigned long long size) {
+static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, const char *src, const char *fmt, unsigned long long size, unsigned long long appdb_size) {
     if (a->want) {
         if (a->d_found || strcmp(a->want, tid) != 0) return;
         snprintf(a->d_name, sizeof(a->d_name), "%s", name);
         snprintf(a->d_src, sizeof(a->d_src), "%s", src);
         snprintf(a->d_fmt, sizeof(a->d_fmt), "%s", fmt);
         a->d_size = size;
+        a->d_appdb_size = appdb_size;
         a->d_found = 1;
         return;
     }
@@ -292,8 +300,9 @@ static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, con
     long long bver = game_title_bg_ver(tid);
     int used = snprintf(a->buf + a->pos, a->size - a->pos,
                         "%s{\"tid\":\"%s\",\"name\":\"%s\",\"src\":\"%s\",\"fmt\":\"%s\",\"size\":%llu,"
+                        "\"appdb_size\":%llu,"
                         "\"platform\":\"%s\",\"icon\":%lld,\"bg\":%lld}",
-                        a->count ? "," : "", tid, esc, src, fmt, size,
+                        a->count ? "," : "", tid, esc, src, fmt, size, appdb_size,
                         gm_platform(tid), iver, bver);
     if (used < 0 || (size_t)used >= GM_ITEM_HEADROOM) { a->overflow = 1; return; }
     a->pos += (size_t)used;
@@ -323,7 +332,14 @@ static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     if (!name[0]) snprintf(name, sizeof(name), "%s", tid);
     unsigned long long gsize;
     const char *fmt = gm_fmt_size(tid, "installed", &gsize, a->skip_du);
-    gm_append_item(a, tid, name, "installed", fmt, gsize);
+    /* app.db 的 size 列（安装包体积）：固件间列序可变，由 st_cb_master 现查 st_sql_col_index。
+     * 列表 skip_du=1 时 folder 游戏 gsize=0，前端用 appdb_size 兜底显示。 */
+    unsigned long long appdb_sz = 0;
+    if (a->size_col >= 0) {
+        uint64_t num = 0;
+        if (st_rec_col(d, sz, rec, a->size_col, NULL, NULL, &num) == 3) appdb_sz = (unsigned long long)num;
+    }
+    gm_append_item(a, tid, name, "installed", fmt, gsize, appdb_sz);
     return 0;
 }
 
@@ -341,8 +357,9 @@ static void game_enum_appdb(enum_arg_t *a) {
     uint32_t pgsz = st_be16(d + 16);
     if (pgsz == 1) pgsz = 65536;
     if (pgsz < 512 || pgsz > 65536) { free(d); return; }
-    st_master_arg m = { 0, -1 };
+    st_master_arg m = { 0, -1, -1 };
     st_bwalk(d, (size_t)rd, 1, pgsz, 0, st_cb_master, &m);
+    a->size_col = m.size_col;
     if (m.root) st_bwalk(d, (size_t)rd, m.root, pgsz, 0, st_cb_enum, a);
     free(d);
 }
@@ -400,7 +417,7 @@ int game_mgr_enum_deeplinks(game_mgr_deeplink_cb cb, void *user) {
     uint32_t pgsz = st_be16(d + 16);
     if (pgsz == 1) pgsz = 65536;
     if (pgsz < 512 || pgsz > 65536) { free(d); return -1; }
-    st_master_arg m = { 0, -1 };
+    st_master_arg m = { 0, -1, -1 };
     st_bwalk(d, (size_t)rd, 1, pgsz, 0, st_cb_master, &m);
     if (!m.root) { free(d); return -1; }              /* 连表都没有：异常库，交给调用方下次重试 */
     if (m.deeplink_col < 0) { free(d); return 0; }     /* 库正常但无该列：视为「无磁贴链接」 */
@@ -650,7 +667,7 @@ static void game_enum_dump(enum_arg_t *a) {
             const char *fmt = gm_fmt_size(ent->d_name, "dump", &sz, a->skip_du);
             if (!strcmp(fmt, "folder") && gm_dir_is_lz4(root)) fmt = "lz4";
             if (!a->skip_du && !sz) sz = gm_dir_size_cached(root);   /* 列表模式 skip_du=1 跳过此兜底 du */
-            gm_append_item(a, ent->d_name, name, "dump", fmt, sz);
+            gm_append_item(a, ent->d_name, name, "dump", fmt, sz, 0);   /* dump 游戏不在 app.db，appdb_size=0 */
         }
         closedir(dp);
     }

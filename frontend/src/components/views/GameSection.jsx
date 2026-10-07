@@ -82,7 +82,7 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction }) {
   const platform = gamePlatform(g.tid)
   const fmtInfo = FMT_LABEL[g.fmt] || FMT_LABEL[installed ? 'pkg' : 'folder']
   const fmtLabel = t(fmtInfo.k, fmtInfo.d)
-  const sizeLabel = formatSize(g.size)
+  const sizeLabel = formatSize(g.size || g.appdb_size)   /* v0.5.2.135：skip_du 时 folder 游戏 size=0，用 appdb_size 兜底 */
   const platColor = PLAT_COLOR[platform] || '#475569'
   /* [CN-FORK] v0.5.2.112 磁贴上的图**拆成两层**（用户：「还要增加一个修改背景的」）：
    *   · icon —— 封面那一格方图。有自定义（列表项带 icon 版本号）就用 /game_tile_icon，
