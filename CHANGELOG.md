@@ -120,6 +120,31 @@
 > - 出包：`NayePlmTools_0.5.2.142-{me,ga}.elf` 各 10,818,640 B，titleId 自检 OK，
 >   内嵌标题 `(c73ac9a)` 非 DEV，包内网页与 `frontend/dist/index.html` 逐字节一致
 
+> ### 真机验收（192.168.1.214，已推 `.142`）
+>
+> 真机 `/version` = `0.5.2.142`；`/game_saves` 已带 `auto_state`（新代码在跑）。
+>
+> **① `device142_sync.py` —— 18/18 PASS**（本机起一个极小 HTTP 桩当远端，PUT 存 / GET 取）：
+>
+> - 远端为空时 `pull` → **200 + note「远程还没有这个游戏的存档」**（`SR_ENOTFOUND` 不是失败）
+> - 配 `mode=smb` 时 `push` → **400 + 「当前 SDK 不支持 smb 传输」**（不是「没有存档」）
+> - `push` → 远端真出现 `saves/PPSA27836/1a1d3627.zip`（15,728,894 B，
+>   条目 `PPSA27836/sdimg_SAVESERVICE-LINE-0-1Slot`）
+> - `pull` → `ok:true`；本地仍 1 文件 / 15,728,640 字节
+> - 每一步之后 `/version` 都是 `0.5.2.142`（面板没被打死）
+>
+> **② `device142_pull_restore.py` —— 13/13 PASS**（专测 `.142` 新写的**拉取兜底**）：
+>
+> - 先用 FTP 把本地存档整个备份（记 sha256）→ `push` → **删掉本地存档** → `pull`
+> - `pull` 此时本地 0 条，必须走 `game_saves_user_ids()` 兜底 → `ok:true`，
+>   note `已拉取 1 份（1 个文件 / 15728640 字节）`
+> - 恢复后的文件 **sha256 与原文件逐字节一致**
+>
+> **③ 其它真机回归（确认没碰坏）**：`device141_snap.py` **PASS**（快照 run/restore/delete 三条都不打死面板）、
+> `device129_detail.mjs` **29/29**、`device127_badges.mjs` **17/17**、`device125.mjs` **PASS**。
+>
+> 验收脚本在 `_ftp_probe/device142_sync.py` / `_ftp_probe/device142_pull_restore.py`（不受版本管理）。
+
 ## v0.5.2.141 (CN-FORK)
 
 > **`.140` 的快照功能在真机上一按就把面板打死 —— 根因是栈溢出。**

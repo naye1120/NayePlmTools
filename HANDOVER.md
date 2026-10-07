@@ -857,7 +857,7 @@ PS4 的 `.bin` 密封密钥一起打包），API 的 `save` 参数从「槽名�
 
 **`.140`（2026-10-07）存档三层计划的第 2 层：本地定时快照。**
 用户上一轮拍板的范围是「根因 + 引擎 + 本地快照」，`.139` 交付了根因，本轮交付第 2 层
-（第 3 层「自动存档执行引擎 + 传输层」仍未开工）。设计上按用户的选择走：**配置跟着游戏走**
+（第 3 层「自动存档执行引擎 + 传输层」已由 `.142` 交付，见下）。设计上按用户的选择走：**配置跟着游戏走**
 （存在 `GAME_SAVES_AUTO_PATH` 同一个 tid 对象里的 `snap` 键，与 `smb`/`ftp`/`http` 并排，
 用户「对着这个游戏一起配」的心智模型不变），**能力 = 列表 + 一键还原 + 删除**。
 
@@ -1032,6 +1032,16 @@ JSON 与 i18next 都取最后一个，详情里那一行当场变成「远程路
 两包各 **10,818,640** 字节、titleId 自检 NAYE00001/NAYE00004 通过，
 `dist` 932,607 字节与两个 ELF 内嵌 blob 逐字节一致，`0.5.2.139` / `.140` / `.141` 残留各 0 处。
 宿主新增 `save_remote` 63 项 + `game_auto` 45 项（都是 0 失败），前端 `game112` 232 → 248 项。
+
+**已推真机 192.168.1.214 验收通过**（`/version` = `0.5.2.142`）。两条新写的验收脚本
+（`_ftp_probe/device142_sync.py` **18/18**、`_ftp_probe/device142_pull_restore.py` **13/13**）
+在本机起一个极小 HTTP 桩当远端（PUT 存 / GET 取），端到端验了：
+远端为空时 `pull` 回 **200 + note「远程还没有」**（`SR_ENOTFOUND` 不是失败）；
+配 `smb` 时 `push` 回 **400 +「当前 SDK 不支持」**（不是「没有存档」）；
+`push` 后远端真出现 `saves/<TID>/<uid>.zip`（15,728,894 B）；
+**删掉本地存档再 `pull`** → 走 `game_saves_user_ids()` 兜底恢复，**恢复的文件 sha256 与原文件逐字节一致**。
+每一步之后 `/version` 都还是 `0.5.2.142`。顺带复跑 `device141_snap.py` PASS、
+`device129_detail.mjs` 29/29、`device127_badges.mjs` 17/17、`device125.mjs` PASS。
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
@@ -1835,6 +1845,26 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
   记得同步更新 `test/mutation_check_media.sh`**。
 
 ## 7. 接手后的下一步（待定，非阻塞）
+- **`.142`（存档第 3 层：自动存档执行引擎 + 远程推拉）—— ✅ 已出包、已推真机、真机验收全过**。
+  见 §0 的 `.142` 段与 §6 的「存档远程同步」条。真机侧已确认：`push` 真把 `<TID>/<uid>.zip`
+  写进远端、`pull` 能从空本地靠 `game_saves_user_ids()` 兜底恢复（sha256 逐字节一致）、
+  `SR_ENOTFOUND` 与 `smb 不支持` 两条错误路径的返回都对、每一步面板都活着。
+  **下次动传输层（`src/save_remote.c`）或引擎（`src/game_auto.c`）时照这几条真机验**：
+  1. **协议硬约束**：SDK `libcurl 8.18.0` 没编 `smb` → 只能 FTP + HTTP；新增协议前先
+     `strings -n 3 /opt/ps5-payload-sdk/target/lib/libcurl.a | grep <proto>` 确认。
+  2. **远端布局推拉逐字一致**：`<base>/<TID>/<uid>.zip`，文件名恒定、不带时间戳、整份覆盖。
+     改任何一边（`sr_build_url` 的拼接 / `sr_pull` 的落点）都要同时改另一边。
+  3. **`g_sync_mu` 不能去掉**：「整份替换」= 旧的改名 → 换上去 → 删旧的，并发跑同一目录会
+     互相删掉对方刚改名的目录（守护线程退出推送 vs 用户手点「立即推送」完全可能同时）。
+  4. **`SR_ENOTFOUND (-2)`**：FTP 的 `CURLE_REMOTE_FILE_NOT_FOUND` **与**
+     `CURLE_REMOTE_ACCESS_DENIED`（CWD 到不存在目录 → 550）都要归进来，HTTP 是 404。
+     它是「跳过」不是「失败」—— 别让它把 `ok:false` 带出来。
+  5. **守护线程栈**：`game_auto` 是 `pthread_create` 出来的，**不受 MHD 那个 1MB 选项管**，
+     自己 `pthread_attr_setstacksize(1MB)`（真机连接线程只有 64KB，见 §0 的栈预算红线）。
+  6. **验收脚本**：`_ftp_probe/device142_sync.py`（推拉 + 两条错误路径，18 项）、
+     `_ftp_probe/device142_pull_restore.py`（删本地 → pull 兜底恢复 + sha256 比对，13 项）。
+     两者都在本机起一个极小 HTTP 桩当远端（PUT 存 / GET 取），**不依赖外网**。
+
 - **`.132`（改名写源 `sce_sys/param.json`，SMP 重扫不再回退）—— ✅ 已出包、已推真机、真机闭环验完（32/32）**。
   见 §0 的 `.132` 段。真机侧已确认的：`persisted:true` + 四层逐字节一致 + 备份建成 +
   **SMP 重扫后主屏名字不回退**（这是 `.132` 唯一的目标）。三条真机才看得出的结论也记在 §0
