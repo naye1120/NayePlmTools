@@ -20,6 +20,7 @@
  *   ⑨ 本地快照：立即备份 / 内容没变不新增 / 只改了哪个用户就只新增哪个 /
  *      保留数裁剪 / 一键还原 / 删除 / uid 与 ts 的路径穿越一律拒 /
  *      间隔与保留数的归一化（86400 不能被当成越界回落成 30 分钟）
+ *   ⑨c 崩溃留下的 .tmp_* / .rst_* 会被清掉，且**不误删正在写的那一份**
  *   ⑩ **整条快照链必须能在 32KB 线程栈上跑完**（真机连接线程只有 64KB 上下）
  *
  * 测不了的部分（写在前面，免得有人以为是漏了）：
@@ -37,6 +38,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/time.h> /* utimes：⑨c 要把 .tmp_* 的 mtime 拨回过去 */
 
 #include "game_saves.h"
 #include "cJSON.h"
@@ -710,6 +712,42 @@ int main(void) {
     if (o) {
         CHECK(count_snap(cJSON_GetObjectItem(o, "snapshots"), U5) == 0, "U5 的快照没被删掉");
         cJSON_Delete(o);
+    }
+
+    /* ⑨c 崩溃留下的半成品要清掉，**但不能误删正在写的那一份**。
+     * `.tmp_*` / `.rst_*` 只在正常路径上由 gs_rmtree 收掉；进程死在复制中途
+     * （`.141` 那个栈溢出就是）它就永远留在盘上，而且列表与全局预算**两套账都不认它**
+     * （都只认 15 字符时间戳目录）—— 真机上 `.140` 崩溃留下的 .tmp_226_1791374835
+     * 在 `.141` 起来之后还原样躺着。判据用 mtime：够旧（>1h）才删。 */
+    {
+        const char *udir = GAME_SAVES_SNAP_DIR "/" TID_PS5 "/" U2;
+        char stale[512], fresh[512], inner[600];
+        snprintf(stale, sizeof(stale), "%s/.tmp_999_1", udir);
+        snprintf(fresh, sizeof(fresh), "%s/.tmp_999_2", udir);
+        /* 崩溃现场的形态：两个半截目录，各带一个半截文件。
+         * 先断言造出来了 —— 否则下面「旧的被清了」会因为**夹具根本不存在**而假绿。 */
+        CHECK(mkdir(stale, 0755) == 0, "造不出 .tmp_ 夹具（父目录不在？）：%s", stale);
+        CHECK(mkdir(fresh, 0755) == 0, "造不出 .tmp_ 夹具（父目录不在？）：%s", fresh);
+        snprintf(inner, sizeof(inner), "%s/sdimg_part", stale);
+        put_blob(inner, 32);
+        snprintf(inner, sizeof(inner), "%s/sdimg_part", fresh);
+        put_blob(inner, 32);
+        /* 「旧的」那份的 mtime 拨回 2 小时前（阈值是 1 小时） */
+        struct timeval old[2];
+        old[0].tv_sec = time(NULL) - 7200;
+        old[0].tv_usec = 0;
+        old[1] = old[0];
+        utimes(stale, old);
+
+        put_blob(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_TMPTEST", 48); /* 避开「内容没变」 */
+        game_saves_snap_run_now(TID_PS5, msg, sizeof(msg));
+        CHECK(access(stale, F_OK) != 0, "崩溃留下的旧 .tmp_* 没被清掉：%s", stale);
+        CHECK(access(fresh, F_OK) == 0, "刚建的 .tmp_* 被误删了（阈值判反了？）：%s", fresh);
+
+        /* 收尾：把故意留着的那份删掉，别让它影响后面的用例 */
+        snprintf(inner, sizeof(inner), "%s/sdimg_part", fresh);
+        unlink(inner);
+        rmdir(fresh);
     }
 
     /* ⑩ 小栈。放在最后：它会动 U2 的源、也会给 U5 补一份快照（上面刚删掉），

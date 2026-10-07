@@ -878,6 +878,45 @@ static void gs_snap_evict_total(void) {
     free(refs);
 }
 
+/* ── 清掉崩溃留下的半成品 ─────────────────────────────────────────────────
+ * `.tmp_*`（快照的临时目录）与 `.rst_*`（还原的临时目录）都是「我们自己的副本」，
+ * 删掉永远不会动到用户数据 —— 这是它们能被无条件清理的前提。
+ *
+ * 为什么需要这道清扫：这两个目录只在**正常路径**上由 gs_rmtree 收掉，
+ * 而进程如果死在复制中途（`.141` 那个栈溢出就是），它就永远留在盘上 ——
+ * 而且**两套账都不认它**：列表用 gs_snap_ts_ok 过滤，只认 15 字符时间戳目录；
+ * 全局预算 gs_snap_collect_tid 同样只收时间戳目录。于是它既看不见、也淘汰不掉，
+ * 每崩一次就往 /data 里留一份几 MB 的半截副本。真机上验证过：`.140` 那次崩溃
+ * 留下的 .tmp_226_1791374835 在 `.141` 起来之后还原样躺在那里。
+ *
+ * 只删**够旧**的（1 小时）。正常一次复制最多几秒，留 1 小时是给「超慢主机 +
+ * 512MB 上限的大存档」留足余量，宁可少清一次也不要误删正在写的那个。
+ * 只扫一层：这两个名字都直接落在目标目录下，不会嵌套。 */
+#define GS_TMP_STALE_SEC 3600
+
+static int gs_name_is_temp(const char *n) {
+    return strncmp(n, ".tmp_", 5) == 0 || strncmp(n, ".rst_", 5) == 0;
+}
+
+static void gs_sweep_temp(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    time_t now = time(NULL);
+    struct dirent *e;
+    char p[1200];
+    while ((e = readdir(d)) != NULL) {
+        if (!gs_name_is_temp(e->d_name)) continue;
+        if (snprintf(p, sizeof(p), "%s/%s", dir, e->d_name) >= (int)sizeof(p)) continue;
+        struct stat st;
+        if (lstat(p, &st) != 0) continue;
+        if (now - st.st_mtime < GS_TMP_STALE_SEC) continue; /* 可能是正在写的那一份 */
+        pldmgr_log("[PLDMGR] saves: 清掉上次没做完的临时目录 %s\n", p);
+        if (S_ISDIR(st.st_mode)) gs_rmtree(p);
+        else unlink(p);
+    }
+    closedir(d);
+}
+
 /* ── 做一份快照 ─────────────────────────────────────────────────────────── */
 /* 返回 0 = 新生成一份（out_ts 已填）；1 = 跳过（内容没变 / 空 / 正在被写，note 回原因）；
  * -1 = 失败（note 回人话）。调用方必须持有 g_snap_mu。 */
@@ -929,6 +968,9 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
         if (note) snprintf(note, notesz, "无法创建快照目录（%s）", strerror(errno));
         return -1;
     }
+    /* 上一次如果死在复制中途，这里会留下一个 .tmp_*。先扫掉再建新的 ——
+     * 顺手做，不给它单开一条守护路径（见 gs_sweep_temp 的注释）。 */
+    gs_sweep_temp(udir);
 
     /* 时间戳目录名要唯一：同一秒内再来一次就往后挪一秒（跨过 DST 也不会重复，
      * 因为我们是拿拼好的名字去 lstat 试，而不是算差值）。 */
@@ -1222,6 +1264,9 @@ static int gs_snap_restore(const char *tid, const char *uid, const char *ts,
     err[0] = 0;
     int rc = -1;
     pthread_mutex_lock(&g_snap_mu);
+    /* 还原的临时目录落在**主机存档目录的父目录**（要同文件系统才能 rename），
+     * 崩在那里会留一个 .rst_* 在 /user/home 下 —— 同样两套账都不认它，顺手清。 */
+    gs_sweep_temp(parent);
     gs_rmtree(tmp);
     if (ensure_dir_recursive(tmp) != 0) {
         snprintf(err, sizeof(err), "无法创建临时目录（%s）", strerror(errno));
