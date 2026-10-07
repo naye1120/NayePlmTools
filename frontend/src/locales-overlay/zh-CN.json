@@ -90,9 +90,8 @@
   "settings.archive_title": "存档配置",
   "settings.archive_desc": "配置自动存档与本地快照的默认参数。",
   "settings.archive_config_title": "存档配置",
-  "settings.archive_config_hint": "这里配置的远程位置（主机 / 共享 / 账号等）对所有游戏生效：单游戏弹窗里的「远程位置」只读显示它，保存后该游戏就按它推拉；自动存档的开关与时机、本地快照仍在该游戏的「存档管理」里单独设置。",
+  "settings.archive_config_hint": "这里配置的三件事对所有游戏生效：远程位置、自动存档的开关与时机、本地快照的间隔与保留份数。单个游戏的「存档管理」里只显示这些设置并执行（立即拉取 / 立即推送 / 立即备份），不重复配置。",
   "settings.archive_saved": "全局存档配置已保存",
-  "settings.archive_pergame_hint": "自动存档的开关与时机、本地快照的间隔与保留份数，请在每个游戏的「存档管理」里单独设置。",
   "settings.default_repo_title": "默认云端仓库",
   "settings.default_repo_desc": "内置的官方 payload 目录。关掉后向它发出的请求全部停掉（含开机那一次刷新），你自己的来源照常可用。",
   "settings.default_repo_off_hint": "已关闭默认仓库且未开启多来源模式：管理页只会列出本地 payload。想继续在线安装，请打开「多来源」并添加自己的源。",
@@ -476,5 +475,8 @@
   "game.remote_from_global": "（来自全局设置）",
   "game.remote_from_game": "（本游戏已配置）",
   "game.remote_unset": "尚未配置远程位置，请到「设置 → 存档配置」填写。",
-  "game.remote_global_hint": "远程位置在「设置 → 存档配置」中统一设置，对所有游戏生效。"
+  "game.remote_global_hint": "以上开关与远程位置都在「设置 → 存档配置」里统一设置，对所有游戏生效。",
+  "settings.auto_enable_hint_global": "开关打开后，主机按下面的时机自动与远程位置同步每个游戏的存档。对所有游戏生效。",
+  "settings.snap_enable_hint_global": "不依赖网络：主机按下面的间隔把存档整份复制到本地 /data 下，超保留数自动删最旧。远程同步连不上时，这一条是最后的兜底。对所有游戏生效。",
+  "game.snap_global_hint": "快照的开关与参数在「设置 → 存档配置」里统一设置，对所有游戏生效。"
 }

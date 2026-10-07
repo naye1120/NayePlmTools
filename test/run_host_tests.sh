@@ -141,7 +141,7 @@ if command -v python3 >/dev/null 2>&1; then
             -DGAME_SAVES_SNAP_DIR='"/tmp/pldmgr_saves_test/snap"' \
             -DGS_SNAP_QUIET_SEC=0 \
             src/game_job.c src/json_helpers.c src/utils.c src/inflate.c src/zip_io.c \
-            src/psaccounts/third_party/cJSON.c
+            src/psaccounts/third_party/cJSON.c test/stub_archive_global.c
     fi
 else
     echo "=== game_saves SKIPPED: 需要 python3 做夹具 ==="
@@ -222,7 +222,7 @@ if [ -n "$SR_CURL_INC" ] && [ -n "$SR_SMB_A" ] && clang /tmp/_curlprobe.c -lcurl
         -DGS_SNAP_QUIET_SEC=0 \
         src/save_remote.c src/curl_init.c src/game_saves.c src/game_job.c src/json_helpers.c \
         src/utils.c src/inflate.c src/zip_io.c src/psaccounts/third_party/cJSON.c \
-        test/stub_servers.c test/save_remote_test.c \
+        test/stub_servers.c test/stub_archive_global.c test/save_remote_test.c \
         -o /tmp/save_remote_test "$SR_SMB_A" -lpthread -lm -lcurl; then
         echo "  BUILD FAILED"; fail=1
     else
@@ -244,7 +244,7 @@ if [ -n "$SR_CURL_INC" ] && [ -n "$SR_SMB_A" ] && clang /tmp/_curlprobe.c -lcurl
         src/game_auto.c src/save_remote.c src/curl_init.c src/game_saves.c src/game_job.c \
         src/json_helpers.c src/utils.c src/inflate.c src/zip_io.c \
         src/psaccounts/third_party/cJSON.c \
-        test/stub_servers.c test/game_auto_test.c \
+        test/stub_servers.c test/stub_archive_global.c test/game_auto_test.c \
         -o /tmp/game_auto_test "$SR_SMB_A" -lpthread -lm -lcurl; then
         echo "  BUILD FAILED"; fail=1
     else

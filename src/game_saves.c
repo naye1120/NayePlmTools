@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "cJSON.h"
+#include "config.h" /* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）*/
 #include "inflate.h"
 #include "json_helpers.h"
 #include "pldmgr.h"
@@ -160,6 +161,12 @@ typedef struct {
  * 「用户 A 的存档」和「用户 B 的存档」谁在前会随机变，前端每刷一次都换位置。
  * 按 uid 升序排一下，顺带让 local_path（取第一条）也是确定的。 */
 static int gs_uid_cmp(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
+
+/* [CN-FORK] v0.5.2.145 同一件事，只是元素宽度是 32 而不是 64（tid 表）。
+ * 与 gs_uid_cmp 一样只比字符串 —— qsort 给的是元素首地址，宽度由调用方保证。 */
+static int gs_tid_cmp(const void *a, const void *b) {
     return strcmp((const char *)a, (const char *)b);
 }
 
@@ -1039,12 +1046,9 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
 }
 
 /* ── 快照配置读取 ───────────────────────────────────────────────────────── */
-/* 读一款游戏的 snap 配置。缺键 / 越界一律回落默认，调用方不必判 NULL。 */
-static void gs_snap_cfg(const char *tid, int *enabled, int *interval, int *keep) {
+/* 从一份 auto JSON 里读 snap 段（per-game 与全局结构相同，共用这一段）。 */
+static void gs_snap_from_json(cJSON *cur, int *enabled, int *interval, int *keep) {
     int en = 0, iv = GAME_SAVES_SNAP_INTERVAL_DEF, kp = GAME_SAVES_SNAP_KEEP_DEF;
-    pthread_mutex_lock(&g_auto_mu);
-    cJSON *all = gs_auto_load();
-    cJSON *cur = all ? cJSON_GetObjectItem(all, tid) : NULL;
     cJSON *s = cur ? cJSON_GetObjectItem(cur, "snap") : NULL;
     if (s && cJSON_IsObject(s)) {
         en = gs_field_bool(s, "enabled", 0);
@@ -1053,8 +1057,45 @@ static void gs_snap_cfg(const char *tid, int *enabled, int *interval, int *keep)
         kp = (int)gs_get_int(cJSON_GetObjectItem(s, "keep"),
                              GAME_SAVES_SNAP_KEEP_DEF, 0, 1000000000);
     }
-    cJSON_Delete(all);
-    pthread_mutex_unlock(&g_auto_mu);
+    if (enabled) *enabled = en;
+    if (interval) *interval = gs_snap_clamp_interval(iv);
+    if (keep) *keep = gs_snap_clamp_keep(kp);
+}
+
+/* 读全局存档配置（设置页「存档配置」）里的 snap 段。有返回 1，没有返回 0。
+ * 走堆：这份 JSON 六百多字节，而调用链上有几处跑在 64KB 栈的连接线程上。 */
+static int gs_global_snap(int *enabled, int *interval, int *keep) {
+    char *buf = (char *)malloc(4096);
+    if (!buf) return 0;
+    int got = 0;
+    if (config_read_archive_global(buf, 4096) > 0) {
+        cJSON *o = cJSON_Parse(buf);
+        if (o && cJSON_IsObject(o)) {
+            gs_snap_from_json(o, enabled, interval, keep);
+            got = 1;
+        }
+        cJSON_Delete(o);
+    }
+    free(buf);
+    return got;
+}
+
+/* 读一款游戏的 snap 配置。缺键 / 越界一律回落默认，调用方不必判 NULL。
+ *
+ * [CN-FORK] v0.5.2.145 **全局优先**（与 game_auto.c 的 ga_load_cfg 同一规则）：
+ * 设置页「存档配置」里配过本地快照，就以它为准；没配过才用这个游戏自己的一份。
+ * 这条决定了「立即备份」用几份保留、守护线程按什么间隔跑 —— 两处必须同一口径，
+ * 否则 UI 说「保留 5 份」而守护按 3 份删，用户会觉得丢了东西。 */
+static void gs_snap_cfg(const char *tid, int *enabled, int *interval, int *keep) {
+    int en = 0, iv = GAME_SAVES_SNAP_INTERVAL_DEF, kp = GAME_SAVES_SNAP_KEEP_DEF;
+    if (!gs_global_snap(&en, &iv, &kp)) {
+        pthread_mutex_lock(&g_auto_mu);
+        cJSON *all = gs_auto_load();
+        cJSON *cur = all ? cJSON_GetObjectItem(all, tid) : NULL;
+        gs_snap_from_json(cur, &en, &iv, &kp);
+        cJSON_Delete(all);
+        pthread_mutex_unlock(&g_auto_mu);
+    }
     if (enabled) *enabled = en;
     if (interval) *interval = gs_snap_clamp_interval(iv);
     if (keep) *keep = gs_snap_clamp_keep(kp);
@@ -1063,8 +1104,64 @@ static void gs_snap_cfg(const char *tid, int *enabled, int *interval, int *keep)
 /* 列出配置里开了本地快照的全部游戏。 */
 typedef struct { char tid[32]; int interval; int keep; } gs_snap_cfg_t;
 
+/* [CN-FORK] v0.5.2.145 扫出主机上**有存档的全部游戏**。
+ *
+ * 为什么需要它：全局配了一开，快照要覆盖的就是「所有有存档的游戏」，而这些游戏
+ * 在 per-game 配置里**根本没有条目**（用户从没进过它们的存档弹窗），所以照旧
+ * 从配置枚举的话，全局开了也一个都扫不到 —— 这正是「全局不生效」的另一种表现。
+ * 反过来从「存档目录里实际有什么」枚举，才是对的口径：没存档的游戏本来也没什么可备份。
+ * uid 排序 + 逐目录扫描与 gs_user_ids/gs_find_roots 一致，保证顺序稳定（回归可比对）。 */
+static int gs_all_tids(char out[][32], int max) {
+    if (!out || max <= 0) return 0;
+    char ids[16][64];
+    int nu = gs_user_ids(ids, 16);
+    /* 与 gs_find_roots 同一顺序（PS5 优先），保证枚举顺序稳定、回归可比对。 */
+    static const char *const dirs[2] = {"savedata_prospero", "savedata"};
+    int n = 0;
+    for (int d = 0; d < 2 && n < max; d++) {
+        for (int i = 0; i < nu && n < max; i++) {
+            char p[512];
+            if (snprintf(p, sizeof(p), "%s/%s/%s", GS_HOME, ids[i], dirs[d])
+                >= (int)sizeof(p)) continue;
+            DIR *dd = opendir(p);
+            if (!dd) continue;
+            struct dirent *e;
+            while ((e = readdir(dd)) != NULL && n < max) {
+                if (e->d_name[0] == '.' || e->d_name[0] == 0) continue;
+                if (!gs_tid_ok(e->d_name)) continue;
+                /* 已有就别重复加（PS5 那档先扫，命中一次就够）。 */
+                int dup = 0;
+                for (int k = 0; k < n; k++)
+                    if (strcmp(out[k], e->d_name) == 0) { dup = 1; break; }
+                if (dup) continue;
+                snprintf(out[n], 32, "%s", e->d_name);
+                n++;
+            }
+            closedir(dd);
+        }
+    }
+    if (n > 1) qsort(out, (size_t)n, 32, gs_tid_cmp);
+    return n;
+}
+
 static int gs_snap_enabled_games(gs_snap_cfg_t *out, int max) {
     int n = 0;
+    /* ① 全局配了本地快照 → 覆盖所有有存档的游戏，用全局的间隔/保留。 */
+    int gen = 0, giv = 0, gkp = 0;
+    if (gs_global_snap(&gen, &giv, &gkp) && gen) {
+        char (*tids)[32] = (char (*)[32])malloc(sizeof(char[32]) * GS_SNAP_MAX_GAMES);
+        if (!tids) return 0;
+        int nt = gs_all_tids(tids, GS_SNAP_MAX_GAMES);
+        for (int i = 0; i < nt && n < max; i++) {
+            snprintf(out[n].tid, sizeof(out[n].tid), "%s", tids[i]);
+            out[n].interval = giv;
+            out[n].keep = gkp;
+            n++;
+        }
+        free(tids);
+        return n;
+    }
+    /* ② 没配全局 → 老口径：只扫 per-game 里显式开着的那些。 */
     pthread_mutex_lock(&g_auto_mu);
     cJSON *all = gs_auto_load();
     for (cJSON *it = all ? all->child : NULL; it && n < max; it = it->next) {

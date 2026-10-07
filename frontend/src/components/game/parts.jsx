@@ -1,5 +1,6 @@
 import React from 'react'
 import { cn } from '../../utils/helpers'
+import Switch from '../ui/Switch'
 
 /* [CN-FORK] v0.5.2.112 游戏模块四个弹窗共用的小零件
  *
@@ -149,6 +150,29 @@ export function MiniEmpty({ icon: Icon, children }) {
     <div className="flex flex-col items-center justify-center text-center py-8 border border-dashed border-white/10 rounded-xl">
       {Icon && <Icon className="w-7 h-7 text-white/15" />}
       <p className="panel-note text-zinc-500 mt-2">{children}</p>
+    </div>
+  )
+}
+
+/* [CN-FORK] v0.5.2.145 同步时机的一行：标题 + 说明 + 开关。
+ * 做成一行而不是两个 Field，因为「说明」在电视端必须跟着开关走，
+ * 否则用户看不出「启动时拉取」和「退出时回传」的区别。
+ *
+ * 原来只活在 SaveManagerModal 里；`.145` 起「自动存档时机」整体搬进设置页的
+ * 「存档配置」，两个弹窗都要用（单游戏那边改成只读展示、也需要同一行样式），
+ * 所以挪到这个共用零件表里 —— 一处定义，两边不会长歪。 */
+export function TimingRow({ label, hint, checked, onChange, disabled }) {
+  return (
+    <div className={cn(
+      'flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/10 bg-white/[0.02]',
+      disabled && 'opacity-50 pointer-events-none',
+    )}
+    >
+      <div className="min-w-0">
+        <p className="text-white panel-note font-semibold">{label}</p>
+        <p className="text-zinc-500 panel-tiny mt-0.5 leading-snug">{hint}</p>
+      </div>
+      <Switch checked={checked} onChange={onChange} label={label} />
     </div>
   )
 }

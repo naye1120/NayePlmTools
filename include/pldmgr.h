@@ -103,9 +103,14 @@
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
 
-#define MENU_VERSION "0.5.2.144" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.144，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.145" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.145，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
+/* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）单独一份 JSON 文件。
+ * 不塞进 nayeplmtools_config.txt：那是 key=value 行式文件，config_upsert_value 的行缓冲
+ * 只有 256 字节，而这个 JSON 六百多字节，写进去会被截断成半个 JSON（静默失效）。
+ * 单独成文件还省掉了「JSON 里的引号怎么塞进行式文件」这一层转义。 */
+#define ARCHIVE_GLOBAL_PATH "/data/nayeplmtools/archive_global.json"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"
 /* [CN-FORK] 安全模式哨兵文件：存在（内容无所谓）即在下次启动跳过全部引导期高危动作。
  * v0.5.1.64 起硬件探测已整体删除，本哨兵只负责跳过装机/杀光盘/开浏览器/自启序列。 */

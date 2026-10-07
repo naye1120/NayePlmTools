@@ -2099,6 +2099,17 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         char list_escaped[8192];
         pldmgr_json_escape(list_buf, list_escaped, sizeof(list_escaped));
 
+        /* [CN-FORK] v0.5.2.145 全局存档配置原文（设置页「存档配置」）。
+         * 单游戏弹窗要求它来判断「远程位置来自全局还是本游戏」，所以必须从 /get_config
+         * 发出去 —— 不发的话前端每次刷新就丢，用户填的全局配置看起来像没保存。
+         * 没配过时是空串（前端 loadGlobalCfg 会拿它跟 EMPTY_CFG 合并，不会崩）。
+         * 两个缓冲都刻意压小：这条请求跑在 64KB 栈的连接线程上（见 check_stack_frames.sh）。 */
+        char ag_raw[2048];
+        if (config_read_archive_global(ag_raw, sizeof(ag_raw)) < 0)
+            ag_raw[0] = 0;
+        char ag_escaped[2816];
+        pldmgr_json_escape(ag_raw, ag_escaped, sizeof(ag_escaped));
+
         char *resp_buf;
         resp = alloc_response_buffer(&resp_buf);
         if (!resp) {
@@ -2108,13 +2119,14 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                      "\"AUTO_BROWSER_OPEN\":%s,\"AUTOLOAD_DELAY\":%d,"
                      "\"KILL_DISC_PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s,"
                      "\"AUTO_INSTALL_APP\":%s,\"MULTI_SOURCES_ENABLED\":%s,"
-                     "\"DEFAULT_REPO_ENABLED\":%s}",
+                     "\"DEFAULT_REPO_ENABLED\":%s,\"ARCHIVE_GLOBAL_CONFIG\":\"%s\"}",
                      cfg.autoload_enabled ? "true" : "false", list_escaped, cfg.last_repository_update,
                      cfg.auto_browser_open ? "true" : "false", cfg.autoload_delay,
                      cfg.kill_disc_player ? "true" : "false", cfg.scan_usb_payloads ? "true" : "false",
                      cfg.auto_install_app ? "true" : "false",
                      cfg.multi_sources_enabled ? "true" : "false",
-                     cfg.default_repo_enabled ? "true" : "false");
+                     cfg.default_repo_enabled ? "true" : "false",
+                     ag_escaped);
             resp = MHD_create_response_from_buffer(strlen(resp_buf),
                                                    (void *)resp_buf,
                                                    MHD_RESPMEM_MUST_FREE);

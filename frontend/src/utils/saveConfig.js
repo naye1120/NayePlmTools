@@ -115,13 +115,41 @@ export function remoteOf(cfg) {
   }
 }
 
-/* 单个游戏保存时该用哪份远程配置：
- *   优先全局（全局已填目标）—— 这就是「全局生效」的字面意义，用户在设置里填一次，
- *   所有游戏保存后都用它；游戏之前各自配过、且全局还没填时，回退到这个游戏自己已存的远程段，
- *   不丢旧配置。后端没回传密码，所以 per-game 回退段的密码是空串 —— toRemoteCfg 会把它当
- *   「不修改」，后端保留自己存的密码。 */
-export function resolveRemoteForGame(globalCfg, perGameAuto) {
-  if (isRemoteConfigured(globalCfg)) return remoteOf(globalCfg)
+/* [CN-FORK] v0.5.2.145 「全局是不是在生效」的唯一判据。
+ *
+ * 判据是**全局那份配置写过没有**（主配置里 ARCHIVE_GLOBAL_CONFIG 是个非空串），
+ * 而不是「全局里填了几个字段」。理由：后者会引出一堆没法解释的分支 ——
+ * 用户在设置页把主机清空保存（本意是「别同步了」），按内容判就会悄悄回落到
+ * 这个游戏很久以前存的旧主机上，继续往一个他以为已经删掉的地方推。
+ * 「写过就算数」只有一条规则，用户改了什么就看到什么。
+ *
+ * 后端 game_auto.c / game_saves.c 用的是同一判据（ARCHIVE_GLOBAL_PATH 这个文件在不在），
+ * 所以前后端不会各说各话。 */
+export function hasGlobalArchive(config) {
+  const raw = config && config[GLOBAL_KEY]
+  return typeof raw === 'string' && raw.trim().length > 0
+}
+
+/* 这个游戏**实际生效**的自动存档 + 本地快照参数。
+ *   全局写过 → 全局；没写过（老装机）→ 这个游戏自己存的那份；都没有 → 内置默认。
+ * `from` 给单游戏弹窗决定标「（来自全局设置）」还是「（本游戏已配置）」。 */
+export function resolveAutoForGame(config, perGameAuto) {
+  const useGlobal = hasGlobalArchive(config)
+  const src = useGlobal ? loadGlobalCfg(config) : toLocalCfg(perGameAuto)
+  return {
+    enabled: !!src.enabled,
+    on_launch: src.on_launch !== false,
+    on_exit: src.on_exit !== false,
+    snap: { ...EMPTY_CFG.snap, ...(src.snap || {}) },
+    from: useGlobal ? 'global' : (perGameAuto ? 'game' : 'none'),
+  }
+}
+
+/* 单个游戏**实际生效**的远程位置（{mode, smb, ftp, http}），与上面同一优先级。
+ * 后端没回传密码，所以回退段的密码是空串 —— toRemoteCfg 会把它当「不修改」。 */
+export function resolveRemoteForGame(config, perGameAuto) {
+  const useGlobal = hasGlobalArchive(config)
+  if (useGlobal) return remoteOf(loadGlobalCfg(config))
   return remoteOf(toLocalCfg(perGameAuto))
 }
 

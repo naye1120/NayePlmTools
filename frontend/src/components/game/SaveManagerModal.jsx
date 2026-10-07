@@ -5,63 +5,55 @@ import {
   History, RotateCcw, CloudDownload, CloudUpload, Activity,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
-import Switch from '../ui/Switch'
-import { Block, Chip, Field, Note, MiniEmpty, ProgressBar } from './parts'
+import { Block, Chip, Note, MiniEmpty, ProgressBar, GridRow } from './parts'
 import { formatSizeAlways, formatStamp } from './format'
 import {
-  getSaves, saveAutoConfig, saveDownloadUrl, uploadSave, deleteSave, snapAction,
+  getSaves, saveDownloadUrl, uploadSave, deleteSave, snapAction,
   syncSaves,
 } from '../../utils/gameApi'
 import {
-  EMPTY_CFG, toLocalCfg, toRemoteCfg,
-  loadGlobalCfg, resolveRemoteForGame, remoteSummary, remoteOf, isRemoteConfigured,
+  resolveAutoForGame, resolveRemoteForGame, remoteSummary,
 } from '../../utils/saveConfig'
 
 /* [CN-FORK] v0.5.2.112 存档管理弹窗（磁贴第一颗按钮）
  *
- * 用户口径：「第一个代表，存档管理，最终功能就是可以上传下载存档，还可以配置远程自动存档路径
- * 和自动存档开关。」其中「远程」是三种协议都要（SMB / FTP / HTTP）。
+ * 用户口径（`.145` 收束后的最终形态）：
+ *   「把配置功能迁移过去，配置一个全局生效。单个游戏包开启 拉取和推送按钮。」
+ * 所以本弹窗**不再有可编辑的配置**，只剩三件事：
+ *   ① 这个游戏**实际生效**的自动存档状态（开关 / 两个时机）—— 只读，来自设置页「存档配置」；
+ *   ② 远程位置只读摘要 + 「立即拉取 / 立即推送」+ 引擎上次干了什么（auto_state）；
+ *   ③ 存档列表（下载 / 上传覆盖 / 删除 / 上传新的）与本地快照列表（立即备份 / 还原 / 删除）。
+ * 配置（远程位置 / 自动存档 / 快照参数）全部在「设置 → 存档配置」一处，对所有游戏生效。
  *
- * ── [CN-FORK] v0.5.2.144 重新切分：远程位置配置**迁移到设置页**（ArchiveConfigModal，
- * 存主配置键 ARCHIVE_GLOBAL_CONFIG，全局生效）。本弹窗只管**这一个游戏**的：
- *   ① 总开关 + 两个时机（启动拉取 / 退出回传）—— 这是 per-game 的，必须留。
- *   ② 「立即拉取 / 立即推送」按钮 —— 手动试一次，走 POST /game_save_sync，与自动同链。
- *   ③ 本地快照块 —— 不依赖网络，per-game 的兜底，留。
- * 远程位置类型 / host / share / 账号 / 测试连接 这些**不再是本弹窗的事**：全局在设置里配好，
- * 这里只读出来展示（来自全局 / 本游戏已存），并把解析出的远程段合进保存请求，让「全局生效」
- * 字面成立。改远程位置请去「设置 → 存档配置」。
+ * 为什么把「配置」和「动作」这样分：配置是**跨游戏共享的一份**（同一台 NAS、同一个节奏），
+ * 每个游戏各填一遍纯属重复劳动；而推 / 拉 / 备份、以及两串列表天生就是**某个游戏的**。
+ * 一个控件只有一个家 —— 用户改了配置不会怀疑「是这个游戏的还是全局的」。
  *
- * 密码字段的坑（历史）：后端不回传密码明文，per-game 回退段密码是空串，toRemoteCfg 当「不修改」，
- * 后端保留自己存的密码。全局配置则原样存密码（见 ArchiveConfigModal 注释）。
+ * 有效值来自 resolveAutoForGame(config, data.auto)：全局写过就用全局，没写过才回落到
+ * 这个游戏自己存的那份（老装机行为不变）。后端 game_auto.c / game_saves.c 读同一份全局
+ * 配置，所以这里显示什么引擎就按什么跑，不存在「UI 说开着但没跑」。
  *
- * 即时推 / 拉的链路、auto_state 状态行都与 .142 / .143 一致，这里不再重复。
+ * 历史包袱：后端永远不回传密码明文（per-game 路径），全局配置那份原样存（见
+ * ArchiveConfigModal 注释）；本条只在「回退到本游戏已存」时相关，密码一律按「不修改」处理。
  */
 
-/* per-game 可编辑的那一份（远程段不在此，来自全局 / 回退）。 */
-const PG_EMPTY = {
-  enabled: false,
-  on_launch: true,
-  on_exit: true,
-  snap: { enabled: false, interval: EMPTY_CFG.snap.interval, keep: EMPTY_CFG.snap.keep },
-}
+/* 只读状态行的标签列要宽一些：`GridRow` 默认的 86px 是给详情页那种短标签
+ * （「版本」「大小」）用的，这里全是「启动游戏时拉取」这种五六个字，86px 会**在词中间**
+ * 折行（「启动游戏时拉 / 取」），很难看。 */
+const RO_COLS = 'grid-cols-[124px_minmax(0,1fr)]'
 
 export default function SaveManagerModal({ show, game, onClose, addToast, showConfirm, config }) {
   const { t } = useTranslation()
   const tid = game && game.tid
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
-  const [pg, setPg] = useState(PG_EMPTY)
   const [remote, setRemote] = useState(null)     // {mode, smb, ftp, http} 只读展示
   const [remoteFrom, setRemoteFrom] = useState('none') // 'global' | 'game' | 'none'
-  const [saving, setSaving] = useState(false)
   const [busyId, setBusyId] = useState('')
   const [uploading, setUploading] = useState(null)   // {name, percent|null}
   const [snapping, setSnapping] = useState(false)    // 「立即备份」进行中
   const [busySnap, setBusySnap] = useState('')       // `${uid}/${ts}`，该行正在还原/删除
   const [syncing, setSyncing] = useState('')         // '' | 'push' | 'pull'：立即同步进行中
-  /* 间隔用**分钟**给用户看/填，但存的是秒（后端口径）。做成独立的文本 state：
-   * 直接由 pg.snap.interval 反推的话，用户清空输入框准备重填时会被立刻弹回原值。 */
-  const [snapMin, setSnapMin] = useState('30')
   const fileRef = useRef(null)
   const pendingSlot = useRef(null)                   // null = 新存档；字符串 = 覆盖该槽
   const aliveRef = useRef(true)
@@ -82,37 +74,26 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     }
     if (!aliveRef.current) return
     if (d) {
-      const lc = toLocalCfg(d.auto)
       setData(d)
-      setPg({
-        enabled: lc.enabled,
-        on_launch: lc.on_launch,
-        on_exit: lc.on_exit,
-        snap: lc.snap,
-      })
-      /* 远程位置：优先全局（全局已填目标），否则回退到这个游戏自己已存的远程段。 */
-      const g = loadGlobalCfg(config)
-      const useGlobal = isRemoteConfigured(g)
-      setRemote(useGlobal ? resolveRemoteForGame(g, d.auto) : remoteOf(toLocalCfg(d.auto)))
-      setRemoteFrom(useGlobal ? 'global' : (isRemoteConfigured(lc) ? 'game' : 'none'))
-      const iv = (lc.snap && lc.snap.interval) || EMPTY_CFG.snap.interval
-      setSnapMin(String(Math.max(1, Math.round(iv / 60))))
+      /* 远程位置与自动存档状态都按「全局优先」解析 —— 与引擎同一口径。 */
+      setRemote(resolveRemoteForGame(config, d.auto))
+      setRemoteFrom(resolveAutoForGame(config, d.auto).from)
       setErr('')
     }
     if (failed) setErr(failed)
   }, [tid, t, config])
 
-  /* 打开 / 换游戏时把配置、列表、上传状态全部归零。
+  /* 打开 / 换游戏时把列表与上传状态归零。
    * 写在**渲染期**（键为 tid）而不是 effect 里：effect 体里同步 setState 会引发级联渲染，
    * 而「prop 变了就把这几个 state 重置」本来就属于 React 官方说的「渲染期调整 state」。 */
   const openKey = show && tid ? tid : ''
   const [loadedKey, setLoadedKey] = useState('')
   if (openKey !== loadedKey) {
     setLoadedKey(openKey)
-    setData(null); setErr(''); setPg(PG_EMPTY)
+    setData(null); setErr('')
     setRemote(null); setRemoteFrom('none')
-    setBusyId(''); setUploading(null); setSaving(false)
-    setSnapping(false); setBusySnap(''); setSnapMin('30'); setSyncing('')
+    setBusyId(''); setUploading(null)
+    setSnapping(false); setBusySnap(''); setSyncing('')
   }
 
   useEffect(() => {
@@ -128,6 +109,9 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   /* auto_state 是后端**只读**的运行期状态；没接后端时是 {}，一律当「没有状态」。 */
   const st = (data && data.auto_state) || {}
   const last = st.last || null
+  /* 这个游戏**实际生效**的自动存档 + 快照参数（全局优先，见文件头）。
+   * 本弹窗只读它 —— 配置本身在设置页「存档配置」里改。 */
+  const eff = resolveAutoForGame(config, data && data.auto)
 
   /* [CN-FORK] v0.5.2.142 立即推 / 拉。与自动那条链走的是同一套后端代码（同一个互斥锁），
    * 所以「手动点」和「游戏退出时自动推」不会互相把对方的目录删掉。
@@ -151,30 +135,6 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
       await load()
     }
     if (aliveRef.current) setSyncing('')
-  }
-
-  const onSaveCfg = async () => {
-    setSaving(true)
-    try {
-      /* 远程段来自全局（优先）或本游戏已存的回退段；per-game 只决定开关与时机。 */
-      const resolved = resolveRemoteForGame(loadGlobalCfg(config), data && data.auto)
-      const body = toRemoteCfg({
-        enabled: pg.enabled,
-        mode: resolved.mode,
-        on_launch: pg.on_launch,
-        on_exit: pg.on_exit,
-        smb: resolved.smb,
-        ftp: resolved.ftp,
-        http: resolved.http,
-        snap: pg.snap,
-      })
-      await saveAutoConfig(tid, body)
-      addToast?.(t('game.auto_saved', '自动存档设置已保存'))
-      await load()
-    } catch (e) {
-      addToast?.(e.message || t('game.auto_save_fail', '保存失败'), 'error')
-    }
-    setSaving(false)
   }
 
   /* 选文件 → 上传。两种入口共用一条路径：pendingSlot 为 null 是「新存档」，
@@ -284,15 +244,6 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     )
   }
 
-  /* 间隔输入框：值是分钟，改一次就同步回秒。解析不出来（用户清空）就只改文本，
-   * 不把 cfg 带坏 —— 清空再重填是再正常不过的操作。 */
-  const onSnapMin = (v) => {
-    setSnapMin(v)
-    const m = parseInt(v, 10)
-    if (Number.isFinite(m) && m > 0) {
-      setPg((c) => ({ ...c, snap: { ...c.snap, interval: Math.min(1440, m) * 60 } }))
-    }
-  }
 
   return (
     <Modal
@@ -321,7 +272,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
 
         {data && (
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] gap-5 items-start">
-            {/* ── ① 自动存档（per-game 只管开关 + 时机）── */}
+            {/* ── ① 自动存档（只读展示 + 立即推拉）── */}
             <Block
               className="min-w-0"
               title={t('game.auto_title', '自动存档')}
@@ -336,44 +287,30 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                       {t('game.running', '游戏运行中')}
                     </Chip>
                   )}
-                  <Chip tone={pg.enabled ? 'ok' : 'muted'}>{pg.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}</Chip>
+                  <Chip tone={eff.enabled ? 'ok' : 'muted'}>{eff.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}</Chip>
                 </>
               }
             >
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-white panel-body font-semibold">{t('game.auto_enable', '启用自动存档')}</p>
-                  <p className="text-zinc-500 panel-tiny mt-0.5">
-                    {t('game.auto_enable_hint', '开关打开后，主机按下面的时机自动与远程位置同步这个游戏的存档。')}
-                  </p>
-                </div>
-                <Switch
-                  checked={pg.enabled}
-                  onChange={(v) => setPg((c) => ({ ...c, enabled: v }))}
-                  label={t('game.auto_enable', '启用自动存档')}
-                />
-              </div>
+              {/* 只读状态行。**没有开关**：开关在设置页「存档配置」，全局生效。
+                  用 GridRow 而不是灰掉的 Switch —— 灰开关会让人一直点它。 */}
+              <GridRow
+                cols={RO_COLS}
+                label={t('game.auto_enable', '启用自动存档')}
+                value={eff.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
+              />
+              <GridRow
+                cols={RO_COLS}
+                label={t('game.auto_on_launch', '启动游戏时拉取')}
+                value={eff.on_launch ? t('game.on', '已启用') : t('game.off', '未启用')}
+              />
+              <GridRow
+                cols={RO_COLS}
+                label={t('game.auto_on_exit', '退出游戏时回传')}
+                value={eff.on_exit ? t('game.on', '已启用') : t('game.off', '未启用')}
+              />
 
-              {/* 同步时机：两个独立开关，可以只开一个；自动关掉时这一档灰掉 */}
-              <div className={pg.enabled ? 'mt-4' : 'mt-4 opacity-50 pointer-events-none'}>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <TimingRow
-                    label={t('game.auto_on_launch', '启动游戏时拉取')}
-                    hint={t('game.auto_on_launch_hint', '把远程的存档下载到主机，覆盖本地')}
-                    checked={pg.on_launch}
-                    onChange={(v) => setPg((c) => ({ ...c, on_launch: v }))}
-                  />
-                  <TimingRow
-                    label={t('game.auto_on_exit', '退出游戏时回传')}
-                    hint={t('game.auto_on_exit_hint', '把主机的存档上传到远程位置')}
-                    checked={pg.on_exit}
-                    onChange={(v) => setPg((c) => ({ ...c, on_exit: v }))}
-                  />
-                </div>
-              </div>
-
-              {/* 远程位置：来自全局（设置页「存档配置」），本弹窗只读展示，不再编辑。
-               * 想去改它，提示用户到设置页。这样「全局生效」是字面意义。 */}
+              {/* 远程位置：只读摘要。来源（全局 / 本游戏已存）标出来，
+                  用户才知道该去哪儿改 —— 见文件头「一个控件只有一个家」。 */}
               <div className="mt-4">
                 <span className="block panel-tiny font-semibold text-zinc-400 mb-1.5">{t('game.remote_location', '远程位置')}</span>
                 {remote && remoteFrom !== 'none' ? (
@@ -390,18 +327,18 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                     {t('game.remote_unset', '尚未配置远程位置，请到「设置 → 存档配置」填写。')}
                   </Note>
                 )}
-                <p className="panel-tiny text-zinc-500 mt-1.5">
-                  {t('game.remote_global_hint', '远程位置在「设置 → 存档配置」中统一设置，对所有游戏生效。')}
-                </p>
               </div>
 
+              {/* 唯一的「去改配置」出口。单游戏这边一个可编辑控件都没有，
+                  不给这条提示的话用户会在弹窗里找不到开关干瞪眼。 */}
+              <p className="panel-tiny text-zinc-500 mt-2">
+                {t('game.remote_global_hint', '以上开关与远程位置都在「设置 → 存档配置」里统一设置，对所有游戏生效。')}
+              </p>
+
               <div className="flex flex-wrap items-center gap-2 mt-4">
-                <button type="button" className="btn btn-primary" disabled={saving} onClick={onSaveCfg}>
-                  {saving ? t('game.saving', '保存中…') : t('game.save_settings', '保存设置')}
-                </button>
-                {/* [CN-FORK] v0.5.2.142 立即推 / 拉。**不受上面的总开关影响** ——
-                    手动就是手动，用户想试一次不该被迫先把自动打开。也**不需要先保存**：
-                    后端读的是它自己那份已保存的配置，界面上改了没存是另一回事。 */}
+                {/* [CN-FORK] v0.5.2.142 立即推 / 拉。**不受总开关影响** ——
+                    手动就是手动，用户想试一次不该被迫先把自动打开。后端读的是它自己
+                    那份已保存的配置（全局或本游戏的），与这里的只读展示同源。 */}
                 <button
                   type="button"
                   className="btn btn-outline"
@@ -536,8 +473,8 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
             icon={History}
             actions={
               <>
-                <Chip tone={pg.snap.enabled ? 'ok' : 'muted'}>
-                  {pg.snap.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
+                <Chip tone={eff.snap.enabled ? 'ok' : 'muted'}>
+                  {eff.snap.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
                 </Chip>
                 <button
                   type="button"
@@ -551,64 +488,32 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
               </>
             }
           >
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-white panel-body font-semibold">{t('game.snap_enable', '启用本地快照')}</p>
-                <p className="text-zinc-500 panel-tiny mt-0.5">
-                  {t('game.snap_enable_hint',
-                    '不依赖网络：主机按下面的间隔把存档整份复制到本地 /data 下，超保留数自动删最旧。远程同步连不上时，这一条是最后的兜底。')}
-                </p>
-              </div>
-              <Switch
-                checked={pg.snap.enabled}
-                onChange={(v) => setPg((c) => ({ ...c, snap: { ...c.snap, enabled: v } }))}
-                label={t('game.snap_enable', '启用本地快照')}
-              />
-            </div>
-
-            <div className={pg.snap.enabled ? 'mt-4' : 'mt-4 opacity-50 pointer-events-none'}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Field
-                  label={t('game.snap_interval', '间隔（分钟）')}
-                  hint={t('game.snap_interval_hint', '最短 1 分钟，最长 1440（一天）。改完记得点保存。')}
-                >
-                  <input
-                    className="field"
-                    type="number"
-                    min="1"
-                    max="1440"
-                    inputMode="numeric"
-                    value={snapMin}
-                    onChange={(e) => onSnapMin(e.target.value)}
-                  />
-                </Field>
-                <Field
-                  label={t('game.snap_keep', '保留份数')}
-                  hint={t('game.snap_keep_hint', '每份存档最多留这么多份，超了删最旧（1~20）。')}
-                >
-                  <input
-                    className="field"
-                    type="number"
-                    min="1"
-                    max="20"
-                    inputMode="numeric"
-                    value={pg.snap.keep}
-                    onChange={(e) => setPg((c) => ({ ...c, snap: { ...c.snap, keep: e.target.value } }))}
-                  />
-                </Field>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 mt-4">
-                <button type="button" className="btn btn-primary" disabled={saving} onClick={onSaveCfg}>
-                  {saving ? t('game.saving', '保存中…') : t('game.save_settings', '保存设置')}
-                </button>
-                {data.snap_used > 0 && (
-                  <span className="panel-tiny text-zinc-500">
-                    {t('game.snap_used', '快照已占用 {{size}}', { size: formatSizeAlways(data.snap_used) })}
-                  </span>
-                )}
-              </div>
-            </div>
+            {/* 参数只读：开关 / 间隔 / 保留数都在设置页「存档配置」里改。
+                「立即备份」与下面的列表留在这里 —— 备份的是**这个游戏**的存档，
+                本来就属于这个弹窗。 */}
+            <GridRow
+              cols={RO_COLS}
+              label={t('game.snap_enable', '启用本地快照')}
+              value={eff.snap.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
+            />
+            <GridRow
+              cols={RO_COLS}
+              label={t('game.snap_interval', '间隔（分钟）')}
+              value={String(Math.max(1, Math.round((Number(eff.snap.interval) || 0) / 60)))}
+            />
+            <GridRow
+              cols={RO_COLS}
+              label={t('game.snap_keep', '保留份数')}
+              value={String(eff.snap.keep)}
+            />
+            {data.snap_used > 0 && (
+              <p className="panel-tiny text-zinc-500 mt-2">
+                {t('game.snap_used', '快照已占用 {{size}}', { size: formatSizeAlways(data.snap_used) })}
+              </p>
+            )}
+            <p className="panel-tiny text-zinc-500 mt-2">
+              {t('game.snap_global_hint', '快照的开关与参数在「设置 → 存档配置」里统一设置，对所有游戏生效。')}
+            </p>
 
             <div className="mt-4">
               {snapshots.length === 0 ? (
@@ -680,19 +585,5 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
         />
       </div>
     </Modal>
-  )
-}
-
-/* 同步时机的一行：标题 + 说明 + 开关。做成一行而不是两个 Field，
- * 因为「说明」在电视端必须跟着开关走，否则用户看不出这两个开关的区别。 */
-function TimingRow({ label, hint, checked, onChange }) {
-  return (
-    <div className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/10 bg-white/[0.02]">
-      <div className="min-w-0">
-        <p className="text-white panel-note font-semibold">{label}</p>
-        <p className="text-zinc-500 panel-tiny mt-0.5 leading-snug">{hint}</p>
-      </div>
-      <Switch checked={checked} onChange={onChange} label={label} />
-    </div>
   )
 }

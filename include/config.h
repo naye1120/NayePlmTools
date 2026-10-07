@@ -52,4 +52,16 @@ int config_read_last_update(long *out_ts);
 /* Write the LAST_REPOSITORY_UPDATE timestamp to the config file. */
 int config_write_last_update(long ts);
 
+/* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）。
+ *
+ * 存的是前端那份完整 cfg 的 JSON 原文（远程位置 + 自动存档开关/时机 + 本地快照参数）。
+ * 单独一份文件（ARCHIVE_GLOBAL_PATH），不走 nayeplmtools_config.txt —— 理由见 pldmgr.h。
+ *
+ * 语义是「**未单独配置过的游戏的默认值**」：引擎（game_auto.c / game_saves.c）读配置时
+ * 先看这份全局，有就用它，没有才回落到这个游戏自己的 per-game 配置，再没有才用内置默认。
+ * 这样老装机（全局还没写过）行为完全不变，新装机设一次就全局生效。 */
+int config_write_archive_global(const char *json);
+/* 读全局存档配置原文。成功返回字节数（>0），文件不存在 / 读失败返回 -1。 */
+int config_read_archive_global(char *out, size_t osz);
+
 #endif

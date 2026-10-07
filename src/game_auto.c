@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "cJSON.h"
+#include "config.h" /* [CN-FORK] v0.5.2.145 读全局存档配置（设置页「存档配置」） */
 #include "game_saves.h"
 #include "pldmgr.h"
 #include "save_remote.h"
@@ -83,22 +84,13 @@ static void ga_str(cJSON *o, const char *k, char *out, size_t osz) {
     if (cJSON_IsString(f) && f->valuestring) snprintf(out, osz, "%s", f->valuestring);
 }
 
-/* 读一款游戏的自动备份配置。0 成功（out 已填默认值再覆盖），-1 没配置。 */
-static int ga_load_cfg(const char *tid, ga_cfg_t *out) {
-    memset(out, 0, sizeof(*out));
-    snprintf(out->rc.mode, sizeof(out->rc.mode), "ftp");
-    out->rc.port = 21;
-    /* 两个时机的**默认是开**，与 gs_auto_defaults 保持一致 —— 不一致的话
-     * 「没配过的游戏」在 UI 上显示开、引擎却按关处理。 */
-    out->on_launch = 1;
-    out->on_exit = 1;
-
-    char buf[4096];
-    if (game_saves_auto_json(tid, buf, sizeof(buf)) < 0) return -1;
-    cJSON *o = cJSON_Parse(buf);
+/* 把一份 auto JSON（per-game 或全局，结构相同）填进 ga_cfg_t。
+ * out 必须已 memset + 填好默认（见下面两个调用方）。 */
+static void ga_fill_cfg(const char *json, ga_cfg_t *out) {
+    cJSON *o = cJSON_Parse(json);
     if (!o || !cJSON_IsObject(o)) {
         cJSON_Delete(o);
-        return -1;
+        return;
     }
 
     cJSON *f = cJSON_GetObjectItem(o, "enabled");
@@ -134,6 +126,35 @@ static int ga_load_cfg(const char *tid, ga_cfg_t *out) {
     }
 
     cJSON_Delete(o);
+}
+
+/* 读一款游戏的自动备份配置。0 成功（out 已填默认值再覆盖），-1 没配置。
+ *
+ * [CN-FORK] v0.5.2.145 **全局优先**：设置页「存档配置」里那份（ARCHIVE_GLOBAL_PATH）
+ * 存在就用它，没有才回落到这个游戏自己的 per-game 配置。这就是「全局生效」的落点 ——
+ * 用户在新装机上设一次，所有没单独配过的游戏就都按它跑，不必逐个游戏进弹窗点保存。
+ *
+ * 反过来（per-game 优先）会让「全局」变成摆设：per-game 一旦被前端写过一次（哪怕是
+ * 默认值），全局就再也影响不到它 —— 用户看到的是「我改了全局但没反应」。
+ * 老装机全局文件不存在，走 per-game 分支，行为与 `.144` 完全一致。 */
+static int ga_load_cfg(const char *tid, ga_cfg_t *out) {
+    memset(out, 0, sizeof(*out));
+    snprintf(out->rc.mode, sizeof(out->rc.mode), "ftp");
+    out->rc.port = 21;
+    /* 两个时机的**默认是开**，与 gs_auto_defaults 保持一致 —— 不一致的话
+     * 「没配过的游戏」在 UI 上显示开、引擎却按关处理。 */
+    out->on_launch = 1;
+    out->on_exit = 1;
+
+    char buf[4096];
+    /* 全局（设置页「存档配置」）优先。读不到就当没这份，继续往下走。 */
+    if (config_read_archive_global(buf, sizeof(buf)) > 0) {
+        ga_fill_cfg(buf, out);
+        return 0;
+    }
+
+    if (game_saves_auto_json(tid, buf, sizeof(buf)) < 0) return -1;
+    ga_fill_cfg(buf, out);
     return 0;
 }
 

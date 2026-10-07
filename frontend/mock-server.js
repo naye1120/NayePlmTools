@@ -872,7 +872,24 @@ function mediaFor(tid) {
   return out;
 }
 
-function autoFor(tid) {
+/* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）。mock 里等价于后端那份
+ * ARCHIVE_GLOBAL_PATH 文件：main config 的 ARCHIVE_GLOBAL_CONFIG 一非空就「生效」。
+ * 返回解析后的对象；没配过（键不存在 / 空串 / 坏 JSON）返回 null ——
+ * 与后端 config_read_archive_global() 返回 -1 是同一件事。 */
+function globalArchive() {
+  const raw = mockConfig.ARCHIVE_GLOBAL_CONFIG;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const o = JSON.parse(raw);
+    return o && typeof o === 'object' ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+/* 这个游戏**自己存的那份**（不带全局）。写入路径必须用这个 —— autoFor() 在全局生效时
+ * 返回的是合并后的**副本**，往副本上写会静默丢掉（`/game_save_auto` 正是全字段覆写）。 */
+function pgAutoFor(tid) {
   if (!gameState.auto[tid]) {
     gameState.auto[tid] = {
       enabled: false,
@@ -893,6 +910,27 @@ function autoFor(tid) {
     };
   }
   return gameState.auto[tid];
+}
+
+/* 这个游戏**实际生效**的那份（全局优先），供读取路径用。
+ * 与后端 ga_load_cfg() / gs_snap_cfg() 同一条规则：全局配过就整套以全局为准（含远程段），
+ * 没配过才用这个游戏自己那份。放在这里（而不是让每个调用方各自判一次）是为了让
+ * mock 的 /game_saves 就是「引擎眼里的真相」，回归可以直接对着它断言「全局生效」。 */
+function autoFor(tid) {
+  const pg = pgAutoFor(tid);
+  const g = globalArchive();
+  if (!g) return pg;
+  return {
+    ...pg,
+    enabled: !!g.enabled,
+    on_launch: g.on_launch !== false,
+    on_exit: g.on_exit !== false,
+    mode: g.mode || pg.mode,
+    smb: { ...pg.smb, ...(g.smb || {}) },
+    ftp: { ...pg.ftp, ...(g.ftp || {}) },
+    http: { ...pg.http, ...(g.http || {}) },
+    snap: { ...pg.snap, ...(g.snap || {}) },
+  };
 }
 
 /* [CN-FORK] v0.5.2.142 自动存档引擎的运行期状态（对应后端 /game_saves 的 auto_state）。
@@ -1025,7 +1063,8 @@ app.get('/game_saves', (req, res) => {
 
 app.post('/game_save_auto', (req, res) => {
   const tid = String((req.body && req.body.tid) || '');
-  const cur = autoFor(tid);
+  /* 写 per-game 那一份 —— 不能用 autoFor()：全局生效时它给的是合并副本，写了会丢。 */
+  const cur = pgAutoFor(tid);
   const b = req.body || {};
   /* 密码/token 没传 = 保持原值（与前端「留空即不修改」的约定一致）。 */
   ['smb', 'ftp', 'http'].forEach((m) => {
@@ -1075,7 +1114,7 @@ app.post('/game_save_snap', (req, res) => {
       made++;
     });
     /* 保留数裁剪：每个用户只留最近 keep 份。列表新的在前，从尾部砍。 */
-    const keep = autoFor(tid).snap.keep;
+    const keep = autoFor(tid).snap.keep; /* 读取路径：按生效值（全局优先）来保留 */
     MOCK_UIDS.forEach((uid) => {
       snaps.filter((x) => x.uid === uid).slice(keep)
         .forEach((x) => snaps.splice(snaps.indexOf(x), 1));

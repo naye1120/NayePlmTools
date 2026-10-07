@@ -1,3 +1,73 @@
+## v0.5.2.145 (CN-FORK)
+
+> **存档配置彻底收口：自动存档与本地快照也搬进「设置 → 存档配置」，三件事全部全局生效；
+> 单游戏弹窗里一个可编辑控件都不剩。**
+>
+> 用户口径：「你前端 按上一版我改那个安排 … 这个保留」+「这两块都放在存档配置里，要全局生效」
+> （附「自动存档」「本地快照」两块截图）。
+
+> ### 为什么要再搬一次
+>
+> `.144` 只把**远程位置**搬到了全局，理由写的是「开关与时机是每个游戏各自不同的策略」。
+> 用户看完实际界面后要的是**全都要全局**：同一台主机上的存档备份策略本来就该一致，
+> 每款游戏各配一遍同样是重复劳动。
+> 于是 `.145` 把「启用自动存档 + 启动时拉取 + 退出时回传」和「启用本地快照 + 间隔 + 保留份数」
+> 一起搬进设置页。**一个控件只有一个家**这条原则不变，只是「家」从「每个游戏」换成了「全局」。
+
+> ### 关键：这次的「全局生效」是后端真的读它，不只是 UI 显示
+>
+> `.144` 的「全局生效」是前端在保存时把全局的远程段**合进 per-game 请求** —— 用户不进那个
+> 游戏的弹窗点一次保存，就还是不生效。`.145` 改成**引擎直接读全局**：
+> - **`config.c` / `http_server.c`**：新增全局存档配置的落盘与读取。`/set_config` 里
+>   `ARCHIVE_GLOBAL_CONFIG` 用 `cJSON` 取值（**不能**用老的 `strstr` 找引号：这个值是内容
+>   为 JSON 的 JSON **字符串**，里面全是 `\"`，手扫会在第一个内层引号处截断），落到
+>   **单独一份文件** `ARCHIVE_GLOBAL_PATH`（`/data/nayeplmtools/archive_global.json`）——
+>   `nayeplmtools_config.txt` 是 `key=value` 行式、行缓冲只有 256 B，六百多字节的 JSON 写进去
+>   会被截断成半个（静默失效）。`/get_config` 把它原样发出去（前端要用它渲染只读状态）。
+> - **`game_auto.c`**：抽出 `ga_fill_cfg(json, out)`，`ga_load_cfg()` 改成**全局优先** ——
+>   全局文件在就用它，没有才回落到 per-game，再没有才用内置默认。
+> - **`game_saves.c`**：`gs_snap_cfg()` 同样全局优先；`gs_snap_enabled_games()` 在全局开启时
+>   **改成扫存档目录枚举游戏**（新增 `gs_all_tids()`）—— 因为「要快照的游戏」里绝大多数
+>   在 per-game 配置里**根本没有条目**，照旧从配置枚举的话全局开了也扫不到任何一款。
+>
+> 优先级统一为「**全局写过 → 全局说了算；没写过 → per-game（老装机行为不变）**」，
+> 判据是「那份配置写过没有」而不是「填了几个字段」：后者会让「用户把主机清空保存（本意是
+> 别同步了）」悄悄回落到这个游戏很久以前存的旧主机上继续推。
+> 这条规则前端（`saveConfig.js` 的 `hasGlobalArchive()` / `resolveAutoForGame()`）与后端
+> 用的是同一个判据，所以**界面显示什么，引擎就按什么跑**。
+
+> ### 前端
+>
+> - **`ArchiveConfigModal.jsx`** 新增「自动存档」与「本地快照」两块，现在是三块并存：
+>   远程位置（+测试连接）/ 自动存档 / 本地快照，各带「保存设置」。
+> - **`SaveManagerModal.jsx` 再收敛**：删掉自动存档总开关与两个时机开关、快照的
+>   启用/间隔/保留输入框、以及所有「保存设置」；改为**只读状态行**（`GridRow`）
+>   显示生效值，保留「立即拉取 / 立即推送 / 立即备份」、`auto_state` 状态行、存档列表与快照列表。
+>   现在这个弹窗里**没有任何 switch、没有任何输入框**。
+> - **`parts.jsx`**：`TimingRow` 从 `SaveManagerModal` 提到共用零件表（两个弹窗都要用）。
+> - **`saveConfig.js`**：新增 `hasGlobalArchive(config)` / `resolveAutoForGame(config, perGameAuto)`；
+>   `resolveRemoteForGame` 改成同一个判据（原先按「全局填了目标没有」判，两种口径会打架）。
+> - i18n：新增 `settings.auto_enable_hint_global` / `settings.snap_enable_hint_global` /
+>   `game.snap_global_hint`，改写 `settings.archive_config_hint` / `game.remote_global_hint`，
+>   删掉已无用的 `settings.archive_pergame_hint`。
+
+> ### mock
+>
+> - `autoFor()` 拆成 `pgAutoFor()`（per-game 原始，**写入路径必须用它**）+ `autoFor()`
+>   （读路径，全局优先合并）—— 合并后返回的是副本，往副本上写会静默丢。
+> - `globalArchive()` 读 `mockConfig.ARCHIVE_GLOBAL_CONFIG`，与后端
+>   `config_read_archive_global()` 同语义（空串 / 坏 JSON 都当「没配过」）。
+
+> ### 测试
+>
+> - 新增 `test/stub_archive_global.c`：宿主测试里全局配置的替身（默认「没有」，即老行为），
+>   并提供 `stub_archive_global_set/clear` 供用例测「全局优先」。`run_host_tests.sh` 里
+>   `game_saves` / `save_remote` / `game_auto` 三条补上它（否则 link 不过）。
+> - 回归：第 5 节加**反面断言**（0 个 switch / 无「保存设置」/ 无任何输入框）、5b 改为验只读
+>   状态行、5c 去掉「保存设置可用」、**5d 重写**（全局三项同时对单游戏生效，且分「显示面」与
+>   「引擎面」两面 —— 只看显示面的话「界面对了但引擎没跟上」照样全绿）、**新增 5e**
+>   （设置页存档配置弹窗本身：三块都在 + 保存真写回 `ARCHIVE_GLOBAL_CONFIG` + 重开仍在）。
+
 ## v0.5.2.144 (CN-FORK)
 
 > **存档配置搬家：远程位置改到「设置」里配一次、全局生效；单个游戏只留「拉取 / 推送」。**

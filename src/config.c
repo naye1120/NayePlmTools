@@ -7,6 +7,7 @@
 #include "pldmgr.h"
 #include "json_helpers.h"
 #include "utils.h" /* [CN-FORK] pldmgr_utils_strip_config_line */
+#include "cJSON.h" /* [CN-FORK] v0.5.2.145 取 ARCHIVE_GLOBAL_CONFIG 的字符串值 */
 
 /* ── Read / Write full config ──────────────────────────────── */
 
@@ -183,6 +184,38 @@ int config_write_last_update(long ts) {
     return config_upsert_value("LAST_REPOSITORY_UPDATE", ts_buf);
 }
 
+/* ── [CN-FORK] v0.5.2.145 全局存档配置（单独文件）──────────────────────────
+ * 见 include/config.h 的语义说明。这两条刻意不做任何校验：存进来什么就原样落盘，
+ * 读出来什么就原样交给调用方 —— 校验（哪些键合法、数值夹到多少）在解析端
+ * 各自做（game_auto.c / game_saves.c），与 per-game 那份同一套代码。
+ * 在这里"顺便"校验一次只会多一份可能跑偏的规则。 */
+int config_write_archive_global(const char *json) {
+    if (!json) return -1;
+    ensure_dir_recursive(BASE_DATA_DIR);
+    FILE *f = fopen(ARCHIVE_GLOBAL_PATH, "w");
+    if (!f) return -1;
+    size_t n = strlen(json);
+    size_t w = fwrite(json, 1, n, f);
+    fclose(f);
+    return (w == n) ? 0 : -1;
+}
+
+int config_read_archive_global(char *out, size_t osz) {
+    if (!out || osz < 2) return -1;
+    out[0] = 0;
+    FILE *f = fopen(ARCHIVE_GLOBAL_PATH, "r");
+    if (!f) return -1;
+    size_t n = fread(out, 1, osz - 1, f);
+    fclose(f);
+    out[n] = 0;
+    /* 空文件 / 只有空白 = 没配置，当作没有（否则调用方要自己再判一次）。 */
+    int blank = 1;
+    for (size_t i = 0; i < n; i++)
+        if (out[i] != ' ' && out[i] != '\n' && out[i] != '\r' && out[i] != '\t') { blank = 0; break; }
+    if (blank) { out[0] = 0; return -1; }
+    return (int)n;
+}
+
 /* ── JSON config update handler (from /set_config POST body) ── */
 
 /* Helper: extract a JSON boolean value for a given key.
@@ -310,6 +343,34 @@ int config_handle_set_json(const char *json_data) {
                 }
                 free(list_val);
             }
+        }
+    }
+
+    /* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）。
+     * 这里**必须**用 cJSON 取，不能用上面那种 strstr 找引号的老办法：这个值本身就是
+     * 一个 JSON **字符串**（内容是转义过的 JSON），里面全是 \" 与 \\，手写扫描极容易
+     * 在第一个内层引号处截断，存进去就是半个 JSON。cJSON 会替我们做完整的反转义。
+     * 值以对象或字符串形式给都认（前端给的是 JSON.stringify 出来的字符串）。 */
+    {
+        cJSON *root = cJSON_Parse(json_data);
+        if (root) {
+            cJSON *ag = cJSON_GetObjectItem(root, "ARCHIVE_GLOBAL_CONFIG");
+            if (cJSON_IsString(ag) && ag->valuestring && ag->valuestring[0]) {
+                if (config_write_archive_global(ag->valuestring) == 0)
+                    pldmgr_log("[PLDMGR] Saved global archive config to %s\n",
+                               ARCHIVE_GLOBAL_PATH);
+                else
+                    pldmgr_log("[PLDMGR] 全局存档配置写入失败（%s）\n", ARCHIVE_GLOBAL_PATH);
+            } else if (cJSON_IsObject(ag)) {
+                char *s = cJSON_PrintUnformatted(ag);
+                if (s) {
+                    if (config_write_archive_global(s) == 0)
+                        pldmgr_log("[PLDMGR] Saved global archive config to %s\n",
+                                   ARCHIVE_GLOBAL_PATH);
+                    free(s);
+                }
+            }
+            cJSON_Delete(root);
         }
     }
 
