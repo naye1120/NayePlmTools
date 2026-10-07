@@ -139,7 +139,7 @@ static int json_items(const char *s) {
 static int list_fresh(void) {
     game_mgr_invalidate();
     seed_stack(4);
-    return game_mgr_list_json(g_buf, sizeof g_buf);
+    return game_mgr_list_json(g_buf, sizeof g_buf, 0);
 }
 
 int main(void) {
@@ -337,9 +337,32 @@ int main(void) {
     memcpy(g_snap, g_buf, (size_t)n + 1);
     seed_stack(4);   /* 再播一次种：若这次没走缓存而是重建，字节该变 */
     {
-        int n2 = game_mgr_list_json(g_buf, sizeof g_buf);
+        int n2 = game_mgr_list_json(g_buf, sizeof g_buf, 0);
         CHECK(n2 == n && memcmp(g_snap, g_buf, (size_t)n) == 0,
               "没作废缓存却回了不一样的字节（n=%d n2=%d）", n, n2);
+    }
+
+    /* ── ⑪ .133 force=1 必须跳过 60s 快照直接重建 ────────────────────────
+     * 判据：时间戳递进。seed_stack 播种的字节每次重建可能一模一样，所以
+     * memcmp != 0 不能当判据（两次播种的重建字节可能恒同）。改用
+     * game_mgr_cache_ts()：invalidate 后 ts=0，force=1 必须把它刷成非 0；
+     * 紧接着 force=0 必须走缓存（ts 不动、字节恒同），不然改了个形参就静默通过。 */
+    {
+        game_mgr_invalidate();      /* ts=0, len=0 */
+        seed_stack(4);              /* 播种栈，rebuild 会读到垃圾 */
+        int nf = game_mgr_list_json(g_buf, sizeof g_buf, 1);
+        CHECK(nf > 0 && json_count(g_buf) == N_GAMES,
+              "force=1 之后 count 不对（n=%d）", nf);
+        time_t ts_after_force = game_mgr_cache_ts();
+        CHECK(ts_after_force > 0,
+              "force=1 后时间戳仍为 0（没走重建路）");
+
+        /* force=0 紧跟在 force=1 后面：ts 刚刷新，60s 窗口内，必须走缓存。
+         * 走缓存 = 字节恒同 + ts 不动。 */
+        int nc = game_mgr_list_json(g_buf, sizeof g_buf, 0);
+        CHECK(nc == nf, "force=0 在 TTL 内没回刚重建的快照（nc=%d nf=%d）", nc, nf);
+        CHECK(game_mgr_cache_ts() == ts_after_force,
+              "force=0 缓存命中不该动时间戳");
     }
 
     printf("game_mgr: %d checks, %d failures\n", g_checks, g_fails);

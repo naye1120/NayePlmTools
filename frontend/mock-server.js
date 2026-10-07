@@ -492,11 +492,15 @@ const mockGames = [
   { tid: 'PAUS00100', name: 'Pulse Demo（无图标）', src: 'installed', fmt: 'pkg', size: 0 },
   { tid: 'PPSA01500', name: '容器镜像游戏', src: 'dump', fmt: 'ffpfsc', size: 145465737216 },
 ];
-app.get('/game_list', (req, res) => {
-  /* [CN-FORK] v0.5.2.112：过滤掉已删除的、套用改过的名字、带上两层自定义图的版本号。
-   * 列表项两个可选字段 `icon` / `bg`（都是 number，即「自定义版本号」）—— 有值时前端才去取
-   * /game_tile_icon 与 /game_tile_bg。这条要加进后端契约：不给这两个字段的话，
-   * 前端要么对每款游戏都白跑两次 404，要么永远显示不出自定义的图。 */
+/* [CN-FORK] v0.5.2.133 mock 里也照抄后端那份 60s 快照缓存，
+ * 否则「刷新按钮跳过缓存」这条断言在本地永远绿（mock 每次都现算，看不出差别）。
+ * force=1 → 重建并刷新时间戳；不带参数 → 60s 内直接回快照。
+ * /_game_list_cache 是测试钩子：读当前快照，不触发重建（和后端行为一致）。 */
+const LIST_TTL_MS = 60 * 1000;
+let listSnap = null;
+let listSnapAt = 0;
+
+function buildGameList() {
   const games = mockGames
     .filter((g) => !gameState.deleted.has(g.tid))
     .map((g) => {
@@ -505,8 +509,19 @@ app.get('/game_list', (req, res) => {
       if (gameState.bg[g.tid]) out.bg = gameState.bg[g.tid];
       return out;
     });
-  res.json({ games, count: games.length });
+  return { games, count: games.length };
+}
+
+app.get('/game_list', (req, res) => {
+  const force = req.query.force === '1';
+  const now = Date.now();
+  if (!force && listSnap && now - listSnapAt < LIST_TTL_MS) return res.json(listSnap);
+  listSnap = buildGameList();
+  listSnapAt = now;
+  res.json(listSnap);
 });
+
+app.get('/_game_list_cache', (req, res) => res.json(listSnap));
 
 // [CN-FORK] 游戏图标 mock：返回带 TID 的占位 SVG；两个 tid 故意 404，验证前端 onError 回退 Gamepad2
 app.get('/game_icon', (req, res) => {
@@ -1042,6 +1057,7 @@ app.post('/game_rename', (req, res) => {
   }
   if (!name) return res.status(400).json({ error: 'EINVAL', message: '名称不能为空' });
   gameState.renamed[tid] = name;
+  listSnap = null; listSnapAt = 0;   /* 对齐后端 game_mgr_invalidate()：改名后快照立刻作废 */
   const fmt = mockGames.find((x) => x.tid === tid).fmt || 'pkg';
   let persisted = false;
   let persist_note = '';
@@ -1265,6 +1281,7 @@ Object.keys(TILE_IMAGE_KINDS).forEach((kind) => {
     const bytes = req.body || Buffer.alloc(0);
     const bucket = K.bucket();
     bucket[tid] = (bucket[tid] || 0) + 1;
+    listSnap = null; listSnapAt = 0;   /* 对齐后端 game_mgr_invalidate() */
     const png = decodePng(bytes);
     const store = kind === 'icon' ? gameState.iconBytes : gameState.bgBytes;
     store[tid] = bytes;
@@ -1291,6 +1308,7 @@ Object.keys(TILE_IMAGE_KINDS).forEach((kind) => {
   app.get(`/${K.path}_reset`, (req, res) => {
     const tid = String(req.query.tid || '');
     delete K.bucket()[tid];
+    listSnap = null; listSnapAt = 0;   /* 对齐后端 game_mgr_invalidate() */
     const store = kind === 'icon' ? gameState.iconBytes : gameState.bgBytes;
     delete store[tid];
     if (kind === 'bg') delete gameState.bgDds[tid];
@@ -1594,6 +1612,8 @@ app.post('/reset', (req, res) => {
   gameState.auto = {};
   gameState.jobs = {};
   gameState.nextJob = 1;
+  listSnap = null;
+  listSnapAt = 0;
   res.json({ ok: true });
 });
 

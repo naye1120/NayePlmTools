@@ -26,7 +26,10 @@
  *                           存在）。不是「runtime_path 存在」—— 裸目录游戏的源目录一直在。
  *          installed_pkg  = 真·内置安装的 PKG（= source_type=="pkg"）。
  *          can_manage_source = !installed_pkg，后端判定，前端只认这个字段。
- *   GET  /game_list              → { games:[{tid,name,src,fmt,size,icon?,bg?}], count, truncated }
+ *   GET  /game_list[?force=1]    → { games:[{tid,name,src,fmt,size,icon?,bg?}], count, truncated }
+ *     后端有 60s 快照缓存（app.db 全库 + 扫描路径是重 IO）。进页面那次 load 吃缓存秒开；
+ *     点右上角「刷新」要带 force=1，否则用户连点十次也只是等快照自然过期 ——
+ *     外部改了 app.db（FTP、SMP 扫进新游戏）会「点了刷新看不到」，体感就是按钮坏了。
  *        icon / bg 都是「自定义版本号」（number），有值前端才去取对应的自定义图，避免白跑 404
  *
  * 删除（异步任务，参考 ShadowMountPlus 的 /api/v1/games/delete 语义）

@@ -1,4 +1,64 @@
-## v0.5.2.132 (CN-FORK)
+## v0.5.2.133 (CN-FORK)
+
+> **刷新按钮现在真从主机重新读，不再等 60 秒快照自然过期。**
+>
+> `.132` 及更早，游戏列表有一个 60 秒快照缓存（`/game_list` 的全库 `app.db` 读取 +
+> 一次递归 `du` 是重 IO，缓存是为了治「游戏列表载入超级慢」）。进页面那次 `load()`
+> 吃缓存是对的，但刷新按钮也走同一条路 —— 用户连点十次刷新，看到的还是那份快照，
+> 体感就是「刷新按钮没反应」。
+>
+> **根因实测（4 次连续调用，中间用 FTP 直写 `name.txt` 改主机真相）**：
+>
+> ```
+> #1 进页面 load   → 鬼武者 Way of the Sword    (15 games)
+> #2 立即再刷      → 鬼武者 Way of the Sword    (字节完全一致)
+>    └ FTP 写 name.txt = "外部FTP直写_列表应缓存住旧值"
+> #3 立即再刷      → 鬼武者 Way of the Sword    ← 主机真相变了，列表没跟上
+> #4 等 61 秒后    → 外部FTP直写_列表应缓存住旧值 ← 重建才读到新值
+> ```
+>
+> 产品自身的改名 / 换图标 / 换背景 / 删游戏都会调 `game_mgr_invalidate()`，
+> 所以那些操作完刷新立刻生效 —— 问题只在**外部工具**（FTP、SMP 自己扫进新游戏）
+> 改了 `name.txt` / `app.db` 之后，用户手动刷新永远看不到。
+>
+> **修法：加一个 `force=1` 参数，只给刷新按钮用。**
+>
+> - 后端 `game_mgr_list_json(buf, size, int force)`：`force != 0` 时跳过快照、
+>   直接重建、刷新缓存时间戳。进页面那次 `load()` 仍然吃缓存（快），
+>   手动刷新才付一次全库读的成本 —— 手点刷新本来就是显式意图，不是轮询。
+> - 前端刷新按钮 `onClick={() => load(true)}`，请求带 `?force=1&_=${Date.now()}`；
+>   `useEffect` 里的进页面 `load()` 不带 force（缓存命中）。
+> - mock 同步加了 60 秒快照缓存，否则这条断言在本地永远绿。
+>   同时补齐了 mock 侧 5 条失效路径（rename / set_icon / set_bg / reset_icon / reset_bg）
+>   —— 后端每条都调 `game_mgr_invalidate()`，mock 之前一条都没作废缓存。
+>
+> **新增诊断出口 `game_mgr_cache_ts()`**：返回当前快照时间戳（0 = 空），
+> 仅供 `test/game_mgr_test.c` ⑪ 块断言时间戳递进。seed_stack 播种的重建字节
+> 可能恒同（两次播种的垃圾一样），所以 `memcmp != 0` 不能当判据 ——
+> 改用时间戳：invalidate 后 ts=0，force=1 必须刷成非 0；紧跟的 force=0
+> 必须走缓存（ts 不动、字节恒同）。
+
+### 改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `include/pldmgr.h` | 版本 `0.5.2.133` |
+| `include/game_mgr.h` | `game_mgr_list_json` 加 `int force` 参数；新增 `game_mgr_cache_ts()` 声明 |
+| `src/game_mgr.c` | `game_mgr_list_json` 加 force 分支；新增 `game_mgr_cache_ts()` 实现 |
+| `src/http_server.c` | `/game_list` 解析 `?force=1` 传给 `game_mgr_list_json` |
+| `frontend/src/components/views/GameSection.jsx` | `load` 接受 `force` 参数；刷新按钮 `load(true)` |
+| `frontend/mock-server.js` | 加 60 秒快照缓存 + `/_game_list_cache` 测试钩子；补齐 5 条失效路径 |
+| `frontend/src/utils/gameApi.js` | 契约注释更新 `GET /game_list[?force=1]` |
+| `test/game_mgr_test.c` | ⑪ 块：force=1 时间戳递进断言 |
+| `test/game_mgr_test.c` | 两处 `game_mgr_list_json` 调用补 `0` 参数 |
+
+### 回归结果
+
+- **主机单元测试**：`game_mgr: 94 checks, 0 failures`，`overall: PASS`
+- **前端回归** `game112.mjs`：203/203 通过（含 7.6 段 5 条断言）
+- **版本握手**：`pldmgr.h` / mock `/version` 均为 `0.5.2.133`
+
+
 
 > **改名不再回退：这次改到了名字真正的来源。**
 >

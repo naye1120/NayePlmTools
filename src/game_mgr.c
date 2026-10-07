@@ -1195,11 +1195,11 @@ static size_t build_game_json(char *buf, size_t size) {
     return pos;
 }
 
-int game_mgr_list_json(char *buf, size_t size) {
+int game_mgr_list_json(char *buf, size_t size, int force) {
     if (!buf || size < 64) return 0;
     pthread_mutex_lock(&g_game_mtx);
     time_t now = time(NULL);
-    if (g_game_cache_len && now >= g_game_cache_ts && (now - g_game_cache_ts) < 60) {
+    if (!force && g_game_cache_len && now >= g_game_cache_ts && (now - g_game_cache_ts) < 60) {
         size_t n = g_game_cache_len;
         if (n > size - 1) n = size - 1;
         memcpy(buf, g_game_cache, n);
@@ -1228,4 +1228,11 @@ void game_mgr_invalidate(void) {
     g_game_cache_len = 0;
     g_game_cache_ts = 0;
     pthread_mutex_unlock(&g_game_mtx);
+}
+
+time_t game_mgr_cache_ts(void) {
+    pthread_mutex_lock(&g_game_mtx);
+    time_t ts = g_game_cache_ts;
+    pthread_mutex_unlock(&g_game_mtx);
+    return ts;
 }

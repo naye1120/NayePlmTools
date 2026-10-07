@@ -2,6 +2,7 @@
 #define GAME_MGR_H
 
 #include <stddef.h>
+#include <time.h>
 
 /* [CN-FORK] 游戏管理模块。参考 ShadowMountPlus 的「游戏识别」思路，并移植 v0.5.1.63
  * stats.c 里那套成熟的 app.db(SQLite) 只读解析器与 param.sfo 解析，实现：
@@ -11,11 +12,17 @@
  * 合并去重（按 TITLE_ID，已安装优先）。
  *
  * 重要：进页面一次性拉取 + mutex 串行 + 60s 缓存，绝不轮询。app.db 全库读取 + 目录扫描
- * 是有成本的 IO，频繁调用同样有风险（参考 /system_stats 死机教训）。 */
+ * 是有成本的 IO，频繁调用同样有风险（参考 /system_stats 死机教训）。
+ *
+ * v0.5.2.133 起加 force 参数：用户手点「刷新」时跳过 60s 快照直接重建。
+ * 进页面那次 load 仍然吃缓存（快），手动刷新才付一次全库读的成本 —— 手点本来就是
+ * 显式意图，不是轮询。不加这条的话，外部工具（FTP、SMP 自己扫了新游戏）改了 app.db，
+ * 用户连点十次刷新也看不到，只会等 60 秒自己过期，体感就是「刷新按钮没反应」。 */
 
 /* 输出 {"count":N,"games":[{"tid":"PPSAxxxxx","name":"…","src":"installed|dump"},...]}。
- * name 经 JSON 转义（含中文）。返回写入长度。 */
-int game_mgr_list_json(char *buf, size_t size);
+ * name 经 JSON 转义（含中文）。返回写入长度。
+ * force 非 0 时忽略缓存快照，重新枚举（app.db 全库 + 扫描路径），并刷新缓存时间戳。 */
+int game_mgr_list_json(char *buf, size_t size, int force);
 
 /* [CN-FORK] v0.5.2.116 单个游戏的完整详情（/game_detail）。
  * 字段与 frontend/src/utils/gameApi.js 文件头的「详情」那一段一一对应。
@@ -42,6 +49,10 @@ int game_mgr_source_paths(const char *tid, char *kind, size_t ksz,
 
 /* [CN-FORK] v0.5.2.116 让 60s 列表缓存立刻过期（删除/卸载/删除源之后调）。 */
 void game_mgr_invalidate(void);
+
+/* [CN-FORK] v0.5.2.133 诊断用：返回当前快照的时间戳（0 = 空 / 已作废）。
+ * 只给 test/game_mgr_test.c 做时间戳递进的断言用，产品代码不该依赖它。 */
+time_t game_mgr_cache_ts(void);
 
 /* [CN-FORK] v0.5.2.116 path 是否落在某个已知 dump 扫描根**之下**（必须是子项，
  * 根本身不算）。删除前的白名单只认两种源：注册过的镜像文件，或这个判据为真的目录。 */

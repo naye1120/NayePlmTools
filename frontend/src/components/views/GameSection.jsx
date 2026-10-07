@@ -245,11 +245,15 @@ export default function GameSection({ addToast, showConfirm }) {
    * 换 kind —— 五个布尔得同时改两个，很容易出现两个弹窗叠在一起。 */
   const [modal, setModal] = useState(null)
 
-  const load = useCallback(async () => {
+  /* force=true 时带 force=1：让后端跳过 60s 快照直接重建（.133）。
+   * 进页面那次不带 —— 吃缓存，秒开；用户手点「刷新」才付一次全库读的成本。
+   * 语义对齐按钮的含义：点了刷新就是要真从主机重新读，而不是等快照自己过期。 */
+  const load = useCallback(async (force) => {
     setLoading(true)
     setErr('')
     try {
-      const res = await fetch(`/game_list?_=${Date.now()}`, { cache: 'no-store' })
+      const q = force ? `?force=1&_=${Date.now()}` : `?_=${Date.now()}`
+      const res = await fetch(`/game_list${q}`, { cache: 'no-store' })
       const data = await res.json().catch(() => null)
       if (data && Array.isArray(data.games)) {
         setGames(data.games)
@@ -296,7 +300,7 @@ export default function GameSection({ addToast, showConfirm }) {
         count={games ? t('game.total', '共 {{n}} 款', { n: count }) : undefined}
         bodyClass="space-y-4"
         actions={
-          <button onClick={load} disabled={loading} title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} className="icon-btn">
+          <button onClick={() => load(true)} disabled={loading} title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} className="icon-btn">
             <RefreshCw className={cn(loading && 'animate-spin')} />
           </button>
         }

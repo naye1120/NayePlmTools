@@ -1716,12 +1716,17 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_GAME_LIST) == 0) {
-        /* [CN-FORK] 游戏列表：app.db 已安装 + 扫描 dump，mutex+60s 缓存，进页面一次拉取不轮询 */
+        /* [CN-FORK] 游戏列表：app.db 已安装 + 扫描 dump，mutex+60s 缓存，进页面一次拉取不轮询。
+         * v0.5.2.133 加 force=1：用户手点「刷新」时跳过 60s 快照直接重建。
+         * 前端两处调用区分开 —— 进页面那次不带参数（吃缓存，快），刷新按钮带 force=1。
+         * 不加这条的话，外部改了 app.db（FTP、SMP 扫进新游戏）用户连点十次刷新都看不到。 */
+        const char *gforce = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "force");
+        int gl_force = (gforce && gforce[0] == '1') ? 1 : 0;
         char *resp_buf;
         struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
         if (oom_resp)
             return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-        int glen = game_mgr_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        int glen = game_mgr_list_json(resp_buf, RESPONSE_BUFFER_SIZE, gl_force);
         if (glen < 0) glen = 0;
         resp = MHD_create_response_from_buffer((size_t)glen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
         MHD_add_response_header(resp, "Content-Type", "application/json");
