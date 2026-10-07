@@ -813,6 +813,16 @@ PPSA27836 做的、验完还还原回了原名，所以当时没暴露这条时�
 `[PLDMGR] title: 启动自愈完成（回填 8 款：主机索引 8、名字源 5、失败 0）`，15 款面板名与
 SMP `title_name` 全部一致（含 3 款 `ffpfsc` 镜像类），坏的只有那颗按钮。
 
+**出包（2026-10-07）**：`NayePlmTools_0.5.2.138.elf` / `-me.elf`（NAYE00001）/ `-ga.elf`
+（NAYE00004），三包各 **10,785,872** 字节，内嵌标题短哈希 **`8e310b1`**、`PLDMGR_VER:0.5.2.138`；
+`frontend/dist/index.html` 917,991 字节，与 ELF 内嵌 blob 在偏移 **2,008,880** 逐字节一致；
+旧版本 `0.5.2.137` 残留 0 处。`.137` 的两个包**别用**（`/game_title_sync` 断连，见上）。
+真机（192.168.1.214）验收：`POST /game_title_sync` →
+`{"ok":true,"scanned":8,"applied":8,"persisted":5,"failed":0}`，两次调用口径相同、
+15 款面板名与 SMP `title_name` 全部一致；日志里 `启动自愈完成（回填 8 款：主机索引 8、
+名字源 5、失败 0）` 与 40 条「本来就一致（app.db 写 0 行、appinfo 写 0 行）」
+（后者证明 `td_count_differ` 短路生效、没有重复写事务）。
+
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
