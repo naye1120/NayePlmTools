@@ -36,12 +36,22 @@
 只监听 loopback，电脑端连不通不代表主机自己连不通；「面板能不能拉起它」跟浏览器在哪台机器上无关。
 `.131` 沿用 `.84` 的标签手法（点击手势同步栈里先 `window.open('about:blank')`，探活通过才
 `tab.location.assign(url)`，失败 `tab.close()`；`window.open` **仍不带** `'noopener,noreferrer'`）。
-`dist` 914,696 字节；新增 8 条词条（`game.smp_checking` / `smp_launching` / `smp_waiting` /
-`smp_waited` / `smp_start_fail` / `smp_start_timeout` / `smp_not_installed` /
+`dist` 914,696 字节（`vite build` 产物；`make frontend-build` 的标题注入后为 **914,750**）；新增
+ 8 条词条（`game.smp_checking` / `smp_launching` / `smp_waiting` / `smp_waited` /
+`smp_start_fail` / `smp_start_timeout` / `smp_not_installed` /
 `game.pack_auto_downloading`，中英双包，`zh-CN` 404→412、`en-US` 402→410）。
 **`.130` 那个 i18next 内联兜底的坑这轮又照做了一遍**：这几个新词条的兜底文案同时写在 JSX 的
 `t(key, '默认值')` 第二参数里（会编译进产物、语言包盖不住），JSON 与 JSX 两处都改了，
 并用产物级检索确认新串在 `dist/index.html` 里（`smp_status` ×1、`打包完成，正在下载` ×2 等）。
+**出包版** `NayePlmTools_0.5.2.131-me.elf` / `-ga.elf`（提交 `9088433`，内嵌标题短哈希
+`9088433`，**不是 DEV**），两包各 10,785,872 字节、titleId 自检 NAYE00001/NAYE00004 通过，
+`dist` 914,750 字节与两颗 ELF 内嵌 blob **逐字节一致**（`verify131.py` **29/29**，
+`cancelJob` / `watchJob` / `含删除` / `0.5.2.130` 残留各 0 处）。
+回归：`game112` **186/186**（新增 1a 节，见 §7）、`nav112` 20/20、`acct111` 23/23、
+`avatar109` 19/19、`cropfix` 75/75、`pack125` **15/15**（新增自动下载断言，见 §7）。
+已推真机 `192.168.1.214`，`GET /version` → `0.5.2.131`（**`.131` 确实在主机上跑起来了**）。
+`device129_detail.mjs` 与 SMP 拉起 / 自动下载的真机实测**未跑完** —— 推包后主机 userland
+整体掉线（8911 / 9021 / 2121 全拒连，但 ping 通），需物理接入重启后再验。
 - 近期定型（.64 → .100）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
   - `.65` 「默认云端仓库」总开关 `DEFAULT_REPO_ENABLED`（现默认关，可彻底停用内置官方源）
@@ -1423,7 +1433,7 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
   记得同步更新 `test/mutation_check_media.sh`**。
 
 ## 7. 接手后的下一步（待定，非阻塞）
-- **`.131`（SMP 先探后开 + 打包自动下载）—— ✅ 已出包、已推真机**（见 §0 的 `.131` 句）。
+- **`.131`（SMP 先探后开 + 打包自动下载）—— ✅ 已出包、已推真机（`GET /version` → `0.5.2.131` 已确认）**（见 §0 的 `.131` 句）。
   回归口径（下次动 SMP 入口或多媒体打包时照这几条验）：
   1. **SMP 没起时点「去 ShadowMount 管理」**：按钮转圈 + 文案依次变
      「正在检查 ShadowMount 是否已启动…」→「正在启动 ShadowMount…」→
@@ -1447,6 +1457,26 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
      兜底（PS5 的 WebKit 偶尔拦非用户手势触发的下载）。
   7. **别顺手改的两处**：`game.delete_*` 词条簇仍无 JSX 引用（同 `.129`/`.130`，别当基准）；
      详情的两行 `GridRow` 仍是 `<button>`（它们是导航不是操作）。
+
+  **⏳ 真机侧还欠一轮实测**（`.131` 推上去后主机 userland 掉线，只能物理接入重启后补）：
+  1. **`/smp_status` 的 C 实现是真机第一次跑**（本地与 mock 都验过，主机上还没跑）。
+     主机上先 `GET /smp_status` 看回 `{"running":false,"port":10101}`，耗时应在 400ms 以内
+    （loopback 拒连是即时的）；**不要**因为「电脑浏览器连不通 10101」就判 SMP 没起 ——
+     探活是主机在 loopback 上做的，两条路不是一回事。
+  2. **SMP 没起时点「去 ShadowMount 管理」**：确认电视上真的看到三态进度 + 秒数递增 +
+     按钮转灰，以及 31 秒后是否如预期出红色失败条。**主机上是否装了 ShadowMountPlus 未知**
+     —— 没装就应出「本机没有找到 ShadowMountPlus…」并按普通链接打开，这本身就是预期行为，
+     别当成 bug。
+  3. **打包自动下载在 PS5 的 WebKit 上有没有被拦**：这是本次唯一「非用户手势触发下载」的行为，
+     正是 WebKit 最可能拦的一类。本地 Chromium 产物已验过 download 事件真的发出
+     （`pack125` 15/15，落盘名 `战神-诸神黄昏-20261007_121143.zip`），但真机要人工确认
+     **是否真的有下载开始**；被拦的话，界面上那颗「下载打包文件（N 项）」就是兜底，不用改代码。
+
+  **推包的两个环境细节**：① `push_elf.py` 第 3 步传输末尾常报
+  `ConnectionResetError [WinError 10054]` —— 那是 elfldr 收到后开始执行时主动断连，
+  **不是失败**；判据只有一条：`GET /version` 返回期望版本。② 主机掉线判定：8911 / 9021 / 2121
+  **全拒连但 ping 通**说明 userland 整体没起（不是我们 payload 崩），推包前必须先确认 elfldr
+  回来了。
 
 - **`.130`（`.129` 漏掉的一条死链文案）—— ✅ 已出包、已推真机、29/29 验收通过**。
   唯一遗留的坑：`t(key, '中文默认值')` 的**内联兜底**改 JSON 盖不住（见 §0 的 `.130` 句）。
