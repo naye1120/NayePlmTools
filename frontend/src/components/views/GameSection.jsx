@@ -318,7 +318,7 @@ export default function GameSection({ addToast, showConfirm }) {
                 一行说明比在每个磁贴上盖一个「详情」角标省地方得多。 */}
             <p className="text-[11px] text-zinc-500 flex items-center gap-1.5">
               <Info className="w-3.5 h-3.5 shrink-0" />
-              <span>{t('game.tile_hint', '点磁贴查看游戏详情（含删除）；磁贴上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能。')}</span>
+              <span>{t('game.tile_hint', '点磁贴查看游戏详情（详情里只能看信息，挂载 / 卸载 / 删除源请到 ShadowMount 后台）；磁贴上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能。')}</span>
             </p>
             {/* [CN-FORK] v0.5.2.100 用户指令「磁贴再小三分之一，变成自适应，屏幕宽就多放几个、
                窄就少放几个，不要固定四个」：原来是 grid-cols-2 / sm:3 / lg:4，宽屏永远卡在 4 列，
