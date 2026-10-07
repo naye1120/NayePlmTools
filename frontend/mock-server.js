@@ -185,6 +185,17 @@ app.get('/pkgmanager_status', async (req, res) => {
     file: pkgInstalled !== '-',
   });
 });
+/* [CN-FORK] v0.5.2.131 ShadowMount+ 探活 mock：与实机同一语义——只探 loopback 10101，
+ * 端口活=服务已就绪。真实 TCP 探活，不用假开关：/loadpayload: 命中 ShadowMountPlus 路径时
+ * 会起一个监听 10101 的桩，探活随之转活，前端「先探 → 不活则拉 → 等转活 → 打开」整条链路
+ * 在预览里就能端到端验证。 */
+app.get('/smp_status', async (req, res) => {
+  const sock = net.connect({ host: '127.0.0.1', port: 10101 });
+  const done = (ok) => { sock.destroy(); res.json({ running: ok, port: 10101 }); };
+  sock.setTimeout(400, () => done(false));
+  sock.once('connect', () => done(true));
+  sock.once('error', () => done(false));
+});
 app.get('/pkgmanager_launch', async (req, res) => {
   try {
     await pkgStubStart();
@@ -400,7 +411,7 @@ const progStubStart = (port) => new Promise((resolve, reject) => {
   if (progStubs.has(port)) return resolve();
   const srv = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`<!doctype html><title>Payload stub :${port} (mock)</title><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#101014;color:#e4e4e7;font:600 16px/1.6 system-ui,sans-serif">本机 payload 桩服务 · 端口 ${port}</body>`);
+    res.end(`<!doctype html><title>Payload stub :${port} (mock)</title><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#101014;color:#e4e4e7;font:600 16px/1.6 system-ui,sans-serif">本机 payload 桩服务 · 端口 ${port}<script>document.body.insertAdjacentHTML('beforeend','<p>SMP_STUB_LOADED</p>')</script></body>`);
   });
   srv.once('error', reject);
   srv.listen(port, '127.0.0.1', () => { srv.removeListener('error', reject); progStubs.set(port, srv); resolve(); });

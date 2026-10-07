@@ -1,3 +1,65 @@
+## v0.5.2.131 (CN-FORK)
+
+> **两个「点完按钮却还要自己动手」的缺口。**
+> ① 「去 ShadowMount 管理」原来是无条件开新标签 —— 而 ShadowMount 很多时候根本没起，
+>    打开就是一块加载不出的空白页，用户以为面板坏了。现在**先探活，没起就拉起、
+>    在按钮里等探活转活再打开**，与「常用入口」的灰点条目同一套交互。
+> ② 多媒体「全量打包下载」/「打包下载选中」，按钮名里写着**下载**，包却打好就停在那儿
+>    等人去找那颗「下载打包文件」按钮。现在**打包一完成就自动开始下载**，
+>    那颗按钮保留作兜底（PS5 的 WebKit 偶尔拦非手势触发的下载）。
+>
+> 为此后端新增一条只读端点 `/smp_status`（主机在本机 loopback 10101 上 TCP 探活）。
+> 其余后端路由与全部既有 UI 一行未动。
+
+### ✨ Added
+
+* **`GET /smp_status` → `{"running":bool,"port":10101}`**（`include/pldmgr.h` 的
+  `ROUTE_SMP_STATUS` + `src/http_server.c`）：主机在 `127.0.0.1:10101` 上做 TCP 建连
+  探活（400ms 收发超时兜底，与 `pkgmanager_is_running()` 同一套实现）。
+  * **为什么必须在本机探、不能交给浏览器直连**：SMP 的 Web UI 在很多机器上只监听
+    loopback，电脑端浏览器连不通不代表主机自己连不通；「面板能不能拉起它」这件事
+    跟浏览器在哪台机器上无关。探测留在主机侧，前端只读一个布尔值。
+  * 面板**只读、不拉起也不关闭** SMP：拉起走上游 elfldr 的 `/loadpayload:`，
+    关闭属于 SMP 自己的生命周期，交给它自己或用户手动做。
+  * 已加入 `is_quiet_route`（拉起期间前端每 700ms 问一次，不算噪声）。
+
+* **游戏详情「去 ShadowMount 管理」改成先探后开**（`GameDetailModal.jsx`）：
+  * 点击后先 `/smp_status` 探活；**已起 → 直接打开**，不等。
+  * **未起 → 从 `/list_payloads` 按名字解析 ShadowMountPlus 的 ELF 路径**
+    （`normName` + 双向前缀匹配，与 CommonEntriesView 同一套；版本号 / 变体差异
+    如 `1.7beta3` / `beta4` 由归一化吸收），走上游 `/loadpayload:<path>` 拉起，
+    然后在**按钮里**等探活转活，转活了才把标签页指向 10101。
+  * **探活期间按钮显示进度**：`正在检查 ShadowMount 是否已启动…` →
+    `正在启动 ShadowMount…` → `已发起启动，正在等待端口就绪… 已等 N 秒`，
+    按钮置灰 + 转圈，用户知道在等什么、还该不该等。
+  * **失败收口**：`/loadpayload:` 失败或约 31 秒（700ms × 45 次）内端口没起来 →
+    关掉空白标签 + 按钮上方出一句红色提示，不留打不开的空白页。
+  * **本机没装 ShadowMountPlus** → 不猜程序，照旧按普通链接打开，并提示先去安装。
+  * 标签仍走 `.84` 那套：**点击手势的同步栈里**先开 `about:blank`（PS5 老内核里
+    异步 `window.open` 会被拦），探活通过才 `tab.location.assign(url)`，
+    失败 `tab.close()`；`window.open` **仍不带** `'noopener,noreferrer'`。
+
+* **打包一完成就自动下载**（`MediaManagerModal.jsx`）：`watchJob` 的 `st.done && st.ok`
+  分支里插一个隐藏 `<a>` → `click()` → 摘掉，指向与手动按钮同一个
+  `/game_media_pack_get?job=`。全量与选中两条路都汇聚到 `startPack`，**一处改动两个按钮都生效**。
+  同时弹一句 `打包完成，正在下载（N 项）` 的 Toast。界面上那颗「下载打包文件」按钮
+  **保留** —— 程序化下载不一定总能成，按钮是兜底，且包会在槽里保留一段时间。
+
+### 🌐 语言包
+
+新增 `game.smp_checking` / `smp_launching` / `smp_waiting` / `smp_waited` /
+`smp_start_fail` / `smp_start_timeout` / `smp_not_installed` / `game.pack_auto_downloading`
+（中英双包各 8 条，`zh-CN` 404 → 412 条、`en-US` 402 → 410 条）。
+
+### 📝 注意
+
+* **JSX 内联 fallback 同样要改**：这几个新词条的兜底文案写在
+  `GameDetailModal.jsx` / `MediaManagerModal.jsx` 的 `t(key, '默认值')` 第二参数里，
+  会被编译进产物，语言包**不能**覆盖它们（`.130` 踩过一次坑，见 SKILL 坑 21）。
+  本次两边都改了，并用产物级检索确认新串在 `dist/index.html` 里。
+
+---
+
 ## v0.5.2.130 (CN-FORK)
 
 > **`.129` 漏掉的一条死链文案，真机验收时抓到的。** 页面底部那句磁贴提示还写着

@@ -76,6 +76,11 @@ export default defineConfig(({ command }) => ({
       '/repository_refresh': { target: API_TARGET, changeOrigin: true },
       // [CN-FORK] 「PKG安装」视图与设置页管理卡片需要这三个端点，缺了本地 dev 会直接落到 failed 态
       '/pkgmanager_status': { target: API_TARGET, changeOrigin: true },
+      // [CN-FORK] v0.5.2.131 游戏详情「去 ShadowMount 管理」先探后开（见 GameDetailModal.jsx）。
+      // 缺这条代理会被 SPA fallback 吞成 index.html，r.json() 抛错被 catch 静默吃掉，
+      // 探活永远读不到 running → 每次都走「拉起 → 等端口就绪」分支，而等就绪时同样读不到
+      // → 31 秒超时 → 关掉刚开的空白标签。表现是「点按钮没反应」。
+      '/smp_status': { target: API_TARGET, changeOrigin: true },
       '/pkgmanager_launch': { target: API_TARGET, changeOrigin: true },
       '/pkgmanager_stop': { target: API_TARGET, changeOrigin: true },
       // [CN-FORK] 上传是 POST 且 mock 已实现，不代理的话设置页「上传更新」在本地必失败

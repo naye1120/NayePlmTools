@@ -44,6 +44,10 @@
 #define ROUTE_PKG_LAUNCH "/pkgmanager_launch"
 #define ROUTE_PKG_STOP "/pkgmanager_stop"
 #define ROUTE_PKG_UPLOAD "/pkgmanager_upload"
+/* [CN-FORK] v0.5.2.131 ShadowMount+ 探活：游戏详情「去 ShadowMount 管理」要先问它
+ * 起没起（本机 127.0.0.1:10101），没起才去拉。探测必须在本机做——从电脑用浏览器
+ * 直连 10101 不一定通（SMP 可能只监听 loopback），前端 fetch 探不到。 */
+#define ROUTE_SMP_STATUS "/smp_status"
 /* [CN-FORK] 「常用入口」自定义快捷访问清单：列表（含探活）/ 新增 / 删除 */
 #define ROUTE_QUICKLINKS "/quicklinks"
 #define ROUTE_QUICKLINKS_ADD "/quicklinks_add"
@@ -90,7 +94,7 @@
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
 
-#define MENU_VERSION "0.5.2.130" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.130，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.131" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.131，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"

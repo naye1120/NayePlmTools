@@ -5,7 +5,7 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-> - 版本：`MENU_VERSION = 0.5.2.130`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+> - 版本：`MENU_VERSION = 0.5.2.131`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 - 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。`.102` 是**修掉 `.101` 改名取证代码的堆溢出（整 payload 崩）+ 按钮按功能转实心六色（样张 A + I2）+ 页头去粘顶**（正式出包版 `NayePlmTools_0.5.2.102-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `be7fa8f`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 的包已过期。`.103`–`.105` 是**纯前端/文档改动、从未单独出包**（`.103` 收敛上色 + 深空黑 + 舒展留白；`.104` 账号板块按钮状态分色 + 主色换朱橙 `#F43E06`；`.105` 同步按钮补图标 + PIN 进度条重做），`.106` 把这四轮**一次性出包**（正式出包版 `NayePlmTools_0.5.2.106-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `0e9afb2`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.102` 的包已过期。`.107` 是**头像上传/裁剪四项缺陷修复**（变形 / 卡死 / 拖拽裁剪 / 拖放选图）+ **账号「登出」不再连带反激活**（备份层加来源维度，按钮 `[登出]` = 只登出、`[反激活]` = 登出并反激活，文字不变）—— 详见 §2.1.1 与 §2.2.1。正式出包版 `NayePlmTools_0.5.2.107-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `8065f19`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.106` 的包已过期。`.108` 是**账号按钮语义修正** —— 用户否掉了 `.107` 的文案（「逻辑做错了，登出 就是只登出，反激活 即 登出并反激活，**但是按钮文字不要改**」）：按钮行恒为 `[登出]` + `[反激活]`，已登录时 `[反激活]` 走 `signout-full`（登出 + 反激活一步到位），未登录时走 `deactivate`；后端契约沿用 `.107`，本轮只动前端/语言包/文档。正式出包版 `NayePlmTools_0.5.2.108-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `12e2ba5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.107` 的包已过期。`.109` 是**修掉「头像上传一直显示上传中、不报错也不结束」**（真根因在 MHD 流式状态回收的判据，见 §2.2.2；前端同时把「超时」与「用户取消」区分开）+ **通知条挪到底部居中并缩小**（见 §2.2.3）+ mock 里头像改成真闭环。正式出包版 `NayePlmTools_0.5.2.109-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `b8ea772`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.108` 的包已过期。`.110` 是**修掉电视端「确定」生效在鼠标指针位置、而不是彩色光圈所在的那个控件上**（见 §2.2.4；结论：网页无法移动系统鼠标指针，改为让 OK 的落点脱离指针）+ 新增 `?navdebug=1` 排障面板。正式出包版 `NayePlmTools_0.5.2.110-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `dcfb48b`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.109` 的包已过期。`.111` 是**四件事一起做**：① 遥控器模式下藏掉系统光标（见 §2.2.4 延伸 —— 网页无法移动指针，只能让它消失）；② **改名不再影响账号 ID**（ID 改由 uid 派生，见 §2.1.1）；③ **登入/登出/激活/改名/接口错误全部中文化**，不再报英文诊断串；④ **去掉「反激活」** —— 激活成功后那颗按钮整颗收起（见 §2.2.5）；⑤ 修掉**「第一次登出失败、第二次才成功」**（`fill_status()` 改为 uid 优先解槽位，见 §2.1.1）。正式出包版 `NayePlmTools_0.5.2.111-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `e908ef5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.110` 的包已过期。`.112` 是**游戏管理三个面板改「铺满右侧」+ 磁贴图拆成图标/背景两层 + 电视端焦点那套逻辑整体回退到上游做法**（用户口径两轮：「存档管理页面打开后铺满右边整个区域。多媒体管理也是铺满右边。修改名称也是铺满，但是你只把修改磁贴图标放出来了，还要增加一个修改背景的」/「刚才铺满的几个页面圆角全部取消，修改名称哪里将磁贴图标与游戏名称放在一行，磁贴背景放在下面，磁贴背景预览图是16:9的dds图片。图标是png图片。另外修复一个历史bug。ps5真机上焦点鼠标移动的方式最好改回跟上游一样，现在这样很别扭」）。具体：① `Modal` 新增 `layout="panel"`、四角直角、`--sidebar-w` 令牌 + `html[data-sidebar]`、`.panel-sheet` 的 `margin:0!important`（躲 `.space-y-6` 的 `> * + *`）—— 见 §2.2.6；② 磁贴两层图（**图标 1:1 PNG / 背景 16:9 1920×1080 DXT1 DDS，DDS 由后端转**，`/game_tile_icon` 与 `/game_tile_background` 拆分，`game_list` 新增 `icon` 版本号字段）；③ **电视端「光圈/光标」整层回退**：删掉自己搬焦点、抢确定键、藏光标三层，改成光圈跟着指针走 —— 见 §2.2.7；④ 修掉 `.92` 起就存在的「弹窗里按返回键连带退页」—— 见 §2.2.8；⑤ `Modal` 焦点进出独立 effect —— 见 §2.2.9。**本轮为纯前端/mock/文档改动，未出包**（后端 C 代码一行未动）。`.113` 是**三件事 + 一处版本号清账**（用户口径：「这几个铺满页面的字体太小了，跟其他父级菜单一样大。这里点击也可以上传图片，上传完要有一个应用的动作；这里的缩略图也要调大。太小了，预览都看不清。改把，改完直接打包成elf」）：① 铺满面板里的字号与侧栏菜单拉平 —— 立 `.panel-body` / `.panel-note` / `.panel-tiny` / `.panel-micro` 四条语义档，替掉 60 处硬编码 `text-[13px]` 之类的 px 字号（见 §2.2.6 末尾）；② 改名页两层图改「**点预览也能选图 + 应用才生效**」（预览本身是按钮、选图先暂存并本地预览、点「应用」才提交，另有「取消」）；③ 多媒体缩略图列宽下限由写死的 112px 改成 `--thumb-w` 令牌（移动 140 / 桌面 200 / 电视 320px）；④ 顺手清掉三处**手抄的版本号**（设置页捐赠说明、支持作者页兜底值、mock 的 `/version`）并加回归守卫。正式出包版 `NayePlmTools_0.5.2.113-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `81c42c1`，两包各 9,957,216 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.112` 的包已过期。`.114` 是**磁贴再放大 1/4（`--tile-w` 这根令牌的第三次调档：PC/手机 210px → 262.5px、电视 300px → 375px）+ 改名页「磁贴背景」块从竖排改回左右分栏**（正式出包版 `NayePlmTools_0.5.2.114-me.elf` / `-ga.elf`，短哈希 `91fa4fb`，两包各 9,957,216 字节，`.113` 的包已过期；⚠️ 这一轮**包出了文档漏了**，到 `.115` 才补上 CHANGELOG），`.115` 是**游戏管理 → 多媒体管理（截图/录屏）后端**——新增 `src/game_media.c` + `include/game_media.h`、八条路由（六条 `/game_media*` + `/game_job_status` / `/game_job_cancel`），主机关卡从 3 条增至 4 条（新 `media_scan` 98 项断言），详见 §2.1.0 与 CHANGELOG `.115`。`.116` 是**游戏管理后端一次补完 + 修掉「预览只剩顶部一条 / 打包下载失败」** —— 新增 19 条端点与六个模块（`game_title` / `game_saves` / `game_runtime` / `game_job` / `zip_io` / `inflate`，详见 §2.1.2），并把**文件直出从 `MHD_create_response_from_fd64` 换成自写 32KB 回调 `gr_file_response()`**（fd 直出那条分支在真机上会把 Content-Length 报全、字节发短，导致图片只剩顶部一条、zip 下载判失败；三个调用点一起换），出包版 `NayePlmTools_0.5.2.116-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.115` 的包已过期。`.117` 是**修真机报的「游戏管理的列表变空了」** —— 根因是 `.116` 给 `enum_arg_t` 加了 `want`，而 `build_game_json` 仍逐字段赋值**漏了它**，`want` 成栈上垃圾、`gm_append_item` 第一行 `if (a->want)` 把每个条目都早退、`count` 恒 0（症状「先好后坏」，跑过一次 `/game_detail` 才把非空指针留在栈上）；同轮另修**详情页 5 个字段读错列**（`st_cb_row` 拿 `GM_DB_*` 枚举序号当列号，把 `gm_sql_col_index` 的解析结果整个丢掉）与 **`version` 吐栈上垃圾**。同时**把「三道门为什么拦不住」补上**：`src/game_mgr.c` 第一次能在主机上编译（`test/host_mnt_compat.h` 顶掉 `getmntinfo` 三个 BSD 符号 + `GAME_MGR_APPDB_PATH` 加 `#ifndef` + 合成 app.db 夹具），新增 `game_mgr` 主机关卡 **65 项断言**，核心手法是 `seed_stack()` **主动把栈播种成非空指针**（见 §2.1.3）。出包版 `NayePlmTools_0.5.2.117-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.116` 的包已过期。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。。`.128` **改错了地方，已回退**（用户：「退回上一版，你改错了，我要的是将游戏详情里面的按钮全部去掉，改为『去 ShadowMount 管理』」）——它删的是**磁贴下**那四颗动作按钮（存档管理 / 多媒体管理 / 名称与背景 / 待定功能），而那四颗是我们自己的功能，必须留。`.129` 把磁贴恢复到 `.127` 的样貌，把手术做到**游戏详情弹窗**里：`GameDetailModal.jsx` 515 → 250 行，改成**纯只读信息面板 + 一颗「去 ShadowMount 管理」按钮**——只读挂载 / 读写挂载 / 卸载挂载 / 卸载 / 删除源 五颗按钮全部下线，连带整条删除任务链（`busy`/`job` state、`watchJob`/`cancelJob` 轮询、删除进度面板、「取消任务」按钮、`PHASE_LABEL`/`BUSY_REASON`、`deleting`/`stopWatch`）一起删干净，不留半死代码（否则 `no-unused-vars` 与维护陷阱）。动机同 `.128` 那次：ShadowMount 挂的镜像/裸目录游戏调 `sceAppInstUtilAppUnInstall` 会删掉 app.db 注册与 `/user/app/<TID>/`（连带 `mount.lnk`）后返回非零，而 `game_runtime_uninstall()` 只在 rc==0 时清缓存，于是图标先还在、刷新后消失且**无从挂回**——外部源 `/mnt/ext1/PPSA21567-宇宙机器人` 完好、SMP 侧仍列着，但我们没有挂载/重注册能力，所以干脆撤掉挂载类入口，交给 ShadowMount 自己管；**这次详情里那颗「卸载」也一起撤了**，不再有「留着以后决定」的欠账。SMP 按钮的行为沿用 `.128` 那套（回归已验证）：点击走 `.84` 的老套路——手势内 `window.open("about:blank", "_blank")` 占位再 `win.location.replace(url)`，**目标 `http://${location.hostname}:10101/`**（用页面自己的 host，主机上 `127.0.0.1`、PC 上 `192.168.x.x` 零配置都对）。**`window.open` 第三个参数千万别加 `noopener,noreferrer`**——加了返回 `null`，兜底分支再开一个真标签页，用户看到两个标签而 `about:blank` 那个还挂着；`catch` 里要 `win.close()` 再兜底。存档 / 多媒体 两条 `GridRow`（`打开存档管理` / `打开多媒体管理`）**保留在详情里**，同时磁贴上四颗按钮也在，所以两条路都能到；「名称与背景」现在**只能从磁贴进**（`.128` 给详情加的那行 `打开名称与背景` 随回退一起没了），「待定功能」那颗空壳按钮也回来了。`GameSection.jsx` 的 `GameDetailModal` 调用点顺势收掉 `addToast` / `showConfirm` / `onChanged` 三个回调（详情不再发操作，它自己的 SMP 按钮不经过我们）；**`showConfirm` 在存档 / 多媒体两个弹窗里仍在用，别误删**。正式出包版 `NayePlmTools_0.5.2.129-me.elf` / `-ga.elf`（提交 `ead334d`，内嵌标题 `ead334d`），两包各 10,785,872 字节、titleId 自检 NAYE00001/NAYE00004 通过，`frontend/dist/index.html`（910,858 字节）与 ELF 内嵌 blob 在偏移 2007072 **逐字节一致**，`0.5.2.128` / `.127` / `.126` 残留各 0 处、`cancelJob` / `watchJob` 各 0 处；`.128` 的包已过期。回归：`game112` 171/171、`nav112` 20/20。**断言口径翻转了**：磁贴上必须**有**四颗（`length === 4` 且磁贴上没有 SMP 按钮），详情里必须**只有一颗** SMP 按钮，且挂载/卸载/删除源/取消任务**一颗都不剩**（用正则扫弹窗内所有 `<button>` 的 aria-label + text——这条反面断言是刻意加的，防止以后把按钮偷偷加回来还静默通过；`.128` 只有正向断言，就是它的教训）。负向对照：把 `GameDetailModal.jsx` checkout 回 `HEAD~1`，6 条断言立刻全红，恢复后全绿。`.129` 出包版 `NayePlmTools_0.5.2.129-me.elf` / `-ga.elf`（提交 `ead334d`），已推真机 `192.168.1.214` 验收。
 
 `.130` 是**真机验收 `.129` 时抓到的一条死链文案**：`GameSection.jsx:321` 渲染的磁贴提示还写着
@@ -22,6 +22,26 @@
 处 blob 逐字节一致，`含删除` / `cancelJob` / `watchJob` 各 0 处；`.129` 的包已过期。
 已推真机，`device129_detail.mjs` **29/29 PASS**（`WANT_VER=0.5.2.130`），
 `game112` 171/171、`nav112` 20/20 复跑通过。
+
+`.131` 是**两个「点完按钮还得自己动手」的缺口**（用户口径：「去 shownmount 管理的做法参考
+快速入口的做法，如果没启动则先将 shownmount 启动并，在按钮中等待探活，探活成功后，进行访问，
+探活过程给提示。并且多媒体的全量打包下载和下载打包选中，点完按钮后打包完应该自动下载」）：
+① 游戏详情「去 ShadowMount 管理」改成**先探后开**，与 CommonEntriesView 的灰点条目同一套；
+② 多媒体打包一完成**自动下载**，全量与选中两条路共用一个钩子。**后端只新增一条只读端点**
+`GET /smp_status` → `{"running":bool,"port":10101}`（`ROUTE_SMP_STATUS`，`src/http_server.c`
+里 `smp_is_running()` 在 `127.0.0.1:10101` 做 TCP 探活、400ms 收发超时，与
+`pkgmanager_is_running()` 同一套；面板只读、不拉起也不关闭 SMP —— 拉起走上游 `/loadpayload:`，
+关闭属于 SMP 自己的生命周期）。其余后端路由与全部既有 UI 一行未动。
+关键取舍：**探活必须留在主机侧**，不能交给浏览器直连 10101 —— SMP 的 Web UI 在很多机器上
+只监听 loopback，电脑端连不通不代表主机自己连不通；「面板能不能拉起它」跟浏览器在哪台机器上无关。
+`.131` 沿用 `.84` 的标签手法（点击手势同步栈里先 `window.open('about:blank')`，探活通过才
+`tab.location.assign(url)`，失败 `tab.close()`；`window.open` **仍不带** `'noopener,noreferrer'`）。
+`dist` 914,696 字节；新增 8 条词条（`game.smp_checking` / `smp_launching` / `smp_waiting` /
+`smp_waited` / `smp_start_fail` / `smp_start_timeout` / `smp_not_installed` /
+`game.pack_auto_downloading`，中英双包，`zh-CN` 404→412、`en-US` 402→410）。
+**`.130` 那个 i18next 内联兜底的坑这轮又照做了一遍**：这几个新词条的兜底文案同时写在 JSX 的
+`t(key, '默认值')` 第二参数里（会编译进产物、语言包盖不住），JSON 与 JSX 两处都改了，
+并用产物级检索确认新串在 `dist/index.html` 里（`smp_status` ×1、`打包完成，正在下载` ×2 等）。
 - 近期定型（.64 → .100）：
   - `.64` 主页与全部硬件信息探测下线（`src/stats.c` 删除），启动直达「管理 Payload」页
   - `.65` 「默认云端仓库」总开关 `DEFAULT_REPO_ENABLED`（现默认关，可彻底停用内置官方源）
@@ -1220,7 +1240,8 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
 - **网络**：用户态代码用 socket 前必须 `sceNetCtlInit` + `sceUserServiceInitialize(256)`。
 - **传感器/硬件**：`sceKernelIccGet*` 会 crash、Sony 传感器 API 非可重入 —— 这是 `.64` 下线硬件信息的根因；`/dev/dce` ioctl 默认停用 + `safe_mode` 哨兵文件用于防死机。
 - **提权**：官方范式只改 authid/caps 且用完还原（勿改 uid/prison/rootdir）。**已知偏差（待裁决）**：`.99` 移植的 `src/psaccounts/sys_lite.c` 里 `escalate_creds()` 沿用 `D:\offact-new` 已测行为——一次性提满 root + jailbreak 且不还原，因为写 SysReg 与 `/system_data/priv` 头像路径都需要它。这是移植保真，不是本 fork 的新增风险；若要收口成官方范式，必须先实测账号写入是否仍能成功。
-- **前端**：Vite 未代理的 API 会被 SPA fallback 吞成 index.html → 页面转圈；`!text-white` important 变体、tailwind 字面色需单独映射。
+- **前端**：Vite 未代理的 API 会被 SPA fallback 吞成 index.html → 页面转圈；`!text-white` important 变体、tailwind 字面色需单独映射。**`.131` 的教训**：新端点只要不属于既有代理前缀（`'/game_'`、`'/api'`…），**必须**在 `vite.config.js` 里补一条代理 —— 漏了不报错，`res.json()` 抛错被 `.catch(() => null)` 静默吃掉，探活永远读到 `undefined`，表现是「点按钮没反应」。自查：`curl http://127.0.0.1:5199/<新端点>` 看回的是 JSON 还是 `<!doctype html>`；改完 **必须重启 vite**（`--strictPort` 那个进程），热更新不覆盖 proxy 表。
+- **浏览器回归里定位按钮别用会变的 `aria-label`**（`.131` 踩到）。`GameDetailModal` 那颗 SMP 按钮的 `aria-label` 是 `smpStarting ? smpPhase : '去 ShadowMount 管理'` —— 点击后 React 一重渲染，`button[aria-label="去 ShadowMount 管理"]` 就解析到 **0 个元素**，`innerText()` / `isDisabled()` 全抛错被 `.catch()` 吞掉，断言报「整个等待窗口都没看到进度文案」，看起来像产品没渲染，实际是选择器脱锚了（同批的 10101 跳转断言照样全绿）。修法：用**稳定 class**（`button.btn-outline.w-full`，详情弹窗里只有它 + 右上关闭的 `.icon-btn`），再单加一条断言校验初始文案确实是「去 ShadowMount 管理」。同理：`window.open` 的 `popup` 事件比 React 状态重渲染**早到**，t=0 读一次读到的还是旧值 —— 要在那 ~2.5s 拉起窗口里轮询采样。
 - **PS5 老内核三条硬约束**：① flex 盒的 `gap` 不生效（`grid` 的 `gap` 生效）——横排/竖排间距一律用 `* + *` 外边距或 `.stack-x`；② 不支持 `@layer`，`index.css` 顶部那批 `LEGACY FALLBACKS` 是给老内核兜底的关键工具类，别删；③ `animate-in / slide-in-from-*` 之类是死类名（`tailwindcss-animate` 未安装），别指望它做动画。
 - **网页无法移动系统/浏览器鼠标指针**（Pointer Lock 只能锁不能移，合成 `mousemove` 也移动不了真光标）。凡是「让鼠标跟着某某走」的需求，先翻译成用户要的**结果**再选路。
 - **电视端导航：我们不接管键盘，光圈跟着指针走**（`.112` 定稿）。方向键**不** preventDefault、不做几何搬焦点；`.is-focus` 挂在**指针当前压着的可操作元素**上（指针压在图上就向上找最近的按钮祖先）。**不要再加「自己搬焦点 / 抢确定键 / 藏系统光标」的逻辑** —— 那三层 `.92`→`.110`→`.111` 越补越别扭，`.112` 已整层回退，见 §2.2.7 的链条表。返回键例外：仍由我们派发 `ps5-back`，但**屏上有 `[role="dialog"]` 时留给浮层**（见 §2.2.8）。
@@ -1402,6 +1423,31 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
   记得同步更新 `test/mutation_check_media.sh`**。
 
 ## 7. 接手后的下一步（待定，非阻塞）
+- **`.131`（SMP 先探后开 + 打包自动下载）—— ✅ 已出包、已推真机**（见 §0 的 `.131` 句）。
+  回归口径（下次动 SMP 入口或多媒体打包时照这几条验）：
+  1. **SMP 没起时点「去 ShadowMount 管理」**：按钮转圈 + 文案依次变
+     「正在检查 ShadowMount 是否已启动…」→「正在启动 ShadowMount…」→
+     「已发起启动，正在等待端口就绪… 已等 N 秒」（N 每秒 +1）；期间按钮 `disabled`。
+     探活转活后新开一个标签指向 `http://<host>:10101/`，本面板页不被顶掉。
+  2. **SMP 已起时点同一颗按钮**：**不等**，直接开标签（`/smp_status` 一次即回 `running:true`）。
+  3. **探活不通过**（约 31 秒 = 700ms × 45 次）：关掉空白标签 + 按钮上方出红色
+     `已发起启动，但端口迟迟没有就绪`；本机没装 SMP 则出 `本机没有找到 ShadowMountPlus…`
+     并**照旧按普通链接打开**（不猜程序）。
+  4. **`/smp_status` 语义**：主机在 `127.0.0.1:10101` 上 TCP 建连探活，400ms 收发超时；
+     回 `{"running":bool,"port":10101}`。已在 `is_quiet_route` 降噪（拉起期间 700ms 轮询）。
+     mock（`frontend/mock-server.js`）用**真实 TCP 探活**实现，`/loadpayload:` 命中
+     ShadowMountPlus 路径会起一个监听 10101 的桩（`MOCK_PROGS` 里 `shadowmountplus:10101`，
+     1.5s 延迟模拟「进程起来 → 端口转活」），整条链路可在预览里端到端验证。
+  5. **SMP ELF 路径解析**：`/list_payloads` 的 `payloads` 按**目录名与文件名两路**归一化
+     （`normName` + 双向前缀，阈值 3）匹配 `ShadowMountPlus`，排除 `nayeplmtools*`（自己），
+     **唯一候选才认**。所以 `ShadowMountPlus_1.7beta3.elf` / `beta4` 这类版本差异不用改代码。
+  6. **打包自动下载**：`watchJob` 的 `st.done && st.ok` 分支里插隐藏 `<a>` → `click()` → 摘掉，
+     指向 `mediaPackUrl(job_id)`，同时弹 `打包完成，正在下载（N 项）`。**全量与选中都汇聚到
+     `startPack`，一处改动两个按钮都生效**。界面上那颗「下载打包文件（N 项）」按钮**保留**作
+     兜底（PS5 的 WebKit 偶尔拦非用户手势触发的下载）。
+  7. **别顺手改的两处**：`game.delete_*` 词条簇仍无 JSX 引用（同 `.129`/`.130`，别当基准）；
+     详情的两行 `GridRow` 仍是 `<button>`（它们是导航不是操作）。
+
 - **`.130`（`.129` 漏掉的一条死链文案）—— ✅ 已出包、已推真机、29/29 验收通过**。
   唯一遗留的坑：`t(key, '中文默认值')` 的**内联兜底**改 JSON 盖不住（见 §0 的 `.130` 句）。
 - **`.129`（游戏详情弹窗的操作按钮全部下线，只留一颗「去 ShadowMount 管理」）—— ✅ 已出包**

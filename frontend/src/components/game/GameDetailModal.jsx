@@ -31,6 +31,12 @@ import { getGameDetail } from '../../utils/gameApi'
  * ① 弹窗**恒可关闭**：Esc / 右上角叉。`.129` 之后这里没有任何进行中任务，关掉就是关掉。
  * ② 「存档 / 截图」两格是可点的，直接跳到对应管理弹窗 —— 详情页里看到数字却过不去，
  *    是最没意义的只读。
+ *
+ * [CN-FORK] v0.5.2.131 「去 ShadowMount 管理」不再直接开链接（它没起时打开就是一块
+ * 加载不出的空白页）：先 /smp_status 探活，没起就走上游 /loadpayload: 把它拉起来，
+ * 在**按钮里**等探活转活并显示「已等 N 秒」，转活了才把标签页指过去；一直不活就关掉
+ * 空白标签，不留打不开的页。做法与 CommonEntriesView 的「灰点条目接管拉起」（.83/.84）
+ * 同一套，不是另起一套交互。
  */
 
 /* 明细网格的一行。值为空显示「—」：空着会让人分不清「没有」还是「没读到」。
@@ -42,11 +48,68 @@ const ROW_COLS = 'grid-cols-[86px_minmax(0,1fr)] sm:grid-cols-[104px_minmax(0,1f
  * 127.0.0.1，从电脑用 192.168.x.x 打开时就是局域网地址，两边都不用配置。 */
 const SMP_PORT = 10101
 
+/* [CN-FORK] v0.5.2.131 「去 ShadowMount 管理」的启动链路。全部放模块作用域：组件体内
+ * 定义的取数闭包会被 react-hooks/purity 判成「渲染期调用不纯函数」。 */
+const SMP_NAME = 'ShadowMountPlus'
+/* 拉起后的探活节奏：700ms 一次、最多 45 次（≈31s）。SMP 起进程 + 初始化挂载点比 PKG
+ * Manager 慢，所以间隔比 CommonEntriesView 那 500ms 略松。 */
+const SMP_PROBE_GAP = 700
+const SMP_PROBE_TIMES = 45
+
+const normName = (s) => String(s || '').toLowerCase().replace(/\.elf$/, '').replace(/[^a-z]/g, '')
+const prefixHit = (a, b, min) => {
+  const x = normName(a), y = normName(b)
+  return !!x && !!y && Math.min(x.length, y.length) >= min && (x.startsWith(y) || y.startsWith(x))
+}
+const getJson = (url) => fetch(url, { cache: 'no-store' }).then((r) => r.json()).catch(() => null)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/* /list_payloads 的 payloads 是 "…/<目录>/<文件>.elf"，按目录名与文件名两路匹配。
+ * 本面板自身（nayeplmtools*）永远排除，否则可能把面板自己再拉一遍；唯一候选才认，
+ * 避免歧义拉起错的程序。版本号/变体差异（1.7beta3 / beta4）由归一化后前缀匹配吸收。 */
+const findSmpPath = (data) => {
+  const hits = ((data && data.payloads) || []).filter((p) => {
+    const seg = String(p).split('/')
+    const dir = seg[seg.length - 2] || ''
+    return !normName(dir).startsWith('nayeplmtools')
+      && (prefixHit(dir, SMP_NAME, 3) || prefixHit(seg[seg.length - 1] || '', SMP_NAME, 3))
+  })
+  return hits.length === 1 ? hits[0] : ''
+}
+
+/* 探活必须问主机，不能浏览器直连 10101：SMP 可能只监听 loopback，电脑端浏览器连不通
+ * 不代表主机自己连不通。/smp_status 由主机在 127.0.0.1:10101 上做 TCP 探活后回布尔值。 */
+const probeSmp = async () => {
+  const s = await getJson(`/smp_status?_=${Date.now()}`)
+  return !!(s && s.running)
+}
+
+const waitSmpAlive = async () => {
+  for (let k = 0; k < SMP_PROBE_TIMES; k++) {
+    await sleep(SMP_PROBE_GAP)
+    if (await probeSmp()) return true
+  }
+  return false
+}
+
+const smpUrl = () => {
+  const raw = window.location.hostname || '127.0.0.1'
+  const host = raw.includes(':') ? `[${raw}]` : raw
+  return `http://${host}:${SMP_PORT}/`
+}
+
 export default function GameDetailModal({ show, game, onClose, onOpenSaves, onOpenMedia }) {
   const { t } = useTranslation()
   const tid = game && game.tid
   const [detail, setDetail] = useState(null)
   const [err, setErr] = useState('')
+  /* [CN-FORK] v0.5.2.131 拉起 ShadowMount 的进度：starting=是否在等探活，
+   * startAt/now 用来算「已等 N 秒」，phase 决定按钮上写「正在启动」还是「正在等待端口就绪」。 */
+  const [smpStarting, setSmpStarting] = useState(false)
+  const [smpPhase, setSmpPhase] = useState('')
+  const [smpStartAt, setSmpStartAt] = useState(0)
+  const [smpNow, setSmpNow] = useState(0)
+  const [smpFail, setSmpFail] = useState('')
   const aliveRef = useRef(true)
 
   useEffect(() => {
@@ -68,6 +131,7 @@ export default function GameDetailModal({ show, game, onClose, onOpenSaves, onOp
     setLoadedKey(openKey)
     setDetail(null)
     setErr('')
+    setSmpFail('')
   }
 
   const load = useCallback(async () => {
@@ -92,33 +156,86 @@ export default function GameDetailModal({ show, game, onClose, onOpenSaves, onOp
     load()
   }, [show, tid, load])
 
+  /* 拉起期间挂一根本机秒针，只为让「已等 N 秒」自己往前走。不在等就停掉——空转的
+   * 1s 定时器在电视端浏览器上也是白烧。依赖抽成布尔量：直接写 `[smpStarting]` 本身
+   * 是布尔，没有复杂表达式问题。 */
+  useEffect(() => {
+    if (!smpStarting) return undefined
+    const iv = setInterval(() => setSmpNow(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [smpStarting])
+
   /* 唯一的动作：跳 ShadowMount 后台（它的 Web UI 就挂在 SMP_PORT 的根路径上）。
-   * 先开 about:blank 再把 URL 塞过去：PS5 老内核里 window.open(url) 只要不在点击手势的
-   * 同步栈里就会被拦（.84 那次的修法），同步开空窗最稳；空窗都没开出来就退化成直接开 url。
    *
-   * 这里**不能**给 window.open 加 'noopener,noreferrer' —— 那样它会直接返回 null，于是落到
-   * 下面的兜底分支**再开一个**标签，用户一次点出两个 tab（第一颗还停在 about:blank）。
-   * 代价是这个新 tab 能反向拿到我们的 window —— 但它只是 ShadowMount 自家后端（同机
-   * 127.0.0.1 / 局域网），跟 .84 那条 CommonEntriesView 的做法一致，可接受。 */
-  const openSmp = () => {
-    const raw = window.location.hostname || '127.0.0.1'
-    const host = raw.includes(':') ? `[${raw}]` : raw
-    const url = `http://${host}:${SMP_PORT}/`
-    const win = window.open('about:blank', '_blank')
-    if (win) {
-      try {
-        win.location.replace(url)
-        win.focus()
-      } catch {
-        try { win.close() } catch { /* 关不掉也没关系，下面这个兜底才是真正打开它的那个 */ }
+   * [CN-FORK] v0.5.2.131 不再直接开链接。SMP 没起时 10101 上什么都没有，打开就是一块
+   * 加载不出的空白页——而它常常确实没起（我们面板自己不负责拉起它）。所以先探活，
+   * 不活就拉起、在按钮里等探活转活再打开。整条链路的取舍照 CommonEntriesView 的
+   * openProgram（.83 通用拉起 / .84 新标签）：
+   *   · **点击手势的同步栈里**先开 about:blank —— PS5 老内核里异步的 window.open 会被
+   *     拦（.84 那次修过），先占位再慢慢指过去最稳；
+   *   · 探活通过才 `tab.location.assign(url)`，失败就 `tab.close()`，不留打不开的空白页；
+   *   · **不能**给 window.open 加 'noopener,noreferrer' —— 那样它会返回 null，落到
+   *     兜底分支**再开一个**标签，一次点出两个 tab（第一颗还停在 about:blank）。
+   *     代价是新 tab 能反向拿到我们的 window，但它只是同机后端，与 .84 一致，可接受。 */
+  const openSmp = async () => {
+    if (smpStarting) return
+    const at = Date.now()
+    setSmpFail('')
+    setSmpStartAt(at)
+    setSmpNow(at)
+    setSmpStarting(true)
+    setSmpPhase(t('game.smp_checking', '正在检查 ShadowMount 是否已启动…'))
+    /* 手势内同步开空窗（见上方注释） */
+    const tab = window.open('about:blank', '_blank')
+    let go = false
+    try {
+      if (await probeSmp()) {
+        go = true
+      } else {
+        /* 没起：从 /list_payloads 按名字找 ELF 路径。找不到就不猜程序，直接按普通链接
+         * 打开（多半还是空白页，但至少把地址交到用户手里，让他知道去哪儿装 SMP）。 */
+        const data = await getJson(`/list_payloads?_=${Date.now()}`)
+        const path = findSmpPath(data)
+        if (!path) {
+          setSmpFail(t('game.smp_not_installed',
+            '本机没有找到 ShadowMountPlus，先安装它才能从这里打开。'))
+          go = true
+        } else {
+          setSmpPhase(t('game.smp_launching', '正在启动 ShadowMount…'))
+          const res = await fetch(`/loadpayload:${encodeURI(path)}`).catch(() => null)
+          if (!res || !res.ok) throw new Error(t('game.smp_start_fail', 'ShadowMount 启动失败'))
+          setSmpPhase(t('game.smp_waiting', '已发起启动，正在等待端口就绪…'))
+          if (!(await waitSmpAlive()))
+            throw new Error(t('game.smp_start_timeout', '已发起启动，但端口迟迟没有就绪'))
+          go = true
+        }
+      }
+    } catch (e) {
+      setSmpFail((e && e.message) || t('game.smp_start_fail', 'ShadowMount 启动失败'))
+    }
+    if (aliveRef.current) setSmpStarting(false)
+    if (go) {
+      const url = smpUrl()
+      if (tab) {
+        try {
+          tab.location.assign(url)
+          tab.focus()
+        } catch {
+          try { tab.close() } catch { /* 关不掉也没关系，下面这个兜底才是真正打开它的那个 */ }
+          window.open(url, '_blank')
+        }
+      } else {
         window.open(url, '_blank')
       }
-    } else {
-      window.open(url, '_blank')
+    } else if (tab) {
+      tab.close()
     }
   }
 
   if (!show || !game) return null
+
+  /* 已等秒数：只在等的时候显示，且至少给 0 秒，不显示负数（刚设 at 那一下 now 可能还没追上来）。 */
+  const smpSec = smpStarting && smpStartAt ? Math.max(0, Math.floor((smpNow - smpStartAt) / 1000)) : 0
 
   /* 列表里已有的字段先顶上，详情到了再覆盖 —— 这样弹窗一打开就有封面和名字，
    * 不会先闪一片空白再填内容。 */
@@ -141,16 +258,26 @@ export default function GameDetailModal({ show, game, onClose, onOpenSaves, onOp
       onClose={onClose}
       className="max-w-3xl"
       footer={
-        <button
-          type="button"
-          className="btn btn-outline w-full"
-          onClick={openSmp}
-          title={t('game.smp_hint', '挂载 / 卸载 / 删除源请到 ShadowMount 后台处理')}
-          aria-label={t('game.smp_open', '去 ShadowMount 管理')}
-        >
-          <ExternalLink className="w-4 h-4" />
-          <span>{t('game.smp_open', '去 ShadowMount 管理')}</span>
-        </button>
+        /* [CN-FORK] v0.5.2.131 按钮下面可能有一句失败提示（拉不起来 / 没装 SMP），
+         * footer 骨架是横向 .stack-x，这里改成纵向堆叠：提示在上、按钮在下。 */
+        <div className="flex flex-col gap-2 w-full">
+          {smpFail && (
+            <Note tone="error" icon={AlertTriangle}>{smpFail}</Note>
+          )}
+          <button
+            type="button"
+            className="btn btn-outline w-full"
+            onClick={openSmp}
+            disabled={smpStarting}
+            title={smpStarting ? smpPhase : t('game.smp_hint', '挂载 / 卸载 / 删除源请到 ShadowMount 后台处理')}
+            aria-label={smpStarting ? smpPhase : t('game.smp_open', '去 ShadowMount 管理')}
+          >
+            {smpStarting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
+            <span>{smpStarting
+              ? `${smpPhase} ${t('game.smp_waited', '已等 {{n}} 秒', { n: smpSec })}`
+              : t('game.smp_open', '去 ShadowMount 管理')}</span>
+          </button>
+        </div>
       }
     >
       {/* Modal 的 children 容器自带 text-lg/xl（给确认文案用的），详情页是数据密集型，

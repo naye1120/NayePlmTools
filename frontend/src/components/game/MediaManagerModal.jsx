@@ -26,6 +26,11 @@ import { getMedia, mediaThumbUrl, mediaFileUrl, packMedia, mediaPackUrl, deleteM
  *   ④ 单个预览 —— 全屏 lightbox。视频用原生 <video controls>，不自己造播放器
  *      （PS5 的 WebKit 原生解码器比自己用 canvas 拼的靠谱得多）。
  *
+ * [CN-FORK] v0.5.2.131 打包一完成就**自动开始下载**，不再只放一颗「下载打包文件」按钮
+ * 等人去找。用户点的是「打包**下载**」——按钮名里就写着下载，包打好了却不下载会让人
+ * 以为功能坏了。自动下载之外那颗按钮保留作兜底：PS5 的 WebKit 对非用户手势触发的下载
+ * 偶尔拦截，界面上得有个能点的东西。两处指向同一个 URL。
+ *
  * 性能上的两条硬约束（参考 game_mgr.c 的教训，那里反复强调「轮询会打死内核」）：
  *   · 缩略图走 /game_media_thumb?id=&w=320 后端**按需缩放并缓存**，绝不把 4K 原图塞进网格
  *     —— 42 张 3840×2160 的 PNG 在电视端浏览器里直接能把内存打满。
@@ -52,6 +57,25 @@ const PHASE_TEXT = {
 function phaseText(phase, t) {
   const e = PHASE_TEXT[phase]
   return e ? t(e[0], e[1]) : ''
+}
+
+/* [CN-FORK] v0.5.2.131 打包一完成就自动下载，不再让用户去找那颗「下载打包文件」按钮。
+ *
+ * 做法是动态插一个 <a>、click()、再摘掉 —— 这是没有现成可见锚点时的标准程序化下载。
+ * 之所以保留界面上那颗手动按钮：程序化下载不一定总能成（PS5 的 WebKit 对非手势触发的
+ * 下载偶尔拦截），按钮是兜底。两条路指向同一个 URL，后端下发的 Content-Disposition
+ * 与 <a download> 同名，落盘名一致。
+ *
+ * 放模块作用域而不是组件体内：它只是 DOM 操作，与组件状态无关，且 startPack 的
+ * watchJob 回调里要拿到它。 */
+const triggerPackDownload = (jobId, name) => {
+  const a = document.createElement('a')
+  a.href = mediaPackUrl(jobId)
+  a.download = name || true
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
 }
 
 export default function MediaManagerModal({ show, game, onClose, addToast, showConfirm }) {
@@ -186,7 +210,14 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
           if (stopJobRef.current) { stopJobRef.current(); stopJobRef.current = null }
           /* name 是后端定下的成品文件名（游戏名称-打包时间戳.zip）。存下来给
            * <a download> 用 —— 服务端也下发了同名 Content-Disposition，两边同源。 */
-          if (st.ok) setPacked({ job_id: r.job_id, count: ids ? ids.length : items.length, name: st.name || '' })
+          if (st.ok) {
+            const count = ids ? ids.length : items.length
+            setPacked({ job_id: r.job_id, count, name: st.name || '' })
+            /* 一完成就自动下载：不用等用户去找那颗按钮（.131）。全量与选中两条路都走
+             * 到这里，所以一处改动两个按钮都生效。 */
+            triggerPackDownload(r.job_id, st.name || '')
+            addToast?.(t('game.pack_auto_downloading', '打包完成，正在下载（{{n}} 项）', { n: count }), 'success')
+          }
           else if (st.error && !st.transient) addToast?.(t('game.pack_fail', '打包失败：{{why}}', { why: st.error }), 'error')
         }
       })

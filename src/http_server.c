@@ -15,6 +15,9 @@
 #include <unistd.h> /* [CN-FORK] close() for /game_icon */
 #include <stdint.h> /* [CN-FORK] gr_file_read 的 uint64_t pos（MHD 内容回调签名） */
 #include <sys/stat.h>
+#include <sys/socket.h>   /* [CN-FORK] v0.5.2.131 /smp_status 的 loopback TCP 探活 */
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <microhttpd.h>
 
 #include "http_server.h"
@@ -97,6 +100,41 @@ static enum MHD_Result queue_json_error(struct MHD_Connection *conn, int status,
     int n = snprintf(buf, sizeof(buf), "{\"error\":\"%s\",\"message\":\"%s\"}", code, esc);
     if (n < 0 || (size_t)n >= sizeof(buf)) n = 0;
     return queue_json(conn, status, buf, (size_t)n);
+}
+
+/* [CN-FORK] v0.5.2.131 ShadowMount+ 探活：只探 loopback。
+ *
+ * 为什么必须在本机探、不能交给前端 fetch：SMP 的 Web UI（10101）在很多机器上
+ * 只监听 127.0.0.1，电脑用浏览器直连不一定通；而「面板能不能拉起它」这件事跟
+ * 浏览器在哪台机器上无关 —— 只看主机自己能不能连上。探测逻辑留在主机侧，
+ * 前端只读一个布尔值。
+ *
+ * 实现照 pkgmanager_is_running()（pkgmanager.c）：非阻塞 connect 的 select 版
+ * 留给 quicklinks 那套跨机探测用，本机 loopback 建连极快，阻塞 connect 加
+ * 400ms 收发超时兜底就够，少引一套非阻塞状态机。 */
+#define SMP_UI_PORT 10101
+
+static int smp_is_running(void) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return 0;
+    struct timeval tv = {0, 400000}; /* loopback 建连很快，400ms 兜底 */
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(SMP_UI_PORT);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    int running = (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    close(sock);
+    return running;
+}
+
+/* 只读状态：面板不拉起、不关闭 SMP —— 拉起要走 /loadpayload:（上游 elfldr），
+ * 关闭 SMP 属于它的生命周期管理，交给 SMP 自己或用户手动做。 */
+static void smp_status_json(char *out, size_t osz) {
+    snprintf(out, osz, "{\"running\":%s,\"port\":%d}",
+             smp_is_running() ? "true" : "false", SMP_UI_PORT);
 }
 
 /* [CN-FORK] v0.5.2.116 **文件直出一律走自写回调，不再用 MHD_create_response_from_fd64。**
@@ -505,6 +543,7 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
     /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
     if (strcmp(url, ROUTE_PKG_STATUS) == 0) return 1; /* [CN-FORK] PKG安装页轮询，降噪 */
+    if (strcmp(url, ROUTE_SMP_STATUS) == 0) return 1; /* [CN-FORK] v0.5.2.131 SMP 探活，拉起期间轮询，降噪 */
     if (strcmp(url, "/events") == 0) return 1;
     /* [CN-FORK] v0.5.2.99 远程游玩配对的进度查询，界面每 1 秒问一次，降噪；
      * 出码/配对成功/失败/超时那几条仍会记日志（是别的 URL）。 */
@@ -1557,6 +1596,15 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         char pkg_json[512];
         pkgmanager_status_json(pkg_json, sizeof(pkg_json));
         resp = MHD_create_response_from_buffer(strlen(pkg_json), (void *)pkg_json,
+                                               MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_SMP_STATUS) == 0) {
+        /* [CN-FORK] v0.5.2.131 ShadowMount+ 探活（本机 loopback 10101）。
+         * 供游戏详情「去 ShadowMount 管理」先问一句：没起就拉，起了直连。 */
+        char smp_json[128];
+        smp_status_json(smp_json, sizeof(smp_json));
+        resp = MHD_create_response_from_buffer(strlen(smp_json), (void *)smp_json,
                                                MHD_RESPMEM_MUST_COPY);
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
