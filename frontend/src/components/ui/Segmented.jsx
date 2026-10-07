@@ -9,6 +9,10 @@ import { cn } from '../../utils/helpers'
  * 现在只有一处定义：轨道读 inset 档 + 一根发丝线，选中项读契约里唯一的实心选中档 .sel-chip，
  * 每档命中高度统一走 --ctl-h。颜色一个都没改（四处原本也都是这几个档）。
  * role=radiogroup/radio 是故意的：读屏会念「共 3 项，当前第 2 项」，遥控器方向键也能顺着走。 */
+/* [CN-FORK] v0.5.2.142 加 `o.disabled` / `o.title`：远程位置类型里的 SMB 要**看得见但点不动**
+ * （SDK 那份 libcurl 没编 smb，选了也传不出去）。直接从选项表里删掉是更省事，但老用户
+ * 存的就是 mode:"smb" —— 选项没了会变成「一个都没选中」，用户根本不知道发生了什么。
+ * 留着一个禁用的档 + 一句原因，才是能自解释的。 */
 const Segmented = ({ options, value, onChange, label, className, itemClassName }) => (
   <div role="radiogroup" aria-label={label} className={cn("segmented-track", className)}>
     {options.map((o) => {
@@ -20,11 +24,15 @@ const Segmented = ({ options, value, onChange, label, className, itemClassName }
           type="button"
           role="radio"
           aria-checked={active}
+          disabled={!!o.disabled}
+          aria-disabled={o.disabled ? 'true' : undefined}
           title={o.title || undefined}
-          onClick={() => onChange(o.value) }
+          onClick={() => { if (!o.disabled) onChange(o.value) }}
           className={cn(
             "segmented-item flex items-center justify-center min-w-0 rounded-lg transition-colors",
-            active ? "sel-chip" : "text-zinc-500 hover:text-white",
+            o.disabled
+              ? "opacity-40 cursor-not-allowed text-zinc-600"
+              : (active ? "sel-chip" : "text-zinc-500 hover:text-white"),
             itemClassName
           )}
         >

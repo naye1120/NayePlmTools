@@ -147,6 +147,44 @@ int game_saves_upload(const char *tid, const char *save,
                       long long *out_files, long long *out_size,
                       char *msg, size_t msgsz);
 
+/* [CN-FORK] v0.5.2.142 从**磁盘上的一个归档文件**整份导入。
+ * 与 game_saves_upload 是同一份实现（同一条「旧的先留一手」的回退逻辑），
+ * 只是来源不同 —— 自动同步的「拉取」下载完落到临时文件后走这里。 */
+int game_saves_import_file(const char *tid, const char *save, const char *path,
+                           long long *out_files, long long *out_size,
+                           char *msg, size_t msgsz);
+
+/* [CN-FORK] v0.5.2.142 这个游戏在主机上的全部用户标识（每个用户一条）。
+ * 自动同步要**逐份**处理 —— 一台主机可能有多个用户都存过同一个游戏
+ * （真机实测 PPSA01650 有两个），只处理第一个等于另一个永远不同步。
+ * 返回条数（0 = 主机上还没有这个游戏的存档）。 */
+int game_saves_uids(const char *tid, char out[][64], int max);
+
+/* [CN-FORK] v0.5.2.142 主机上**全部用户目录名**（不限于有这款游戏存档的）。
+ *
+ * 为什么拉取需要它：`game_saves_uids` 是靠「<uid>/savedata_prospero/<TID> 这个
+ * 目录在不在」来枚举的 —— 而「拉取」要救的恰恰是**本地那份已经没了**的情况
+ * （换机、误删、重装）。那时候本地枚举必然是 0 条，用 game_saves_uids 就永远
+ * 拉不回来，成了一条死路。用户目录本身是主机账号，不会因为删了游戏存档而消失，
+ * 所以拿它当 uid 的候选集：逐个去远端试 <uid>.zip，远端没有的算「跳过」而不是
+ * 「失败」（见 ga_do）。代价是主机上用户多时会多几次 404，但那是本地回环/局域网的
+ * 一次往返，和「救不回存档」不是一个量级。
+ *
+ * 返回条数；名字已经过 gs_uid_ok 过滤，可以直接拼路径。 */
+int game_saves_user_ids(char out[][64], int max);
+
+/* [CN-FORK] v0.5.2.142 读一款游戏的自动备份配置（原始 JSON，**含明文密钥**）。
+ * 给自动存档引擎解析用；不进任何响应体（对外那份只吐 has_password / token_set）。
+ * 返回写入长度，<0 = 没有这款游戏的配置。 */
+int game_saves_auto_json(const char *tid, char *buf, size_t size);
+
+/* [CN-FORK] v0.5.2.142 注入「自动存档运行期状态」的提供者（由 game_auto 注册）。
+ * 绕这一层是为了不让 game_saves 依赖 game_auto —— 后者要 curl 与 sceLncUtil，
+ * 而 game_saves 的宿主测试只想要一个纯文件系统的关卡（不链 curl）。
+ * 没注册时 /game_saves 里的 auto_state 就是 {}，列表照常可用。 */
+typedef int (*gs_state_fn)(const char *tid, char *buf, size_t size);
+void game_saves_set_state_provider(gs_state_fn fn);
+
 /* GET /game_save_delete：删掉这个用户在这个游戏上的整份存档。0 成功。 */
 int game_saves_remove(const char *tid, const char *save, char *msg, size_t msgsz);
 

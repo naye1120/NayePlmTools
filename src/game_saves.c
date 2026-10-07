@@ -308,6 +308,12 @@ int game_saves_count(const char *tid) {
 /* ── 自动备份配置 ───────────────────────────────────────────────────────── */
 static pthread_mutex_t g_auto_mu = PTHREAD_MUTEX_INITIALIZER;
 
+/* [CN-FORK] v0.5.2.142 自动存档运行期状态的提供者（见 game_saves.h 的
+ * game_saves_set_state_provider）。game_auto 在守护线程启动时注册进来；
+ * 没注册（宿主测试、safe_mode 下没起引擎）时列表里的 auto_state 就是 {}。 */
+static gs_state_fn g_state_fn = NULL;
+void game_saves_set_state_provider(gs_state_fn fn) { g_state_fn = fn; }
+
 static cJSON *gs_auto_load(void) {
     char *txt = NULL;
     size_t sz = 0;
@@ -336,7 +342,9 @@ static cJSON *gs_auto_defaults(void) {
     cJSON *o = cJSON_CreateObject();
     if (!o) return NULL;
     cJSON_AddBoolToObject(o, "enabled", 0);
-    cJSON_AddStringToObject(o, "mode", "smb");
+    /* [CN-FORK] v0.5.2.142 默认传输方式由 smb 改成 **ftp**：SDK 的 curl 没有编
+     * SMB（见 save_remote.h），默认给一个用不了的东西等于让每个新用户先撞一次墙。 */
+    cJSON_AddStringToObject(o, "mode", "ftp");
     cJSON_AddBoolToObject(o, "on_launch", 1);
     cJSON_AddBoolToObject(o, "on_exit", 1);
     cJSON *smb = cJSON_AddObjectToObject(o, "smb");
@@ -467,7 +475,7 @@ static void gs_auto_json(cJSON *src, char *buf, size_t size) {
     if (!o) return;
 
     gs_put_bool(o, "enabled", gs_field_bool(src, "enabled", 0));
-    gs_put_str(o, "mode", gs_field_str(src, "mode", "smb"));
+    gs_put_str(o, "mode", gs_field_str(src, "mode", "ftp"));
     gs_put_bool(o, "on_launch", gs_field_bool(src, "on_launch", 1));
     gs_put_bool(o, "on_exit", gs_field_bool(src, "on_exit", 1));
 
@@ -1434,10 +1442,20 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
     free(refs);
     gs_app(snaps, kcap, &kpos, "]");
 
+    /* [CN-FORK] v0.5.2.142 自动存档的运行期状态（是否在跑 / 上次动作与结果）。
+     * 由 game_auto 在启动时注册进来（见 game_saves_set_state_provider）——
+     * 刻意**不直接 include game_auto.h**：那边要 curl 与 sceLncUtil，而这条
+     * 存档测试只想要一个纯文件系统的关卡。没注册就输出 {}，列表照常可用。 */
+    char statej[512];
+    statej[0] = 0;
+    if (!g_state_fn || g_state_fn(tid, statej, sizeof(statej)) < 0)
+        snprintf(statej, sizeof(statej), "{}");
+
     int w = snprintf(buf, size,
-                     "{\"tid\":\"%s\",\"local_path\":\"%s\",\"auto\":%s,\"saves\":%s,"
+                     "{\"tid\":\"%s\",\"local_path\":\"%s\",\"auto\":%s,"
+                     "\"auto_state\":%s,\"saves\":%s,"
                      "\"snap_used\":%llu,\"snapshots\":%s}",
-                     etid, eroot, autoj, saves, snap_used, snaps);
+                     etid, eroot, autoj, statej, saves, snap_used, snaps);
     free(snaps);
     free(saves);
     if (w < 0 || (size_t)w >= size) return -1;
@@ -1924,10 +1942,13 @@ static int gs_single_subdir(const char *dir, char *out, size_t osz) {
     return 1;
 }
 
-int game_saves_upload(const char *tid, const char *save,
-                      const unsigned char *body, size_t len,
-                      long long *out_files, long long *out_size,
-                      char *msg, size_t msgsz) {
+/* 整份替换的**唯一实现**。两个公开入口（POST 上来的裸 body / 自动同步拉回来的
+ * 磁盘文件）都走它 —— 各写一份的话，「旧的先改名留一手、失败能退回来」这条
+ * 早晚有一边漏掉，而漏掉的那一边会**直接删用户的存档**。 */
+static int gs_upload_buf(const char *tid, const char *save,
+                         const unsigned char *body, size_t len,
+                         long long *out_files, long long *out_size,
+                         char *msg, size_t msgsz) {
     if (out_files) *out_files = 0;
     if (out_size) *out_size = 0;
     if (msg && msgsz) msg[0] = 0;
@@ -2044,6 +2065,106 @@ done:
     if (out_files) *out_files = u.files;
     if (out_size) *out_size = u.bytes;
     return 0;
+}
+
+/* ── 公开入口：POST 上来的裸 body ───────────────────────────────────────── */
+int game_saves_upload(const char *tid, const char *save,
+                      const unsigned char *body, size_t len,
+                      long long *out_files, long long *out_size,
+                      char *msg, size_t msgsz) {
+    return gs_upload_buf(tid, save, body, len, out_files, out_size, msg, msgsz);
+}
+
+/* ── 公开入口：磁盘上的一个归档文件（自动同步的拉取用）───────────────────
+ * 语义与 game_saves_upload **完全一致**（同一份实现），只是来源是文件而不是
+ * 请求体。整份读进内存是必须的：zip_extract / gunzip_alloc 都是内存 API，
+ * 而真机实测的存档只有 4~20 MB —— 与「POST 上传」那条路的内存占用同量级。 */
+int game_saves_import_file(const char *tid, const char *save, const char *path,
+                           long long *out_files, long long *out_size,
+                           char *msg, size_t msgsz) {
+    if (out_files) *out_files = 0;
+    if (out_size) *out_size = 0;
+    if (msg && msgsz) msg[0] = 0;
+    if (!path || !*path) {
+        if (msg) snprintf(msg, msgsz, "没有指定要导入的文件");
+        return -1;
+    }
+    char *buf = NULL;
+    size_t len = 0;
+    if (read_file_text(path, &buf, &len) != 0 || !buf) {
+        if (msg) snprintf(msg, msgsz, "读不了这个文件（%s）", strerror(errno));
+        free(buf);
+        return -1;
+    }
+    if (len == 0) {
+        if (msg) snprintf(msg, msgsz, "远程那份是空的");
+        free(buf);
+        return -1;
+    }
+    /* 与 POST 那条同一道闸门：畸形包不许把主机拖死。 */
+    if (len > GAME_SAVES_MAX_BYTES) {
+        if (msg) snprintf(msg, msgsz, "远程那份太大（超过 %llu MB）",
+                          (unsigned long long)(GAME_SAVES_MAX_BYTES >> 20));
+        free(buf);
+        return -1;
+    }
+    int rc = gs_upload_buf(tid, save, (const unsigned char *)buf, len,
+                           out_files, out_size, msg, msgsz);
+    free(buf);
+    return rc;
+}
+
+/* ── 公开入口：这个游戏在主机上的全部用户存档（自动同步逐份处理用）───────
+ * 一台主机可能有多个用户都存过同一个游戏（真机实测 PPSA01650 有两个），
+ * 自动同步必须**逐份**处理 —— 只同步第一个用户等于另一个用户的存档永远不动。 */
+int game_saves_uids(const char *tid, char out[][64], int max) {
+    if (!out || max <= 0) return 0;
+    int n = 0;
+    gs_root_t *r = gs_roots_find(tid, &n);
+    if (!r) return 0;
+    if (n > max) n = max;
+    for (int i = 0; i < n; i++) snprintf(out[i], 64, "%s", r[i].uid);
+    free(r);
+    return n;
+}
+
+/* [CN-FORK] v0.5.2.142 主机上全部用户目录名。给「拉取」兜底用 —— 见头文件里
+ * game_saves_user_ids 的说明（本地存档目录没了的时候，game_saves_uids 必然是 0，
+ * 只有用户目录本身还在）。这里再过滤一次 gs_uid_ok：/user/home 下不是只有
+ * 数字账号，还可能有些别的目录，别把它们也拿去拼远端路径。 */
+int game_saves_user_ids(char out[][64], int max) {
+    if (!out || max <= 0) return 0;
+    char ids[16][64];
+    int nu = gs_user_ids(ids, 16);
+    int n = 0;
+    for (int i = 0; i < nu && n < max; i++)
+        if (gs_uid_ok(ids[i])) snprintf(out[n++], 64, "%s", ids[i]);
+    return n;
+}
+
+/* ── 公开入口：一款游戏的自动备份配置（原始 JSON）────────────────────────
+ * 给自动存档引擎解析用。**会带出明文密码 / token** —— 这是刻意的：不给出
+ * 明文，引擎就没法去连那个远程位置。前提是它只在进程内用，不进任何响应体
+ * （对外的 gs_auto_json 只吐 has_password / token_set，见那里）。 */
+int game_saves_auto_json(const char *tid, char *buf, size_t size) {
+    if (!buf || size < 32) return -1;
+    buf[0] = 0;
+    if (!gs_tid_ok(tid)) return -1;
+    pthread_mutex_lock(&g_auto_mu);
+    cJSON *all = gs_auto_load();
+    cJSON *cur = all ? cJSON_GetObjectItem(all, tid) : NULL;
+    int rc = -1;
+    if (cur && cJSON_IsObject(cur)) {
+        char *s = cJSON_PrintUnformatted(cur);
+        if (s) {
+            int n = snprintf(buf, size, "%s", s);
+            rc = (n > 0 && (size_t)n < size) ? n : -1;
+            free(s);
+        }
+    }
+    cJSON_Delete(all);
+    pthread_mutex_unlock(&g_auto_mu);
+    return rc;
 }
 
 /* ── 删除 ───────────────────────────────────────────────────────────────── */

@@ -55,14 +55,29 @@
  * 存档
  *   GET  /game_saves?tid=<TID>
  *        → { tid, local_path, auto:{enabled,mode,smb,ftp,http,on_launch,on_exit,snap},
+ *            auto_state:{running,last:{action,ok,at,message}|null},
  *            saves:[{id,name,kind,mtime,size,files}],
  *            snap_used, snapshots:[{uid,ts,mtime,size,files}] }
  *        saves[] 每条 = **一个存过这个游戏的用户**（id/name 都是 uid）；一台主机可以
  *        有多个用户都存过同一个游戏，所以不止一条，互不覆盖。
  *        auto.snap = 本地快照配置 {enabled, interval(秒), keep(份)}。
  *        snapshots[] = 已经存在的本地快照，**新的在前**。
+ *        auto_state = [CN-FORK] v0.5.2.142 **自动存档引擎的运行期状态**（只读，不是配置）：
+ *          running   此刻这款游戏是不是正在跑（后端**当场探测**，不是守护线程记的滞后值）
+ *          last      最近一次自动/手动同步：action=push|pull、ok、at（本地时间字符串）、
+ *                    message（失败原因，成功时是空串）。从没同步过则是 null。
+ *          没接后端时它是 {}（前端一律当「没有状态」处理，不要假设字段在）。
+ *        ⚠ auto.mode 的 "smb" 是**历史遗留**：SDK 那份 libcurl 没编 smb，真机上选了它
+ *        传不出去。新配置默认 ftp，前端把 SMB 那一档做成禁用并给出原因。
  *   POST /game_save_auto         {enabled, mode, smb, ftp, http, on_launch, on_exit, snap} → {ok}
  *   POST /game_save_test         {mode, smb, ftp, http}  → {ok, latency_ms}
+ *   POST /game_save_sync         {tid, action:"push"|"pull", uid?} → {ok, action, uids, files, size, failed, note}
+ *     [CN-FORK] v0.5.2.142 **立即同步**：不等「启动/退出游戏」那两个字，手动推一次 / 拉一次。
+ *     与自动走的是**同一套**后端代码（同一个互斥锁 —— 「整份替换」并发会互相删掉对方
+ *     刚改名的目录）。uid 不传 = 这个游戏在主机上的全部用户各来一份。
+ *     远端还没有对应文件时回 **ok:true** + note「远程还没有这个游戏的存档」（首次使用
+ *     必然遇到，不该是一条红报错）；真的连不上 / 协议不支持才是 400 + message。
+ *     note 是给人话的总结，界面直接展示。
  *   GET  /game_save_download?tid=&save=  → 二进制（zip）
  *   POST /game_save_upload?tid=&save=    裸 body（zip） → {ok, files, size}
  *   GET  /game_save_delete?tid=&save=    → {ok}
@@ -377,6 +392,18 @@ export function deleteSave(tid, saveId, opts) {
 export function snapAction(tid, action, extra, opts) {
   return request('/game_save_snap', {
     ...opts, method: 'POST', body: { tid, action, ...(extra || {}) },
+  })
+}
+
+/* [CN-FORK] v0.5.2.142 立即同步（手动推 / 拉）。action = 'push' | 'pull'；
+ * uid 不传 = 这个游戏在主机上的全部用户各来一份（后端自己枚举）。 */
+export function syncSaves(tid, action, uid, opts) {
+  return request('/game_save_sync', {
+    ...opts,
+    method: 'POST',
+    body: { tid, action, ...(uid ? { uid } : {}) },
+    /* 整份存档可能要几十 MB，走上传那一档超时（20s 不够 —— 那是给普通 JSON 的）。 */
+    timeoutMs: TIMEOUTS.upload,
   })
 }
 

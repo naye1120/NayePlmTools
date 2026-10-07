@@ -315,7 +315,10 @@ int main(void) {
         /* ── ④ auto 默认值 + 明文不外泄 ──────────────────────────────── */
         CHECK(jbool(autoo, "enabled") == 0, "enabled 默认该 false");
         const char *mode = jstr(NULL, autoo, "mode");
-        CHECK(mode && !strcmp(mode, "smb"), "mode 默认该 smb，实际 %s", mode ? mode : "(null)");
+        /* [CN-FORK] v0.5.2.142 默认协议从 smb 改成 ftp：SDK 那份 libcurl 8.18.0
+         * 编了 http/https/ftp/file/dict/imap/ldap/pop3/smtp，**没有 smb** ——
+         * 默认成 smb 等于默认一个点了保存也传不出去的协议。 */
+        CHECK(mode && !strcmp(mode, "ftp"), "mode 默认该 ftp，实际 %s", mode ? mode : "(null)");
         CHECK(jbool(autoo, "on_launch") == 1, "on_launch 默认该 true");
         CHECK(jbool(autoo, "on_exit") == 1, "on_exit 默认该 true");
 

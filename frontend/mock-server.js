@@ -625,6 +625,9 @@ const gameState = {
   media: {},            // tid -> 媒体数组
   auto: {},             // tid -> 自动存档配置
   snaps: {},            // [CN-FORK] v0.5.2.140 tid -> 本地快照数组（新的在前）
+  autoState: {},        // [CN-FORK] v0.5.2.142 tid -> 自动存档引擎的运行期状态（auto_state）
+  runningTid: '',       // [CN-FORK] v0.5.2.142 模拟「此刻哪个游戏在跑」，空 = 没有
+  remoteFiles: new Set(), // [CN-FORK] v0.5.2.142 远端已有的 `${tid}/${uid}`（推送往里加，拉取查它）
   jobs: {},             // job_id -> 任务
   nextJob: 1,
   seq: 0,               // 让每次生成的假数据（体积/时间）有变化，避免看起来是写死的
@@ -873,7 +876,10 @@ function autoFor(tid) {
   if (!gameState.auto[tid]) {
     gameState.auto[tid] = {
       enabled: false,
-      mode: 'smb',
+      /* [CN-FORK] v0.5.2.142 默认协议从 smb 改成 ftp，与后端 gs_auto_defaults 一致 ——
+       * SDK 那份 libcurl 没编 smb，默认成 smb 等于默认一个传不出去的协议。
+       * 想测「老用户存的是 smb」那条路，用 POST /game_save_auto {mode:'smb'} 显式造。 */
+      mode: 'ftp',
       on_launch: true,
       on_exit: true,
       smb: { host: '192.168.1.10', share: 'ps5save', sub: tid, user: 'ps5', has_password: true },
@@ -885,6 +891,22 @@ function autoFor(tid) {
     };
   }
   return gameState.auto[tid];
+}
+
+/* [CN-FORK] v0.5.2.142 自动存档引擎的运行期状态（对应后端 /game_saves 的 auto_state）。
+ * 后端是**当场探测** running，这里用 gameState.runningTid 模拟（测试可以摆布它）。
+ * last 的形状与后端一字不差：{action, ok, at, message}，从没同步过就是 null。 */
+function autoStateFor(tid) {
+  const rec = gameState.autoState[tid] || null;
+  return {
+    running: !!gameState.runningTid && gameState.runningTid === tid,
+    last: rec || null,
+  };
+}
+
+function mockStamp(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /* ── 本地快照（v0.5.2.140）────────────────────────────────────────────────
@@ -990,6 +1012,8 @@ app.get('/game_saves', (req, res) => {
      * （后端 game_saves_root 找不到就回空 —— 前端据此判「还没有存档」）。 */
     local_path: saves.length ? `/user/home/${saves[0].id}/savedata_prospero/${tid}` : '',
     auto: autoFor(tid),
+    /* [CN-FORK] v0.5.2.142 引擎运行期状态（只读，不是配置）。 */
+    auto_state: autoStateFor(tid),
     saves,
     snap_used: snaps.reduce((a, s) => a + s.size, 0),
     /* 剥掉内部用的 src 指纹字段 —— 真机上快照条目就只有这五个键 */
@@ -1074,6 +1098,76 @@ app.post('/game_save_snap', (req, res) => {
     return res.json({ ok: true });
   }
   return res.status(400).json({ error: 'EBAD', message: '未知的 action' });
+});
+
+/* [CN-FORK] v0.5.2.142 立即同步（手动推 / 拉）。与后端 /game_save_sync 同形：
+ *   · 协议是 smb → 400（SDK 没编这个协议，后端也是这条）；
+ *   · 推送时主机上没存档 → 400（没什么可推的）；
+ *   · 拉取时远端还没有 → **200 + ok:true**，note 里说明。第一次用必然遇到，
+ *     后端刻意不把它算失败，mock 也必须一样（否则前端会显示一条真机不会出现的红报错）。 */
+app.post('/game_save_sync', (req, res) => {
+  const b = req.body || {};
+  const tid = String(b.tid || '');
+  const action = String(b.action || '');
+  const onlyUid = String(b.uid || '');
+  const base = mockGames.find((x) => x.tid === tid);
+  if (!base || gameState.deleted.has(tid)) {
+    return res.status(400).json({ error: 'EBAD', message: '主机上找不到这个游戏' });
+  }
+  if (action !== 'push' && action !== 'pull') {
+    return res.status(400).json({ error: 'EBAD', message: 'action 只能是 push 或 pull' });
+  }
+  const mode = autoFor(tid).mode;
+  if (mode === 'smb') {
+    return res.status(400).json({
+      error: 'EBAD',
+      message: '当前 SDK 不支持 smb 传输，请改用 FTP 或 HTTP',
+    });
+  }
+
+  const list = savesFor(tid);
+  const done = (note, extra) => {
+    gameState.autoState[tid] = { action, ok: true, at: mockStamp(new Date()), message: '' };
+    res.json({
+      ok: true, action, uids: (extra && extra.uids) || 0,
+      files: (extra && extra.files) || 0, size: (extra && extra.size) || 0,
+      failed: 0, note,
+    });
+  };
+
+  if (action === 'push') {
+    const src = onlyUid ? list.filter((s) => s.id === onlyUid) : list;
+    if (!src.length) {
+      return res.status(400).json({ error: 'EBAD', message: '主机上还没有这个游戏的存档' });
+    }
+    let bytes = 0;
+    src.forEach((s) => { gameState.remoteFiles.add(`${tid}/${s.id}`); bytes += s.size; });
+    return done(`已推送 ${src.length} 份（${bytes} 字节）`, { uids: src.length, size: bytes });
+  }
+
+  /* 拉取：本地没有这个游戏的存档时，后端会退化成「主机上全部用户目录」逐个去远端试
+   * （那是「救回丢失的存档」唯一可行的做法）。mock 用 MOCK_UIDS 代表那些用户目录。 */
+  const cands = onlyUid ? [onlyUid] : (list.length ? list.map((s) => s.id) : MOCK_UIDS);
+  let n = 0, files = 0, bytes = 0, skipped = 0;
+  cands.forEach((uid) => {
+    if (!gameState.remoteFiles.has(`${tid}/${uid}`)) { skipped++; return; }
+    let rec = list.find((s) => s.id === uid);
+    if (!rec) {
+      /* 远端有、本地没有 → 这就是「拉回来」：补一条本地记录（后端是真的写盘）。 */
+      rec = {
+        id: uid, name: uid,
+        kind: /^(CUSA|PPJB)/.test(tid) ? 'PS4' : 'PS5',
+        mtime: mockStamp(new Date()),
+        size: 3145728, files: 12,
+      };
+      list.push(rec);
+    }
+    n++; files += rec.files; bytes += rec.size;
+  });
+  if (n === 0) {
+    return done(skipped > 0 ? '远程还没有这个游戏的存档' : '主机上没有可用的用户目录', { uids: 0 });
+  }
+  return done(`已拉取 ${n} 份（${files} 个文件 / ${bytes} 字节）`, { uids: n, files, size: bytes });
 });
 
 app.post('/game_save_test', (req, res) => {
@@ -1275,6 +1369,16 @@ app.post('/_host_drift', (req, res) => {
   gameState.hostNames = {};
   res.json({ ok: true, dropped: n });
 });
+
+/* [CN-FORK] v0.5.2.142 自动存档的运行期状态钩子。
+ * 后端那侧 `running` 是靠 sceLncUtil 当场探测的，mock 里没法探测 —— 用它摆布，
+ * 回归才能断言「游戏在跑 → 界面上出现『游戏运行中』」以及「退出后那一条变成推送」。
+ * remote_files 只读，用来验「推送真的把远端写上了」而不是只看响应。 */
+app.post('/_set_running', (req, res) => {
+  gameState.runningTid = String((req.body && req.body.tid) || '');
+  res.json({ ok: true, running: gameState.runningTid });
+});
+app.get('/_remote_files', (req, res) => res.json({ files: [...gameState.remoteFiles].sort() }));
 
 /* ══════════════════════════════════════════════════════════════════════════════
  * [CN-FORK] v0.5.2.112 磁贴背景的 DDS 转换（PNG 解码 + DXT1 编码），在 mock 里**真做一遍**
@@ -1815,6 +1919,21 @@ app.post('/reset', (req, res) => {
   gameState.saves = {};
   gameState.media = {};
   gameState.auto = {};
+  /* [CN-FORK] v0.5.2.142 快照原来漏在 reset 之外 —— 于是同一个 mock 进程跑第二遍 game112，
+   * 5b 那节「还没做过快照时列表是空的」「立即备份生成 2 份」全红，而 5 节的
+   * `dlg(page).locator('li').count()` 还会多算上残留的快照行（2 条存档变成 3 条）。
+   * 快照是 v0.5.2.140 加的，加的时候没同步改这里。 */
+  gameState.snaps = {};
+  /* [CN-FORK] v0.5.2.142 自动存档的运行期状态与「远端已有的文件」也要清 ——
+   * 上一节的推送/拉取留下的远端痕迹会串场，让下一节的「第一次用远端还是空的」假绿。 */
+  gameState.autoState = {};
+  gameState.runningTid = '';
+  gameState.remoteFiles.clear();
+  /* [CN-FORK] v0.5.2.142 把 /loadpayload: 起过的程序桩（10101）一并关掉。
+   * 不关的话，第二遍 game112 的 1a 节「前置：10101 必须真的没人监听」必红 ——
+   * 而那条前置正是「先探后开」整条链路的立足点。之前只能靠重启 mock 进程绕开。 */
+  for (const srv of progStubs.values()) { try { srv.close() } catch { /* 已经关了 */ } }
+  progStubs.clear();
   gameState.jobs = {};
   gameState.nextJob = 1;
   listSnap = null;

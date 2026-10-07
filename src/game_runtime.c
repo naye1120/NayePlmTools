@@ -355,8 +355,10 @@ static size_t gr_write_cb(void *ptr, size_t sz, size_t nm, void *ud) {
     return k;
 }
 
-static pthread_once_t g_curl_once = PTHREAD_ONCE_INIT;
-static void gr_curl_init(void) { curl_global_init(CURL_GLOBAL_DEFAULT); }
+/* [CN-FORK] v0.5.2.142 curl 全局初始化收到 utils.h 的 pldmgr_curl_init（实现 src/curl_init.c）：
+ * save_remote.c（自动存档的传输层）也要 curl，两边各持一把 once 控制块就是「两个线程
+ * 各自认为自己是第一个」—— 正好踩中 curl 文档里那个「global_init 不是线程安全的」。
+ * 所以这里不再自己搞 once，直接调那一个（它内部也是 pthread_once，且是全进程唯一的一把）。 */
 
 /* 0 = 拿到了 HTTP 响应（*code 有效、resp 已 NUL 结尾）；-1 = 连不上这个服务。 */
 static int gr_smp(const char *api, const char *json, long *code, char *resp, size_t respsz) {
@@ -366,7 +368,7 @@ static int gr_smp(const char *api, const char *json, long *code, char *resp, siz
     *code = 0;
     if (snprintf(url, sizeof(url), "%s%s", GR_SMP_BASE, api) >= (int)sizeof(url)) return -1;
 
-    pthread_once(&g_curl_once, gr_curl_init);
+    pldmgr_curl_init();
     CURL *c = curl_easy_init();
     if (!c) return -1;
 

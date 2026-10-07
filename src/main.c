@@ -30,6 +30,7 @@
 #include "fan_control.h" /* [CN-FORK] 风扇温控常驻重发守护 */
 #include "game_title.h"  /* [CN-FORK] v0.5.2.137 启动自愈：把 name.txt 重放到主机各层 */
 #include "game_saves.h"  /* [CN-FORK] v0.5.2.140 本地快照守护（存档的本地兜底） */
+#include "game_auto.h"   /* [CN-FORK] v0.5.2.142 自动存档守护（启动拉取 / 退出回传） */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入：提权入口 + 远程游玩会话收尾 */
 #include "psaccounts/sys.h"
 #include "psaccounts/accounts.h"
@@ -264,6 +265,12 @@ int main(int argc, char *argv[]) {
      * 要对面在线；这一条不依赖任何外部条件，按每款游戏自己的间隔把存档整份
      * 复制到 /data/nayeplmtools/saves_snap/，超保留数就删最旧。safe_mode 下整条跳过。 */
     game_saves_snap_start_daemon();
+
+    /* [CN-FORK] v0.5.2.142 自动存档执行引擎：`on_launch` / `on_exit` 这两个开关
+     * 在这之前**只被读写、没有任何人在跑**。这里起一条线程探测「前台大应用是谁」
+     * （sceLncUtil），游戏启动时把远程那份拉下来、退出时把主机这份推上去。
+     * 传输只做 FTP + HTTP（SDK 的 curl 没编 SMB）。safe_mode 下整条跳过。 */
+    game_auto_start_daemon();
 
     if (cfg.auto_browser_open) {
         char browser_url[128];

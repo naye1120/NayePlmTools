@@ -41,6 +41,7 @@
 #include "game_media.h" /* [CN-FORK] v0.5.2.115 多媒体管理 /game_media*（六条 + 任务两条） */
 #include "game_runtime.h" /* [CN-FORK] v0.5.2.116 删源 / 挂载 / 卸载挂载 / 卸载安装 */
 #include "game_saves.h"   /* [CN-FORK] v0.5.2.116 存档六条 */
+#include "game_auto.h"    /* [CN-FORK] v0.5.2.142 自动存档手动推 / 拉 */
 #include "game_title.h"   /* [CN-FORK] v0.5.2.116 改名 + 磁贴两层图六条 */
 #include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF：账号/头像/安全还原/远程游玩
@@ -289,6 +290,7 @@ static size_t gr_post_limit(const char *url) {
         strcmp(url, ROUTE_GAME_SAVE_AUTO) == 0 ||
         strcmp(url, ROUTE_GAME_SAVE_TEST) == 0 ||
         strcmp(url, ROUTE_GAME_SAVE_SNAP) == 0 ||
+        strcmp(url, ROUTE_GAME_SAVE_SYNC) == 0 ||
         strcmp(url, ROUTE_GAME_RENAME) == 0 ||
         strcmp(url, ROUTE_GAME_SYNC) == 0 ||
         strcmp(url, ROUTE_GAME_MOUNT) == 0 ||
@@ -390,6 +392,19 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         if (game_saves_snap_action(body, len, out, size, msg, sizeof(msg)) != 0)
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
                                msg[0] ? msg : "快照操作失败");
+        *code = MHD_HTTP_OK;
+        return (int)strlen(out);
+    }
+
+    /* [CN-FORK] v0.5.2.142 自动存档的手动推 / 拉。**同步**执行（与 /game_save_test、
+     * /game_save_upload 同一取舍）：用户手点就是要一个明确结果，挂成后台任务反而
+     * 要再配一套轮询。超时在传输层里封着（180s + 低速熔断），不会无限挂。 */
+    if (strcmp(url, ROUTE_GAME_SAVE_SYNC) == 0) {
+        char msg[240];
+        msg[0] = 0;
+        if (game_auto_sync_action(body, len, out, size, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "ESYNC",
+                               msg[0] ? msg : "同步失败");
         *code = MHD_HTTP_OK;
         return (int)strlen(out);
     }

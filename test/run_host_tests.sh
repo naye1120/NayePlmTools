@@ -147,6 +147,78 @@ else
     echo "=== game_saves SKIPPED: 需要 python3 做夹具 ==="
 fi
 
+# ── [CN-FORK] v0.5.2.142 存档的「远程推拉 + 自动执行引擎」两件套 ────────────
+# save_remote = 传输层（FTP / HTTP，libcurl）；game_auto = 状态机 + 守护线程。
+# 两条都用 test/stub_servers.c 里那两个**真协议**桩（自己实现的极小 FTP / HTTP
+# 服务器，监听 127.0.0.1 随机端口），所以测试里的「推送」是真的搬了字节、
+# 真的发了 STOR / RETR / PUT —— 不是对着一个假函数打桩。
+#
+# curl 头从哪来（这是 .142 踩过的坑，别再踩）：
+#   · WSL 上 /usr/include/curl/curl.h **不存在**（没装 libcurl4-openssl-dev），
+#     但 /usr/lib/x86_64-linux-gnu/libcurl.so 在；
+#   · SDK 的 /opt/ps5-payload-sdk/target/include/curl 有全套头。
+#   于是编译用 SDK 头、链接用系统库（两边同为 8.18.0，ABI 对得上）。
+#   **绝不能直接 -I 整个 SDK include 目录** —— 那底下有整套 FreeBSD 头，会把
+#   glibc 的 stdio.h 盖掉，链接期一片 `undefined reference to __error /
+#   __stderrp / _CurrentRuneLocale`。只把 curl/ 这一个子目录单独软链出来。
+# 缺头或缺库就整段 SKIP，不半跑（与 check_stack_frames 同一态度）。
+SR_CURL_INC=""
+if [ -f /usr/include/curl/curl.h ]; then
+    SR_CURL_INC=/usr/include
+elif [ -f /opt/ps5-payload-sdk/target/include/curl/curl.h ]; then
+    mkdir -p /tmp/pldmgr_curl_inc
+    ln -sfn /opt/ps5-payload-sdk/target/include/curl /tmp/pldmgr_curl_inc/curl
+    SR_CURL_INC=/tmp/pldmgr_curl_inc
+fi
+printf 'int main(void){return 0;}\n' > /tmp/_curlprobe.c 2>/dev/null
+if [ -n "$SR_CURL_INC" ] && clang /tmp/_curlprobe.c -lcurl -o /tmp/_curlprobe 2>/dev/null; then
+    rm -f /tmp/_curlprobe.c /tmp/_curlprobe
+    # 这两条不用 run_one：-lcurl 必须落在源文件**之后**（默认 --as-needed 下，
+    # 出现在源文件之前会被直接丢掉，报一串 undefined reference）。
+    rm -rf /tmp/pldmgr_sr_test
+    echo "=== save_remote ==="
+    if ! clang -Wall -Wextra -O0 -Iinclude -Isrc/psaccounts/third_party -Itest \
+        -I"$SR_CURL_INC" \
+        -DGS_HOME='"/tmp/pldmgr_sr_test/home"' \
+        -DGAME_SAVES_AUTO_PATH='"/tmp/pldmgr_sr_test/auto.json"' \
+        -DGAME_SAVES_PACK_DIR='"/tmp/pldmgr_sr_test/packs"' \
+        -DGAME_SAVES_SNAP_DIR='"/tmp/pldmgr_sr_test/snap"' \
+        -DGS_SNAP_QUIET_SEC=0 \
+        src/save_remote.c src/curl_init.c src/game_saves.c src/game_job.c src/json_helpers.c \
+        src/utils.c src/inflate.c src/zip_io.c src/psaccounts/third_party/cJSON.c \
+        test/stub_servers.c test/save_remote_test.c \
+        -o /tmp/save_remote_test -lpthread -lm -lcurl; then
+        echo "  BUILD FAILED"; fail=1
+    else
+        /tmp/save_remote_test || fail=1
+    fi
+
+    rm -rf /tmp/pldmgr_ga_test
+    echo "=== game_auto ==="
+    if ! clang -Wall -Wextra -O0 -Iinclude -Isrc/psaccounts/third_party -Itest \
+        -I"$SR_CURL_INC" \
+        -DGA_NO_LNCUTIL \
+        -DROOT_DIR='"/tmp/pldmgr_ga_test"' \
+        -DAUTO_PATH='"/tmp/pldmgr_ga_test/auto.json"' \
+        -DGS_HOME='"/tmp/pldmgr_ga_test/home"' \
+        -DGAME_SAVES_AUTO_PATH='"/tmp/pldmgr_ga_test/auto.json"' \
+        -DGAME_SAVES_PACK_DIR='"/tmp/pldmgr_ga_test/packs"' \
+        -DGAME_SAVES_SNAP_DIR='"/tmp/pldmgr_ga_test/snap"' \
+        -DGS_SNAP_QUIET_SEC=0 \
+        src/game_auto.c src/save_remote.c src/curl_init.c src/game_saves.c src/game_job.c \
+        src/json_helpers.c src/utils.c src/inflate.c src/zip_io.c \
+        src/psaccounts/third_party/cJSON.c \
+        test/stub_servers.c test/game_auto_test.c \
+        -o /tmp/game_auto_test -lpthread -lm -lcurl; then
+        echo "  BUILD FAILED"; fail=1
+    else
+        /tmp/game_auto_test || fail=1
+    fi
+else
+    rm -f /tmp/_curlprobe.c /tmp/_curlprobe
+    echo "=== save_remote / game_auto SKIPPED: 没有可用的 libcurl 头或库 ==="
+fi
+
 # [CN-FORK] v0.5.2.117 游戏列表**静默变空**（build_game_json 漏清 want）→ src/game_mgr.c
 # 这条是那三道门全都放行、真机才炸出来的那类 bug 的补漏：
 #   ① 这个文件以前主机上编不过（getmntinfo 是 BSD 专有）→ 由 test/host_mnt_compat.h
