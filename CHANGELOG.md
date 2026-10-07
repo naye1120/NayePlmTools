@@ -116,8 +116,50 @@
     **且**弹窗说明源为什么不可写 **且** 不谎报已写入源文件 **且** 列表里的名字真的变了。
     最后这条是防止把 `persisted:false` 当错误、让 UI 报错而用户白改一次名。
 
+### 🎬 真机闭环验证（PS5，192.168.1.214）
+
+目标游戏 **PPSA27836 鬼武者：剑之道**，`source_type=folder`，源
+`/mnt/ext1/PPSA27836-鬼武者/sce_sys/param.json`（2902 B，3 个语言键 + `defaultLanguage`）。
+四层证据链逐字节核验，**32 项断言全过**（`_ftp_probe/rename_verify.py`）：
+
+| 层 | 路径 | 改名前 | 改名后 |
+| --- | --- | --- | --- |
+| ① 面板 | `/data/nayeplmtools/titles/PPSA27836/name.txt` | 鬼武者：剑之道 | 鬼武者（改名验证） |
+| ③ 源 | `<源>/sce_sys/param.json` | 2902 B，3 语言各自原名 | 2905 B，3 语言全 = 新名 |
+| ④ 挂载副本 | `/user/app/PPSA27836/sce_sys/param.json` | 与 ③ 骨架一致 | 已同步 |
+| ⑤ 备份 | `/data/nayeplmtools/titles/PPSA27836/orig/param.json` | 不存在 | 2902 B，**== 原厂件** |
+
+接口返回：
+
+```json
+{"ok":true,"name":"鬼武者（改名验证）","persisted":true,
+ "persist_note":"已写入 /mnt/ext1/PPSA27836-鬼武者/sce_sys/param.json（3 个语言）"}
+```
+
+关键结论：`POST /api/v1/scan`（SMP 重扫）→ `{"queued":true}` 之后，
+`POST /api/v1/games` 返回的 `title_name` 就是新名字，**没有回退**。这一步在 ≤.131 上
+正是名字被冲回去的地方。SMP 是从源重建索引的旁证：重扫后它显示的中文名字来自我们改写的
+`localizedParameters`，如果它读的是自己缓存的 `app.db` 副本，仍会显示 `Onimusha: Way of the Sword`。
+
+逐字节核验同时证实了定点替换的安全边界：
+* 改写后**骨架与原厂件逐字节一致**（挖掉 `titleName` 的值再比），即只动了这三个值；
+* 字节数变化 `+3 B` == 三个 titleName 值长度差之和（2902 → 2905）；
+* CRLF 行数 135 不变；顶层 29 个键不变、未被误伤；
+* 全角括号正确走 JSON 转义（`\uff08` / `\uff09`），未出现裸字节；
+* 顶层没有新增 `titleName` 字段。
+
+另：**还原验证**也走通了同一套路径 —— 用 ja-JP 正规名 `鬼武者 Way of the Sword` 重扫后
+SMP 首次轮询即一致，且源文件回到 **2902 B（与原厂件零字节差）**，证明替换是长度无偏的。
+
 ### 📝 注意
 
+* **SMP 的 `title_name` 来自它自己的 `app.db`，不是实时读源。** `/game_rename` 之所以让主屏
+  立刻变名，是它同时写了源和 `app.db`/`appinfo.db`（`tile_db_set_name`）。因此**外部工具（FTP）
+  直接改源，主屏不会跟着变**，得等 SMP 下次自己重建索引。这不是产品缺陷，是给排障留的记录：
+  真机改名后若发现「源改了、主屏没变」，先看是不是走了产品之外的路径。
+* **所有语言键一起改**。`tt_param_rename` 替换的是 `param.json` 里**每一个** `titleName`，
+  多语言游戏会把非主力语言也换成新名字（实测：`ja-JP` 原本就是被覆盖的那个）。这是设计取舍，
+  不是 bug —— 但别假设产品会保留其他语言的原文。
 * **`persisted=false` 不能当错误**。改名本身是成功的（面板层 + 主机索引层已生效），
   只是源不可写所以重启 SMP 会回退。把它当错误会让用户看到红字、以为改名失败。
 * **只有源 `sce_sys/param.json` 需要备份**。备份在首次改名时写入 `<GAME_TITLE_DIR>/<TID>/orig/param.json`，
