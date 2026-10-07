@@ -849,9 +849,12 @@ PS4 的 `.bin` 密封密钥一起打包），API 的 `save` 参数从「槽名�
 `game112` **215/215**（原 214 + 新增「每行标出是哪个用户的存档」）。
 **尚未做**（用户已确认要做，分后续版本）：自动存档执行引擎（`on_launch`/`on_exit`
 目前仍只存配置不执行）、本地定时快照。已查明 **SDK 里 curl 8.18.0 没编 SMB**
-（`lib/smb.c` 是空壳、无 libsmb2；`strings -n 3` 才看得见 3 字符的协议名，
-用默认 `strings` 会误判 —— 第一遍就是这么误判了 FTP 也不存在），
-所以自动存档的传输只能做 **FTP + HTTP**，而用户现有配置恰好是 SMB。
+（`strings -n 3` 才看得见 3 字符的协议名，用默认 `strings` 会误判 —— 第一遍就是这么
+误判了 FTP 也不存在）。**注意这里当时把「libcurl 没有 SMB」错当成了「PS5 做不了 SMB」**：
+2026-10-07 复核后确认 **SMB 可行**（`libsmb2` 是 pacbrew 正式包，已实测能交叉编译并
+链进 payload，+241 KB），详见 §6 那条与 `include/save_remote.h` 的文件头。
+`.142` 交付时**先做的是 FTP + HTTP**，而用户现有配置恰好是 SMB —— 那一档在 UI 上标
+「当前构建未启用」。
 
 ---
 
@@ -1640,7 +1643,7 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
 ## 6. 关键约定 / 易踩坑（速查）
 - **别把大块内存放在栈上（安全红线，已栽三次）**：真机的 HTTP 是 `MHD_USE_THREAD_PER_CONNECTION` —— 每条连接一条 pthread 线程，栈走 **真机 pthread 默认值，只有 64KB 上下**（宿主上量出来的临界点：整条 `http_on_request → …` 的链超过 **56KB** 就 SIGSEGV）。`.116`（`tt_apply` 的 `unsigned char[65536]`，改磁贴图标/背景死机）、`.141`（`gs_copy_file` 的 `char buf[32*1024]` + `gs_root_t roots[16]` 11.4KB，点「立即备份」打死面板）都是这个。**两次都只在真机上炸、宿主测试全绿** —— 宿主跑在主线程的 8MB 栈上，这点数组不构成压力。规矩：**任何函数栈帧不许超 32KB**，大缓冲一律 `malloc` 一次、整条链共用（参考 `src/game_saves.c` 的 `gs_cp_t`）。两条守卫：`test/game_saves_test.c` ⑩（**在 32KB 线程栈上跑完整条快照链**，带负向对照）+ `tools/check_stack_frames.sh`（静态上限 32KB，已接进宿主套件）。连接线程栈已在 `main.c` 提到 1MB（`MHD_OPTION_THREAD_STACK_SIZE`，**参数是 `size_t` 不是 `unsigned int`**，传错会静默退回默认栈），但**自己 `pthread_create` 的守护线程不受它管**，要单独 `pthread_attr_setstacksize`。**新写这类「只在真机上炸」的路径时，先写一条小栈线程用例**，别等真机反馈。
 
-- **存档的远程同步只做 FTP + HTTP，SMB 用不了（`.142` 定死）**：SDK 那份 `libcurl 8.18.0` 没编 `smb`（协议表：`http/https/ftp/file/dict/imap/ldap/pop3/smtp`）。默认值已前后端 + mock 一起改成 `ftp`；UI 上 SMB 一档是**看得见、点不动、写明原因**（不从选项表里删 —— 老用户存的就是 `mode:"smb"`，删了会变成「一个都没选中」）。远端布局 `<base>/<TID>/<uid>.zip`（一个用户一份、文件名恒定、整份覆盖），推与拉**逐字一致**。改传输层前先读 `include/save_remote.h` 与 `include/game_auto.h` 的文件头（四条硬约定 + 三条刻意设计）。
+- **存档的远程同步目前只做 FTP + HTTP；但「SMB 做不到」是错的（2026-10-07 复核）**：SDK 那份 `libcurl 8.18.0` 确实没编 `smb`（协议表：`http/https/ftp/file/dict/imap/ldap/pop3/smtp`）—— 那只是说**走 libcurl 的这条路**不通。**PS5 上 SMB 是可以做的**：`libsmb2`（SMB2/3 用户态客户端）是 `ps5-payload-dev/pacbrew-repo` 里的正式包 `ps5-payload-libsmb2`，上游 `ps5-payload-dev/websrv` 就在用。已实测：用本仓库同一套工具链（`prospero-clang` + `prospero.cmake`）能把 `libsmb2 6.2` 编成 `libsmb2.a` 并链进 PS5 ELF，写路径符号齐（`smb2_write`/`smb2_open(O_CREAT)`/`smb2_unlink`/`smb2_mkdir`/`smb2_rmdir`/`smb2_rename`/`smb2_fsync`），协议覆盖 SMB 2.0.2–3.1.1。代价 **+约 241 KB**（约 +2.2%）。所以正确说法是**「当前构建没编入 SMB」**，不是「SDK 不支持」。默认值已前后端 + mock 一起改成 `ftp`；UI 上 SMB 一档是**看得见、点不动、写明原因**（不从选项表里删 —— 老用户存的就是 `mode:"smb"`，删了会变成「一个都没选中」）。远端布局 `<base>/<TID>/<uid>.zip`（一个用户一份、文件名恒定、整份覆盖），推与拉**逐字一致**。改传输层前先读 `include/save_remote.h` 与 `include/game_auto.h` 的文件头（四条硬约定 + 三条刻意设计）。
 - **同一时刻只能有一次存档同步**：`src/game_auto.c` 的 `g_sync_mu`。**这是正确性要求不是性能优化** —— 「整份替换」= 「旧的改名 → 换上去 → 删旧的」，并发跑同一目录会互相把对方刚改名的目录当垃圾删掉。守护线程（退出推送）与手点「立即推送」完全可能同时发生。
 - **「远端还没有这个文件」不是失败**：`SR_ENOTFOUND (-2)` 单独一类。FTP 侧两种表现都要归进来 —— `CURLE_REMOTE_FILE_NOT_FOUND` 与 **`CURLE_REMOTE_ACCESS_DENIED`**（远端根目录不存在时 `CWD` 得到 550，libcurl 报的是后者）。首次使用必然遇到，给用户一条红报错是不对的。
 - **curl 的全局初始化在 `src/curl_init.c`，别搬回 `utils.c`**：`utils.c` 被一堆纯文件系统的宿主测试链着（game_saves / media_scan / game_mgr），`curl_global_init` 一进 `utils.o` 它们立刻 `undefined reference`。宿主测试要 curl 头时**只软链 SDK 的 `curl/` 一个目录**（`-I/tmp/pldmgr_curl_inc`），**直接 `-I` 整个 SDK include 会把 glibc 的 `stdio.h` 盖掉**，链接期一片 `undefined reference to __error / __stderrp / _CurrentRuneLocale`。
@@ -1850,8 +1853,13 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
   写进远端、`pull` 能从空本地靠 `game_saves_user_ids()` 兜底恢复（sha256 逐字节一致）、
   `SR_ENOTFOUND` 与 `smb 不支持` 两条错误路径的返回都对、每一步面板都活着。
   **下次动传输层（`src/save_remote.c`）或引擎（`src/game_auto.c`）时照这几条真机验**：
-  1. **协议硬约束**：SDK `libcurl 8.18.0` 没编 `smb` → 只能 FTP + HTTP；新增协议前先
-     `strings -n 3 /opt/ps5-payload-sdk/target/lib/libcurl.a | grep <proto>` 确认。
+  1. **协议**：`libcurl` 那条路只有 `http/https/ftp/file/dict/imap/ldap/pop3/smtp`（没 `smb`）；
+     新增协议前先 `strings -n 3 /opt/ps5-payload-sdk/target/lib/libcurl.a | grep <proto>` 确认。
+     **但 SMB 本身能做** —— 见 §6 那条，`libsmb2` 可交叉编译并链进来（+241 KB）。
+     真要接 SMB 的话：`src/save_remote.c` 加 `mode == "smb"` 分支（`smb2_connect_share` +
+     `smb2_open(O_CREAT|O_WRONLY)` + `smb2_write`；`smb2_unlink` 做「远端还没有」的清理），
+     远端布局沿用 `<base>/<TID>/<uid>.zip`，UI 把那一档 `disabled` 去掉，
+     并同步改掉「当前构建未启用 SMB」那句提示。
   2. **远端布局推拉逐字一致**：`<base>/<TID>/<uid>.zip`，文件名恒定、不带时间戳、整份覆盖。
      改任何一边（`sr_build_url` 的拼接 / `sr_pull` 的落点）都要同时改另一边。
   3. **`g_sync_mu` 不能去掉**：「整份替换」= 旧的改名 → 换上去 → 删旧的，并发跑同一目录会

@@ -5,15 +5,27 @@
 
 /* [CN-FORK] v0.5.2.142 存档的远程传输层（FTP / HTTP）。
  *
- * ── 为什么只有这两种协议 ─────────────────────────────────────────────────
- * SDK 里的 libcurl 是 **8.18.0，编了
+ * ── 为什么当前只有这两种协议（**注意：不是「SMB 做不到」**）─────────────
+ * SDK 里那份 libcurl 是 **8.18.0，编了
  *   http https ftp file dict imap ldap pop3 smtp
- * 而**没有 smb**（`lib/smb.c` 是空壳、没有 libsmb2；`target/include/` 下只有
- * `fs/smbfs`、`netsmb` 那套**内核侧**头文件，没有用户态库）。
- * 所以「自动存档」的远程只能 FTP + HTTP —— UI 上那个 SMB 选项标成
- * 「当前 SDK 不支持」，别让用户填完一整套共享名再发现它永远连不上。
- * 探测方法的坑记在这里：`strings` 默认只输出 ≥4 字符，而 `ftp` / `smb` 只有
- * 3 字符 —— 必须 `strings -n 3`，否则连 `ftp` 都会被判成「不存在」。
+ * 而**没有 smb** —— 所以「靠 libcurl 走 SMB」这条路是死的。
+ * 探测方法的坑：`strings` 默认只输出 ≥4 字符，而 `ftp` / `smb` 只有 3 字符，
+ * 必须 `strings -n 3`，否则连 `ftp` 都会被判成「不存在」。
+ *
+ * **但这不等于 PS5 上做不了 SMB。** 2026-10-07 复核过一遍，结论是：
+ *   - `libsmb2`（SMB2/3 用户态客户端，sahlberg/libsmb2）是 PS5 SDK 生态的
+ *     **正式包**：`ps5-payload-dev/pacbrew-repo` 里的 `ps5-payload-libsmb2`；
+ *     上游 `ps5-payload-dev/websrv` 就用它（`prospero-pkg-config libsmb2 --libs`）。
+ *   - 已实测：源码用**本仓库同一套工具链**（`prospero-clang` + `prospero.cmake`）
+ *     能编出 `libsmb2.a`，能链进 PS5 ELF，写路径符号齐
+ *     （`smb2_write` / `smb2_open(O_CREAT)` / `smb2_unlink` / `smb2_mkdir` /
+ *     `smb2_rmdir` / `smb2_rename` / `smb2_fsync`），协议覆盖 SMB 2.0.2–3.1.1
+ *     （含签名与加密）。代价是 payload **+约 241 KB**（约 +2.2%）。
+ *   - 所以「当前 SDK 不支持 SMB」这个说法**不准确**，正确的是
+ *     **「当前这个构建没有编入 SMB 支持」** —— 因为还没有把 libsmb2 链进来。
+ *     真要接的时候：`src/save_remote.c` 加一条 `mode == "smb"` 分支，
+ *     远端布局沿用 `<base>/<TID>/<uid>.zip`，UI 把那一档的 `disabled` 去掉。
+ *     `libsmb2.h` 不是自包含的，要先 `#include <time.h>` 与 `<smb2/smb2.h>`。
  *
  * ── 远端布局（推与拉必须逐字一致，否则推上去的东西拉不回来）────────────
  *   <base>/<TID>/<uid>.zip
