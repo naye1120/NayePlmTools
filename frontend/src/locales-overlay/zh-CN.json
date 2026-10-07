@@ -390,7 +390,7 @@
   "game.tile_staged": "待应用",
   "game.truncated": "列表过大，已截断显示",
   "game.empty": "未发现已安装或已存在的游戏",
-  "game.tile_hint": "点磁贴查看游戏详情（含删除）；磁贴上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能。",
+  "game.tile_hint": "点磁贴查看游戏详情（详情里只能看信息，挂载 / 卸载 / 删除源请到 ShadowMount 后台）；磁贴上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能。",
   "game.title": "游戏管理",
   "game.fmt_pkg": "PKG",
   "game.fmt_ffpkg": "ffPKG",

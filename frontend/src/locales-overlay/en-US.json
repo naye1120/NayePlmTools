@@ -383,7 +383,7 @@
   "game.test_fail": "Connection failed: {{why}}",
   "game.test_ok": "Connection succeeded{{lat}}",
   "game.testing": "Testing…",
-  "game.tile_hint": "Click a tile to open the game's details (including delete). The four buttons on a tile are Saves, Media, Name & artwork, and Coming soon.",
+  "game.tile_hint": "Click a tile to open the game's details (read-only: mount, uninstall and delete-source are handled in ShadowMount). The four buttons on a tile are Saves, Media, Name & artwork, and Coming soon.",
   "game.title": "Game manager",
   "game.total": "{{n}} games",
   "game.tile_apply": "Apply",
