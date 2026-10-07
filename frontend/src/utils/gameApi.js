@@ -76,7 +76,13 @@
  *   GET  /game_media_delete?tid=&id=     → {ok}
  *
  * 改名 / 换磁贴背景
- *   POST /game_rename            {tid, name} → {ok, name}
+ *   POST /game_rename            {tid, name} → {ok, name, persisted, persist_note}
+ *     v0.5.2.132 起带 persisted：名字**源**（游戏包里的 sce_sys/param.json）也改成功
+ *     才为 true —— 只有它才是真的不回退。ShadowMount 重扫时会用自己的源重建
+ *     app.db/appinfo.db，所以只改面板层与主机索引层的那两版（≤.131）一定会被冲回去。
+ *     persisted=false 时 persist_note 说明原因（镜像游戏 / 系统内置 / 源写失败）。
+ *     **不要**把 false 当错误：面板层与主机索引层已经生效，改名本身是成功的，
+ *     只是重启 SMP 之后电视主屏会回到原名。
  *
  *   磁贴图分两层（v0.5.2.112），格式与尺寸各不相同：
  *   POST /game_tile_icon?tid=        裸 body（**PNG**，1:1，前端已缩到 1024×1024） → {ok, bytes}

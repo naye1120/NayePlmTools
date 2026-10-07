@@ -1,3 +1,134 @@
+## v0.5.2.132 (CN-FORK)
+
+> **改名不再回退：这次改到了名字真正的来源。**
+>
+> `.131` 及更早只改得了两层**缓存**（面板的 `name.txt`、主机的 `app.db` / `appinfo.db`），
+> ShadowMount 一重扫就用自己的源把两层全重建一遍，于是「改完名、重启又回去了」。
+> 用户明确说这样不行，要找到游戏包里控制名字的那个文件并直接处理。
+>
+> **侦察结论（全部只读，动文件之前先拿证据）**：
+> * 名字源**不是** `NPXS.json` —— 全盘 `/user/app/` 递归扫描，`NPXS.json` 与 `.sig` 都是 **0 个**。
+> * 真正的来源是 **`sce_sys/param.json`** 里的 `localizedParameters.<语言>.titleName`
+>   （一款 1～10 个语言键，仁王 3 有 10 个）。
+> * **ShadowMount 完全不缓存名字**：`image_index.bin`（2.44 MB）里只存镜像路径 + TID，
+>   按「Onimusha / Nioh / 鬼武者 / 仁王 / Way of the Sword」逐个字符串搜索全部 **0 命中**；
+>   `config.ini` 只有 8 行；`/user/data/PPSA01650/` 根本不存在。
+>   → **改源就是终点**，不需要常驻守护进程、不需要重扫后再补一刀。
+> * 签名验证**不存在**：这些是 AMPR 已解密的包（有 `fakelib/`、96 字节的 `keystone`、
+>   `eboot.bin.orig`、`*index.crc`），没有校验链，改写 `param.json` 不会让游戏起不来。
+> * FTP 写权限已在三处实测通过（`STOR` → `RETR` 字节一致 → `DELE`）。
+>
+> **游戏分三类，只有第一类能改源**：
+>
+> | 类别 | 数量 | 源 | 结论 |
+> |---|---|---|---|
+> | folder | 10 | `mount.lnk` → 磁盘目录 | `sce_sys/param.json` 是普通文件，**可写** |
+> | image | 4 | `mount_img.lnk` → 单个 `.ffpfsc`（28.9～171.5 GB） | 名字锁在镜像文件系统内部，**不可行** |
+> | pkg | — | 无 lnk | 系统内置安装，没有可写的游戏源 |
+>
+> 后两类**如实报告不适用**，不再假成功。
+>
+> **用定点替换而不是 cJSON 整包重写**：真机 `param.json` 是 CRLF + 2 空格缩进的美化格式
+> （约 2.9 KB），整包重写会把它压成单行 LF，几千字节的改动面全是为了改一个字符串。
+> `titleName` 在 schema 里只出现在 `localizedParameters` 的语言对象下，
+> 所以全局替换所有 `"titleName": "..."` 是精确命中 —— 一次改完全部语言，
+> 不会遇到「英文改了日文没改」这种一半生效的怪现象。
+
+### 🔍 侦察工具（`_ftp_probe/`，全部只读）
+
+| 脚本 | 作用 | 结论 |
+|---|---|---|
+| `recon_names.py` | 递归 `LIST` + 定向 `RETR`，找 `NPXS.json` / `.sig` | 全树 0 个 |
+| `recon_param.py` | 读全部 `mount.lnk` / `mount_img.lnk`，拉 `param.json` | 定位到 `localizedParameters` |
+| `recon_source.py` | 比对源与挂载点的 `sce_sys/` 文件清单 | SMP 是**拷贝者**不是绑定者，两处清单一致 |
+| `recon_smp.py` | 遍历 SMP 数据目录 | 无 per-TID 目录 |
+| `recon_db.py` | 拉 `config.ini` + `image_index.bin`，抽字符串搜索游戏名 | **5 个名字全部 0 命中** |
+| `verify_write.py` | 三处目标写探针 + 往返校验 + 清理 | 全通过 |
+
+### ✨ Added
+
+* **`game_mgr_source_paths()`**（`include/game_mgr.h` + `src/game_mgr.c`）：
+  只读 `/user/app/<TID>/` 下那两个 `.lnk` 文件解析物理源，**毫秒级**。
+  * 与既有的 `gm_fmt_size()` **共用 `gm_ext_is_image()` / `gm_lnk_root()`**，
+    分类口径不可能漂移（folder / image / pkg 的判据只有一份实现）。
+  * 为什么不复用 `game_mgr_source()`：那是全量 `app.db` 读 + 目录扫描（几十到几百毫秒），
+    对 `/game_delete` / `/game_detail` 这类读接口合适，**放在写路径上会让用户改个名卡一下**。
+
+* **`tt_param_rename()`**（`src/game_title.c`）：逐字节拷贝 + 命中就换值，
+  缩进 / CRLF / 其他字段一字节不改。
+  * **契约**：`hits > 0` → 换缓冲区；`hits == 0` → **调用方的缓冲区原样保留**。
+    第二条是硬要求 —— 没命中时那个拷贝是白费的，而且调用方传的可能是**栈数组**，
+    `free` 它会直接崩。`test/param_rename_test.c` 拿一个残缺的 `titleName` 边界输入钉住了这条。
+  * `TT_PARAM_MAX = 512 KB` 防呆天花板（实测 1～10 KB）。
+  * 名字转义只处理 `"` 与 `\` —— `game_title_set_name()` 已经剥光了 `<0x20` 与 `0x7F`。
+
+* **`tt_rename_in_param()`**：读入 → **先备份原厂件**（`<GAME_TITLE_DIR>/<TID>/orig/param.json`，
+  仅首次）→ 定点替换 → 原子写回。
+  * **备份顺序有讲究**：必须在改写内存缓冲**之前**备份，否则存进去的是我们自己改过的内容，
+    用户的回退点就没了。备份 best-effort，失败只记日志。
+  * **原子写**：同目录 `.tmp` + `rename()`，失败退化成直接写 —— 避免写一半断电留下截断的
+    `param.json`。
+
+* **改名现在会连带改源**（`game_title_set_name()`）：folder 游戏改完 `name.txt` + 主机索引后，
+  再改 `<源>/sce_sys/param.json`，并 best-effort 同步挂载点那份副本
+  （路径相同时跳过，免得对自己重复改写）。
+  * **源写失败不把整个改名打成失败**：面板层已经生效，用户不该因为源是镜像就白改一次名；
+    状态如实回给前端。
+
+### 🔌 API
+
+`POST /game_rename` 增加两个字段：
+
+```json
+{"ok":true,"name":"新名字","persisted":false,"persist_note":"镜像游戏：名字锁在镜像文件内部，无法持久修改"}
+```
+
+* `persisted` —— 名字**源**也改成功了吗。只有它才是真的不回退。
+* `persist_note` —— `persisted=false` 时说明原因（镜像游戏 / 系统内置 / 源写失败）。
+* **`persisted=false` 不是错误**。面板层与主机索引层已经生效，改名本身是成功的，
+  只是重启 SMP 之后电视主屏会回到原名。
+
+### 🖥️ 前端
+
+`RenameModal.jsx` 增加一个**常驻**提示（`Note` + `Check` / `AlertTriangle`）。
+不用 toast —— toast 几秒就没了，而「重启 SMP 之后会不会又变回去」是用户下次重扫才撞上的问题，
+只在成功那一刻弹一下等于没说。`persist` 状态在弹窗打开时重置，不跨款残留。
+
+### 🧪 测试
+
+* **`test/param_rename_test.c`**（新增，主机侧）—— 这是全仓库唯一会**写进用户游戏包**的逻辑，
+  改坏 `param.json` 不可逆，而它在真机上要到「改完名 + SMP 重扫」才暴露，反馈链太长。
+  夹具是真机 FTP 拉下来的真实 `param.json`（238 B～3.2 KB，1 / 3 / 10 个语言键），
+  用 `#include` 把被测源文件拉进同一翻译单元以触及 `static` 函数。**43 项断言**：
+  * 替换处数与独立统计一致；
+  * **除 `titleName` 的值之外逐字节一致**（缩进 / CRLF / 其他字段都没动）；
+  * 转义后的新名字出现次数 == 语言数；
+  * 改写结果经**真 cJSON 解析器**校验仍是合法 JSON，且每个语言键的 `titleName` 读回来都等于新名字；
+  * CRLF 行数不变；无 `titleName` 的文件返回 0 且内容一字节未改；
+  * 残缺输入（`"titleName": ` 后就没了）返回 0、不越界。
+  * 顺带钉住一个 schema 事实：`localizedParameters` 里除了 `<lang>: {...}` 还有
+    `defaultLanguage: "..."` 这类**字符串**子节点（四份夹具都有）。它不携带 `titleName`，
+    所以全文替换不会误伤它 —— 但也别在解析校验时把它当成缺字段的语言键。
+* 已接入 `test/run_host_tests.sh`（夹具缺时 SKIP，不半跑）。**全套 PASS**。
+* **`game112.mjs` 新增 12 条断言**（改名段 + 新的 7.4 节）：
+  * folder 游戏改名成功 → 弹窗内提示「已写入源文件 sce_sys/param.json」，且**不出现**镜像/内置措辞；
+  * 镜像（`ffpkg`）与系统内置（`pkg`）两类：保存前无提示 → 保存后改名**仍然成功**（成功提示在）
+    **且**弹窗说明源为什么不可写 **且** 不谎报已写入源文件 **且** 列表里的名字真的变了。
+    最后这条是防止把 `persisted:false` 当错误、让 UI 报错而用户白改一次名。
+
+### 📝 注意
+
+* **`persisted=false` 不能当错误**。改名本身是成功的（面板层 + 主机索引层已生效），
+  只是源不可写所以重启 SMP 会回退。把它当错误会让用户看到红字、以为改名失败。
+* **只有源 `sce_sys/param.json` 需要备份**。备份在首次改名时写入 `<GAME_TITLE_DIR>/<TID>/orig/param.json`，
+  与 icon / bg 的 `tt_backup_to_orig()` 同一套目录约定。
+* **别把 cJSON 整包重写拿来用**。真机 `param.json` 是 CRLF + 2 空格缩进，整包重写会把它压成单行 LF，
+  用户 diff 游戏包时会看到几千字节的无关变化。定点替换的代价只是一个 512 KB 防呆上限和一个
+  「值结束位置」扫描器（要处理 `\"` 与 `\\`）。
+* **`test/param_rename_test.c` 的夹具是真机数据**（`_ftp_probe/evidence/recon/*.json`），
+  不在仓库里。缺夹具时 `run_host_tests.sh` 会 SKIP 这条，不会半跑。
+
+---
 ## v0.5.2.131 (CN-FORK)
 
 > **两个「点完按钮却还要自己动手」的缺口。**

@@ -156,5 +156,28 @@ else
     echo "=== game_mgr SKIPPED: 需要 python3 做夹具 ==="
 fi
 
+# [CN-FORK] v0.5.2.132 改名要写游戏源 sce_sys/param.json（src/game_title.c）
+# 这段是全仓库唯一会**写进用户游戏包**的逻辑，改坏 param.json 不可逆，所以单独测。
+# 夹具是真机 FTP 拉下来的真实 param.json（CRLF + 2 空格美化格式，1/3/10 个语言键），
+# 不是手写的最小样例 —— 手写样例测不出缩进被踩、CRLF 被改这类真问题。
+# 夹具不在仓库里（真机数据，不入库），缺了就 SKIP，不半跑。
+#
+# 不用 run_one：这个测试用 #include 把 game_title.c / json_helpers.c 拉进同一翻译单元
+# （这样才能碰到 static 的 tt_param_rename），并且运行时要收一个夹具目录参数。
+PARAM_FIXTURE_DIR="${PARAM_FIXTURE_DIR:-$PWD/../_ftp_probe/evidence/recon}"
+echo "=== param_rename ==="
+if ls "$PARAM_FIXTURE_DIR"/*.json >/dev/null 2>&1; then
+    if ! clang -Wall -Wextra -O0 -Iinclude -Isrc -Isrc/psaccounts \
+        -Isrc/psaccounts/third_party -Itest \
+        test/param_rename_test.c src/psaccounts/third_party/cJSON.c \
+        -o /tmp/param_rename_test -lm; then
+        echo "  BUILD FAILED"; fail=1
+    else
+        /tmp/param_rename_test "$PARAM_FIXTURE_DIR" || fail=1
+    fi
+else
+    echo "=== param_rename SKIPPED: 夹具不在 $PARAM_FIXTURE_DIR ==="
+fi
+
 echo "==== overall: $([ $fail -eq 0 ] && echo PASS || echo FAIL) ===="
 exit $fail

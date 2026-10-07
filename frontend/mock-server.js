@@ -1024,6 +1024,16 @@ app.get('/game_media_delete', (req, res) => {
 });
 
 /* 改名 / 换磁贴背景 */
+/* [CN-FORK] v0.5.2.132 返回 persisted + persist_note：名字源（游戏包里的
+ * sce_sys/param.json）改成功了吗。分类口径与后端 game_title.c 完全一致 ——
+ * fmt 是 image（ffpkg/exfat/ffpfs/ffpfsc）或 pkg 时源不可写，folder/lz4 才可写。
+ * 三个分支在 mock 里都能触发，本地预览就能验到前端的提示分支，不必等实机：
+ *   CUSA01111 / PPSA02000 → persisted:true
+ *   PPSA01234 / PPSA00802 / EMUA90001 / PPSA01500 → 镜像，false
+ *   PPJB01010 / PAUS00100 → 系统内置，false
+ */
+const IMG_FMTS = new Set(['ffpkg', 'exfat', 'ffpfs', 'ffpfsc']);
+const FOLDER_FMTS = new Set(['folder', 'lz4']);
 app.post('/game_rename', (req, res) => {
   const tid = String((req.body && req.body.tid) || '');
   const name = String((req.body && req.body.name) || '').trim();
@@ -1032,7 +1042,18 @@ app.post('/game_rename', (req, res) => {
   }
   if (!name) return res.status(400).json({ error: 'EINVAL', message: '名称不能为空' });
   gameState.renamed[tid] = name;
-  res.json({ ok: true, name });
+  const fmt = mockGames.find((x) => x.tid === tid).fmt || 'pkg';
+  let persisted = false;
+  let persist_note = '';
+  if (IMG_FMTS.has(fmt)) {
+    persist_note = '镜像游戏：名字锁在镜像文件内部，无法持久修改';
+  } else if (FOLDER_FMTS.has(fmt)) {
+    persisted = true;
+    persist_note = `已写入源文件 sce_sys/param.json（1 个语言）`;
+  } else {
+    persist_note = '系统内置安装：没有可写的游戏源';
+  }
+  res.json({ ok: true, name, persisted, persist_note });
 });
 
 /* ══════════════════════════════════════════════════════════════════════════════

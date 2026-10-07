@@ -967,6 +967,45 @@ static void gm_paths(const char *tid, const char *cls,
     if (gm_read_lnk(f, line, sizeof(line))) snprintf(runtime, rsz, "%s", line);
 }
 
+/* [CN-FORK] v0.5.2.132 只读那两个 lnk 文件解析物理源 —— **不做** app.db 枚举。
+ *
+ * game_mgr_source() 要 gm_lookup（app.db 全库读 + 目录扫描，真机上几十到上百毫秒），
+ * 那是给 /game_delete、/game_detail 这种「点一次查一次」的读入口用的。改名是**写路径**，
+ * 写之前再枚举一遍纯属浪费，而且 app.db 打不开时它还会误判。
+ *
+ * 来源类别的判据本来就只有那两个 lnk 文件（见 gm_class_of_fmt / gm_fmt_size 的头注释），
+ * 直接读它们：mount_img.lnk 带镜像扩展名 → image；mount.lnk 指非镜像路径 → folder；
+ * 都没有 → pkg。分类口径与 gm_fmt_size **共用 gm_ext_is_image / gm_lnk_root**，
+ * 没有第三份实现，不会漂移。
+ *
+ * kind 出 "pkg" | "image" | "folder"；path 出物理源（folder = 源目录，image = 镜像文件，
+ * pkg = /user/app/<TID>）。返回 1 = 判定完成（pkg 也算），0 = tid 不合法。 */
+int game_mgr_source_paths(const char *tid, char *kind, size_t ksz,
+                          char *path, size_t psz) {
+    if (kind && ksz) kind[0] = 0;
+    if (path && psz) path[0] = 0;
+    if (!tid || !gm_tid_is_game(tid)) return 0;
+
+    char appdir[300], f[320], line[512];
+    snprintf(appdir, sizeof(appdir), "%s/%s", GAME_MGR_APP_BASE, tid);
+
+    snprintf(f, sizeof(f), "%s/mount_img.lnk", appdir);
+    if (gm_read_lnk(f, line, sizeof(line)) && gm_ext_is_image(line)) {
+        if (kind && ksz) snprintf(kind, ksz, "image");
+        if (path && psz) snprintf(path, psz, "%s", line);
+        return 1;
+    }
+    char root[512];
+    if (gm_lnk_root(tid, root, sizeof(root))) {
+        if (kind && ksz) snprintf(kind, ksz, "folder");
+        if (path && psz) snprintf(path, psz, "%s", root);
+        return 1;
+    }
+    if (kind && ksz) snprintf(kind, ksz, "pkg");
+    if (path && psz) snprintf(path, psz, "%s", appdir);
+    return 1;
+}
+
 /* [CN-FORK] v0.5.2.116 删除前的路径白名单用：path 是否落在某个 dump 扫描根**之下**。
  * 两个边界条件必须卡住：
  *   · `path[n] == '/'` —— 只允许根的**子项**，否则路径恰好等于 /mnt/ext0 时

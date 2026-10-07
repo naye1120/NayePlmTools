@@ -52,11 +52,19 @@
 #define GAME_TITLE_MAX_NAME 128
 
 /* ── 改名 ──────────────────────────────────────────────────────────────────
- * 改名**只动我们自己这一层**，不去改 app.db 的 titleName：
- * app.db 是系统库，v0.5.2.67 起本仓的铁律就是「不写系统 DB」（参考 game_media.h 的
- * av_content.db），而且改了也只对读库人生效、对 VSH 磁贴无效，两头不讨好。
- * 返回 0 成功，-1 参数非法（msg 里给人话）。 */
-int game_title_set_name(const char *tid, const char *name, char *msg, size_t msgsz);
+ * v0.5.2.132 改名写**三层**，事实源是第四层（游戏包里的 param.json）：
+ *   ① GAME_TITLE_DIR/<TID>/name.txt   —— 面板层的接口事实源（列表/详情都读它盖名）
+ *   ② app.db 平铺列 + appinfo.db       —— 电视主屏磁贴读它（见 src/tile_db.c）
+ *   ③ 源 <sce_sys>/param.json          —— SMP 重扫时据此重建 ②，**只有改了它才不回退**
+ *   ④ name.txt + ② + ③ 三者一致才算「改完」
+ * ③ 只对 folder（裸目录）游戏可写；image（.ffpfsc 镜像）与 pkg（系统内置）不可写，
+ * 由 persisted / pnote 两个出参如实报告，**不假成功**。
+ *
+ * 成功返回 0（persisted 已置位），-1 参数非法（msg 里给人话）。
+ * persisted 与 pnote 都可为 NULL（调用方不关心源持久化状态）。 */
+int game_title_set_name(const char *tid, const char *name,
+                        char *msg, size_t msgsz,
+                        int *persisted, char *pnote, size_t pnotesz);
 
 /* 读自定义名。1 = 有自定义名（out 已填），0 = 没改过（out 置空）。
  * 游戏列表 / 详情都用它盖掉 app.db 里的原名 —— 两边必须走同一个口，

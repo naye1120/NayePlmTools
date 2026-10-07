@@ -135,6 +135,11 @@ export default function RenameModal({ show, game, onClose, addToast, onChanged }
    * 两层的键名与 pickImage / tile 接口同一套命名，免得再加第三层时要现起名字。 */
   const [staged, setStaged] = useState({ icon: null, bg: null })
   const [err, setErr] = useState('')
+  /* v0.5.2.132 名字源持久化结果。{ state: 'ok'|'warn', note } | null。
+   * 改名成功但源改不动（镜像 / 系统内置）时，这个提示必须留在弹窗里而不是只走 toast ——
+   * toast 几秒就没了，而「重启 SMP 之后会不会又变回去」是用户下次重扫时才会撞上的问题，
+   * 只在成功那一刻弹一下等于没说。 */
+  const [persist, setPersist] = useState(null)
   const iconFileRef = useRef(null)
   const bgFileRef = useRef(null)
   const aliveRef = useRef(true)
@@ -182,6 +187,7 @@ export default function RenameModal({ show, game, onClose, addToast, onChanged }
     setIconCustom(!!(game && (game.icon || game.title_icon_custom)))
     setBgCustom(!!(game && (game.bg || game.title_bg_custom)))
     setErr('')
+    setPersist(null)
     setIconVer(0); setBgVer(0)
     setIconBusy(false); setBgBusy(false)
     setIconFailed(false); setBgFailed(false)
@@ -211,8 +217,15 @@ export default function RenameModal({ show, game, onClose, addToast, onChanged }
     setSavingName(true)
     setErr('')
     try {
-      await renameGame(tid, trimmed)
+      const r = await renameGame(tid, trimmed)
       addToast?.(t('game.renamed', '名称已改为「{{name}}」', { name: trimmed }))
+      /* 名字**源**（游戏包里的 sce_sys/param.json）改成功了吗。
+       * false **不等于**改名失败 —— 面板层与主机索引层已经生效，只是 SMP 重扫会把
+       * 电视主屏刷回原名。所以它是常驻提示而不是错误。 */
+      const note = (r && r.persist_note) ? r.persist_note : ''
+      if (r && r.persisted === false && note) setPersist({ state: 'warn', note })
+      else if (r && r.persisted && note) setPersist({ state: 'ok', note })
+      else setPersist(null)
       onChanged?.()
     } catch (e) {
       setErr(e.message || t('game.rename_fail', '改名失败'))
@@ -383,6 +396,13 @@ export default function RenameModal({ show, game, onClose, addToast, onChanged }
             <p className="panel-tiny text-zinc-500 mt-2">
               {t('game.rename_hint', '只修改显示名称，不会改动标题 ID（{{tid}}），也不影响存档与启动。', { tid })}
             </p>
+            {persist && persist.note && (
+              <Note tone={persist.state === 'ok' ? 'ok' : 'warn'}
+                    icon={persist.state === 'ok' ? Check : AlertTriangle}
+                    className="mt-2">
+                {persist.note}
+              </Note>
+            )}
           </Block>
 
           {/* ── ② 图标 ── */}

@@ -32,6 +32,14 @@ int game_mgr_detail_json(const char *tid, char *buf, size_t size);
 int game_mgr_source(const char *tid, char *src, size_t ssz,
                     char *path, size_t psz, char *runtime, size_t rsz);
 
+/* [CN-FORK] v0.5.2.132 同上但**不枚举 app.db**：只读 /user/app/<TID>/ 下那两个 lnk
+ * 文件解析物理源，毫秒级。给改名这种写路径用 —— 写之前没必要为了个来源类别
+ * 把 app.db 全库读一遍（真机上几十到上百毫秒）。
+ * kind 出 "pkg" | "image" | "folder"；path 出物理源（folder = 源目录，image = 镜像文件）。
+ * 返回 1 = 判定完成，0 = tid 不合法。 */
+int game_mgr_source_paths(const char *tid, char *kind, size_t ksz,
+                          char *path, size_t psz);
+
 /* [CN-FORK] v0.5.2.116 让 60s 列表缓存立刻过期（删除/卸载/删除源之后调）。 */
 void game_mgr_invalidate(void);
 

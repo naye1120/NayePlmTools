@@ -394,20 +394,30 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
 
     if (strcmp(url, ROUTE_GAME_RENAME) == 0) {
         char btid[32], bname[512], msg[192], shown[GAME_TITLE_MAX_NAME * 4 + 8];
-        char esc[GAME_TITLE_MAX_NAME * 6 + 16];
+        char esc[GAME_TITLE_MAX_NAME * 6 + 16], pnote[512], pesc[700];
+        int persisted = 0;
         msg[0] = 0;
         if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) ||
             !gr_json_str(body, len, "name", bname, sizeof(bname)))
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid 或 name");
-        if (game_title_set_name(btid, bname, msg, sizeof(msg)) != 0)
+        if (game_title_set_name(btid, bname, msg, sizeof(msg),
+                                &persisted, pnote, sizeof(pnote)) != 0)
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
                                msg[0] ? msg : "名称不合法");
         /* 回**存下来的**名字，不是原样回传：set_name 会去控制字符、去首尾空白、
          * 按 UTF-8 字符数截到 128，回一个没截过的会让前端存下一份对不上的值。 */
         game_title_get_name(btid, shown, sizeof(shown));
         pldmgr_json_escape(shown, esc, sizeof(esc));
+        pldmgr_json_escape(pnote, pesc, sizeof(pesc));
         *code = MHD_HTTP_OK;
-        int n = snprintf(out, size, "{\"ok\":true,\"name\":\"%s\"}", esc);
+        /* [CN-FORK] v0.5.2.132 persisted = 名字源（游戏包里的 sce_sys/param.json）
+         * 也改成功了，SMP 重扫不会回退。false 时 persist_note 说清为什么
+         * （镜像游戏 / 系统内置 / 源写失败）。前端据此决定要不要提示 ——
+         * 别把 false 当错误：面板层与主机索引层已经生效，改名本身是成功的。 */
+        int n = snprintf(out, size,
+                         "{\"ok\":true,\"name\":\"%s\","
+                         "\"persisted\":%s,\"persist_note\":\"%s\"}",
+                         esc, persisted ? "true" : "false", pesc);
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 

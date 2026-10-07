@@ -100,11 +100,235 @@ long long game_title_bg_ver(const char *tid) {
     return tt_ver_read(d, "bg.ver");
 }
 
+/* ── [CN-FORK] v0.5.2.132 名字源持久化（写游戏包里的 sce_sys/param.json）─────
+ *
+ * 真机验证：v0.5.2.118 只改了两层缓存 —— name.txt（面板层）+ app.db/appinfo.db
+ * （主机索引层）。但 ShadowMount 一重扫就用自己的源重建注册，②那层全被冲掉，
+ * 用户看到「改完名、重启又回去了」。
+ *
+ * FTP 只读侦察结论（192.168.1.214，_ftp_probe/evidence/recon/recon*.txt）：
+ *   1. /user/app 全树 **0 个 NPXS.json、0 个 .sig** —— 这些是 AMPR 解包游戏
+ *      （fakelib + sce_sys/keystone），没有签名校验链，改 param.json 零风险。
+ *   2. 名字唯一源头是 sce_sys/param.json 的 localizedParameters.<lang>.titleName
+ *      （一个游戏 1～10 个语言键，实测 Nioh 3 有 10 个）。
+ *   3. SMP 自己的数据目录 /user/data/shadowmnt/ 里一个字的游戏名都没有
+ *      （image_index.bin 2.4MB 检索 Onimusha / 鬼武者 / Way of the Sword 全 0 次）
+ *      —— SMP 不缓存名字，每次现场从 param.json 读。所以**改源即终局**，
+ *      不需要后台守护进程在重扫后重放。
+ *   4. 分两类：
+ *      folder  source 是 /mnt/ext1/<目录>/，sce_sys/param.json 是普通文件 → 直接写
+ *              （已实测 /mnt/ext1、目标 sce_sys、挂载点三处 STOR/RETR/DELE 往返一致）。
+ *      image   source 是单个 .ffpfsc（28GB～171GB），名字锁在镜像文件系统内部
+ *              → 不可行。返回「不适用」而不是假成功。
+ *
+ * 用**定点替换**而不是 cJSON 整包重写：真机 param.json 是 CRLF + 2 空格缩进的美化
+ * 格式（2.9KB），整包重写会把它压成单行 LF，几千字节的 diff 面全是为了改一个字符串。
+ * titleName 在 param.json 的 schema 里**只**出现在 localizedParameters 的语言对象下，
+ * 所以全局替换所有 titleName 对就是精确命中 —— 一次改完全部语言，用户不会遇到
+ * 「英文改了日文没改」这种一半生效的怪现象。 */
+
+#define TT_PARAM_MAX (512u * 1024u)  /* 实测 1～10KB，512KB 是防呆天花板 */
+
+/* JSON 字符串值的结束位置：p 指向开引号**之后**，avail 是剩余字节数。
+ * 处理 \" 与 \\ 转义。返回指向闭引号；不成对返回 NULL。 */
+static const unsigned char *tt_json_str_end(const unsigned char *p, size_t avail) {
+    size_t i = 0;
+    while (i < avail) {
+        unsigned char c = p[i];
+        if (c == '\\' && i + 1 < avail) { i += 2; continue; }
+        if (c == '"') return p + i;
+        i++;
+    }
+    return NULL;
+}
+
+/* 把游戏名按 JSON 规则转义。set_name 已经剥光了 <0x20 与 0x7F 控制字符，
+ * 所以只剩 " 和 \ 两种需要转义。 */
+static int tt_json_escape_name(const char *str, char *out, size_t osz) {
+    size_t k = 0;
+    for (const unsigned char *p = (const unsigned char *)str; *p; p++) {
+        if (k + 3 >= osz) return -1;
+        if (*p == '"' || *p == '\\') out[k++] = '\\';
+        out[k++] = (char)*p;
+    }
+    if (k >= osz) return -1;
+    out[k] = 0;
+    return (int)k;
+}
+
+/* 把 buf 里所有  "titleName" : "<value>"  的 value 换成 newname。
+ *
+ * 逐字节拷贝 + 命中就换值：缩进、CRLF、其他字段的字节**一字节不改**。
+ *
+ * 契约（测试 test/param_rename_test.c 逐条钉死）：
+ *   hits > 0  → *buf 已被换成新分配（旧的已 free），*buflen 更新；
+ *   hits == 0 → **调用方的缓冲区原样保留**，*buf 与 *buflen 都不动。
+ * 第二条是硬要求：没命中时那个拷贝是白费的，而且调用方传的可能是**栈数组**
+ * （见 tt_json_str_end 那条边界用例），free 它会直接崩。宁可白拷贝一次，
+ * 也不能让「没找到」变成「缓冲区归属不明」。
+ *
+ * 返回替换处数；0 = 文件里没有 titleName（不是游戏 param.json）；-1 = 内部错误。 */
+static int tt_param_rename(unsigned char **buf, size_t *buflen,
+                           const char *newname, char *esc, size_t escsz) {
+    if (tt_json_escape_name(newname, esc, escsz) < 0) return -1;
+    size_t nl = strlen(esc);
+    size_t keylen = 11;                        /* "\"titleName\"" 含两端引号 */
+    const unsigned char *end = *buf + *buflen;
+
+    size_t ocap = *buflen + nl + 8192;
+    unsigned char *out = (unsigned char *)malloc(ocap);
+    if (!out) return -1;
+    size_t oc = 0;
+    const unsigned char *p = *buf;
+    int hits = 0;
+
+    while (p < end) {
+        if ((size_t)(end - p) >= keylen && memcmp(p, "\"titleName\"", keylen) == 0) {
+            const unsigned char *q = p + keylen;
+            while (q < end && (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')) q++;
+            if (q < end && *q == ':') {
+                q++;
+                while (q < end && (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')) q++;
+                if (q < end && *q == '"') {
+                    const unsigned char *ve =
+                        tt_json_str_end(q + 1, (size_t)(end - (q + 1)));
+                    if (ve) {
+                        size_t need = oc + (size_t)(q - p) + nl + 3;
+                        if (need > ocap) {
+                            ocap = need;
+                            unsigned char *nb = (unsigned char *)realloc(out, ocap);
+                            if (!nb) { free(out); return -1; }
+                            out = nb;
+                        }
+                        memcpy(out + oc, p, (size_t)(q - p));   /* key + 空白 + : + 空白 */
+                        oc += (size_t)(q - p);
+                        out[oc++] = '"';
+                        memcpy(out + oc, esc, nl);
+                        oc += nl;
+                        out[oc++] = '"';
+                        p = ve + 1;
+                        hits++;
+                        continue;
+                    }
+                }
+            }
+        }
+        if (oc + 1 > ocap) {
+            ocap *= 2;
+            unsigned char *nb = (unsigned char *)realloc(out, ocap);
+            if (!nb) { free(out); return -1; }
+            out = nb;
+        }
+        out[oc++] = *p++;
+    }
+
+    if (oc + 1 > ocap) {
+        ocap = oc + 1;
+        unsigned char *nb = (unsigned char *)realloc(out, ocap);
+        if (!nb) { free(out); return -1; }
+        out = nb;
+    }
+    out[oc] = 0;
+    if (hits > 0) {
+        free(*buf);
+        *buf = out;
+        *buflen = oc;
+    } else {
+        free(out);            /* 没命中：拷贝扔掉，调用方的缓冲区原样保留 */
+    }
+    return hits;
+}
+
+/* 原子写：先写同目录临时文件再 rename，避免写一半断电留下截断的 param.json。
+ * exFAT 上 rename 同目录是本地操作；万一 rename 失败就退化成直接写目标。 */
+static int tt_write_atomic(const char *path, const unsigned char *data, size_t len) {
+    char tmp[1100];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (write_file_text(tmp, (const char *)data, len) == 0) {
+        if (rename(tmp, path) == 0) return 0;
+        unlink(tmp);
+    }
+    return write_file_text(path, (const char *)data, len);
+}
+
+/* 改一个 param.json：读入 → 备份原厂件 → 定点替换所有 titleName → 原子写回。
+ *
+ * 备份必须在改写 buf **之前**做：先改内存再备份会把「我们自己改过的」当成原厂件
+ * 存进去，用户就再没有回退点了。备份只在 <GAME_TITLE_DIR>/<TID>/orig/param.json
+ * 还不存在时写，跟 icon/bg 那套 tt_backup_to_orig 的判据一致。
+ *
+ * 成功返回替换处数（>0）；-1 失败，msg 里给人话。 */
+static int tt_rename_in_param(const char *tid, const char *param_path,
+                              const char *name, char *msg, size_t msgsz) {
+    unsigned char *buf = NULL;
+    size_t buflen = 0;
+
+    if (read_file_text(param_path, (char **)&buf, &buflen) != 0) {
+        snprintf(msg, msgsz, "读不到源文件：%s", param_path);
+        return -1;
+    }
+    if (buflen >= TT_PARAM_MAX) {
+        snprintf(msg, msgsz, "源文件过大（%zu 字节），已跳过", buflen);
+        free(buf);
+        return -1;
+    }
+
+    /* ① 先备份原厂件（未改写）。备份失败不致命 —— 参数写成功比留回退点更重要，
+     * 只记日志，跟 tile_db 那条链的 best-effort 口径一致。 */
+    char dir[768], bdir[860], bpath[1000];
+    int have_backup = 0;
+    if (tt_dir(tid, dir, sizeof(dir)) == 0) {
+        snprintf(bdir, sizeof(bdir), "%s/orig", dir);
+        snprintf(bpath, sizeof(bpath), "%s/param.json", bdir);
+        if (tt_exists(bpath)) {
+            have_backup = 1;
+        } else if (ensure_dir_recursive(bdir) == 0) {
+            if (write_file_text(bpath, (const char *)buf, buflen) == 0) {
+                have_backup = 1;
+            } else {
+                pldmgr_log("[PLDMGR] title: param.json 备份失败 %s (%s)\n",
+                           bpath, strerror(errno));
+            }
+        }
+    }
+
+    /* ② 定点替换所有 titleName（不动缩进与 CRLF） */
+    char esc[GAME_TITLE_MAX_NAME * 3 + 16];
+    int hits = tt_param_rename(&buf, &buflen, name, esc, sizeof(esc));
+    if (hits < 0) {
+        snprintf(msg, msgsz, "改写源文件时内存不足");
+        free(buf);
+        return -1;
+    }
+    if (hits == 0) {
+        snprintf(msg, msgsz, "源文件里没有可改的名字字段");
+        free(buf);
+        return -1;
+    }
+
+    /* ③ 原子写回 */
+    if (tt_write_atomic(param_path, buf, buflen) != 0) {
+        snprintf(msg, msgsz, "写源文件失败：%s", strerror(errno));
+        free(buf);
+        return -1;
+    }
+    free(buf);
+    snprintf(msg, msgsz, "已写入 %s（%d 个语言）%s", param_path, hits,
+             have_backup ? "" : "，备份未建成");
+    return hits;
+}
+
+
+
 /* ── 改名 ──────────────────────────────────────────────────────────────────
- * 文件内容**不做任何转义**：就是一行 UTF-8 原文。转义发生在进 JSON 的那一刻
- * （game_mgr.c 的 pldmgr_json_escape），存转义串会让「名字里本来就有反斜杠」的
- * 用户越改越怪 —— 这类 bug 在改名功能上是经典款。 */
-int game_title_set_name(const char *tid, const char *name, char *msg, size_t msgsz) {
+ * name.txt 里的文件内容**不做任何转义**：就是一行 UTF-8 原文。转义发生在进 JSON 的
+ * 那一刻（game_mgr.c 的 pldmgr_json_escape），存转义串会让「名字里本来就有反斜杠」
+ * 的用户越改越怪 —— 这类 bug 在改名功能上是经典款。 */
+int game_title_set_name(const char *tid, const char *name,
+                        char *msg, size_t msgsz,
+                        int *persisted, char *pnote, size_t pnotesz) {
+    if (persisted) *persisted = 0;
+    if (pnote && pnotesz) pnote[0] = 0;
     if (msg && msgsz) msg[0] = 0;
     if (!tt_tid_ok(tid)) {
         if (msg) snprintf(msg, msgsz, "标题 ID 不合法");
@@ -177,6 +401,50 @@ int game_title_set_name(const char *tid, const char *name, char *msg, size_t msg
     if (tile_db_set_name(tid, s, hmsg, sizeof(hmsg)) != 0)
         pldmgr_log("[PLDMGR] title: %s 主机端改名未生效：%s\n", tid,
                    hmsg[0] ? hmsg : "见上一条日志");
+
+    /* [CN-FORK] v0.5.2.132 ③ 名字源。上面 name.txt + app.db/appinfo.db 都是**缓存**，
+     * ShadowMount 一重扫就用自己的源重建注册，两层全被冲掉 —— 用户看到「改完名、
+     * 重启又回去了」。只有把源 param.json 的 titleName 改了才真正不回退，
+     * 侦察依据见本文件 tt_param_rename 那节的头注释。
+     *
+     * best-effort：源写失败**不把整个改名打成失败**。面板层已经生效，用户不该因为
+     * 源是镜像或只读就白改一次名；如实把状态回给前端，由它决定要不要提示。 */
+    char kind[16], srcpath[600];
+    int persisted_now = 0;
+    char wmsg[256];
+    wmsg[0] = 0;
+
+    if (game_mgr_source_paths(tid, kind, sizeof(kind), srcpath, sizeof(srcpath)) == 0) {
+        snprintf(wmsg, sizeof(wmsg), "这个游戏不在游戏列表里");
+    } else if (strcmp(kind, "image") == 0) {
+        snprintf(wmsg, sizeof(wmsg), "镜像游戏：名字锁在镜像文件内部，无法持久修改");
+    } else if (strcmp(kind, "pkg") == 0) {
+        snprintf(wmsg, sizeof(wmsg), "系统内置安装：没有可写的游戏源");
+    } else {
+        char sp[1000];
+        snprintf(sp, sizeof(sp), "%s/sce_sys/param.json", srcpath);
+        int h = tt_rename_in_param(tid, sp, s, wmsg, sizeof(wmsg));
+        if (h > 0) {
+            persisted_now = 1;
+            /* 顺带同步挂载点那份副本。它是 SMP 的**产物**不是输入，不改也不影响持久性，
+             * 但同一份名字两个地方不一致纯属隐患，而它只多写一次 3KB。
+             * 路径相同（硬链/同目录）就跳过，免得对自己重复改写。 */
+            char m[1000], m2[256];
+            snprintf(m, sizeof(m), "%s/%s/sce_sys/param.json", GAME_TITLE_APP_PREFIX, tid);
+            if (strcmp(m, sp) != 0 && tt_exists(m)) {
+                int h2 = tt_rename_in_param(tid, m, s, m2, sizeof(m2));
+                if (h2 <= 0)
+                    pldmgr_log("[PLDMGR] title: %s 挂载点副本未更新：%s\n", tid, m2);
+            }
+        } else {
+            snprintf(wmsg, sizeof(wmsg), "源文件未更新：%s", wmsg);
+        }
+    }
+
+    if (persisted) *persisted = persisted_now;
+    if (pnote && pnotesz) snprintf(pnote, pnotesz, "%s", wmsg);
+    pldmgr_log("[PLDMGR] title: %s 源持久化 %s：%s\n", tid,
+               persisted_now ? "成功" : "未生效", wmsg);
     return 0;
 }
 
