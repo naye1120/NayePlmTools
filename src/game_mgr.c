@@ -244,6 +244,13 @@ typedef struct {
     char d_fmt[16];
     unsigned long long d_size;
     int d_found;
+    /* [CN-FORK] v0.5.2.134 列表模式跳过递归 du。
+     * gm_fmt_size 对 folder 游戏会调 gm_dir_size_cached → gm_dir_size（递归 opendir/lstat），
+     * 一款完整解包的 PS5 游戏动辄上万文件，15 款就是几十万到上百万次系统调用 —— 这就是
+     * 「游戏列表载入超级慢」的主因。列表不需要精确体积（SMP 也一律报 0），跳过 du 后
+     * folder 游戏 size=0，前端 formatSize 对 0 返回空串、不显示体积标签。
+     * 详情模式（want 非 NULL）不设 skip_du，照旧拿真实体积。 */
+    int skip_du;
 } enum_arg_t;
 
 /* 与 mock / 前端同口径：CUSA、PPJB 是 PS4 本体，其余按 PS5 算。 */
@@ -295,7 +302,7 @@ static void gm_append_item(enum_arg_t *a, const char *tid, const char *name, con
 }
 
 /* [CN-FORK] 前向声明：游戏格式与体积解析（定义见下方 ShadowMount mount.lnk 块），供 app.db 枚举回调使用。 */
-static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out);
+static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out, int skip_du);
 
 /* tbl_contentinfo 每行：col0=titleId, col2=titleName。总返回 0 以便遍历全部行。 */
 static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
@@ -315,7 +322,7 @@ static int st_cb_enum(const uint8_t *d, size_t sz, size_t rec, void *arg) {
     }
     if (!name[0]) snprintf(name, sizeof(name), "%s", tid);
     unsigned long long gsize;
-    const char *fmt = gm_fmt_size(tid, "installed", &gsize);
+    const char *fmt = gm_fmt_size(tid, "installed", &gsize, a->skip_du);
     gm_append_item(a, tid, name, "installed", fmt, gsize);
     return 0;
 }
@@ -543,7 +550,10 @@ static unsigned long long gm_dir_size(const char *root) {
  * 只在 build_game_json 里被调，而那条路全程持 g_game_mtx，所以这里不用再加锁。
  * 与 g_game_cache 的 60s 快照**刻意不同 TTL**：快照要「刚改完名就看见名字」，
  * 体积要的是「别为了个十进制数重扫一遍盘」，两者诉求相反，不能共用一个开关。 */
-#define GM_DU_TTL   600      /* 10 分钟：游戏体积不可能天天变，但也不能永不过期 */
+#define GM_DU_TTL   86400    /* 24 小时：游戏体积不可能天天变。列表跳过 du（skip_du），
+                                * 只有详情视图才会触发 gm_dir_size_cached。缓存 24 小时
+                                * 意味着详情只在用户首次打开（或缓存过期后）做一次递归 du，
+                                * 之后一整天都是毫秒级返回。 */
 #define GM_DUCACHE  128
 static struct {
     char root[512];
@@ -578,8 +588,10 @@ static unsigned long long gm_dir_size_cached(const char *root) {
 }
 
 /* 游戏格式+体积：mount_img.lnk 命中 → 镜像（扩展名定档，体积=镜像文件 st_size）；
- * 仅 mount.lnk → 裸目录(folder，含 ampr_ 则 lz4，体积=有上限递归 du)；都无 → 内置 pkg（体积 0=未知）。 */
-static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out) {
+ * 仅 mount.lnk → 裸目录(folder，含 ampr_ 则 lz4，体积=有上限递归 du)；都无 → 内置 pkg（体积 0=未知）。
+ * skip_du 非 0 时（列表模式）folder 游戏跳过递归 du，size 直接返回 0 —— SMP 对 folder 也一律报 0，
+ * 前端 formatSize(0) 返回空串不显示体积标签。详情模式 skip_du=0 照旧拿真实体积。 */
+static const char *gm_fmt_size(const char *tid, const char *src, unsigned long long *size_out, int skip_du) {
     *size_out = 0;
     char f[256], line[512];
     snprintf(f, sizeof(f), "%s/%s/mount_img.lnk", GAME_MGR_APP_BASE, tid);
@@ -589,7 +601,7 @@ static const char *gm_fmt_size(const char *tid, const char *src, unsigned long l
     }
     char root[512];
     if (gm_lnk_root(tid, root, sizeof(root))) {
-        *size_out = gm_dir_size_cached(root);
+        if (!skip_du) *size_out = gm_dir_size_cached(root);
         DIR *dp = opendir(root);
         int lz4 = 0;
         if (dp) {
@@ -635,9 +647,9 @@ static void game_enum_dump(enum_arg_t *a) {
             sfo_file_name(sfo, name, sizeof(name));
             if (!name[0]) snprintf(name, sizeof(name), "%s", ent->d_name);
             unsigned long long sz;
-            const char *fmt = gm_fmt_size(ent->d_name, "dump", &sz);
+            const char *fmt = gm_fmt_size(ent->d_name, "dump", &sz, a->skip_du);
             if (!strcmp(fmt, "folder") && gm_dir_is_lz4(root)) fmt = "lz4";
-            if (!sz) sz = gm_dir_size_cached(root);   /* dump 目录不在 /user/app 时按扫描根 du */
+            if (!a->skip_du && !sz) sz = gm_dir_size_cached(root);   /* 列表模式 skip_du=1 跳过此兜底 du */
             gm_append_item(a, ent->d_name, name, "dump", fmt, sz);
         }
         closedir(dp);
@@ -1185,6 +1197,7 @@ static size_t build_game_json(char *buf, size_t size) {
      * 拿掉 memset 那行，它那条 count==2 立刻红。 */
     memset(&a, 0, sizeof(a));
     a.buf = buf; a.size = size; a.pos = pos;
+    a.skip_du = 1;   /* 列表模式：folder 游戏跳过递归 du（见 enum_arg_t.skip_du 注释） */
     game_enum_appdb(&a);   /* 已安装优先（格式经 gm_fmt 读 mount.lnk/mount_img.lnk 判定） */
     game_enum_dump(&a);    /* 再补扫描到的 dump，tid 去重 */
     pos = a.pos;
