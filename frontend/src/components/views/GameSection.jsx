@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Gamepad2, RefreshCw, Info, ExternalLink } from 'lucide-react'
+import { Gamepad2, RefreshCw, Info } from 'lucide-react'
 import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import { cn } from '../../utils/helpers'
 import { formatSize } from '../game/format'
-/* [CN-FORK] v0.5.2.128 磁贴下的四颗动作按钮（存档/多媒体/改名/待定）按用户要求全部下线，
- * 只留一颗跳 ShadowMount 管理后台的按钮，所以 game/GameActionIcons.jsx 的四个图标本文件不再引用
- * （文件本身保留：图标设计说明还有参考价值，别删）。 */
+import { SaveManagerIcon, MediaManagerIcon, RenameTileIcon, PendingSlotIcon } from '../game/GameActionIcons'
 import GameDetailModal from '../game/GameDetailModal'
 import SaveManagerModal from '../game/SaveManagerModal'
 import MediaManagerModal from '../game/MediaManagerModal'
@@ -22,19 +20,15 @@ import ComingSoonModal from '../game/ComingSoonModal'
  *
  * [CN-FORK] v0.5.2.112 磁贴交互落地（用户口径：「磁贴点开要显示游戏详情，包括删除功能」+
  * 「四个按钮图标全部重做」+ 四颗按钮各自的功能）：
- *   · 磁贴**整块可点** → 游戏详情。实现上用一张铺满卡片的**透明按钮**做热区，而不是给卡片加
- *     onClick —— 卡片里还有一颗真按钮，把 onClick 挂在外层 div 上就成了「按钮套按钮」，
- *     读屏会念错、遥控器焦点也会错乱。
+ *   · 磁贴**整块可点** → 游戏详情（含删除源 / 卸载 / 挂载）。实现上用一张铺满卡片的
+ *     **透明按钮**做热区，而不是给卡片加 onClick —— 卡片里还有四颗真按钮，把 onClick 挂在外层
+ *     div 上就成了「按钮套按钮」，读屏会念错、遥控器焦点也会错乱。
+ *   · 四颗按钮从「禁用占位」变成真入口，图标换成专用的四颗（见 game/GameActionIcons.jsx）。
  *   · 图拆成**两层**：封面（icon，列表项带 icon 时优先）压在最上面，整卡底图（bg）在它下面。
  *     见下方 GameCard 里 iconSrc / bgSrc 两处注释。
- * [CN-FORK] v0.5.2.128 磁贴下只剩一颗「去 ShadowMount 管理」按钮（跳 10101 后台）。四颗动作按钮
- * 下线的原因见 CHANGELOG 的 .128。
  *
  * 为什么四个弹窗都挂在 GameSection 这一层而不是各自挂在卡片里：卡片是列表项，一屏可能有几十个，
  * 每个卡片挂五个弹窗实例 = 几百个空组件。收在板块层只留一份，靠 modal.kind 切换。
- * （存档/多媒体/名称与背景三个弹窗现在只能从**游戏详情**跳 —— GameDetailModal 的 onOpenSaves /
- * onOpenMedia / onOpenRename，见那边的三行 GridRow。它们跟挂载/卸载无关，ShadowMount 也不提供，
- * 所以撤磁贴按钮的同时在详情里补了入口，不能一起弄丢。pending 那颗占位弹窗则彻底没了入口。）
  */
 
 /* [CN-FORK] 由 TITLE_ID 前缀判断主机平台（后端 gm_tid_is_game 白名单即这几类前缀）。 */
@@ -70,13 +64,19 @@ const BADGE =
 const CHIP_BG = 'rgba(8, 10, 14, 0.72)'
 const chipStyle = (c) => ({ color: c, borderColor: `${c}59`, backgroundColor: CHIP_BG })
 
-/* ShadowMount 后端固定监听 10101（Web UI 直接在该端口根路径，ShadowMount Library）。
- * 端口不是我们的面板 8911，写成一个常量：将来它改端口只改这一处。 */
-const SMP_PORT = 10101
+/* 磁贴上的四颗按钮。顺序即语义顺序（存档 / 多媒体 / 改名 / 待定），
+ * 图标是这一轮专门画的（见 game/GameActionIcons.jsx 顶部：为什么不再用 lucide 那四颗占位）。
+ * 数组放在这里而不是图标文件里：那个文件只许导出组件，否则 react-refresh 的 HMR 会退化成整页刷新。 */
+const TILE_ACTIONS = [
+  { key: 'saves', Icon: SaveManagerIcon },
+  { key: 'media', Icon: MediaManagerIcon },
+  { key: 'rename', Icon: RenameTileIcon },
+  { key: 'pending', Icon: PendingSlotIcon },
+]
 
 /* 单个游戏磁贴（宫格）：大图标铺满 1:1 + 名称/TID，来源徽标叠在图标角上，
- * 图标下排只有一颗跳 ShadowMount 管理后台的按钮。整块可点开详情（见文件头注释）。 */
-function GameCard({ g, iconFailed, onIconError, onOpen }) {
+ * 四颗操作按钮排在图标下排。整块可点开详情（见文件头注释）。 */
+function GameCard({ g, iconFailed, onIconError, onOpen, onAction }) {
   const { t } = useTranslation()
   const installed = g.src === 'installed'
   const platform = gamePlatform(g.tid)
@@ -97,32 +97,11 @@ function GameCard({ g, iconFailed, onIconError, onOpen }) {
     ? `/game_tile_bg?tid=${encodeURIComponent(g.tid)}&v=${encodeURIComponent(g.bg)}`
     : ''
 
-  /* [CN-FORK] v0.5.2.128 唯一的磁贴动作：跳 ShadowMount 后端（ShadowMount Library 直接挂在
-   * 10101 端口根路径）。host 用当前页面的 host：在主机上从 127.0.0.1:8911 打开面板时它自动是
-   * 127.0.0.1，从电脑用 192.168.x.x 打开时就是局域网地址，两边都不需要配置。
-   * 先开 about:blank 再把 URL 塞过去：PS5 老内核里 window.open(url) 只要不在点击手势的同步栈里
-   * 就会被拦（参考 .84 那次的修法），同步开空窗最稳；空窗都没开出来就退化成直接开 url。
-   *
-   * 这里**不能**带 'noopener,noreferrer' —— 那样 window.open 会直接返回 null，于是落到下面的
-   * 兜底分支**再开一个**标签，用户一次点出两个 tab（第一颗还停在 about:blank）。回归实测出的
-   * 就是这个症状。代价是这个新 tab 能反向拿到我们的 window —— 但它只是 ShadowMount 自家后端
-   * （同机 127.0.0.1 / 局域网），跟 .84 那条 CommonEntriesView 的做法一致，可接受。 */
-  const openSmp = () => {
-    const raw = window.location.hostname || '127.0.0.1'
-    const host = raw.includes(':') ? `[${raw}]` : raw
-    const url = `http://${host}:${SMP_PORT}/`
-    const win = window.open('about:blank', '_blank')
-    if (win) {
-      try {
-        win.location.replace(url)
-        win.focus()
-      } catch {
-        try { win.close() } catch { /* 关不掉也没关系，下面这个兜底才是真正打开它的那个 */ }
-        window.open(url, '_blank')
-      }
-    } else {
-      window.open(url, '_blank')
-    }
+  const ACT_LABEL = {
+    saves: t('game.act_saves', '存档管理'),
+    media: t('game.act_media', '多媒体管理'),
+    rename: t('game.act_rename', '名称与背景'),
+    pending: t('game.act_pending', '待定功能'),
   }
 
   return (
@@ -203,26 +182,34 @@ function GameCard({ g, iconFailed, onIconError, onOpen }) {
         >
           {installed ? t('game.badge_installed', '已安装') : t('game.badge_dump', '转储')}
         </span>
-        {/* [CN-FORK] v0.5.2.128 磁贴下的四颗动作按钮（存档/多媒体/改名/待定）按用户要求全部下线，
-         * 换成一颗「去 ShadowMount 管理」：点它跳 ShadowMount 后端（10101）自己管挂载/卸载。
-         * 原因写在 CHANGELOG 的 .128 里 —— 卸载按钮会把 ShadowMount 的文件夹游戏从注册表里删掉
-         * 却又挂不回，所以干脆把挂载类的入口都交给 ShadowMount，自己不再碰注册表。
-         * 仍是 z-10 + pointer-events-auto：压在详情热区之上，点按钮不会顺带打开详情。
-         * 单按钮不写 grid 了：一个子元素自己撑满 inset-x-1.5，省一层 DOM。 */}
-        <button
-          type="button"
-          onClick={openSmp}
-          title={t('game.smp_open', '去 ShadowMount 管理')}
-          aria-label={t('game.smp_open', '去 ShadowMount 管理')}
-          className="absolute inset-x-1.5 bottom-1.5 flex items-center justify-center gap-1.5 py-1.5 rounded-md z-10 pointer-events-auto
-            bg-black/55 border border-white/15 backdrop-blur-sm text-white
-            transition-colors hover:bg-black/80 hover:border-white/35"
-        >
-          <ExternalLink className="w-4 h-4 shrink-0" />
-          <span className="text-[12px] font-semibold truncate">
-            {t('game.smp_open', '去 ShadowMount 管理')}
-          </span>
-        </button>
+        {/* [CN-FORK] v0.5.2.112 四颗动作按钮从禁用占位变成真入口：
+         * 图标换成专用四颗（记忆卡 / 叠卡+播放 / 笔+基线 / 方框三点），配色仍走原来的
+         * 「半透明深底 + 细线白图标」，只把 cursor 和悬停反馈补上。
+         * 它们**压在详情热区之上**（z-10 + pointer-events-auto），点按钮不会顺带打开详情。 */}
+        <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-4 gap-1.5 z-10 pointer-events-auto">
+          {/* 用 `const Icon = item.Icon` 而不是 `({ key, Icon }) =>`：本仓库的 eslint 配置没装
+              eslint-plugin-react，只在 JSX 里用到的**解构参数**会被 no-unused-vars 误判为未使用
+              （const 变量有 varsIgnorePattern '^[A-Z_]' 兜底）。 */}
+          {TILE_ACTIONS.map((item) => {
+            const Icon = item.Icon
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => onAction(item.key, g)}
+                title={ACT_LABEL[item.key]}
+                aria-label={ACT_LABEL[item.key]}
+                className={cn(
+                  'flex items-center justify-center py-1.5 rounded-md text-white',
+                  'bg-black/55 border border-white/15 backdrop-blur-sm',
+                  'transition-colors hover:bg-black/80 hover:border-white/35',
+                )}
+              >
+                <Icon className="w-4 h-4" />
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* 名称 + TID（行末右侧标游戏体积）+ 详情提示 */}
@@ -289,13 +276,14 @@ export default function GameSection({ addToast, showConfirm }) {
 
   const list = games || []
 
-  /* [CN-FORK] v0.5.2.128 磁贴下的四颗动作按钮下线后，「从磁贴直开弹窗」这条入口就没了：
-   * saves / media / rename 改由游戏详情跳过去（GameDetailModal 的 onOpenSaves / onOpenMedia /
-   * onOpenRename，见 GameDetailModal.jsx 里那三行 GridRow）—— 这三个功能和挂载/卸载无关，
-   * ShadowMount 也不提供，不该因为撤了磁贴按钮就跟着消失。
-   * pending 那颗本来就是个「还没定做什么」的占位弹窗，现在连入口都没有了（实例还挂着，但
-   * modal.kind 永远不会变成 'pending'，等于惰性死代码 —— 真删的话要连弹窗组件一起摘，不值当）。
-   * 所以这块 openAction 分发整个删掉了，四个弹窗实例保留（见文件头注释）。 */
+  /* 动作分发：四颗按钮各自开自己的弹窗。用一张表而不是 switch，
+   * 以后加第五颗（第四个位置定下来时）只改这里一行。 */
+  const openAction = useCallback((key, g) => {
+    if (key === 'saves') setModal({ kind: 'saves', game: g })
+    else if (key === 'media') setModal({ kind: 'media', game: g })
+    else if (key === 'rename') setModal({ kind: 'rename', game: g })
+    else setModal({ kind: 'pending', game: g })
+  }, [])
 
   const closeModal = useCallback(() => setModal(null), [])
 
@@ -330,7 +318,7 @@ export default function GameSection({ addToast, showConfirm }) {
                 一行说明比在每个磁贴上盖一个「详情」角标省地方得多。 */}
             <p className="text-[11px] text-zinc-500 flex items-center gap-1.5">
               <Info className="w-3.5 h-3.5 shrink-0" />
-              <span>{t('game.tile_hint', '点磁贴查看游戏详情；磁贴底部那颗按钮跳转到 ShadowMount 后台（10101）继续管理。')}</span>
+              <span>{t('game.tile_hint', '点磁贴查看游戏详情（含删除）；磁贴上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能。')}</span>
             </p>
             {/* [CN-FORK] v0.5.2.100 用户指令「磁贴再小三分之一，变成自适应，屏幕宽就多放几个、
                窄就少放几个，不要固定四个」：原来是 grid-cols-2 / sm:3 / lg:4，宽屏永远卡在 4 列，
@@ -344,6 +332,7 @@ export default function GameSection({ addToast, showConfirm }) {
                   iconFailed={!!failedIcons[g.tid]}
                   onIconError={() => setFailedIcons((m) => ({ ...m, [g.tid]: true }))}
                   onOpen={(x) => setModal({ kind: 'detail', game: x })}
+                  onAction={openAction}
                 />
               ))}
             </div>
@@ -353,16 +342,14 @@ export default function GameSection({ addToast, showConfirm }) {
 
       {/* 五个弹窗收在这一层（见文件头注释：不放进卡片里）。
           全部传 show={modal?.kind === 'x'}，同一时刻只有一个可见。 */}
+      {/* .129：详情弹窗改成纯只读，不再发起任何操作，所以 addToast / showConfirm /
+          onChanged 三个回调一起收掉；它自己的「去 ShadowMount 管理」不经过我们。 */}
       <GameDetailModal
         show={modal?.kind === 'detail'}
         game={modal?.game}
         onClose={closeModal}
-        addToast={addToast}
-        showConfirm={showConfirm}
-        onChanged={load}
         onOpenSaves={(g) => setModal({ kind: 'saves', game: g })}
         onOpenMedia={(g) => setModal({ kind: 'media', game: g })}
-        onOpenRename={(g) => setModal({ kind: 'rename', game: g })}
       />
       <SaveManagerModal
         show={modal?.kind === 'saves'}
