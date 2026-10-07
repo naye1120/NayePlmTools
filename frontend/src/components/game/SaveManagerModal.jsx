@@ -2,13 +2,16 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Save, RefreshCw, Download, Upload, Trash2, Plug, AlertTriangle, HardDrive, FileArchive,
+  History, RotateCcw,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
 import Switch from '../ui/Switch'
 import Segmented from '../ui/Segmented'
 import { Block, Chip, Field, Note, MiniEmpty, ProgressBar } from './parts'
 import { formatSizeAlways, formatStamp } from './format'
-import { getSaves, saveAutoConfig, testRemote, saveDownloadUrl, uploadSave, deleteSave } from '../../utils/gameApi'
+import {
+  getSaves, saveAutoConfig, testRemote, saveDownloadUrl, uploadSave, deleteSave, snapAction,
+} from '../../utils/gameApi'
 
 /* [CN-FORK] v0.5.2.112 存档管理弹窗（磁贴第一颗按钮）
  *
@@ -67,6 +70,8 @@ const EMPTY_CFG = {
   smb: { host: '', share: '', sub: '', user: '', password: '' },
   ftp: { host: '', port: '', path: '', user: '', password: '' },
   http: { url: '', token: '' },
+  /* [CN-FORK] v0.5.2.140 本地快照。默认值必须与后端 gs_auto_defaults 一致。 */
+  snap: { enabled: false, interval: 1800, keep: 5 },
 }
 
 /* 后端 → 本地编辑态。密码一律清空（后端不发明文），是否已保存由 has_password 标记。 */
@@ -80,6 +85,7 @@ function toLocalCfg(auto) {
     smb: { ...EMPTY_CFG.smb, ...(auto.smb || {}), password: '' },
     ftp: { ...EMPTY_CFG.ftp, ...(auto.ftp || {}), password: '' },
     http: { ...EMPTY_CFG.http, ...(auto.http || {}), token: '' },
+    snap: { ...EMPTY_CFG.snap, ...(auto.snap || {}) },
   }
 }
 
@@ -91,6 +97,11 @@ function toRemoteCfg(cfg) {
     mode: cfg.mode,
     on_launch: cfg.on_launch,
     on_exit: cfg.on_exit,
+    snap: {
+      enabled: !!cfg.snap.enabled,
+      interval: Number(cfg.snap.interval) || EMPTY_CFG.snap.interval,
+      keep: Number(cfg.snap.keep) || EMPTY_CFG.snap.keep,
+    },
   }
   Object.keys(MODE_FIELDS).forEach((m) => {
     out[m] = { ...cfg[m] }
@@ -112,6 +123,11 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   const [testResult, setTestResult] = useState(null)
   const [busyId, setBusyId] = useState('')
   const [uploading, setUploading] = useState(null)   // {name, percent|null}
+  const [snapping, setSnapping] = useState(false)    // 「立即备份」进行中
+  const [busySnap, setBusySnap] = useState('')       // `${uid}/${ts}`，该行正在还原/删除
+  /* 间隔用**分钟**给用户看/填，但存的是秒（后端口径）。做成独立的文本 state：
+   * 直接由 cfg.snap.interval 反推的话，用户清空输入框准备重填时会被立刻弹回原值。 */
+  const [snapMin, setSnapMin] = useState('30')
   const fileRef = useRef(null)
   const pendingSlot = useRef(null)                   // null = 新存档；字符串 = 覆盖该槽
   const aliveRef = useRef(true)
@@ -131,7 +147,13 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
       failed = e.message || t('game.saves_read_fail', '读取存档失败')
     }
     if (!aliveRef.current) return
-    if (d) { setData(d); setCfg(toLocalCfg(d.auto)); setErr('') }
+    if (d) {
+      setData(d)
+      setCfg(toLocalCfg(d.auto))
+      const iv = (d.auto && d.auto.snap && d.auto.snap.interval) || EMPTY_CFG.snap.interval
+      setSnapMin(String(Math.max(1, Math.round(iv / 60))))
+      setErr('')
+    }
     if (failed) setErr(failed)
   }, [tid, t])
 
@@ -144,6 +166,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     setLoadedKey(openKey)
     setData(null); setErr(''); setCfg(EMPTY_CFG)
     setTestResult(null); setBusyId(''); setUploading(null); setSaving(false); setTesting(false)
+    setSnapping(false); setBusySnap(''); setSnapMin('30')
   }
 
   useEffect(() => {
@@ -155,6 +178,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   if (!show || !game) return null
 
   const saves = (data && data.saves) || []
+  const snapshots = (data && data.snapshots) || []
   const mode = cfg.mode
   const fields = MODE_FIELDS[mode] || []
   const modeCfg = cfg[mode] || {}
@@ -229,6 +253,79 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
       },
       true,
     )
+  }
+
+  /* ── 本地快照（v0.5.2.140）───────────────────────────────────────────────
+   * 三个动作都走同一条 POST /game_save_snap，只是 action 不同。
+   * restore/delete 要把 uid 与 ts **原样回传**（那是快照目录的最后两段路径，
+   * 后端校验不过就直接 400）—— 前端不自己拼路径，也不做任何变形。 */
+  const onSnapRun = async () => {
+    setSnapping(true)
+    try {
+      const r = await snapAction(tid, 'run')
+      const made = (r && r.made) || 0
+      addToast?.(made
+        ? t('game.snap_made', '已生成 {{n}} 份快照', { n: made })
+        : t('game.snap_nochange', '存档没有变化，未新增快照'))
+      await load()
+    } catch (e) {
+      addToast?.(e.message || t('game.snap_fail', '备份失败'), 'error')
+    }
+    if (aliveRef.current) setSnapping(false)
+  }
+
+  const onSnapRestore = (sn) => {
+    if (!showConfirm) return
+    showConfirm(
+      t('game.snap_restore_title', '从快照还原'),
+      t('game.snap_restore_confirm',
+        '用「{{time}}」的快照整份覆盖「用户 {{uid}}」当前的存档？当前的会被替换掉（替换失败会自动退回）。',
+        { time: sn.mtime || sn.ts, uid: sn.uid }),
+      async () => {
+        setBusySnap(`${sn.uid}/${sn.ts}`)
+        try {
+          await snapAction(tid, 'restore', { uid: sn.uid, ts: sn.ts })
+          addToast?.(t('game.snap_restored', '已从快照还原'))
+          await load()
+        } catch (e) {
+          addToast?.(e.message || t('game.snap_restore_fail', '还原失败'), 'error')
+        }
+        if (aliveRef.current) setBusySnap('')
+      },
+      true,
+    )
+  }
+
+  const onSnapDelete = (sn) => {
+    if (!showConfirm) return
+    showConfirm(
+      t('game.snap_delete_title', '删除快照'),
+      t('game.snap_delete_confirm',
+        '删除「{{time}}」这份快照？只删快照，不动主机上当前的存档。此操作无法撤销。',
+        { time: sn.mtime || sn.ts }),
+      async () => {
+        setBusySnap(`${sn.uid}/${sn.ts}`)
+        try {
+          await snapAction(tid, 'delete', { uid: sn.uid, ts: sn.ts })
+          addToast?.(t('game.snap_deleted', '快照已删除'))
+          await load()
+        } catch (e) {
+          addToast?.(e.message || t('game.snap_delete_fail', '删除失败'), 'error')
+        }
+        if (aliveRef.current) setBusySnap('')
+      },
+      true,
+    )
+  }
+
+  /* 间隔输入框：值是分钟，改一次就同步回秒。解析不出来（用户清空）就只改文本，
+   * 不把 cfg 带坏 —— 清空再重填是再正常不过的操作。 */
+  const onSnapMin = (v) => {
+    setSnapMin(v)
+    const m = parseInt(v, 10)
+    if (Number.isFinite(m) && m > 0) {
+      setCfg((c) => ({ ...c, snap: { ...c.snap, interval: Math.min(1440, m) * 60 } }))
+    }
   }
 
   return (
@@ -442,6 +539,151 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
               </p>
             </Block>
           </div>
+        )}
+
+        {/* ── ③ 本地快照（v0.5.2.140）──
+         * 与上面两块并排会太挤（配置 + 列表已经占满两列），所以单独一行铺开。
+         * 语义上与「远程同步」是**两件不同的事**：远程要网络、要对面在线；
+         * 本地快照不依赖任何外部条件，是存档的最后一层兜底。 */}
+        {data && (
+          <Block
+            title={t('game.snap_title', '本地快照')}
+            icon={History}
+            actions={
+              <>
+                <Chip tone={cfg.snap.enabled ? 'ok' : 'muted'}>
+                  {cfg.snap.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
+                </Chip>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  disabled={snapping || saves.length === 0}
+                  onClick={onSnapRun}
+                >
+                  <History className="w-4 h-4" />
+                  <span>{snapping ? t('game.snap_running', '备份中…') : t('game.snap_now', '立即备份')}</span>
+                </button>
+              </>
+            }
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-white panel-body font-semibold">{t('game.snap_enable', '启用本地快照')}</p>
+                <p className="text-zinc-500 panel-tiny mt-0.5">
+                  {t('game.snap_enable_hint',
+                    '不依赖网络：主机按下面的间隔把存档整份复制到本地 /data 下，超保留数自动删最旧。远程同步连不上时，这一条是最后的兜底。')}
+                </p>
+              </div>
+              <Switch
+                checked={cfg.snap.enabled}
+                onChange={(v) => setCfg((c) => ({ ...c, snap: { ...c.snap, enabled: v } }))}
+                label={t('game.snap_enable', '启用本地快照')}
+              />
+            </div>
+
+            <div className={cfg.snap.enabled ? 'mt-4' : 'mt-4 opacity-50 pointer-events-none'}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Field
+                  label={t('game.snap_interval', '间隔（分钟）')}
+                  hint={t('game.snap_interval_hint', '最短 1 分钟，最长 1440（一天）。改完记得点保存。')}
+                >
+                  <input
+                    className="field"
+                    type="number"
+                    min="1"
+                    max="1440"
+                    inputMode="numeric"
+                    value={snapMin}
+                    onChange={(e) => onSnapMin(e.target.value)}
+                  />
+                </Field>
+                <Field
+                  label={t('game.snap_keep', '保留份数')}
+                  hint={t('game.snap_keep_hint', '每份存档最多留这么多份，超了删最旧（1~20）。')}
+                >
+                  <input
+                    className="field"
+                    type="number"
+                    min="1"
+                    max="20"
+                    inputMode="numeric"
+                    value={cfg.snap.keep}
+                    onChange={(e) => setCfg((c) => ({ ...c, snap: { ...c.snap, keep: e.target.value } }))}
+                  />
+                </Field>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 mt-4">
+                <button type="button" className="btn btn-primary" disabled={saving} onClick={onSaveCfg}>
+                  {saving ? t('game.saving', '保存中…') : t('game.save_settings', '保存设置')}
+                </button>
+                {data.snap_used > 0 && (
+                  <span className="panel-tiny text-zinc-500">
+                    {t('game.snap_used', '快照已占用 {{size}}', { size: formatSizeAlways(data.snap_used) })}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              {snapshots.length === 0 ? (
+                <MiniEmpty icon={History}>{t('game.snap_empty', '还没有本地快照')}</MiniEmpty>
+              ) : (
+                <ul className="space-y-1.5">
+                  {snapshots.map((sn) => {
+                    const key = `${sn.uid}/${sn.ts}`
+                    const busy = busySnap === key
+                    return (
+                      <li
+                        key={key}
+                        className="flex items-center gap-3 p-2.5 rounded-lg border border-white/10 bg-white/[0.02]"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-white panel-body font-semibold truncate">
+                              {t('game.save_user', '用户 {{uid}}', { uid: sn.uid })}
+                            </span>
+                            <Chip tone="muted">{formatStamp(sn.mtime) || sn.ts}</Chip>
+                          </div>
+                          <div className="panel-tiny text-zinc-500 mt-0.5 tabular-nums">
+                            {formatSizeAlways(sn.size)}
+                            {sn.files ? ` · ${t('game.n_files', '{{n}} 个文件', { n: sn.files })}` : ''}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            disabled={busy}
+                            title={t('game.snap_restore', '还原')}
+                            aria-label={t('game.snap_restore', '还原')}
+                            onClick={() => onSnapRestore(sn)}
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn is-danger"
+                            disabled={busy}
+                            title={t('game.snap_delete', '删除快照')}
+                            aria-label={t('game.snap_delete', '删除快照')}
+                            onClick={() => onSnapDelete(sn)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+
+              <p className="panel-tiny text-zinc-500 mt-3">
+                {t('game.snap_hint',
+                  '一行 = 某个用户在某时刻的整份存档。「还原」用它整份覆盖当前存档（失败会自动退回），「删除」只删快照、不动主机上的存档。存档内容没变时不会新增，所以份数涨得很慢。')}
+              </p>
+            </div>
+          </Block>
         )}
 
         <input

@@ -288,6 +288,7 @@ static size_t gr_post_limit(const char *url) {
     if (strcmp(url, ROUTE_GAME_DELETE) == 0 ||
         strcmp(url, ROUTE_GAME_SAVE_AUTO) == 0 ||
         strcmp(url, ROUTE_GAME_SAVE_TEST) == 0 ||
+        strcmp(url, ROUTE_GAME_SAVE_SNAP) == 0 ||
         strcmp(url, ROUTE_GAME_RENAME) == 0 ||
         strcmp(url, ROUTE_GAME_SYNC) == 0 ||
         strcmp(url, ROUTE_GAME_MOUNT) == 0 ||
@@ -379,6 +380,18 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         *code = MHD_HTTP_OK;
         int n = snprintf(out, size, "{\"ok\":true}");
         return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    /* [CN-FORK] v0.5.2.140 本地快照：立即备份 / 还原 / 删除。三条都自己拼响应体
+     * （成功形状不同：run 带 made 计数），失败一律翻成人话回 400。 */
+    if (strcmp(url, ROUTE_GAME_SAVE_SNAP) == 0) {
+        char msg[200];
+        msg[0] = 0;
+        if (game_saves_snap_action(body, len, out, size, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "快照操作失败");
+        *code = MHD_HTTP_OK;
+        return (int)strlen(out);
     }
 
     if (strcmp(url, ROUTE_GAME_SAVE_UPLOAD) == 0) {

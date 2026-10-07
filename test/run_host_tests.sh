@@ -122,11 +122,17 @@ if command -v python3 >/dev/null 2>&1; then
         # src/game_mgr.c 不进来：那是另一条测试（下方 game_mgr），它自带
         # test/host_mnt_compat.h 顶掉 getmntinfo。game_saves.c 现在也不再引用
         # game_mgr_sfo_text（整目录粒度用不到 SFO 取名字），所以没有桩了。
+        #
+        # -DGS_SNAP_QUIET_SEC=0：夹具是**刚造出来**的，文件 mtime 就是「现在」，
+        # 不置 0 的话「源目录最近被写过就跳过本轮」那条会把每一份快照都挡掉，
+        # 快照那一段等于没测。真机上这个值是 20 秒（存档正写到一半时拷出来是撕裂的）。
         run_one game_saves src/game_saves.c \
             -Iinclude -Isrc/psaccounts/third_party \
             -DGS_HOME='"/tmp/pldmgr_saves_test/home"' \
             -DGAME_SAVES_AUTO_PATH='"/tmp/pldmgr_saves_test/saves_auto.json"' \
             -DGAME_SAVES_PACK_DIR='"/tmp/pldmgr_saves_test/packs"' \
+            -DGAME_SAVES_SNAP_DIR='"/tmp/pldmgr_saves_test/snap"' \
+            -DGS_SNAP_QUIET_SEC=0 \
             src/game_job.c src/json_helpers.c src/utils.c src/inflate.c src/zip_io.c \
             src/psaccounts/third_party/cJSON.c
     fi

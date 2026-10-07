@@ -54,13 +54,26 @@
  *
  * 存档
  *   GET  /game_saves?tid=<TID>
- *        → { tid, local_path, auto:{enabled,mode,smb,ftp,http,on_launch,on_exit},
- *            saves:[{id,name,kind,mtime,size,files}] }
- *   POST /game_save_auto         {enabled, mode, smb, ftp, http, on_launch, on_exit} → {ok}
+ *        → { tid, local_path, auto:{enabled,mode,smb,ftp,http,on_launch,on_exit,snap},
+ *            saves:[{id,name,kind,mtime,size,files}],
+ *            snap_used, snapshots:[{uid,ts,mtime,size,files}] }
+ *        saves[] 每条 = **一个存过这个游戏的用户**（id/name 都是 uid）；一台主机可以
+ *        有多个用户都存过同一个游戏，所以不止一条，互不覆盖。
+ *        auto.snap = 本地快照配置 {enabled, interval(秒), keep(份)}。
+ *        snapshots[] = 已经存在的本地快照，**新的在前**。
+ *   POST /game_save_auto         {enabled, mode, smb, ftp, http, on_launch, on_exit, snap} → {ok}
  *   POST /game_save_test         {mode, smb, ftp, http}  → {ok, latency_ms}
  *   GET  /game_save_download?tid=&save=  → 二进制（zip）
  *   POST /game_save_upload?tid=&save=    裸 body（zip） → {ok, files, size}
  *   GET  /game_save_delete?tid=&save=    → {ok}
+ *   POST /game_save_snap         {tid, action:"run"}                  → {ok, made}
+ *                                {tid, action:"restore", uid, ts}     → {ok}
+ *                                {tid, action:"delete",  uid, ts}     → {ok}
+ *     [CN-FORK] v0.5.2.140 本地快照 —— 不依赖网络的兜底：守护线程按每款游戏自己的
+ *     间隔把存档整份复制到主机 /data 下，超保留数删最旧。run 是「立即备份」
+ *     （内容没变就不新增，made=0 是正常结果）；restore 走的是与上传**同一条**
+ *     整份替换逻辑（旧的先留一手，失败能退回去）。uid 与 ts 是路径的最后两段，
+ *     非法一律 400 —— 别在别处再拼一次这个路径。
  *
  * 多媒体
  *   GET  /game_media?tid=<TID>
@@ -357,6 +370,14 @@ export function uploadSave(tid, saveId, blob, opts) {
 
 export function deleteSave(tid, saveId, opts) {
   return request(`/game_save_delete${q({ tid, save: saveId })}`, opts)
+}
+
+/* [CN-FORK] v0.5.2.140 本地快照。action = 'run' | 'restore' | 'delete'；
+ * restore/delete 还要带 { uid, ts }（ts 是快照时间戳，原样回传，别自己拼）。 */
+export function snapAction(tid, action, extra, opts) {
+  return request('/game_save_snap', {
+    ...opts, method: 'POST', body: { tid, action, ...(extra || {}) },
+  })
 }
 
 /* ── 多媒体 ───────────────────────────────────────────────────────────── */

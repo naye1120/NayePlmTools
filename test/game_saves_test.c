@@ -17,6 +17,9 @@
  *   ⑥ 端口既认 JSON 数字也认 "2121" 这种字符串 —— 前端 <input> 出来的是字符串
  *   ⑦ token_set 与 has_token 两个名都得给（前端按 `has_${f.key}` 拼提示）
  *   ⑧ 打包成 zip（源不动）/ 上传整份替换（旧的可回退）/ 删除
+ *   ⑨ 本地快照：立即备份 / 内容没变不新增 / 只改了哪个用户就只新增哪个 /
+ *      保留数裁剪 / 一键还原 / 删除 / uid 与 ts 的路径穿越一律拒 /
+ *      间隔与保留数的归一化（86400 不能被当成越界回落成 30 分钟）
  *
  * 测不了的部分（写在前面，免得有人以为是漏了）：
  *   - HTTP 那一层（tid 到底在 query 还是 body）在 http_server.c，主机上没有
@@ -135,10 +138,48 @@ static int exists_reg(const char *p) {
     return stat(p, &st) == 0 && S_ISREG(st.st_mode);
 }
 
+/* 造一个内容为 n 个 'x' 的文件（快照用例要「改一下源存档」） */
+static void put_blob(const char *path, int n) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    char b[64];
+    memset(b, 'x', sizeof(b));
+    while (n > 0) {
+        int k = n > (int)sizeof(b) ? (int)sizeof(b) : n;
+        if (write(fd, b, (size_t)k) != k) break;
+        n -= k;
+    }
+    close(fd);
+}
+
+/* 在 snapshots[] 里找第 skip 个属于 uid 的条目（列表是新的在前，skip=0 即最新那份） */
+static cJSON *find_snap(cJSON *snaps, const char *uid, int skip) {
+    if (!snaps || !cJSON_IsArray(snaps)) return NULL;
+    int n = cJSON_GetArraySize(snaps);
+    for (int i = 0; i < n; i++) {
+        cJSON *it = cJSON_GetArrayItem(snaps, i);
+        const char *u = jstr(NULL, it, "uid");
+        if (u && !strcmp(u, uid) && skip-- <= 0) return it;
+    }
+    return NULL;
+}
+
+static int count_snap(cJSON *snaps, const char *uid) {
+    int n = 0;
+    if (!snaps || !cJSON_IsArray(snaps)) return 0;
+    for (int i = 0; i < cJSON_GetArraySize(snaps); i++) {
+        const char *u = jstr(NULL, cJSON_GetArrayItem(snaps, i), "uid");
+        if (u && !strcmp(u, uid)) n++;
+    }
+    return n;
+}
+
 int main(void) {
     /* 夹具每次都会 rm -rf 重建，但**单独重跑测试**时上次的 auto 配置还在
-     * —— 「默认值」那段断言就得从干净状态起，所以这里自己先清掉。 */
+     * —— 「默认值」那段断言就得从干净状态起，所以这里自己先清掉。
+     * 快照目录同理：夹具不管它（它不在 home 下），攒着会让「该 2 条」的断言漂。 */
     unlink(GAME_SAVES_AUTO_PATH);
+    system("rm -rf " GAME_SAVES_SNAP_DIR);
 
     char root[640];
     char msg[256];
@@ -455,6 +496,175 @@ int main(void) {
           "删一个用户把另一个用户的存档也带走了");
     CHECK(!exists_reg(HOME "/" U3 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
           "目标用户的存档没被删掉");
+
+    /* ── ⑨ 本地快照（v0.5.2.140）────────────────────────────────────────── *
+     * 走到这里 U3 已经被上一步删掉，「有存档的用户」是 U2 与 U5 两个。 */
+    char obuf[2048];
+    char ts5[24] = "", ts2b[24] = "";
+
+    /* 默认值：没配过就是关的 */
+    o = get_list(TID_PS5);
+    CHECK(o != NULL, "快照段 list 失败");
+    if (o) {
+        cJSON *snap = cJSON_GetObjectItem(cJSON_GetObjectItem(o, "auto"), "snap");
+        CHECK(cJSON_IsObject(snap), "auto.snap 段不是对象");
+        if (snap) {
+            CHECK(jbool(snap, "enabled") == 0, "snap.enabled 默认该 false");
+            CHECK(jnum(snap, "interval") == GAME_SAVES_SNAP_INTERVAL_DEF,
+                  "snap.interval 默认该 %d，实际 %lld",
+                  GAME_SAVES_SNAP_INTERVAL_DEF, jnum(snap, "interval"));
+            CHECK(jnum(snap, "keep") == GAME_SAVES_SNAP_KEEP_DEF,
+                  "snap.keep 默认该 %d，实际 %lld",
+                  GAME_SAVES_SNAP_KEEP_DEF, jnum(snap, "keep"));
+        }
+        cJSON *sns = cJSON_GetObjectItem(o, "snapshots");
+        CHECK(cJSON_IsArray(sns), "snapshots 不是数组");
+        CHECK(cJSON_GetArraySize(sns) == 0, "还没做过快照却列出了 %d 条",
+              cJSON_GetArraySize(sns));
+        CHECK(jnum(o, "snap_used") == 0, "还没做过快照 snap_used 却是 %lld",
+              jnum(o, "snap_used"));
+        cJSON_Delete(o);
+    }
+
+    /* 立即备份：两个用户各一份 */
+    int made = game_saves_snap_run_now(TID_PS5, msg, sizeof(msg));
+    CHECK(made == 2, "立即备份该生成 2 份（U2/U5），实际 %d（%s）", made, msg);
+
+    o = get_list(TID_PS5);
+    if (o) {
+        cJSON *sns = cJSON_GetObjectItem(o, "snapshots");
+        CHECK(cJSON_GetArraySize(sns) == 2, "快照该 2 条，实际 %d", cJSON_GetArraySize(sns));
+        CHECK(jnum(o, "snap_used") > 0, "snap_used 还是 0");
+        cJSON *s_u2 = find_snap(sns, U2, 0);
+        cJSON *s_u5 = find_snap(sns, U5, 0);
+        CHECK(s_u2 != NULL, "U2 的快照没被列出");
+        CHECK(s_u5 != NULL, "U5 的快照没被列出");
+        if (s_u2) {
+            const char *t = jstr(NULL, s_u2, "ts");
+            snprintf(ts2b, sizeof(ts2b), "%s", t ? t : "");
+            CHECK(jnum(s_u2, "size") == U2_BYTES, "U2 快照 size=%lld（该 %d）",
+                  jnum(s_u2, "size"), U2_BYTES);
+            CHECK(jnum(s_u2, "files") == U2_FILES, "U2 快照 files=%lld（该 %d）",
+                  jnum(s_u2, "files"), U2_FILES);
+            char p[1024];
+            snprintf(p, sizeof(p), GAME_SAVES_SNAP_DIR "/" TID_PS5 "/" U2 "/%s/sdimg_STARBOARD", ts2b);
+            CHECK(exists_reg(p), "快照目录里没有 sdimg_STARBOARD：%s", p);
+            snprintf(p, sizeof(p), GAME_SAVES_SNAP_DIR "/" TID_PS5 "/" U2 "/%s/sdimg_sce_bu_sdmemory", ts2b);
+            CHECK(exists_reg(p), "快照没把 _bu_ 备份一起拷过去：%s", p);
+        }
+        if (s_u5) {
+            const char *t = jstr(NULL, s_u5, "ts");
+            snprintf(ts5, sizeof(ts5), "%s", t ? t : "");
+        }
+        cJSON_Delete(o);
+    }
+
+    /* 内容没变 → 不新增。这是省 /data 的关键：不然一天就是 48 份一模一样的东西。 */
+    made = game_saves_snap_run_now(TID_PS5, msg, sizeof(msg));
+    CHECK(made == 0, "内容没变却又生成了 %d 份（%s）", made, msg);
+    o = get_list(TID_PS5);
+    if (o) {
+        CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(o, "snapshots")) == 2,
+              "内容没变却多出了快照");
+        cJSON_Delete(o);
+    }
+
+    /* 只改 U2 的源存档 → 只该 U2 新增，U5 不动 */
+    put_blob(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_NEW", 128);
+    made = game_saves_snap_run_now(TID_PS5, msg, sizeof(msg));
+    CHECK(made == 1, "只改了 U2，该只新增 1 份，实际 %d（%s）", made, msg);
+    o = get_list(TID_PS5);
+    if (o) {
+        cJSON *sns = cJSON_GetObjectItem(o, "snapshots");
+        CHECK(count_snap(sns, U2) == 2, "U2 该有 2 份快照，实际 %d", count_snap(sns, U2));
+        CHECK(count_snap(sns, U5) == 1, "U5 该还是 1 份，实际 %d", count_snap(sns, U5));
+        cJSON *s = find_snap(sns, U2, 0);
+        if (s) {
+            const char *t = jstr(NULL, s, "ts");
+            snprintf(ts2b, sizeof(ts2b), "%s", t ? t : "");
+        }
+        cJSON_Delete(o);
+    }
+
+    /* 一键还原：把 U2 的存档删掉两个文件，再从最新那份整份还原回来 */
+    unlink(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD");
+    unlink(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_NEW");
+    CHECK(!exists_reg(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
+          "前置删除没生效，后面还原就测不出东西");
+    snprintf(obuf, sizeof(obuf),
+             "{\"tid\":\"" TID_PS5 "\",\"action\":\"restore\",\"uid\":\"" U2 "\",\"ts\":\"%s\"}",
+             ts2b);
+    CHECK(game_saves_snap_action(obuf, strlen(obuf), g_buf, sizeof(g_buf), msg, sizeof(msg)) == 0,
+          "还原失败: %s", msg);
+    CHECK(exists_reg(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
+          "还原没把 sdimg_STARBOARD 放回来");
+    CHECK(exists_reg(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_NEW"),
+          "还原没把 sdimg_NEW 放回来");
+    CHECK(exists_reg(HOME "/" U5 "/savedata_prospero/" TID_PS5 "/data.bin"),
+          "还原把另一个用户的存档牵连了（整份替换只该动目标用户）");
+
+    /* uid / ts 是路径的最后两段 —— 穿越一律在拼路径之前就被拒 */
+    const char *bad[] = {
+        "{\"tid\":\"" TID_PS5 "\",\"action\":\"delete\",\"uid\":\"../..\",\"ts\":\"20260101-000000\"}",
+        "{\"tid\":\"" TID_PS5 "\",\"action\":\"restore\",\"uid\":\"" U2 "\",\"ts\":\"../../etc\"}",
+        "{\"tid\":\"" TID_PS5 "\",\"action\":\"delete\",\"uid\":\"" U2 "\",\"ts\":\"2026-01-01\"}",
+        "{\"tid\":\"" TID_PS5 "\",\"action\":\"nope\",\"uid\":\"" U2 "\",\"ts\":\"20260101-000000\"}",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        CHECK(game_saves_snap_action(bad[i], strlen(bad[i]), g_buf, sizeof(g_buf),
+                                     msg, sizeof(msg)) < 0,
+              "非法请求没被拒: %s", bad[i]);
+
+    /* 间隔与保留数的归一化。**86400 不能被当成越界回落成 30 分钟** ——
+     * 拿读端口的那套（gs_get_port，夹 1~65535）来读间隔就会这样：用户填了
+     * 「一天」，存进去变成默认值，而且没有任何提示。 */
+    const char *sb = "{\"tid\":\"" TID_PS5 "\",\"snap\":{\"enabled\":true,"
+                     "\"interval\":\"86400\",\"keep\":\"50\"}}";
+    CHECK(game_saves_auto_set(TID_PS5, sb, strlen(sb), msg, sizeof(msg)) == 0,
+          "snap 配置保存失败: %s", msg);
+    o = get_list(TID_PS5);
+    if (o) {
+        cJSON *snap = cJSON_GetObjectItem(cJSON_GetObjectItem(o, "auto"), "snap");
+        CHECK(jbool(snap, "enabled") == 1, "snap.enabled 没存上");
+        CHECK(jnum(snap, "interval") == 86400,
+              "interval=86400 被回落成 %lld —— 读间隔不能用读端口的那套（夹 1~65535）",
+              jnum(snap, "interval"));
+        CHECK(jnum(snap, "keep") == GAME_SAVES_SNAP_KEEP_MAX,
+              "keep=50 该被夹到 %d，实际 %lld",
+              GAME_SAVES_SNAP_KEEP_MAX, jnum(snap, "keep"));
+        cJSON_Delete(o);
+    }
+
+    /* 保留数裁剪：keep=1，再改一次源 → U2 只该剩最新那份 */
+    const char *kb = "{\"tid\":\"" TID_PS5 "\",\"snap\":{\"keep\":1}}";
+    CHECK(game_saves_auto_set(TID_PS5, kb, strlen(kb), msg, sizeof(msg)) == 0,
+          "snap.keep 保存失败: %s", msg);
+    put_blob(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_NEW2", 64);
+    made = game_saves_snap_run_now(TID_PS5, msg, sizeof(msg));
+    CHECK(made == 1, "改了 U2 该新增 1 份，实际 %d（%s）", made, msg);
+    o = get_list(TID_PS5);
+    if (o) {
+        cJSON *sns = cJSON_GetObjectItem(o, "snapshots");
+        CHECK(count_snap(sns, U2) == 1, "keep=1 却没裁到 1 份，实际 %d", count_snap(sns, U2));
+        cJSON_Delete(o);
+    }
+
+    /* 删除一份快照；再删一次必须失败（它已经不在了）。**放在最后** ——
+     * 删掉之后这个用户就没有「最近一份」可比，下一轮 run 会给他重新生成一份
+     * （这是对的：用户手删了快照，守护线程自然要补回来）。放在中间会把上面
+     * 「只该新增 1 份」的断言带偏 —— 这个顺序坑真的踩过一次。 */
+    snprintf(obuf, sizeof(obuf),
+             "{\"tid\":\"" TID_PS5 "\",\"action\":\"delete\",\"uid\":\"" U5 "\",\"ts\":\"%s\"}",
+             ts5);
+    CHECK(game_saves_snap_action(obuf, strlen(obuf), g_buf, sizeof(g_buf), msg, sizeof(msg)) == 0,
+          "删除快照失败: %s", msg);
+    CHECK(game_saves_snap_action(obuf, strlen(obuf), g_buf, sizeof(g_buf), msg, sizeof(msg)) < 0,
+          "删一份已经不存在的快照居然成功了");
+    o = get_list(TID_PS5);
+    if (o) {
+        CHECK(count_snap(cJSON_GetObjectItem(o, "snapshots"), U5) == 0, "U5 的快照没被删掉");
+        cJSON_Delete(o);
+    }
 
     printf("game_saves: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

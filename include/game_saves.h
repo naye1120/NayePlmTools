@@ -4,12 +4,13 @@
 /* [CN-FORK] v0.5.2.116 游戏管理 → 存档后端
  * 契约定死在 frontend/src/utils/gameApi.js 文件头（那一轮「只做前端 + mock」）：
  *
- *   GET  /game_saves?tid=        → {tid, local_path, auto, saves:[...]}
+ *   GET  /game_saves?tid=        → {tid, local_path, auto, saves:[...], snapshots:[...]}
  *   POST /game_save_auto         → {ok}      （存配置，密码永不回传）
  *   POST /game_save_test         → {ok, latency_ms} | 400 EHOSTUNREACH
  *   GET  /game_save_download?tid=&save= → zip 二进制
  *   POST /game_save_upload?tid=&save=   （裸 body：zip/tar/gzip/单文件）→ {ok, files, size}
  *   GET  /game_save_delete?tid=&save=   → {ok}
+ *   POST /game_save_snap         → {ok, ...} （v0.5.2.140 本地快照：立即备份 / 还原 / 删除）
  *
  * ── 存档落在哪（2026-10 真机实测修正）────────────────────────────────────
  *   /user/home/<uid>/savedata_prospero/<TID>/   ← PS5 存档真正在这里
@@ -39,6 +40,25 @@
  * ".zip,.tar,.gz,.tgz"，四种都得吃：PK 头走 zip、1f 8b 走 gunzip（之后若是 tar 再解 tar，
  * 否则当单文件收下）、ustar 头直接解 tar、都不是就整包存成一个文件。
  * 只认 zip 的话，用户在 Windows 上右键压的 tar.gz 就传不进来。
+ *
+ * ── 本地快照（v0.5.2.140）────────────────────────────────────────────────
+ * 远程同步（SMB/FTP/HTTP）要网络、要对面在线，是「多机之间搬存档」的活；
+ * 本地快照是**不依赖任何外部条件**的兜底：守护线程按每款游戏的间隔，把
+ *   <GS_HOME>/<uid>/savedata_prospero|savedata/<TID>/
+ * 整份复制到
+ *   GAME_SAVES_SNAP_DIR/<TID>/<uid>/<YYYYmmdd-HHMMSS>/
+ * 每个 <TID>/<uid> 只留最近 keep 份（超了删最旧），另有一道全局字节预算兜底。
+ *
+ * 配置跟着**游戏**走（存在 GAME_SAVES_AUTO_PATH 的同一个 tid 对象里，键名 "snap"），
+ * 和远程那套并排：用户「对着这个游戏一起配」的心智模型不变。
+ *
+ * 三个刻意为之的设计：
+ *   ① **内容没变就不新增**。比 (files, bytes, 最大 mtime) 三元组 —— 主机的存档
+ *      绝大部分时间是同一份，按 30 分钟一拷的话，一天下来 48 份一模一样的东西。
+ *      三元组一样就直接跳过，省掉的是用户的 /data 空间。
+ *   ② **源目录最近被写过就跳过本轮**。存档正写到一半时拷出来是撕裂的，还原回去
+ *      可能让主机认不出来。宁可等下一轮。
+ *   ③ 复制到临时目录、**成功才 rename 成时间戳目录**。半截的快照永远不出现。
  */
 
 #include <stddef.h>
@@ -58,6 +78,28 @@
 #define GAME_SAVES_MAX_BYTES (512ull << 20)
 #define GAME_SAVES_MAX_TAR_FILE (256ull << 20)
 
+/* ── 本地快照的落点与限额（v0.5.2.140）───────────────────────────────────── */
+#ifndef GAME_SAVES_SNAP_DIR
+#define GAME_SAVES_SNAP_DIR "/data/nayeplmtools/saves_snap"
+#endif
+
+/* 单份快照的上限：与「一次存档能装多少」同一量级。真机实测最大的存档
+ * （PPSA21567）是 20 MB / 2 文件，512 MB 是给极端情况留的余量。 */
+#define GAME_SAVES_SNAP_MAX_ENTRIES GAME_SAVES_MAX_ENTRIES
+#define GAME_SAVES_SNAP_MAX_BYTES GAME_SAVES_MAX_BYTES
+/* 全部快照的总预算。超了从**全局最旧**的那份开始删 —— 只按每款游戏的 keep
+ * 裁剪的话，15 款 × 5 份 × 18 MB 就是 1.3 GB，主机 /data 顶不住。 */
+#define GAME_SAVES_SNAP_TOTAL_BYTES (4ull << 30)
+
+/* 间隔下限 1 分钟（再密就是拿 IO 换没意义的东西），默认 30 分钟；
+ * 保留份数夹在 1~20。三者都会被 gs_snap_clamp_* 夹一遍再落盘。 */
+#define GAME_SAVES_SNAP_INTERVAL_MIN 60
+#define GAME_SAVES_SNAP_INTERVAL_MAX 86400
+#define GAME_SAVES_SNAP_INTERVAL_DEF 1800
+#define GAME_SAVES_SNAP_KEEP_MIN 1
+#define GAME_SAVES_SNAP_KEEP_MAX 20
+#define GAME_SAVES_SNAP_KEEP_DEF 5
+
 /* 找这个 tid 的**第一个**存档根（<uid>/savedata_prospero|savedata/<TID>）。
  * 返回 0 有（out 已填），-1 找不到（主机上一个存档都还没生成时是正常的）。
  * 只想知道「存档在哪」的调用方用这个；要枚举全部用户请走列表接口。 */
@@ -65,7 +107,9 @@ int game_saves_root(const char *tid, char *out, size_t osz);
 
 /* GET /game_saves：整份响应体（含 auto 与 saves）写进 buf。返回长度，<0 失败。
  * saves[] 里每条 = 一个存过这个游戏的用户：{id, name, kind, mtime, size, files}，
- * id 与 name 都是 uid（前端自己加「用户」前缀），kind 是 "PS5"/"PS4"。 */
+ * id 与 name 都是 uid（前端自己加「用户」前缀），kind 是 "PS5"/"PS4"。
+ * auto 里多一个 snap 子对象 {enabled, interval, keep}（本地快照配置）。
+ * snapshots[] 里每条 = 一份已存在的本地快照：{uid, ts, mtime, size, files}。 */
 int game_saves_list_json(const char *tid, char *buf, size_t size);
 
 /* /game_detail 要的存档条数 = 存过这个游戏的用户数（通常是 0 或 1）。
@@ -97,5 +141,22 @@ int game_saves_upload(const char *tid, const char *save,
 
 /* GET /game_save_delete：删掉这个用户在这个游戏上的整份存档。0 成功。 */
 int game_saves_remove(const char *tid, const char *save, char *msg, size_t msgsz);
+
+/* ── 本地快照（v0.5.2.140）─────────────────────────────────────────────────
+ * 守护线程：读每款游戏配置里的 snap，按各自的间隔做快照。main.c 启动时调用一次。
+ * safe_mode 下整条跳过（与风扇、名字自愈两条守护同一原则）。 */
+void game_saves_snap_start_daemon(void);
+
+/* 立即给这个游戏做一份快照（不等间隔，也不看「内容没变」以外的前置条件）。
+ * 返回已生成/跳过的份数（>=0），msg 回一句人话；<0 是参数或目录层面的硬错误。 */
+int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz);
+
+/* POST /game_save_snap：body 是 JSON
+ *   {tid, action:"run"}                       → 立即备份
+ *   {tid, action:"restore", uid, ts}          → 把那份快照整份还原回主机
+ *   {tid, action:"delete",  uid, ts}          → 删掉那份快照
+ * 0 成功（buf 已填完整 JSON 响应体），-1 参数非法（调用方回 400）。 */
+int game_saves_snap_action(const char *body, size_t len,
+                           char *buf, size_t size, char *msg, size_t msgsz);
 
 #endif

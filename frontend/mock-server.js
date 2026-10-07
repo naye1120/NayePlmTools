@@ -624,6 +624,7 @@ const gameState = {
   saves: {},            // tid -> 存档数组
   media: {},            // tid -> 媒体数组
   auto: {},             // tid -> 自动存档配置
+  snaps: {},            // [CN-FORK] v0.5.2.140 tid -> 本地快照数组（新的在前）
   jobs: {},             // job_id -> 任务
   nextJob: 1,
   seq: 0,               // 让每次生成的假数据（体积/时间）有变化，避免看起来是写死的
@@ -878,9 +879,36 @@ function autoFor(tid) {
       smb: { host: '192.168.1.10', share: 'ps5save', sub: tid, user: 'ps5', has_password: true },
       ftp: { host: '192.168.1.10', port: 2121, path: `/ps5save/${tid}`, user: 'ps5', has_password: false },
       http: { url: '', token_set: false },
+      /* [CN-FORK] v0.5.2.140 本地快照。默认值必须与后端 gs_auto_defaults 一模一样，
+       * 否则前端读到的默认值和真机上的对不上（这是「测试全绿、真机全错」的老路）。 */
+      snap: { enabled: false, interval: 1800, keep: 5 },
     };
   }
   return gameState.auto[tid];
+}
+
+/* ── 本地快照（v0.5.2.140）────────────────────────────────────────────────
+ * 与后端同一口径：不预置任何假快照（真机上没做过就是空的），只有 run 会新增。
+ * 时间戳目录名 YYYYmmdd-HHMMSS —— 字典序 = 时间序，与后端一致。 */
+function snapsFor(tid) {
+  if (!gameState.snaps[tid]) gameState.snaps[tid] = [];
+  return gameState.snaps[tid];
+}
+
+function snapStamp(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+/* 与后端 gs_snap_clamp_* 完全一致：越界**回落默认**（不是夹到边界），
+ * 只有上限那一侧才是夹。分开写两套是这类功能最容易漂的地方。 */
+function clampSnapInterval(v) {
+  if (!Number.isFinite(v) || v < 60) return 1800;
+  return v > 86400 ? 86400 : v;
+}
+function clampSnapKeep(v) {
+  if (!Number.isFinite(v) || v < 1) return 5;
+  return v > 20 ? 20 : v;
 }
 
 /* 缩略图 / 原图 / 磁贴背景，统一用一个带文字的 SVG 生成 —— 一眼能看出是哪一张。 */
@@ -955,6 +983,7 @@ app.get('/game_saves', (req, res) => {
     return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
   }
   const saves = savesFor(tid);
+  const snaps = snapsFor(tid);
   res.json({
     tid,
     /* 与真机同形：PS5 存档在 savedata_prospero 下；一个都没有时是空串
@@ -962,6 +991,9 @@ app.get('/game_saves', (req, res) => {
     local_path: saves.length ? `/user/home/${saves[0].id}/savedata_prospero/${tid}` : '',
     auto: autoFor(tid),
     saves,
+    snap_used: snaps.reduce((a, s) => a + s.size, 0),
+    /* 剥掉内部用的 src 指纹字段 —— 真机上快照条目就只有这五个键 */
+    snapshots: snaps.map(({ uid, ts, mtime, size, files }) => ({ uid, ts, mtime, size, files })),
   });
 });
 
@@ -982,7 +1014,66 @@ app.post('/game_save_auto', (req, res) => {
   cur.mode = b.mode || cur.mode;
   cur.on_launch = b.on_launch !== false;
   cur.on_exit = b.on_exit !== false;
+  /* snap 也是「没传的字段保持原值」—— enabled 只在真的是布尔时才覆盖。 */
+  if (b.snap && typeof b.snap === 'object') {
+    if (typeof b.snap.enabled === 'boolean') cur.snap.enabled = b.snap.enabled;
+    if (b.snap.interval !== undefined) cur.snap.interval = clampSnapInterval(parseInt(b.snap.interval, 10));
+    if (b.snap.keep !== undefined) cur.snap.keep = clampSnapKeep(parseInt(b.snap.keep, 10));
+  }
   res.json({ ok: true });
+});
+
+/* [CN-FORK] v0.5.2.140 本地快照：立即备份 / 还原 / 删除。 */
+app.post('/game_save_snap', (req, res) => {
+  const b = req.body || {};
+  const tid = String(b.tid || '');
+  const action = String(b.action || '');
+  const base = mockGames.find((x) => x.tid === tid);
+  if (!base || gameState.deleted.has(tid)) {
+    return res.status(400).json({ error: 'EBAD', message: '主机上找不到这个游戏' });
+  }
+  const list = savesFor(tid);
+  const snaps = snapsFor(tid);
+
+  if (action === 'run') {
+    if (!list.length) {
+      return res.status(400).json({ error: 'EBAD', message: '主机上还没有这个游戏的存档' });
+    }
+    const ts = snapStamp(new Date());
+    let made = 0;
+    list.forEach((s) => {
+      /* 内容没变就不新增 —— 与后端同一判据（这里拿 size+files+存档 mtime 当指纹） */
+      const newest = snaps.find((x) => x.uid === s.id);
+      if (newest && newest.size === s.size && newest.files === s.files && newest.src === s.mtime) return;
+      snaps.unshift({ uid: s.id, ts, mtime: s.mtime, size: s.size, files: s.files, src: s.mtime });
+      made++;
+    });
+    /* 保留数裁剪：每个用户只留最近 keep 份。列表新的在前，从尾部砍。 */
+    const keep = autoFor(tid).snap.keep;
+    MOCK_UIDS.forEach((uid) => {
+      snaps.filter((x) => x.uid === uid).slice(keep)
+        .forEach((x) => snaps.splice(snaps.indexOf(x), 1));
+    });
+    return res.json({ ok: true, made });
+  }
+
+  const uid = String(b.uid || '');
+  const ts = String(b.ts || '');
+  if (!MOCK_UIDS.includes(uid) || !/^\d{8}-\d{6}$/.test(ts)) {
+    return res.status(400).json({ error: 'EBAD', message: '参数不合法' });
+  }
+  const at = snaps.findIndex((x) => x.uid === uid && x.ts === ts);
+  if (at < 0) {
+    return res.status(400).json({ error: 'EBAD', message: '找不到这份快照' });
+  }
+  if (action === 'delete') {
+    snaps.splice(at, 1);
+    return res.json({ ok: true });
+  }
+  if (action === 'restore') {
+    return res.json({ ok: true });
+  }
+  return res.status(400).json({ error: 'EBAD', message: '未知的 action' });
 });
 
 app.post('/game_save_test', (req, res) => {

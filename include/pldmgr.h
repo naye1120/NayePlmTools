@@ -81,6 +81,9 @@
 #define ROUTE_GAME_SAVE_DOWNLOAD "/game_save_download"
 #define ROUTE_GAME_SAVE_UPLOAD "/game_save_upload"
 #define ROUTE_GAME_SAVE_DELETE "/game_save_delete"
+/* [CN-FORK] v0.5.2.140 本地快照：立即备份 / 还原 / 删除（action 在 body 里）。
+ * 列表不另开 GET —— 快照跟着 /game_saves 一起回（snapshots[]），弹窗一次拉全。 */
+#define ROUTE_GAME_SAVE_SNAP "/game_save_snap"
 #define ROUTE_GAME_RENAME "/game_rename"
 /* [CN-FORK] v0.5.2.137 名字回填：把面板里的 name.txt 重放到主机 app.db/appinfo.db
  * （folder 类再写一次源 sce_sys/param.json）。见 game_title.h 的 game_title_sync_all。 */
@@ -97,7 +100,7 @@
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
 
-#define MENU_VERSION "0.5.2.139" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.139，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.140" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.140，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"

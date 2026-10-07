@@ -80,8 +80,9 @@ static int gs_uid_ok(const char *u) {
 }
 
 /* ── 递归统计（体积 / 文件数），带深度与条目预算 ──────────────────────────
- * 用 lstat 而不是 stat：存档里出现符号链接环时 stat 会跟着走进去，把整个请求拖死。 */
-typedef struct { long long bytes; long long files; int over; } gs_stat_t;
+ * 用 lstat 而不是 stat：存档里出现符号链接环时 stat 会跟着走进去，把整个请求拖死。
+ * max_mtime 是给本地快照去重用的「最晚被写过的时刻」，只认普通文件。 */
+typedef struct { long long bytes; long long files; time_t max_mtime; int over; } gs_stat_t;
 
 static void gs_walk(const char *dir, gs_stat_t *acc, int depth, unsigned *budget) {
     if (depth > GS_MAX_DEPTH || *budget == 0 || acc->over) return;
@@ -100,6 +101,7 @@ static void gs_walk(const char *dir, gs_stat_t *acc, int depth, unsigned *budget
         } else if (S_ISREG(st.st_mode)) {
             acc->bytes += (long long)st.st_size;
             acc->files++;
+            if (st.st_mtime > acc->max_mtime) acc->max_mtime = st.st_mtime;
         }
     }
     if (*budget == 0) acc->over = 1;
@@ -333,6 +335,14 @@ static cJSON *gs_auto_defaults(void) {
         cJSON_AddStringToObject(http, "url", "");
         cJSON_AddStringToObject(http, "token", "");
     }
+    /* v0.5.2.140 本地快照。与远程那三套并排放在同一个 tid 对象里 ——
+     * 用户的心智是「对着这个游戏一起配」，不是「全局配一次」。 */
+    cJSON *snap = cJSON_AddObjectToObject(o, "snap");
+    if (snap) {
+        cJSON_AddBoolToObject(snap, "enabled", 0);
+        cJSON_AddNumberToObject(snap, "interval", GAME_SAVES_SNAP_INTERVAL_DEF);
+        cJSON_AddNumberToObject(snap, "keep", GAME_SAVES_SNAP_KEEP_DEF);
+    }
     return o;
 }
 
@@ -363,9 +373,41 @@ static int gs_get_port(cJSON *f, int def) {
     return def;
 }
 
-/* 本文件里只有 port 一处用它，所以直接并到同一条兼容逻辑上。 */
+/* 端口专用：夹在 1~65535，越界回落到 def。 */
 static double gs_field_num(cJSON *o, const char *k, double def) {
     return (double)gs_get_port(o ? cJSON_GetObjectItem(o, k) : NULL, (int)def);
+}
+
+/* 普通整数字段（快照间隔 / 保留份数这类）。与 gs_get_port 的区别只有范围：
+ * 端口夹在 1~65535，这个交给调用方定上下限。**不能拿 gs_get_port 读间隔** ——
+ * 86400（一天）一过 65535 就被判成越界、悄悄回落成默认 30 分钟，用户填了等于没填。
+ * 同样认数字字符串：前端 <input> 的 value 出来永远是字符串。 */
+static int gs_get_int(cJSON *f, int def, int lo, int hi) {
+    double v;
+    if (f && cJSON_IsNumber(f)) {
+        v = f->valuedouble;
+    } else if (f && cJSON_IsString(f) && f->valuestring && f->valuestring[0]) {
+        char *e = NULL;
+        v = strtod(f->valuestring, &e);
+        if (!e || e == f->valuestring || *e != 0) return def;
+    } else {
+        return def;
+    }
+    if (v < (double)lo || v > (double)hi) return def;
+    return (int)v;
+}
+
+/* 快照两个数值字段的归一化。落盘、回吐、守护线程读三处都用它，保证口径一致 ——
+ * 分开写的话，UI 显示 5 份、守护线程按 50 份裁，是那种谁也发现不了的不一致。 */
+static int gs_snap_clamp_interval(int v) {
+    if (v < GAME_SAVES_SNAP_INTERVAL_MIN) return GAME_SAVES_SNAP_INTERVAL_DEF;
+    if (v > GAME_SAVES_SNAP_INTERVAL_MAX) return GAME_SAVES_SNAP_INTERVAL_MAX;
+    return v;
+}
+static int gs_snap_clamp_keep(int v) {
+    if (v < GAME_SAVES_SNAP_KEEP_MIN) return GAME_SAVES_SNAP_KEEP_DEF;
+    if (v > GAME_SAVES_SNAP_KEEP_MAX) return GAME_SAVES_SNAP_KEEP_MAX;
+    return v;
 }
 static int gs_field_bool(cJSON *o, const char *k, int def) {
     cJSON *f = o ? cJSON_GetObjectItem(o, k) : NULL;
@@ -438,6 +480,20 @@ static void gs_auto_json(cJSON *src, char *buf, size_t size) {
         gs_put_bool(http, "has_token", tok);
     }
 
+    cJSON *sns = src ? cJSON_GetObjectItem(src, "snap") : NULL;
+    cJSON *snap = cJSON_AddObjectToObject(o, "snap");
+    if (snap) {
+        gs_put_bool(snap, "enabled", gs_field_bool(sns, "enabled", 0));
+        gs_put_num(snap, "interval",
+                   (double)gs_snap_clamp_interval((int)gs_get_int(
+                       sns ? cJSON_GetObjectItem(sns, "interval") : NULL,
+                       GAME_SAVES_SNAP_INTERVAL_DEF, 0, 1000000000)));
+        gs_put_num(snap, "keep",
+                   (double)gs_snap_clamp_keep((int)gs_get_int(
+                       sns ? cJSON_GetObjectItem(sns, "keep") : NULL,
+                       GAME_SAVES_SNAP_KEEP_DEF, 0, 1000000000)));
+    }
+
     char *s = cJSON_PrintUnformatted(o);
     if (s) snprintf(buf, size, "%s", s);
     free(s);
@@ -457,6 +513,683 @@ static int gs_app(char *b, size_t cap, size_t *pos, const char *fmt, ...) {
     if (w < 0 || (size_t)w >= rem) { b[*pos] = 0; return -1; }
     *pos += (size_t)w;
     return 0;
+}
+
+/* ══ 本地快照（v0.5.2.140）══════════════════════════════════════════════════
+ * 设计见 include/game_saves.h 的「本地快照」一节。这里只记实现上的取舍。
+ *
+ * 落点：GAME_SAVES_SNAP_DIR/<TID>/<uid>/<YYYYmmdd-HHMMSS>/
+ * 时间戳目录名用**定长 15 字符**，字典序即时间序 —— 排序、找最旧、找最新
+ * 全都不用解析时间，也就没有时区/夏令时这类幺蛾子。
+ */
+#define GS_SNAP_MAX_DEPTH 24
+#define GS_SNAP_MAX_LIST 64     /* 单个 (tid,uid) 下最多认这么多份 */
+#define GS_SNAP_MAX_REFS 512    /* 全局预算淘汰时一次最多收集这么多份 */
+#define GS_SNAP_BOOT_DELAY 90   /* 守护线程起来后先等这么久，避开启动期 IO */
+#define GS_SNAP_TICK 30         /* 守护线程醒来周期（按每款各自的 interval 判定） */
+#define GS_SNAP_MAX_GAMES 64    /* 一次扫描最多处理这么多款（配置里开了快照的） */
+
+/* 源目录最近这么多秒内被写过 → 本轮跳过（正在写的存档拷出来是撕裂的）。
+ * 可被 -D 覆盖：宿主测试里夹具是**刚造出来**的，文件 mtime 就是「现在」，
+ * 不置 0 的话每一份快照都会被这条挡掉，测不到后面任何东西。 */
+#ifndef GS_SNAP_QUIET_SEC
+#define GS_SNAP_QUIET_SEC 20
+#endif
+
+/* 一把锁串起「守护线程」与「立即备份 / 还原 / 删除」四条路径：
+ * 同一时刻只允许一份快照在动，免得两个方向同时往同一个目录里写。 */
+static pthread_mutex_t g_snap_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static int gs_snap_ts_ok(const char *ts) {
+    if (!ts) return 0;
+    if (strlen(ts) != 15) return 0;
+    for (int i = 0; i < 15; i++) {
+        char c = ts[i];
+        if (i == 8) { if (c != '-') return 0; continue; }
+        if (c < '0' || c > '9') return 0;
+    }
+    return 1;
+}
+
+static void gs_snap_stamp(time_t t, char *out, size_t osz) {
+    struct tm tmv;
+    out[0] = 0;
+    if (t <= 0 || !localtime_r(&t, &tmv)) return;
+    strftime(out, osz, "%Y%m%d-%H%M%S", &tmv);
+}
+
+/* 路径拼装。tid / uid 进来之前都已过 gs_tid_ok / gs_uid_ok，ts 已过 gs_snap_ts_ok，
+ * 所以这三条拼出来的路径不可能带 '/' 或 ".." 跳出去。 */
+static int gs_snap_tid_dir(const char *tid, char *out, size_t osz) {
+    return (snprintf(out, osz, "%s/%s", GAME_SAVES_SNAP_DIR, tid) < (int)osz) ? 0 : -1;
+}
+static int gs_snap_uid_dir(const char *tid, const char *uid, char *out, size_t osz) {
+    return (snprintf(out, osz, "%s/%s/%s", GAME_SAVES_SNAP_DIR, tid, uid) < (int)osz) ? 0 : -1;
+}
+static int gs_snap_path(const char *tid, const char *uid, const char *ts,
+                        char *out, size_t osz) {
+    return (snprintf(out, osz, "%s/%s/%s/%s", GAME_SAVES_SNAP_DIR, tid, uid, ts) < (int)osz)
+               ? 0
+               : -1;
+}
+
+/* 升序列出 (tid,uid) 下的快照时间戳。非时间戳格式的目录一律不看 ——
+ * 这一条同时把 .tmp_* / .old_* 这些我们自己的半成品挡在外面。 */
+static int gs_snap_list_one(const char *tid, const char *uid, char ts[][24], int max) {
+    char dir[900];
+    if (gs_snap_uid_dir(tid, uid, dir, sizeof(dir)) != 0) return 0;
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    int n = 0;
+    struct dirent *e;
+    char p[1024];
+    while ((e = readdir(d)) != NULL && n < max) {
+        if (!gs_snap_ts_ok(e->d_name)) continue;
+        if (snprintf(p, sizeof(p), "%s/%s", dir, e->d_name) >= (int)sizeof(p)) continue;
+        struct stat st;
+        if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        snprintf(ts[n++], 24, "%s", e->d_name);
+    }
+    closedir(d);
+    if (n > 1) qsort(ts, (size_t)n, 24, gs_uid_cmp);
+    return n;
+}
+
+/* ── 目录复制 ───────────────────────────────────────────────────────────── */
+typedef struct { long long files; long long bytes; int bad; } gs_cp_t;
+
+static int gs_copy_file(const char *src, const char *dst, gs_cp_t *c, const struct stat *st) {
+    int in = open(src, O_RDONLY);
+    if (in < 0) return -1;
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out < 0) { close(in); return -1; }
+
+    char buf[32 * 1024];
+    long long total = 0;
+    int rc = 0;
+    for (;;) {
+        ssize_t n = read(in, buf, sizeof(buf));
+        if (n < 0) { rc = -1; break; }
+        if (n == 0) break;
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = write(out, buf + off, (size_t)(n - off));
+            if (w <= 0) { rc = -1; break; }
+            off += w;
+        }
+        if (rc != 0) break;
+        total += (long long)n;
+    }
+    close(in);
+    close(out);
+    if (rc != 0) { unlink(dst); return -1; }
+
+    /* 保留 mtime：去重比的就是「(文件数, 字节数, 最大 mtime)」这个三元组，
+     * 快照里那份的 mtime 必须和源一致，否则每一轮都会被判成「变了」而重复拷。
+     * 顺带让还原回主机后的时间线和原来一样。 */
+    struct timeval tv[2];
+    tv[0].tv_sec = st->st_mtime;
+    tv[0].tv_usec = 0;
+    tv[1] = tv[0];
+    utimes(dst, tv);
+
+    c->files++;
+    c->bytes += total;
+    return 0;
+}
+
+/* 递归复制。**只按 lstat 走**，符号链接 / 设备 / 套接字一律跳过：存档里不该有，
+ * 跟着它走还可能绕出目录树。返回 0 成功，-1 失败（c->bad 已置位）。 */
+static int gs_copy_tree(const char *src, const char *dst, gs_cp_t *c, int depth) {
+    if (c->bad) return -1;
+    if (depth > GS_SNAP_MAX_DEPTH) { c->bad = 1; return -1; }
+    DIR *d = opendir(src);
+    if (!d) { c->bad = 1; return -1; }
+
+    struct dirent *e;
+    char sp[1024], dp[1024];
+    int rc = 0;
+    while ((e = readdir(d)) != NULL && !c->bad) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (snprintf(sp, sizeof(sp), "%s/%s", src, e->d_name) >= (int)sizeof(sp) ||
+            snprintf(dp, sizeof(dp), "%s/%s", dst, e->d_name) >= (int)sizeof(dp)) {
+            c->bad = 1;
+            rc = -1;
+            break;
+        }
+        struct stat st;
+        if (lstat(sp, &st) != 0) continue; /* 半路消失的条目跳过，不算失败 */
+        if (S_ISDIR(st.st_mode)) {
+            if (ensure_dir_recursive(dp) != 0) { c->bad = 1; rc = -1; break; }
+            if (gs_copy_tree(sp, dp, c, depth + 1) != 0) { rc = -1; break; }
+        } else if (S_ISREG(st.st_mode)) {
+            if (c->files >= (long long)GAME_SAVES_SNAP_MAX_ENTRIES ||
+                (unsigned long long)c->bytes + (unsigned long long)st.st_size >
+                    GAME_SAVES_SNAP_MAX_BYTES) {
+                c->bad = 1;
+                rc = -1;
+                break;
+            }
+            if (gs_copy_file(sp, dp, c, &st) != 0) { c->bad = 1; rc = -1; break; }
+        }
+    }
+    closedir(d);
+    return rc;
+}
+
+/* ── 整份替换（上传与快照还原共用）───────────────────────────────────────
+ * 把 src 目录换到 target。旧的先改名留一手，换失败还能退回来 ——
+ * 直接 rm -rf 再 rename 的话，中途任何一步失败都等于把用户原来的存档删了。
+ * 调用方保证 src 与 target 在**同一文件系统**（都是 rename）。
+ * 成功 0（src 已被搬走，无需清理）；失败 -1（target 保持原样，src 还在）。 */
+static int gs_swap_dir(const char *parent, const char *target, const char *src,
+                       char *err, size_t errsz) {
+    char old[800];
+    snprintf(old, sizeof(old), "%s/.old_%u_%u", parent, (unsigned)getpid(), (unsigned)time(NULL));
+    int had_old = 0;
+    struct stat ost;
+    if (lstat(target, &ost) == 0) {
+        gs_rmtree(old);
+        if (rename(target, old) == 0) had_old = 1;
+    }
+    if (rename(src, target) != 0) {
+        if (had_old) rename(old, target); /* 退回去 —— 用户原来那份还在 */
+        if (err && errsz) snprintf(err, errsz, "无法写入存档目录（%s）", strerror(errno));
+        return -1;
+    }
+    if (had_old) gs_rmtree(old);
+    return 0;
+}
+
+/* ── 裁剪与预算 ─────────────────────────────────────────────────────────── */
+/* 只留最近 keep 份，多的从最旧开始删。 */
+static void gs_snap_prune(const char *tid, const char *uid, int keep) {
+    keep = gs_snap_clamp_keep(keep);
+    char ts[GS_SNAP_MAX_LIST][24];
+    int n = gs_snap_list_one(tid, uid, ts, GS_SNAP_MAX_LIST);
+    if (n <= keep) return;
+    for (int i = 0; i < n - keep; i++) {
+        char p[1024];
+        if (gs_snap_path(tid, uid, ts[i], p, sizeof(p)) != 0) continue;
+        pldmgr_log("[PLDMGR] saves: %s/%s 快照超保留数，删最旧的 %s\n", tid, uid, ts[i]);
+        gs_rmtree(p);
+    }
+}
+
+typedef struct {
+    char tid[32];
+    char uid[64];
+    char ts[24];
+    long long bytes;
+    long long files;
+    time_t when;
+} gs_snap_ref_t;
+
+static int gs_snap_ref_asc(const void *a, const void *b) {
+    const gs_snap_ref_t *x = (const gs_snap_ref_t *)a, *y = (const gs_snap_ref_t *)b;
+    int c = strcmp(x->ts, y->ts);
+    if (c) return c;
+    c = strcmp(x->tid, y->tid);
+    return c ? c : strcmp(x->uid, y->uid);
+}
+static int gs_snap_ref_desc(const void *a, const void *b) { return -gs_snap_ref_asc(a, b); }
+
+/* 收集某个游戏下的全部快照（跨用户）。新的排前面 —— 列表第一眼该看到最近那份。 */
+static int gs_snap_collect_tid(const char *tid, gs_snap_ref_t *out, int max) {
+    char tp[900];
+    if (gs_snap_tid_dir(tid, tp, sizeof(tp)) != 0) return 0;
+    DIR *du = opendir(tp);
+    if (!du) return 0;
+    int n = 0;
+    struct dirent *eu;
+    char up[1024];
+    while ((eu = readdir(du)) != NULL && n < max) {
+        if (!gs_uid_ok(eu->d_name)) continue;
+        if (snprintf(up, sizeof(up), "%s/%s", tp, eu->d_name) >= (int)sizeof(up)) continue;
+        DIR *ds = opendir(up);
+        if (!ds) continue;
+        struct dirent *es;
+        char sp[1200];
+        while ((es = readdir(ds)) != NULL && n < max) {
+            if (!gs_snap_ts_ok(es->d_name)) continue;
+            if (snprintf(sp, sizeof(sp), "%s/%s", up, es->d_name) >= (int)sizeof(sp)) continue;
+            struct stat st;
+            if (stat(sp, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+            gs_stat_t a = {0, 0, 0, 0};
+            unsigned b = GS_MAX_WALK;
+            gs_walk(sp, &a, 0, &b);
+            snprintf(out[n].tid, sizeof(out[n].tid), "%s", tid);
+            snprintf(out[n].uid, sizeof(out[n].uid), "%s", eu->d_name);
+            snprintf(out[n].ts, sizeof(out[n].ts), "%s", es->d_name);
+            out[n].bytes = a.bytes;
+            out[n].files = a.files;
+            out[n].when = st.st_mtime;
+            n++;
+        }
+        closedir(ds);
+    }
+    closedir(du);
+    if (n > 1) qsort(out, (size_t)n, sizeof(out[0]), gs_snap_ref_desc);
+    return n;
+}
+
+/* 总预算兜底：超了就从**全局最旧**开始删，直到降回预算内。
+ * 只按每款游戏的 keep 裁剪是不够的 —— 15 款 × 5 份 × 18 MB 就是 1.3 GB。 */
+static void gs_snap_evict_total(void) {
+    gs_snap_ref_t *refs = (gs_snap_ref_t *)malloc(sizeof(gs_snap_ref_t) * GS_SNAP_MAX_REFS);
+    if (!refs) return;
+    int n = 0;
+    DIR *dt = opendir(GAME_SAVES_SNAP_DIR);
+    struct dirent *et;
+    char tp[900];
+    while (dt && (et = readdir(dt)) != NULL && n < GS_SNAP_MAX_REFS) {
+        if (!gs_tid_ok(et->d_name)) continue;
+        if (snprintf(tp, sizeof(tp), "%s/%s", GAME_SAVES_SNAP_DIR, et->d_name) >= (int)sizeof(tp))
+            continue;
+        n += gs_snap_collect_tid(et->d_name, refs + n, GS_SNAP_MAX_REFS - n);
+    }
+    if (dt) closedir(dt);
+    if (n <= 0) { free(refs); return; }
+
+    unsigned long long total = 0;
+    for (int i = 0; i < n; i++) total += (unsigned long long)(refs[i].bytes > 0 ? refs[i].bytes : 0);
+    if (total <= GAME_SAVES_SNAP_TOTAL_BYTES) { free(refs); return; }
+
+    qsort(refs, (size_t)n, sizeof(refs[0]), gs_snap_ref_asc);
+    for (int i = 0; i < n && total > GAME_SAVES_SNAP_TOTAL_BYTES; i++) {
+        char p[1200];
+        if (gs_snap_path(refs[i].tid, refs[i].uid, refs[i].ts, p, sizeof(p)) != 0) continue;
+        pldmgr_log("[PLDMGR] saves: 快照总预算超限，淘汰最旧的 %s/%s/%s\n",
+                   refs[i].tid, refs[i].uid, refs[i].ts);
+        gs_rmtree(p);
+        total -= (unsigned long long)(refs[i].bytes > 0 ? refs[i].bytes : 0);
+    }
+    free(refs);
+}
+
+/* ── 做一份快照 ─────────────────────────────────────────────────────────── */
+/* 返回 0 = 新生成一份（out_ts 已填）；1 = 跳过（内容没变 / 空 / 正在被写，note 回原因）；
+ * -1 = 失败（note 回人话）。调用方必须持有 g_snap_mu。 */
+static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
+                        char *out_ts, size_t osz, char *note, size_t notesz) {
+    if (out_ts && osz) out_ts[0] = 0;
+    struct stat st;
+    if (lstat(r->path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        if (note) snprintf(note, notesz, "存档目录不存在");
+        return -1;
+    }
+
+    gs_stat_t src = {0, 0, 0, 0};
+    unsigned budget = GS_MAX_WALK;
+    gs_walk(r->path, &src, 0, &budget);
+    if (src.files == 0) { if (note) snprintf(note, notesz, "存档里没有文件"); return 1; }
+    if (src.over) { if (note) snprintf(note, notesz, "存档条目太多，已跳过"); return -1; }
+
+    /* 正在被写就先不动：拷到一半的存档还原回去可能让主机认不出来。
+     * 宁可等下一轮 —— 快照的价值在于「有一份能用的」，不在于「有一份」。 */
+    time_t now = time(NULL);
+    if (src.max_mtime != 0 && now - src.max_mtime < GS_SNAP_QUIET_SEC) {
+        if (note) snprintf(note, notesz, "存档刚被写过，等下一轮");
+        return 1;
+    }
+
+    char udir[900];
+    if (gs_snap_uid_dir(tid, r->uid, udir, sizeof(udir)) != 0) return -1;
+
+    /* 内容没变就不新增：主机的存档绝大部分时间是同一份，按 30 分钟一拷的话
+     * 一天就是 48 份一模一样的东西，白占用户的 /data。 */
+    char ts[GS_SNAP_MAX_LIST][24];
+    int nt = gs_snap_list_one(tid, r->uid, ts, GS_SNAP_MAX_LIST);
+    if (nt > 0) {
+        char last[1200];
+        if (gs_snap_path(tid, r->uid, ts[nt - 1], last, sizeof(last)) == 0) {
+            gs_stat_t old = {0, 0, 0, 0};
+            unsigned b2 = GS_MAX_WALK;
+            gs_walk(last, &old, 0, &b2);
+            if (old.files == src.files && old.bytes == src.bytes &&
+                old.max_mtime == src.max_mtime) {
+                if (note) snprintf(note, notesz, "内容与最近一份相同，未新增");
+                return 1;
+            }
+        }
+    }
+
+    if (ensure_dir_recursive(udir) != 0) {
+        if (note) snprintf(note, notesz, "无法创建快照目录（%s）", strerror(errno));
+        return -1;
+    }
+
+    /* 时间戳目录名要唯一：同一秒内再来一次就往后挪一秒（跨过 DST 也不会重复，
+     * 因为我们是拿拼好的名字去 lstat 试，而不是算差值）。 */
+    char tss[24];
+    tss[0] = 0;
+    for (int i = 0; i < 120; i++) {
+        char cand[24];
+        gs_snap_stamp(now + i, cand, sizeof(cand));
+        if (!cand[0]) break;
+        char probe[1200];
+        if (gs_snap_path(tid, r->uid, cand, probe, sizeof(probe)) != 0) break;
+        struct stat ps;
+        if (lstat(probe, &ps) != 0) { snprintf(tss, sizeof(tss), "%s", cand); break; }
+    }
+    if (!tss[0]) { if (note) snprintf(note, notesz, "时间戳冲突，稍后再试"); return -1; }
+
+    /* 先复制到 .tmp_*，成功才改名 —— 半截的快照永远不以正式名字出现 */
+    char tmp[1000];
+    snprintf(tmp, sizeof(tmp), "%s/.tmp_%u_%u", udir, (unsigned)getpid(), (unsigned)now);
+    gs_rmtree(tmp);
+    if (ensure_dir_recursive(tmp) != 0) {
+        if (note) snprintf(note, notesz, "无法创建临时目录（%s）", strerror(errno));
+        return -1;
+    }
+
+    gs_cp_t c = {0, 0, 0};
+    if (gs_copy_tree(r->path, tmp, &c, 0) != 0) {
+        gs_rmtree(tmp);
+        if (note) snprintf(note, notesz, "%s", c.bad ? "复制失败（可能超过大小上限）" : "复制失败");
+        return -1;
+    }
+
+    char dst[1200];
+    if (gs_snap_path(tid, r->uid, tss, dst, sizeof(dst)) != 0) { gs_rmtree(tmp); return -1; }
+    if (rename(tmp, dst) != 0) {
+        gs_rmtree(tmp);
+        if (note) snprintf(note, notesz, "快照落盘失败（%s）", strerror(errno));
+        return -1;
+    }
+
+    gs_snap_prune(tid, r->uid, keep);
+    gs_snap_evict_total();
+    if (out_ts && osz) snprintf(out_ts, osz, "%s", tss);
+    if (note) snprintf(note, notesz, "已生成 %s", tss);
+    pldmgr_log("[PLDMGR] saves: %s/%s 本地快照 %s（%lld 文件 / %lld 字节）\n",
+               tid, r->uid, tss, c.files, c.bytes);
+    return 0;
+}
+
+/* ── 快照配置读取 ───────────────────────────────────────────────────────── */
+/* 读一款游戏的 snap 配置。缺键 / 越界一律回落默认，调用方不必判 NULL。 */
+static void gs_snap_cfg(const char *tid, int *enabled, int *interval, int *keep) {
+    int en = 0, iv = GAME_SAVES_SNAP_INTERVAL_DEF, kp = GAME_SAVES_SNAP_KEEP_DEF;
+    pthread_mutex_lock(&g_auto_mu);
+    cJSON *all = gs_auto_load();
+    cJSON *cur = all ? cJSON_GetObjectItem(all, tid) : NULL;
+    cJSON *s = cur ? cJSON_GetObjectItem(cur, "snap") : NULL;
+    if (s && cJSON_IsObject(s)) {
+        en = gs_field_bool(s, "enabled", 0);
+        iv = (int)gs_get_int(cJSON_GetObjectItem(s, "interval"),
+                             GAME_SAVES_SNAP_INTERVAL_DEF, 0, 1000000000);
+        kp = (int)gs_get_int(cJSON_GetObjectItem(s, "keep"),
+                             GAME_SAVES_SNAP_KEEP_DEF, 0, 1000000000);
+    }
+    cJSON_Delete(all);
+    pthread_mutex_unlock(&g_auto_mu);
+    if (enabled) *enabled = en;
+    if (interval) *interval = gs_snap_clamp_interval(iv);
+    if (keep) *keep = gs_snap_clamp_keep(kp);
+}
+
+/* 列出配置里开了本地快照的全部游戏。 */
+typedef struct { char tid[32]; int interval; int keep; } gs_snap_cfg_t;
+
+static int gs_snap_enabled_games(gs_snap_cfg_t *out, int max) {
+    int n = 0;
+    pthread_mutex_lock(&g_auto_mu);
+    cJSON *all = gs_auto_load();
+    for (cJSON *it = all ? all->child : NULL; it && n < max; it = it->next) {
+        if (!it->string || !gs_tid_ok(it->string) || !cJSON_IsObject(it)) continue;
+        cJSON *s = cJSON_GetObjectItem(it, "snap");
+        if (!s || !cJSON_IsObject(s)) continue;
+        if (!gs_field_bool(s, "enabled", 0)) continue;
+        snprintf(out[n].tid, sizeof(out[n].tid), "%s", it->string);
+        out[n].interval = gs_snap_clamp_interval((int)gs_get_int(
+            cJSON_GetObjectItem(s, "interval"), GAME_SAVES_SNAP_INTERVAL_DEF, 0, 1000000000));
+        out[n].keep = gs_snap_clamp_keep((int)gs_get_int(
+            cJSON_GetObjectItem(s, "keep"), GAME_SAVES_SNAP_KEEP_DEF, 0, 1000000000));
+        n++;
+    }
+    cJSON_Delete(all);
+    pthread_mutex_unlock(&g_auto_mu);
+    return n;
+}
+
+/* ── 守护线程 ───────────────────────────────────────────────────────────── */
+/* 「上一轮是什么时候」只记在内存里。重启后第一次会对所有开着的款各做一轮，
+ * 但去重会挡住「内容没变」的那些，所以不会产生重复快照。 */
+typedef struct { char tid[32]; time_t last; } gs_snap_mark_t;
+static gs_snap_mark_t g_snap_marks[GS_SNAP_MAX_GAMES];
+static int g_snap_mark_n = 0;
+
+/* 到期判断 + 记账。必须在 g_snap_mu 里调用（只有守护线程碰它，但保持一致）。 */
+static int gs_snap_due(const char *tid, int interval) {
+    time_t now = time(NULL);
+    for (int i = 0; i < g_snap_mark_n; i++) {
+        if (strcmp(g_snap_marks[i].tid, tid) != 0) continue;
+        if (now - g_snap_marks[i].last < interval) return 0;
+        g_snap_marks[i].last = now;
+        return 1;
+    }
+    if (g_snap_mark_n < GS_SNAP_MAX_GAMES) {
+        snprintf(g_snap_marks[g_snap_mark_n].tid, sizeof(g_snap_marks[0].tid), "%s", tid);
+        g_snap_marks[g_snap_mark_n].last = now;
+        g_snap_mark_n++;
+    }
+    return 1;
+}
+
+static void gs_snap_sweep(void) {
+    gs_snap_cfg_t games[GS_SNAP_MAX_GAMES];
+    int ng = gs_snap_enabled_games(games, GS_SNAP_MAX_GAMES);
+    if (ng <= 0) return;
+
+    pthread_mutex_lock(&g_snap_mu);
+    for (int i = 0; i < ng; i++) {
+        if (!gs_snap_due(games[i].tid, games[i].interval)) continue;
+        gs_root_t roots[GS_MAX_ROOTS];
+        int nr = gs_find_roots(games[i].tid, roots, GS_MAX_ROOTS);
+        for (int k = 0; k < nr; k++) {
+            char ts[24], note[160];
+            ts[0] = note[0] = 0;
+            gs_snap_take(games[i].tid, &roots[k], games[i].keep,
+                         ts, sizeof(ts), note, sizeof(note));
+        }
+    }
+    pthread_mutex_unlock(&g_snap_mu);
+}
+
+static void *gs_snap_main(void *arg) {
+    (void)arg;
+    sleep(GS_SNAP_BOOT_DELAY);
+    for (;;) {
+        if (!pldmgr_utils_safe_mode()) gs_snap_sweep();
+        sleep(GS_SNAP_TICK);
+    }
+    return NULL;
+}
+
+void game_saves_snap_start_daemon(void) {
+    /* safe_mode：与风扇、名字自愈两条守护同一原则 —— 死机后要能止血，
+     * 后台的自动动作一律不做。想留档就手动点「立即备份」。 */
+    if (pldmgr_utils_safe_mode()) {
+        pldmgr_log("[PLDMGR] saves: SAFE MODE，跳过本地快照守护\n");
+        return;
+    }
+    pthread_t th;
+    if (pthread_create(&th, NULL, gs_snap_main, NULL) == 0) {
+        pthread_detach(th);
+        pldmgr_log("[PLDMGR] saves: 本地快照守护已启动（首次运行延后 %ds）\n",
+                   GS_SNAP_BOOT_DELAY);
+    } else {
+        pldmgr_log("[PLDMGR] saves: 本地快照守护线程创建失败\n");
+    }
+}
+
+/* ── 立即备份 / 还原 / 删除 ─────────────────────────────────────────────── */
+int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
+    if (msg && msgsz) msg[0] = 0;
+    if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
+
+    int keep = GAME_SAVES_SNAP_KEEP_DEF;
+    gs_snap_cfg(tid, NULL, NULL, &keep);
+
+    gs_root_t roots[GS_MAX_ROOTS];
+    int nr = gs_find_roots(tid, roots, GS_MAX_ROOTS);
+    if (nr <= 0) {
+        if (msg) snprintf(msg, msgsz, "主机上还没有这个游戏的存档");
+        return -1;
+    }
+
+    int made = 0, skipped = 0, failed = 0;
+    char first[200];
+    first[0] = 0;
+    pthread_mutex_lock(&g_snap_mu);
+    for (int i = 0; i < nr; i++) {
+        char ts[24], note[200];
+        ts[0] = note[0] = 0;
+        int rc = gs_snap_take(tid, &roots[i], keep, ts, sizeof(ts), note, sizeof(note));
+        if (rc == 0) made++;
+        else if (rc == 1) skipped++;
+        else failed++;
+        if (rc != 0 && !first[0]) snprintf(first, sizeof(first), "%s", note);
+    }
+    pthread_mutex_unlock(&g_snap_mu);
+
+    if (made > 0) {
+        if (msg) snprintf(msg, msgsz, "已生成 %d 份快照", made);
+        return made;
+    }
+    if (failed > 0) {
+        if (msg) snprintf(msg, msgsz, "%s", first[0] ? first : "快照失败");
+        return -1;
+    }
+    if (msg) snprintf(msg, msgsz, "%s", first[0] ? first : "内容没变，未新增");
+    return skipped > 0 ? 0 : -1;
+}
+
+/* 删掉一份快照。0 成功，-1 失败（msg 回人话）。 */
+static int gs_snap_delete(const char *tid, const char *uid, const char *ts,
+                          char *msg, size_t msgsz) {
+    char p[1200];
+    if (gs_snap_path(tid, uid, ts, p, sizeof(p)) != 0) {
+        if (msg) snprintf(msg, msgsz, "路径异常");
+        return -1;
+    }
+    struct stat st;
+    if (lstat(p, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        if (msg) snprintf(msg, msgsz, "找不到这份快照");
+        return -1;
+    }
+    pthread_mutex_lock(&g_snap_mu);
+    gs_rmtree(p);
+    /* 用户目录空了就顺手收掉，免得 <tid>/<uid>/ 一层层留着空壳 */
+    char udir[900];
+    if (gs_snap_uid_dir(tid, uid, udir, sizeof(udir)) == 0) rmdir(udir);
+    pthread_mutex_unlock(&g_snap_mu);
+    pldmgr_log("[PLDMGR] saves: 快照已删除 %s/%s/%s\n", tid, uid, ts);
+    return 0;
+}
+
+/* 把一份快照整份还原回主机。走的是与上传**同一条**「整份替换可回退」逻辑。 */
+static int gs_snap_restore(const char *tid, const char *uid, const char *ts,
+                           char *msg, size_t msgsz) {
+    char src[1200];
+    if (gs_snap_path(tid, uid, ts, src, sizeof(src)) != 0) {
+        if (msg) snprintf(msg, msgsz, "路径异常");
+        return -1;
+    }
+    struct stat st;
+    if (lstat(src, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        if (msg) snprintf(msg, msgsz, "找不到这份快照");
+        return -1;
+    }
+
+    gs_root_t r;
+    char rerr[256];
+    rerr[0] = 0;
+    if (gs_root_or_create(tid, uid, &r, rerr, sizeof(rerr)) != 0) {
+        if (msg) snprintf(msg, msgsz, "%s", rerr[0] ? rerr : "找不到主机上的存档目录");
+        return -1;
+    }
+
+    char parent[640];
+    snprintf(parent, sizeof(parent), "%s", r.path);
+    char *sl = strrchr(parent, '/');
+    if (!sl) { if (msg) snprintf(msg, msgsz, "路径异常"); return -1; }
+    *sl = 0;
+
+    char tmp[800];
+    snprintf(tmp, sizeof(tmp), "%s/.rst_%u_%u", parent, (unsigned)getpid(), (unsigned)time(NULL));
+
+    char err[256];
+    err[0] = 0;
+    int rc = -1;
+    pthread_mutex_lock(&g_snap_mu);
+    gs_rmtree(tmp);
+    if (ensure_dir_recursive(tmp) != 0) {
+        snprintf(err, sizeof(err), "无法创建临时目录（%s）", strerror(errno));
+    } else {
+        gs_cp_t c = {0, 0, 0};
+        if (gs_copy_tree(src, tmp, &c, 0) != 0) {
+            snprintf(err, sizeof(err), "复制快照失败");
+        } else if (gs_swap_dir(parent, r.path, tmp, err, sizeof(err)) == 0) {
+            rc = 0; /* tmp 已被 rename 走，不用清 */
+        }
+    }
+    if (rc != 0) gs_rmtree(tmp);
+    pthread_mutex_unlock(&g_snap_mu);
+
+    if (rc != 0) {
+        if (msg) snprintf(msg, msgsz, "%s", err[0] ? err : "还原失败");
+        return -1;
+    }
+    pldmgr_log("[PLDMGR] saves: %s/%s 已从快照 %s 还原\n", tid, uid, ts);
+    return 0;
+}
+
+int game_saves_snap_action(const char *body, size_t len,
+                           char *buf, size_t size, char *msg, size_t msgsz) {
+    if (msg && msgsz) msg[0] = 0;
+    if (!buf || size < 64) return -1;
+
+    cJSON *b = (body && len) ? cJSON_ParseWithLength(body, len) : NULL;
+    if (!b || !cJSON_IsObject(b)) {
+        cJSON_Delete(b);
+        if (msg) snprintf(msg, msgsz, "JSON 解析失败");
+        return -1;
+    }
+    char tid[32] = "", action[16] = "", uid[64] = "", ts[24] = "";
+    cJSON *f;
+    if ((f = cJSON_GetObjectItem(b, "tid")) && cJSON_IsString(f) && f->valuestring)
+        snprintf(tid, sizeof(tid), "%s", f->valuestring);
+    if ((f = cJSON_GetObjectItem(b, "action")) && cJSON_IsString(f) && f->valuestring)
+        snprintf(action, sizeof(action), "%s", f->valuestring);
+    if ((f = cJSON_GetObjectItem(b, "uid")) && cJSON_IsString(f) && f->valuestring)
+        snprintf(uid, sizeof(uid), "%s", f->valuestring);
+    if ((f = cJSON_GetObjectItem(b, "ts")) && cJSON_IsString(f) && f->valuestring)
+        snprintf(ts, sizeof(ts), "%s", f->valuestring);
+    cJSON_Delete(b);
+
+    if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
+
+    if (!strcmp(action, "run")) {
+        int made = game_saves_snap_run_now(tid, msg, msgsz);
+        if (made < 0) return -1;
+        int w = snprintf(buf, size, "{\"ok\":true,\"made\":%d}", made);
+        return (w > 0 && (size_t)w < size) ? 0 : -1;
+    }
+    /* 还原与删除都要定位到「具体哪一份」，uid 与 ts 都必须合法 ——
+     * 这两个值是路径的最后两段，校验不过就绝不去拼路径。 */
+    if (!gs_uid_ok(uid) || !gs_snap_ts_ok(ts)) {
+        if (msg) snprintf(msg, msgsz, "参数不合法");
+        return -1;
+    }
+    int rc = strcmp(action, "delete") == 0 ? gs_snap_delete(tid, uid, ts, msg, msgsz)
+             : strcmp(action, "restore") == 0 ? gs_snap_restore(tid, uid, ts, msg, msgsz)
+                                              : -2;
+    if (rc == -2) { if (msg) snprintf(msg, msgsz, "未知的 action"); return -1; }
+    if (rc != 0) return -1;
+    int w = snprintf(buf, size, "{\"ok\":true}");
+    return (w > 0 && (size_t)w < size) ? 0 : -1;
 }
 
 int game_saves_list_json(const char *tid, char *buf, size_t size) {
@@ -494,7 +1227,7 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
     if (gs_app(saves, scap, &spos, "[") != 0) { free(saves); return -1; }
 
     for (int i = 0; i < nr; i++) {
-        gs_stat_t acc = {0, 0, 0};
+        gs_stat_t acc = {0, 0, 0, 0};
         unsigned budget = GS_MAX_WALK;
         gs_walk(roots[i].path, &acc, 0, &budget);
 
@@ -518,9 +1251,37 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
     }
     gs_app(saves, scap, &spos, "]");
 
+    /* snapshots 同样走堆。**新的在前** —— 列表第一眼该看到最近那份。 */
+    const size_t kcap = 64u * 1024u;
+    char *snaps = (char *)malloc(kcap);
+    if (!snaps) { free(saves); return -1; }
+    size_t kpos = 0;
+    unsigned long long snap_used = 0;
+    int nk = 0;
+    if (gs_app(snaps, kcap, &kpos, "[") != 0) { free(snaps); free(saves); return -1; }
+
+    gs_snap_ref_t *refs = (gs_snap_ref_t *)malloc(sizeof(gs_snap_ref_t) * GS_SNAP_MAX_LIST * 4);
+    int nref = refs ? gs_snap_collect_tid(tid, refs, GS_SNAP_MAX_LIST * 4) : 0;
+    for (int i = 0; i < nref; i++) {
+        snap_used += (unsigned long long)(refs[i].bytes > 0 ? refs[i].bytes : 0);
+        char mt[40], eu[200];
+        gs_fmt_mtime(refs[i].when, mt, sizeof(mt));
+        pldmgr_json_escape(refs[i].uid, eu, sizeof(eu));
+        if (gs_app(snaps, kcap, &kpos,
+                   "%s{\"uid\":\"%s\",\"ts\":\"%s\",\"mtime\":\"%s\","
+                   "\"size\":%lld,\"files\":%lld}",
+                   nk ? "," : "", eu, refs[i].ts, mt, refs[i].bytes, refs[i].files) != 0)
+            break;
+        nk++;
+    }
+    free(refs);
+    gs_app(snaps, kcap, &kpos, "]");
+
     int w = snprintf(buf, size,
-                     "{\"tid\":\"%s\",\"local_path\":\"%s\",\"auto\":%s,\"saves\":%s}",
-                     etid, eroot, autoj, saves);
+                     "{\"tid\":\"%s\",\"local_path\":\"%s\",\"auto\":%s,\"saves\":%s,"
+                     "\"snap_used\":%llu,\"snapshots\":%s}",
+                     etid, eroot, autoj, saves, snap_used, snaps);
+    free(snaps);
     free(saves);
     if (w < 0 || (size_t)w >= size) return -1;
     return w;
@@ -575,6 +1336,25 @@ int game_saves_auto_set(const char *tid, const char *body, size_t len,
         if (pf && cJSON_IsString(pf)) gs_put_str(dst, "password", pf->valuestring);
         pf = cJSON_GetObjectItem(in, "token");
         if (pf && cJSON_IsString(pf)) gs_put_str(dst, "token", pf->valuestring);
+    }
+
+    /* v0.5.2.140 本地快照：与远程那三个子对象同一套合并规则 —— 没传的保持原值。
+     * enabled 只在**真的是布尔**时才覆盖（缺键 / null 一律不动）。 */
+    cJSON *sn = cJSON_GetObjectItem(b, "snap");
+    if (sn && cJSON_IsObject(sn)) {
+        cJSON *dst = cJSON_GetObjectItem(cur, "snap");
+        if (!dst || !cJSON_IsObject(dst)) {
+            dst = cJSON_CreateObject();
+            if (dst) cJSON_AddItemToObject(cur, "snap", dst);
+        }
+        if (dst) {
+            cJSON *e = cJSON_GetObjectItem(sn, "enabled");
+            if (e && cJSON_IsBool(e)) gs_put_bool(dst, "enabled", cJSON_IsTrue(e));
+            int iv = gs_get_int(cJSON_GetObjectItem(sn, "interval"), -1, 0, 1000000000);
+            if (iv >= 0) gs_put_num(dst, "interval", (double)gs_snap_clamp_interval(iv));
+            int kp = gs_get_int(cJSON_GetObjectItem(sn, "keep"), -1, 0, 1000000000);
+            if (kp >= 0) gs_put_num(dst, "keep", (double)gs_snap_clamp_keep(kp));
+        }
     }
 
     cJSON *f;
@@ -1084,24 +1864,12 @@ int game_saves_upload(const char *tid, const char *save,
     if (has_sub) snprintf(src, sizeof(src), "%s/%s", tmp, sub);
     else snprintf(src, sizeof(src), "%s", tmp);
 
-    /* 换上去之前先把旧的改名留一手，rename 失败还能退回来。
-     * 直接 rm -rf 再 rename 的话，中途任何一步失败都等于把用户原来的存档删了。 */
-    char old[800];
-    snprintf(old, sizeof(old), "%s/.old_%u_%u", parent, (unsigned)getpid(), (unsigned)time(NULL));
-    int had_old = 0;
-    struct stat ost;
-    if (lstat(r.path, &ost) == 0) {
-        gs_rmtree(old);
-        if (rename(r.path, old) == 0) had_old = 1;
-    }
-
-    if (rename(src, r.path) != 0) {
-        if (had_old) rename(old, r.path); /* 退回去 —— 用户原来那份还在 */
-        snprintf(err, sizeof(err), "无法写入存档目录（%s）", strerror(errno));
+    /* 整份替换（旧的先改名留一手，失败能退回来）—— 与快照还原共用 gs_swap_dir，
+     * 两条路各写一份的话，早晚有一边忘了「退回去」。 */
+    if (gs_swap_dir(parent, r.path, src, err, sizeof(err)) != 0) {
         rc = -1;
         goto done;
     }
-    if (had_old) gs_rmtree(old);
     /* src == tmp 时 tmp 已被整体搬走；只搬走子目录的话剩下的壳要清掉，
      * 否则 .upl_* 会一直躺在存档目录里（用户看不到也删不掉）。 */
     if (strcmp(src, tmp) != 0) gs_rmtree(tmp);
