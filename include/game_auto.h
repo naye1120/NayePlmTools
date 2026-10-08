@@ -152,7 +152,7 @@ void game_auto_set_freezer(ga_frz_fn frz, ga_thaw_fn thaw);
  * **导出是刻意的**：拉取前挂起游戏那条逻辑只在这条路上（`ga_do` 的 freeze 参数
  * 只有这里传 1），不导出就等于零覆盖 —— 而这正是本轮唯一动到「游戏运行链路」的
  * 改动，最需要宿主先跑一遍。宿主测试直接调它，配合 `game_auto_set_probe` /
- * `game_auto_set_suspender` 就能把「挂起 → 拉取 → 恢复」的**顺序**钉死。 */
+ * `game_auto_set_freezer` 就能把「冻住 → 拉取 → 放行」的**顺序**钉死。 */
 void game_auto_tick(void);
 
 #endif
