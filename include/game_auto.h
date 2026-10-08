@@ -147,6 +147,14 @@ void game_auto_set_freezer(ga_frz_fn frz, ga_thaw_fn thaw);
 #define GA_FREEZE_SIGSTOP 1 /* handle = pid */
 #define GA_FREEZE_LNC 2     /* handle = app_id */
 
+/* ── [CN-FORK] v0.5.2.153 冻结验证的**纯决策**（宿主上穷举 16 种组合）─────────
+ * 返回：1 = 确认冻住 · **0 = 无法验证（按已冻处理，绝不回落 LncUtil）** ·
+ *       -1 = 确认没冻住（放行 + 回落）。
+ * 参数见 `src/game_auto.c` 的定义处。**导出是刻意的**：`.152` 真机栽的那一跤
+ * 是**策略**错（验证读不到数据时错误地放弃了 SIGSTOP → 回落 → 游戏跳后台切不回来），
+ * 而真机那段代码在 `#ifdef GA_HOST` 里、宿主编不到 —— 不导出就等于这个坑零覆盖。 */
+int ga_freeze_verdict(int have_ctl, int ctl_adv, int post_ok, int post_adv);
+
 /* 跑一轮扫描。守护线程每秒调一次（`GA_TICK`）。
  *
  * **导出是刻意的**：拉取前挂起游戏那条逻辑只在这条路上（`ga_do` 的 freeze 参数

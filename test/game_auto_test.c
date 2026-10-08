@@ -19,6 +19,10 @@
  *      真机上挂起后 `GetAppIdOfRunningBigApp()` 返回 0xffffffff，再解析必然失败，
  *      于是 ResumeApp 发不出去、游戏一直冻着（`.150` 真机首轮的坑）。
  *      这一节靠 `game_auto_tick()`（`.150` 为此从 static 导出）+ 两个桩驱动。
+ *   ⑨ 冻结验证的**判定策略**（`.153`）—— `ga_freeze_verdict()` 的 16 种输入组合
+ *      全部穷举。`.152` 真机栽的是**策略**错（读不到进程状态时错误地放弃了
+ *      SIGSTOP → 回落 LncUtil → 游戏跳后台切不回来），而真机那段在 `#ifdef`
+ *      里、宿主编不到，所以判定抽成纯函数并导出，专供这一节。
  *
  * 探测（sceLncUtilGetAppIdOfRunningBigApp）在宿主上没有那个符号，
  * 用 -DGA_HOST 关掉默认实现，测试自己装探针（game_auto_set_probe）。
@@ -736,6 +740,45 @@ static void t_freeze(void) {
     game_auto_set_freezer(NULL, NULL);
 }
 
+/* ⑨ [CN-FORK] v0.5.2.153 冻结验证的**判定策略**（纯函数，16 种组合穷举）。
+ *
+ * 为什么单独立一节：`.152` 真机栽的那一跤不是机制错，是**策略**错 ——
+ * 「读不到进程状态」时它 return -1，于是整条 SIGSTOP 主方案作废、回落 LncUtil，
+ * 游戏跳回主屏还切不回来（用户口径：「远程拉取成功后，并没有将游戏拉到前台」）。
+ * 而真机那段代码在 `#ifdef GA_HOST` 里、宿主根本编不到，所以判定被抽成纯函数
+ * `ga_freeze_verdict()` —— 这里把它的 16 种输入组合全部穷举一遍。
+ *
+ * 判据只有两句话：
+ *   · **只有**「对照推进了、冻结后还在推进」才叫「没冻住」（返回 -1，才允许回落）；
+ *   · 其余「说不清」的一律算「无法验证」（返回 0），**照冻不误**。 */
+static void t_verdict(void) {
+    /* 索引 = have_ctl<<3 | ctl_adv<<2 | post_ok<<1 | post_adv。
+     * 只有最后两格是「说清了」的：1110 = 确认冻住、1111 = 确认没冻住。 */
+    static const int exp[16] = {
+        0, 0, 0, 0, /* 0-3   : have_ctl=0 —— 对照都读不到，一律「无法验证」 */
+        0, 0, 0, 0, /* 4-7   : have_ctl=1, ctl_adv=0 —— 进程本来就没烧 CPU，同样「无法验证」 */
+        0, 0, 0, 0, /* 8-11  : have_ctl=1, ctl_adv=1, post_ok=0 —— 冻结后读不到，还是「无法验证」 */
+        0, 0, 1, -1 /* 12-15 : 12/13 是 post_ok=0（同上）；1110 = 确认冻住 · 1111 = 确认没冻住 */
+    };
+    int bad_n = 0;
+    for (int i = 0; i < 16; i++) {
+        int got = ga_freeze_verdict((i >> 3) & 1, (i >> 2) & 1, (i >> 1) & 1, i & 1);
+        if (got != exp[i]) bad_n++;
+    }
+    CHECK(bad_n == 0, "16 种组合的冻结判定全对（错 %d 个）", bad_n);
+
+    /* 下面三条是**带名字的**策略断言 —— 判定表那条只说「错了几格」，
+     * 说不出错在哪一格；这三条把 `.152` 真机那个坑直接写进用例名里。 */
+    CHECK(ga_freeze_verdict(0, 0, 0, 0) == 0,
+          "读不到进程状态时必须按「已冻」处理，**不许**回落 LncUtil —— "
+          ".152 真机就栽在这一格（游戏被挂起、跳回主屏、切不回来）");
+    CHECK(ga_freeze_verdict(1, 0, 0, 0) == 0,
+          "对照样本没推进（进程本来就没烧 CPU）也算「无法验证」，同样不许回落");
+    CHECK(ga_freeze_verdict(1, 1, 1, 0) == 1, "对照推进、冻结后不推进 = 确认冻住");
+    CHECK(ga_freeze_verdict(1, 1, 1, 1) == -1,
+          "只有「冻结后 CPU 还在涨」才算没冻住（唯一允许回落的输入）");
+}
+
 int main(void) {
     snprintf(g_http_root, sizeof(g_http_root), "%s/http", ROOT);
     if (stub_http_start(g_http_root) != 0) {
@@ -748,6 +791,7 @@ int main(void) {
     t_sync();
     t_log();
     t_freeze();
+    t_verdict();
 
     stub_http_stop();
     printf("game_auto: %d checks, %d failures\n", g_checks, g_fails);

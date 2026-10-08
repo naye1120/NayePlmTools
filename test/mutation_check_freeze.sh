@@ -1,11 +1,12 @@
 #!/bin/bash
-# [CN-FORK] v0.5.2.152 变异对照（三个变异，都必须被抓住）。
+# [CN-FORK] v0.5.2.152 变异对照（四个变异，都必须被抓住）。
 #
-# 跑法：bash test/mutation_check_freeze.sh            （EXIT 0 = 三个都被抓住）
+# 跑法：bash test/mutation_check_freeze.sh            （EXIT 0 = 四个都被抓住）
 #       bash test/mutation_check_freeze.sh order      （只跑顺序那个）
 #       bash test/mutation_check_freeze.sh handle     （只跑「凭据没交出去」那个）
 #       bash test/mutation_check_freeze.sh kind       （只跑「机制代号没交出去」那个）
-# 不接进 run_host_tests.sh：它要重编三遍（与 mutation_check_media.sh 同一理由）。
+#       bash test/mutation_check_freeze.sh verdict    （只跑「验证不可用就回落」那个）
+# 不接进 run_host_tests.sh：它要重编四遍（与 mutation_check_media.sh 同一理由）。
 #
 # ── 变异 ①「order」：把 freeze 挪到 ga_do_inner **之后**（先拉后冻）──────────
 # 这个修复的全部价值就在**顺序**上（用户口径：暂停游戏 → 拉取存档）。而顺序恰恰是
@@ -26,6 +27,14 @@
 # `.152` 起有两套冻结机制（SIGSTOP / LncUtil），放行必须知道冻的时候用的是哪套：
 # 用 `ResumeApp` 去解一个被 SIGSTOP 停住的进程 = 它永远不会被放行。
 # 期望：恰好 1 条红（「放行该收到冻结时报的机制代号」）。
+#
+# ── 变异 ④「verdict」：验证不可用时错误地 return -1（= `.152` 真机那个 bug）──
+# `.152` 真机日志：「读不到 pid=582 的进程状态，进程级冻结跳过」→ 下一秒就
+# 「已暂停（LncUtil 挂起）」。也就是说**主方案在发 SIGSTOP 之前就放弃了**，
+# 回落 LncUtil，游戏跳回主屏还切不回来（用户口径：「远程拉取成功后，并没有将
+# 游戏拉到前台」）。判定策略被抽成纯函数 `ga_freeze_verdict()` 就是为了这一格，
+# 所以这个变异必须被抓住 —— 它等价于「把 `.152` 的 bug 原样放回去」。
+# 期望：恰好 3 条红（判定表那条 + 两条「不许回落」的策略断言）。
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -132,9 +141,27 @@ if [ "$WANT" = "both" ] || [ "$WANT" = "kind" ]; then
     rm -rf "$W"
 fi
 
+if [ "$WANT" = "both" ] || [ "$WANT" = "verdict" ]; then
+    W=$(mktemp -d)
+    # 「验证不可用」那一格返回 -1 = 放弃 SIGSTOP、回落 LncUtil。正是 `.152` 真机那个 bug。
+    python3 - "$W/game_auto.c" <<'PY'
+import sys, pathlib
+src = pathlib.Path('src/game_auto.c').read_text(encoding='utf-8')
+OLD = '    if (!have_ctl || !ctl_adv) return 0;'
+NEW = '    if (!have_ctl || !ctl_adv) return -1;'
+assert src.count(OLD) == 1, '变异锚点（verdict 第一行）没找到或不止一处'
+out = src.replace(OLD, NEW, 1)
+assert out != src and NEW in out, 'mutation failed'
+pathlib.Path(sys.argv[1]).write_text(out, encoding='utf-8')
+print('  变异已注入：验证不可用时 return -1（= 放弃 SIGSTOP、回落 LncUtil）')
+PY
+    run_case verdict "$W/game_auto.c" 3 3 '16 种组合\|不许.*回落' || bad=1
+    rm -rf "$W"
+fi
+
 echo
 if [ "$bad" -eq 0 ]; then
-    echo "MUTATION OK：变异都被抓住了 —— 顺序断言与凭据断言都不是虚的"
+    echo "MUTATION OK：变异都被抓住了 —— 顺序 / 凭据 / 机制代号 / 判定策略 四条断言都不是虚的"
     exit 0
 fi
 echo "MUTATION BAD：有变异没被抓住（守卫不可信）"

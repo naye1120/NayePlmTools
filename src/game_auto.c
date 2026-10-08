@@ -76,6 +76,26 @@ void game_auto_set_probe(ga_probe_fn fn) { g_probe = fn ? fn : ga_probe_default;
  *
  * `GA_FREEZE_*` 三个取值定义在 include/game_auto.h 里（宿主测试也要用）。 */
 
+/* ── 冻结验证的**纯决策**（宿主可穷举）──────────────────────────────────────
+ * 把「能不能算冻住了」从真机代码里摘出来，是因为 `.152` 真机栽的那一跤恰好是
+ * **策略**错、不是机制错：验证读不到数据时它选择了「放弃 SIGSTOP」→ 回落 LncUtil
+ * → 游戏跳回主屏、还切不回来（用户口径：「远程拉取成功后，并没有将游戏拉到前台」）。
+ * 而真机那整段代码在 `#ifdef GA_HOST` 里、宿主上根本编不到，所以决策必须是
+ * 独立、可穷举的纯函数 —— 否则同一个坑下次还会踩。
+ *
+ *   have_ctl  读到「冻结前」的对照样本了吗
+ *   ctl_adv   对照那 200ms 里 CPU 时间**有没有前进**（0 = 进程本来就没烧 CPU，
+ *             这时「冻住后不动」什么也说明不了）
+ *   post_ok   冻结后两次采样都读到了吗
+ *   post_adv  冻结后 CPU 时间**还在前进**吗
+ *
+ * 返回： 1 = 确认冻住 · 0 = 无法验证（**按已冻处理，绝不回落**）· -1 = 确认没冻住 */
+int ga_freeze_verdict(int have_ctl, int ctl_adv, int post_ok, int post_adv) {
+    if (!have_ctl || !ctl_adv) return 0; /* 对照不可用 → 验证不可用，但照冻 */
+    if (!post_ok) return 0;              /* 冻结后读不到 → 同上 */
+    return post_adv ? -1 : 1;
+}
+
 #ifndef GA_HOST
 extern int sceLncUtilSuspendApp(unsigned int app_id);
 extern int sceLncUtilResumeApp(unsigned int app_id);
@@ -106,22 +126,65 @@ static pid_t ga_find_eboot_pid(void) {
         p += ki->ki_structsize;
     }
 
+    /* 一次性把「编译期 struct 大小」与「内核报的 ki_structsize」记进日志。
+     * `.152` 真机就是「按 pid 单查读不到状态」而回落 LncUtil 的（怀疑 SDK 头与
+     * 固件内核的 kinfo_proc 版本对不上）—— 有这两个数，下次一眼就能判定是不是
+     * 版本错配、以及 ki_runtime 到底读在不在正确偏移上。 */
+    {
+        static int layout_logged = 0;
+        struct kinfo_proc *first = (struct kinfo_proc *)buf;
+        if (!layout_logged && sz >= sizeof(struct kinfo_proc) && first->ki_structsize > 0) {
+            layout_logged = 1;
+            pldmgr_log("[PLDMGR] saves: kinfo_proc 编译期 %u 字节 · 内核报 %d 字节 · 共 %u 条\n",
+                       (unsigned)sizeof(struct kinfo_proc), first->ki_structsize,
+                       (unsigned)(sz / (size_t)first->ki_structsize));
+        }
+    }
+
     free(buf);
     return best;
 }
 
 /* 读某个进程的「状态字 + 累计 CPU 时间（微秒）」。拿不到返回 -1。
- * 这两样是**冻结验证**的全部依据：冻住之后 CPU 时间必须不再前进。 */
+ * 这两样是**冻结验证**的全部依据：冻住之后 CPU 时间必须不再前进。
+ *
+ * ⚠ 实现走的是**整表枚举**，不是 `KERN_PROC_PID`。`.152` 真机实证：按 pid 单查
+ * 那一路在 PS5 上**直接失败**（整表能列出来、单查查不到），于是 `ga_sigstop_freeze`
+ * 在发 SIGSTOP **之前**就 return -1，整条主方案作废、回落 LncUtil，游戏又跳后台。
+ * 枚举这条路的可用性是**真机验过的**（`ga_find_eboot_pid` 就是靠它找到 pid 的），
+ * 所以验证也走它。代价是每次 O(进程数) + 一次 malloc，一轮冻结最多调 4 次，可以接受。 */
 static int ga_proc_stat(pid_t pid, int *state_out, unsigned long long *cpu_out) {
-    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
-    struct kinfo_proc ki;
-    size_t sz = sizeof(ki);
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
+    size_t sz = 0;
+    void *buf;
+    int found = -1;
 
-    memset(&ki, 0, sizeof(ki));
-    if (sysctl(mib, 4, &ki, &sz, NULL, 0) != 0) return -1;
-    if (state_out) *state_out = (int)ki.ki_stat;
-    if (cpu_out) *cpu_out = (unsigned long long)ki.ki_runtime;
-    return 0;
+    if (sysctl(mib, 4, NULL, &sz, NULL, 0) != 0 || sz == 0) {
+        pldmgr_log("[PLDMGR] saves: 进程表探测失败，errno=%d\n", errno);
+        return -1;
+    }
+    buf = malloc(sz);
+    if (!buf) return -1;
+    if (sysctl(mib, 4, buf, &sz, NULL, 0) != 0) {
+        pldmgr_log("[PLDMGR] saves: 读进程表失败，errno=%d\n", errno);
+        free(buf);
+        return -1;
+    }
+
+    for (char *p = (char *)buf; p < (char *)buf + sz;) {
+        struct kinfo_proc *ki = (struct kinfo_proc *)p;
+        if (ki->ki_structsize < (int)sizeof(struct kinfo_proc)) break;
+        if (ki->ki_pid == pid) {
+            if (state_out) *state_out = (int)ki->ki_stat;
+            if (cpu_out) *cpu_out = (unsigned long long)ki->ki_runtime;
+            found = 0;
+            break;
+        }
+        p += ki->ki_structsize;
+    }
+
+    free(buf);
+    return found;
 }
 #endif
 
@@ -145,7 +208,13 @@ static int ga_running_app_id(const char *tid) {
 
 /* ── 主方案：进程级冻结（SIGSTOP）─────────────────────────────────────────
  * 调用方（ga_freeze_for_pull）已经确认「正在跑的就是 tid 这一款」，所以这里
- * 找到的那个 eboot.bin 就是它，不必再比一次 tid。 */
+ * 找到的那个 eboot.bin 就是它，不必再比一次 tid。
+ *
+ * ⚠ **验证不可用 ≠ 放弃冻结**（`.152` 真机踩出来的）：
+ * 「冻住之后 CPU 时间不再前进」只是**加分项**，不是前提。读不到进程状态、
+ * 或进程本来就没在烧 CPU（对照样本不动）时，验证只是**不可用** ——
+ * 绝不能因此 return -1，那会回落 LncUtil，游戏又跳后台。
+ * 判据集中在 `ga_freeze_verdict()`（纯函数，宿主上 16 种组合穷举）。 */
 static int ga_sigstop_freeze(const char *tid, unsigned int *handle_out) {
 #ifdef GA_HOST
     (void)tid;
@@ -158,28 +227,36 @@ static int ga_sigstop_freeze(const char *tid, unsigned int *handle_out) {
         return -1;
     }
 
-    /* 先量一个**对照**：运行中的游戏在 200ms 里一定用掉 CPU。没有这个对照，
-     * 「冻住后 CPU 不动」会被「它本来就在 loading、也没在烧 CPU」蒙混过去 ——
-     * 验证就变成了自我安慰。 */
-    int st0 = 0, st1 = 0;
+    /* 先量一个**对照**：运行中的游戏在 200ms 里通常用掉 CPU。有这个对照，
+     * 「冻住后 CPU 不动」才说明得了问题 —— 否则会被「它本来就在 loading、
+     * 也没在烧 CPU」蒙混过去。但对照拿不到时只是**验证不可用**，照冻不误。 */
+    int st_pre = 0, st_post = 0;
     unsigned long long c0 = 0, c1 = 0, c2 = 0, c3 = 0;
-    if (ga_proc_stat(pid, &st0, &c0) != 0) {
-        pldmgr_log("[PLDMGR] saves: 读不到 pid=%d 的进程状态，进程级冻结跳过\n", (int)pid);
-        return -1;
+    int have_ctl = (ga_proc_stat(pid, &st_pre, &c0) == 0);
+    int ctl_adv = 0;
+    if (have_ctl) {
+        usleep(200000);
+        if (ga_proc_stat(pid, &st_pre, &c1) == 0 && c1 > c0) ctl_adv = 1;
     }
-    usleep(200000);
-    ga_proc_stat(pid, &st1, &c1);
 
     if (kill(pid, SIGSTOP) != 0) {
         pldmgr_log("[PLDMGR] saves: kill(%d, SIGSTOP) 失败，errno=%d\n", (int)pid, errno);
         return -1;
     }
-    usleep(200000);
-    ga_proc_stat(pid, &st0, &c2);
-    usleep(200000);
-    ga_proc_stat(pid, &st1, &c3);
 
-    if (c3 != c2) {
+    int post_ok = 0, post_adv = 0;
+    if (have_ctl && ctl_adv) {
+        usleep(200000);
+        post_ok = (ga_proc_stat(pid, &st_post, &c2) == 0);
+        if (post_ok) {
+            usleep(200000);
+            post_ok = (ga_proc_stat(pid, &st_post, &c3) == 0);
+            if (post_ok) post_adv = (c3 != c2);
+        }
+    }
+
+    int v = ga_freeze_verdict(have_ctl, ctl_adv, post_ok, post_adv);
+    if (v < 0) {
         /* 冻不住就**立刻放行**，绝不把一个半死的进程留在那儿，然后让调用方
          * 走 LncUtil 回落 —— 那条路慢一点、会跳主屏，但至少是有效的。 */
         pldmgr_log("[PLDMGR] saves: SIGSTOP 后 pid=%d 的 CPU 仍在涨（+%llu us）→ 冻结无效，"
@@ -188,10 +265,17 @@ static int ga_sigstop_freeze(const char *tid, unsigned int *handle_out) {
         return -1;
     }
 
-    /* 这行是**证据行**：留档之后，「SIGSTOP 到底有没有把这个进程停住」不用再猜。
-     * stat 那两个数也一并记下来 —— PS5 的 SSTOP 具体是几，目前只有这一处能告诉我们。 */
-    pldmgr_log("[PLDMGR] saves: 冻结验证 pid=%d：CPU 200ms +%llu us → +0 us · stat %d→%d\n",
-               (int)pid, c1 - c0, st1, st0);
+    if (v == 1) {
+        /* 这行是**证据行**：留档之后，「SIGSTOP 到底有没有把这个进程停住」不用再猜。
+         * stat 那两个数也一并记下来 —— PS5 的 SSTOP 具体是几，目前只有这一处能告诉我们。 */
+        pldmgr_log("[PLDMGR] saves: 冻结验证 pid=%d：CPU 200ms +%llu us → +0 us · stat %d→%d\n",
+                   (int)pid, c1 - c0, st_pre, st_post);
+    } else {
+        /* 验证不可用（读不到进程状态 / 对照样本没推进）。**仍然算冻住** ——
+         * SIGSTOP 是内核级停止，`kill()` 返回 0 就说明信号已投递。 */
+        pldmgr_log("[PLDMGR] saves: 冻结验证不可用（pid=%d 的进程状态读不到，或 CPU 对照未推进）"
+                   "· 按 SIGSTOP 已投递处理\n", (int)pid);
+    }
     if (handle_out) *handle_out = (unsigned int)pid;
     return 0;
 #endif
