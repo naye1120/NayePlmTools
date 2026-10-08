@@ -1553,6 +1553,13 @@ app_id 必然失败，必须用**挂起时记下的那个**。
   不要指望「稍后还能再查一次」—— 状态一变，查询口径可能就查不到了，
   而失败的表现（游戏冻着）离原因（拿不到 app_id）隔了三层，光看现象根本猜不到。
 
+**`.151` 真机验收通过（`192.168.1.214`）**：日志里 `恢复 PPSA27836：挂起时
+app_id=24601，此刻 GetAppIdOfRunningBigApp=-1` 那一行是**根因的实证** ——
+挂起后系统确实不认这个大应用了；而用记下的 `app_id=24601` 恢复**成功**，
+用户接着又玩了 31 秒才正常退出（`.150` 时是「恢复失败」的下一秒就报「已退出」）。
+完整顺序：`已从快照还原 → 已挂起 → 远程拉取 开始 → upload ok → 远程拉取 结束 →
+恢复…此刻 GetAppIdOfRunningBigApp=-1 → 已恢复运行`。
+
 ### 2.2 React 前端（`frontend/src/`）
 - `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、ManageSources、CommonEntries、MoveFromUsb、Donate、PkgManagerFrame...）。
 - `i18n.js` 加载 locale（子模块）+ **合并 `locales-overlay/<lang>.json`（后者优先）**；完成度 <70% 的语言不注册。
