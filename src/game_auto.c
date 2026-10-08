@@ -47,6 +47,105 @@ static ga_probe_fn g_probe = ga_probe_default;
 
 void game_auto_set_probe(ga_probe_fn fn) { g_probe = fn ? fn : ga_probe_default; }
 
+/* ── 挂起 / 恢复（拉取期间冻住正在启动的那款游戏）─────────────────────────── */
+/* 设计（为什么需要、为什么只用在自动拉取）见 include/game_auto.h 的文件尾。
+ *
+ * 接口刻意收在 **tid** 而不是 app_id 上：app_id 每次启动都不一样、宿主上也没法造，
+ * 而 tid 是测试本来就有的东西。tid → app_id 的解析放在默认实现里（真机那一步）。 */
+#ifndef GA_NO_LNCUTIL
+extern int sceLncUtilSuspendApp(unsigned int app_id);
+extern int sceLncUtilResumeApp(unsigned int app_id);
+#endif
+
+/* 把 tid 解析成「正在跑的那个大应用」的 app_id；不是这款在跑就返回 -1。
+ * 返回 int（而不是 unsigned）是因为 0xffffffff 这个「没有应用在跑」的哨兵值
+ * 在 ps5_launcher.c 里就是按 int -1 比的。
+ *
+ * 整个函数包在 `#ifndef` 里：宿主构建（GA_NO_LNCUTIL）下两个默认实现都直接
+ * 返回 -1，留着它只会换来一条 -Wunused-function。 */
+#ifndef GA_NO_LNCUTIL
+static int ga_running_app_id(const char *tid) {
+    int app_id = sceLncUtilGetAppIdOfRunningBigApp();
+    if (app_id == -1) return -1; /* 0xffffffff：没有大应用在跑 */
+    char t[24];
+    t[0] = 0;
+    if (sceLncUtilGetAppTitleId((unsigned int)app_id, t) != 0) return -1;
+    if (!t[0] || strcmp(t, tid) != 0) return -1;
+    return app_id;
+}
+#endif
+
+static int ga_susp_default(const char *tid) {
+#ifdef GA_NO_LNCUTIL
+    (void)tid;
+    return -1;
+#else
+    int app_id = ga_running_app_id(tid);
+    if (app_id < 0) return -1;
+    if (sceLncUtilSuspendApp((unsigned int)app_id) != 0) return -1;
+    /* SuspendApp 是**请求**，返回时应用未必真的冻住了。与 ps5_launcher.c 的
+     * `ps5_kill_disc_player` 同一口径（那里也是 Suspend → sleep(2) → 下一步）。
+     * 这里没有轮询 IsAppSuspended：那个符号虽然也在 libSceSystemService.so 里，
+     * 但**没有头文件、签名是猜的**，为了省一两秒去赌一个原生调用不值得。 */
+    sleep(2);
+    return 0;
+#endif
+}
+
+static int ga_resm_default(const char *tid) {
+#ifdef GA_NO_LNCUTIL
+    (void)tid;
+    return -1;
+#else
+    int app_id = ga_running_app_id(tid);
+    /* 找不到 = 游戏在我们拉取期间被关了（或已经不是这款）—— 没什么可恢复的。
+     * 这不算错误，调用方会照常收尾。 */
+    if (app_id < 0) return -1;
+    return sceLncUtilResumeApp((unsigned int)app_id) == 0 ? 0 : -1;
+#endif
+}
+
+static ga_susp_fn g_susp = ga_susp_default;
+static ga_resm_fn g_resm = ga_resm_default;
+
+void game_auto_set_suspender(ga_susp_fn susp, ga_resm_fn resm) {
+    g_susp = susp ? susp : ga_susp_default;
+    g_resm = resm ? resm : ga_resm_default;
+}
+
+/* 拉取前把正在跑的**这款**游戏冻住。返回 1 = 冻住了（拉完必须恢复）、0 = 没冻。
+ *
+ * 只冻目标那款：跑的是别的游戏时冻它是纯粹的伤害（人家跟我们这份存档没关系）。
+ * 冻不住**不阻断拉取** —— 那只是退回到 `.149` 之前的老行为（有竞态、但比不拉强），
+ * 而且「配了自动存档却什么都不做」比「拉了一次可能不生效」更难排查。 */
+static int ga_freeze_for_pull(const char *tid) {
+    char run[32];
+    run[0] = 0;
+    /* 这里**再探一次**：ga_tick 探测到 ga_do 之间隔着读配置、可能还有别的一步，
+     * 游戏完全可能已经退出（尤其换游戏那一轮，先推后拉之间还睡了 GA_EXIT_SETTLE）。 */
+    if (!g_probe(run, sizeof(run)) || strcmp(run, tid) != 0) return 0;
+
+    if (g_susp(tid) != 0) {
+        pldmgr_log("[PLDMGR] saves: %s 正在启动 · 挂起失败，仍继续拉取"
+                   "（游戏可能已经读进旧存档，这次拉取未必生效）\n", tid);
+        pldmgr_notify("远程拉取：无法暂停 %s\n存档可能不生效", tid);
+        return 0;
+    }
+    pldmgr_log("[PLDMGR] saves: %s 已挂起 · 拉取完成后自动恢复\n", tid);
+    return 1;
+}
+
+/* 拉完放行。**恢复失败必须让人知道**：游戏会一直停在冻结状态，用户看到的是
+ * 「点了一下就死机了」，而真正的原因在面板日志里 —— 所以屏幕通知也要弹。 */
+static void ga_thaw_after_pull(const char *tid) {
+    if (g_resm(tid) == 0) {
+        pldmgr_log("[PLDMGR] saves: %s 已恢复运行\n", tid);
+        return;
+    }
+    pldmgr_log("[PLDMGR] saves: !!! %s 恢复失败 —— 请手动切回游戏（或退出重进）\n", tid);
+    pldmgr_notify("!!! 远程拉取：%s 恢复失败\n请手动切回游戏", tid);
+}
+
 /* ── 纯函数：状态机 ─────────────────────────────────────────────────────── */
 int game_auto_plan(const char *prev, const char *cur,
                    int prev_enabled, int prev_on_exit,
@@ -381,7 +480,7 @@ static void ga_target_desc(const sr_cfg_t *c, char *out, size_t osz) {
  * 用 CLOCK_MONOTONIC 计时（不受系统改时间影响，同 game_media.c）。手动点一下正常是
  * 几百毫秒到几秒；真卡在网络上（或卡在 g_sync_mu 上等另一次同步）时，「用时」自己说话。 */
 static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
-                  const char *src) {
+                  const char *src, int freeze_game) {
     const char *an = (act == GA_ACT_PUSH) ? "推送" : "拉取";
 
     /* 只读一次配置：既是 inner 的输入，也让「开始」这行带得上目标。
@@ -392,9 +491,21 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
     ga_target_desc(have ? &cfg.rc : NULL, tgt, sizeof(tgt));
 
     struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
 
     const char *scope = (only_uid && only_uid[0]) ? only_uid : "全部用户";
+
+    /* [CN-FORK] v0.5.2.150 **拉取前先冻住正在启动的这款游戏。**
+     *
+     * 顺序就是用户口径的那条（也是唯一的正确顺序）：
+     *   游戏启动 → 引擎监测到启动 → **暂停游戏** → 拉取存档 → 拉取成功 → **恢复游戏**
+     *
+     * 放在「开始」那两条**之前**：日志的时间线于是逐字对上那句话
+     * `已挂起 → 远程拉取 开始 → 远程拉取 结束 → 已恢复`，
+     * 而且「开始」这行说的确实是「存档真的要开始搬了」（不是「我打算搬，先冻两秒」）。
+     *
+     * `freeze_game` 只有守护线程的自动拉取传 1 —— 手动拉取时游戏早就把存档读进
+     * 内存了，冻它没有任何用（理由见 include/game_auto.h）。 */
+    int frozen = (freeze_game && act == GA_ACT_PULL) ? ga_freeze_for_pull(tid) : 0;
 
     /* 字段顺序是**按重要性倒着放**的：环形缓冲每行只有 MAX_LOG_LINE_LEN(256) 字节，
      * 目标里可能带着很长的 host/share/sub，超了就被截断。把「目标」放最后，
@@ -408,6 +519,10 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
     pldmgr_notify("远程%s 开始\n%s · 触发=%s · 范围=%s\n目标=%s",
                   an, tid, src ? src : "?", scope, tgt);
 
+    /* 计时**从冻住之后开始**：挂起固定要 sleep(2)（等应用真的冻住，与
+     * ps5_launcher.c 同一口径），把它算进「拉取用时」会让每次自动拉取都凭空
+     * 多两秒，看着像网络慢 —— 排查时最忌讳这种被污染的指标。 */
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     ga_do_inner(tid, act, only_uid, have ? &cfg : NULL, res);
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -432,6 +547,13 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
     pldmgr_notify("远程%s 结束\n%s · 成功 %d / 跳过 %d / 失败 %d\n%s · 用时 %.0f ms%s%s",
                   an, tid, res->ok, res->skipped, res->failed, qty, ms,
                   res->first_err[0] ? "\n" : "", res->first_err);
+
+    /* 拉完了才放行 —— 收尾在「结束」之后，这样用户看到的是
+     * 「拉取成功」然后才是「游戏回来了」（用户口径：拉取成功 → 恢复游戏）。
+     *
+     * 失败也照样走到这儿：`frozen` 只在**真的冻住了**的时候才为 1，
+     * 没冻过就绝不会去恢复（否则会平白把用户自己挂起的游戏叫醒）。 */
+    if (frozen) ga_thaw_after_pull(tid);
 }
 
 /* ── 手动推 / 拉（POST /game_save_sync）─────────────────────────────────── */
@@ -472,7 +594,9 @@ int game_auto_sync_action(const char *body, size_t len,
     }
 
     ga_res_t res;
-    ga_do(tid, act, uid, &res, "手动");
+    /* 最后一参 0 = **不**挂起游戏：手动拉取时游戏早把存档读进内存了，
+     * 冻住它改变不了内存里那份，只会平白把用户正在看的画面冻一下。 */
+    ga_do(tid, act, uid, &res, "手动", 0);
     pthread_mutex_lock(&g_ga_mu);
     ga_mark(tid, act, res.ok > 0 || (res.failed == 0), res.first_err);
     pthread_mutex_unlock(&g_ga_mu);
@@ -504,11 +628,14 @@ int game_auto_sync_action(const char *body, size_t len,
 
 /* ── 守护线程 ───────────────────────────────────────────────────────────── */
 #define GA_BOOT_DELAY 20 /* 避开启动期 IO（与本地快照守护同一理由） */
-#define GA_TICK 2        /* 扫描周期：游戏起没起，2 秒一轮（用户口径 —— 启动后要尽快拉取） */
+#define GA_TICK 1        /* 扫描周期（`.150` 由 2 改 1）。用户口径：「把监听时间间隔调整为
+                          * 1 秒」—— 启动时拉取是一场与游戏启动的竞速，探测越早越可能赢。
+                          * 一轮的成本只有一次 `sceLncUtilGetAppIdOfRunningBigApp()`
+                          * （游戏没换的时候读配置那一步都走不到），可以忽略。 */
 #define GA_EXIT_SETTLE 5 /* 退出后再等这么久才推，给主机收尾写盘的时间 */
 #define GA_THREAD_STACK (1u << 20)
 
-static void ga_tick(void) {
+void game_auto_tick(void) {
     char cur[32];
     cur[0] = 0;
     g_probe(cur, sizeof(cur));
@@ -563,8 +690,11 @@ static void ga_tick(void) {
          * 那时候存档目录还没被写过，没有「拷到半截」的问题。 */
         if (steps[i].act == GA_ACT_PUSH) sleep(GA_EXIT_SETTLE);
         ga_res_t res;
+        /* 最后一参 1 = 拉取前挂起游戏（`.150`）。
+         * 顺序：监测到启动 → 挂起 → 拉取 → 恢复。只有这条路上传 1 —— 见
+         * ga_do 里那段注释与 include/game_auto.h 的设计说明。 */
         ga_do(steps[i].tid, steps[i].act, NULL, &res,
-              steps[i].act == GA_ACT_PUSH ? "自动（退出游戏时）" : "自动（启动游戏时）");
+              steps[i].act == GA_ACT_PUSH ? "自动（退出游戏时）" : "自动（启动游戏时）", 1);
         pthread_mutex_lock(&g_ga_mu);
         ga_mark(steps[i].tid, steps[i].act, res.ok > 0 || (res.failed == 0), res.first_err);
         pthread_mutex_unlock(&g_ga_mu);
@@ -575,7 +705,7 @@ static void *ga_main(void *arg) {
     (void)arg;
     sleep(GA_BOOT_DELAY);
     for (;;) {
-        if (!pldmgr_utils_safe_mode()) ga_tick();
+        if (!pldmgr_utils_safe_mode()) game_auto_tick();
         sleep(GA_TICK);
     }
     return NULL;

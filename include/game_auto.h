@@ -75,4 +75,38 @@ int game_auto_state_json(const char *tid, char *buf, size_t size);
 typedef int (*ga_probe_fn)(char *tid, size_t osz);
 void game_auto_set_probe(ga_probe_fn fn);
 
+/* ── [CN-FORK] v0.5.2.150 拉取期间挂起 / 恢复游戏 ─────────────────────────────
+ *
+ * ── 它补的是哪条竞态 ─────────────────────────────────────────────────────
+ * 拉取 = 把盘上存档**整份换掉**。而游戏启动时会把它的存档读进内存 —— 如果那一下
+ * 发生在我们的拉取**之前**，换盘上的文件对它毫无影响：它照样用内存里那份，
+ * 之后（存档 / 退出）还会把旧的写回去，顺手把刚拉下来的覆盖掉。
+ *
+ * 所以「游戏启动时拉取」本来是一场**竞态**：赢不赢取决于我们的拉取有没有赶在
+ * 游戏读存档之前。用户口径「偶尔成功，偶尔失败」就是这个 —— 快启动的游戏输、
+ * 慢启动的游戏赢。`.149` 修的「必然失效」（目录 inode 被换掉）跟它不是一回事。
+ *
+ * 挂起把它变成**没有竞态**：先把游戏冻住（这段时间它读不到存档），我们慢慢拉，
+ * 拉完再放行。`sceLncUtilResumeApp` 与 `sceLncUtilSuspendApp` 是成对的，
+ * 两个符号都在真机 SDK 的 `libSceSystemService.so` 里（`ps5_launcher.c` 已在用
+ * Suspend 那一半；**没有** SDK 头文件，靠 extern 声明，与 `GetAppIdOfRunningBigApp` 同）。
+ *
+ * ── 为什么只用在「自动拉取」───────────────────────────────────────────────
+ * 那一刻游戏还在启动、**还没读到存档** —— 冻住它才有效果。
+ * 手动拉取时游戏早就把存档读进内存了，冻不冻都改变不了它内存里那份（白冻一场，
+ * 还会平白把用户正在看的画面冻住）；真要生效得让游戏重读存档，那是另一件事。
+ *
+ * 宿主测试用 `-DGA_NO_LNCUTIL` 关掉真实现，再装桩。产品代码不要调 setter。 */
+typedef int (*ga_susp_fn)(const char *tid); /* 0 = 已挂起 */
+typedef int (*ga_resm_fn)(const char *tid); /* 0 = 已恢复 */
+void game_auto_set_suspender(ga_susp_fn susp, ga_resm_fn resm);
+
+/* 跑一轮扫描。守护线程每秒调一次（`GA_TICK`）。
+ *
+ * **导出是刻意的**：拉取前挂起游戏那条逻辑只在这条路上（`ga_do` 的 freeze 参数
+ * 只有这里传 1），不导出就等于零覆盖 —— 而这正是本轮唯一动到「游戏运行链路」的
+ * 改动，最需要宿主先跑一遍。宿主测试直接调它，配合 `game_auto_set_probe` /
+ * `game_auto_set_suspender` 就能把「挂起 → 拉取 → 恢复」的**顺序**钉死。 */
+void game_auto_tick(void);
+
 #endif

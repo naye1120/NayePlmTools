@@ -10,6 +10,11 @@
  *   ⑥ 推 / 拉的「开始 / 结束」两条 debug 行（`.147`）—— 走 pldmgr_log 进面板「日志」页，
  *      所以是**用户看得见的产物**：成对、有序、带触发来源 / 目标 / 计数 / 用时，
  *      且**提前返回的失败路径也必须成对**
+ *   ⑦ 拉取前挂起游戏 / 拉完恢复（`.150`）—— 顺序必须是
+ *      「挂起 → 拉取 开始 → 拉取 结束 → 恢复」（用户口径：游戏启动 → 监测到启动 →
+ *      暂停游戏 → 拉取存档 → 拉取成功 → 恢复游戏）。挂不住时拉取照跑但不恢复；
+ *      游戏在 tick 与 ga_do 之间退出了则不挂不恢复；**手动拉取一律不挂起**。
+ *      这一节靠 `game_auto_tick()`（`.150` 为此从 static 导出）+ 两个桩驱动。
  *
  * 探测（sceLncUtilGetAppIdOfRunningBigApp）在宿主上没有那个符号，
  * 用 -DGA_NO_LNCUTIL 关掉默认实现，测试自己装探针（game_auto_set_probe）。
@@ -507,6 +512,160 @@ static void t_log(void) {
           log_count("远程推送 结束"));
 }
 
+/* ══ ⑧ 拉取前挂起游戏 / 拉完恢复（v0.5.2.150）═════════════════════════════
+ * 用户口径的顺序：**游戏启动 → 引擎监测到启动 → 暂停游戏 → 拉取存档 → 拉取成功 → 恢复游戏**。
+ *
+ * 这条链路在宿主上原来是**零覆盖**的：`ga_tick` 是 static，而挂起那一段只有它走得到。
+ * `.150` 把 tick 导出（`game_auto_tick`）就是为了让这里能把**顺序**钉死 ——
+ * 挂起必须发生在「远程拉取 开始」之前、恢复必须在「远程拉取 结束」之后。
+ * 顺序错了整个修复就没意义（先拉后冻 = 游戏照样读到旧存档），而它恰恰是最容易被
+ * 后来的重构改坏的地方（比如顺手把 freeze 挪到 ga_do_inner 后面）。
+ *
+ * 为什么挂起能治「偶尔成功、偶尔失败」：拉取是把盘上存档**整份换掉**，而游戏启动时
+ * 会把自己的存档读进内存。谁先谁后决定成败 —— 快启动的游戏输、慢启动的赢，这就是
+ * 用户看到的「偶尔」。冻住它之后游戏读不到存档，等我们拉完再放行，竞态就没有了。 */
+
+static int g_susp_n, g_resm_n;
+static char g_susp_tid[32], g_resm_tid[32];
+static int g_susp_rc, g_resm_rc;
+
+static int susp_stub(const char *tid) {
+    g_susp_n++;
+    snprintf(g_susp_tid, sizeof(g_susp_tid), "%s", tid ? tid : "");
+    return g_susp_rc;
+}
+static int resm_stub(const char *tid) {
+    g_resm_n++;
+    snprintf(g_resm_tid, sizeof(g_resm_tid), "%s", tid ? tid : "");
+    return g_resm_rc;
+}
+
+/* 只在最前面几次探测里报「TID 在跑」，之后报「没在跑」——
+ * 用来造「tick 探到了、等真去挂起时游戏已经退出」这个窗口。 */
+static int g_probe_budget;
+static int probe_budget_fn(char *out, size_t osz) {
+    if (g_probe_budget > 0) {
+        g_probe_budget--;
+        snprintf(out, osz, "%s", TID);
+        return 1;
+    }
+    if (out && osz) out[0] = 0;
+    return 0;
+}
+
+static void t_freeze(void) {
+    printf("-- 拉取前挂起游戏 / 拉完恢复\n");
+    char url[600], body[300], out[2048], msg[300], rp[700];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/ps5save", g_http_port);
+
+    fixture_reset();
+    /* on_exit=0：这个用例只关心「启动拉取」那条路。退出推送会把
+     * GA_EXIT_SETTLE(5s) 的 sleep 拖进来，还会往日志里塞无关的行。 */
+    write_cfg("http", url, 1, 1, 0);
+    remote_path(rp, sizeof(rp), TID);
+
+    /* 前置：先推一份上去，拉取才有东西可拉 */
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"push\"}", TID);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+          "前置推送失败：%s", msg);
+    CHECK(exists(rp), "前置：远端没收到文件：%s", rp);
+
+    game_auto_set_probe(probe_fn);
+    game_auto_set_suspender(susp_stub, resm_stub);
+
+    /* ── ① 正常路径：挂起 → 拉取 → 恢复，顺序必须对 ─────────────────────── */
+    g_fake_running = NULL;
+    game_auto_tick(); /* 让 prev 归零（上一轮没有游戏在跑） */
+    rm_rf(SAVE_DIR);  /* 主机上这份存档「丢了」→ 拉回来才有可验证的变化 */
+    CHECK(!exists(SAVE_FILE), "前置：本地没删干净");
+
+    g_log_n = 0;
+    g_notify_n = 0;
+    g_susp_n = g_resm_n = 0;
+    g_susp_rc = g_resm_rc = 0;
+    g_susp_tid[0] = g_resm_tid[0] = 0;
+
+    g_fake_running = TID;
+    game_auto_tick(); /* 这一轮：启动 → 挂起 → 拉取 → 恢复 */
+
+    CHECK(g_susp_n == 1, "该挂起一次（实得 %d）", g_susp_n);
+    CHECK(g_resm_n == 1, "该恢复一次（实得 %d）", g_resm_n);
+    CHECK(!strcmp(g_susp_tid, TID), "挂起该作用在 %s 上（实得「%s」）", TID, g_susp_tid);
+    CHECK(!strcmp(g_resm_tid, TID), "恢复该作用在 %s 上（实得「%s」）", TID, g_resm_tid);
+    CHECK(exists(SAVE_FILE), "拉取没把存档拉回来");
+
+    int fs = log_at("已挂起"), ps = log_at("远程拉取 开始");
+    int pe = log_at("远程拉取 结束"), rs = log_at("已恢复");
+    CHECK(fs >= 0, "日志里没有「已挂起」这一行");
+    CHECK(rs >= 0, "日志里没有「已恢复」这一行");
+    /* ★ 这四条是这个用例存在的全部理由：顺序必须逐字对上用户口径那句话 ——
+     *   「游戏启动 → 监测到启动 → 暂停游戏 → 拉取存档 → 拉取成功 → 恢复游戏」。
+     *   先拉后冻 = 游戏照样读到旧存档，整个修复就没了意义；而它恰恰是最容易被
+     *   后来的重构改坏的地方（比如顺手把 freeze 挪到 ga_do_inner 后面）。 */
+    CHECK(fs == 0, "「已挂起」该是拉取这条链上的**第一行**（实得 @%d）", fs);
+    CHECK(fs >= 0 && ps >= 0 && fs < ps,
+          "挂起必须在「拉取 开始」之前（实得 挂起@%d / 开始@%d）", fs, ps);
+    CHECK(ps >= 0 && pe > ps, "「拉取 开始」必须在「拉取 结束」之前（实得 %d / %d）", ps, pe);
+    CHECK(pe >= 0 && rs >= 0 && pe < rs,
+          "恢复必须在「拉取 结束」之后（实得 结束@%d / 恢复@%d）", pe, rs);
+
+    /* ── ② 挂不住时：拉取照跑，但**不恢复**（没冻过就不能去放）───────────── */
+    g_fake_running = NULL;
+    game_auto_tick(); /* 归零 prev（on_exit=0，不会触发推送） */
+    rm_rf(SAVE_DIR);
+    g_log_n = 0;
+    g_notify_n = 0;
+    g_susp_n = g_resm_n = 0;
+    g_susp_rc = -1;
+    g_resm_rc = 0;
+    g_fake_running = TID;
+    game_auto_tick();
+
+    CHECK(g_susp_n == 1, "该**尝试**挂起一次（实得 %d）", g_susp_n);
+    CHECK(g_resm_n == 0, "挂起失败时不该去恢复（实得 %d 次）", g_resm_n);
+    CHECK(exists(SAVE_FILE), "挂起失败也必须照样拉取 —— 不能因为冻不住就什么都不做");
+    CHECK(log_count("挂起失败") == 1, "挂起失败要留一行痕（实得 %d）",
+          log_count("挂起失败"));
+
+    /* ── ③ 探测到 ga_do 之间游戏退出了：不挂起、不恢复，拉取照跑 ─────────── */
+    g_fake_running = NULL;
+    game_auto_tick(); /* 归零 prev */
+    rm_rf(SAVE_DIR);
+    g_log_n = 0;
+    g_notify_n = 0;
+    g_susp_n = g_resm_n = 0;
+    g_susp_rc = g_resm_rc = 0;
+    g_probe_budget = 1; /* 只有 tick 那一次探到「在跑」，等真要挂起时已经没了 */
+    game_auto_set_probe(probe_budget_fn);
+    game_auto_tick();
+
+    CHECK(g_susp_n == 0, "游戏已经退出了，不该去挂起（实得 %d）", g_susp_n);
+    CHECK(g_resm_n == 0, "没挂起过就不该恢复（实得 %d）", g_resm_n);
+    CHECK(exists(SAVE_FILE), "游戏退出了也必须照样拉取");
+    CHECK(log_count("已挂起") == 0, "没挂成就不该打「已挂起」（实得 %d）",
+          log_count("已挂起"));
+
+    /* ── ④ 手动拉取**不**挂起（防「顺手给手动也加上」的回归）──────────────
+     * 手动拉取时游戏早把存档读进内存了，冻它改变不了内存里那份，只会平白把
+     * 用户正在看的画面冻一下。 */
+    game_auto_set_probe(probe_fn);
+    g_fake_running = TID;
+    g_susp_n = g_resm_n = 0;
+    g_log_n = 0;
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"pull\"}", TID);
+    out[0] = msg[0] = 0;
+    (void)game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg));
+    CHECK(g_susp_n == 0 && g_resm_n == 0,
+          "手动拉取不该挂起 / 恢复游戏（实得 %d / %d）", g_susp_n, g_resm_n);
+    CHECK(log_count("已挂起") == 0, "手动拉取不该打「已挂起」（实得 %d）",
+          log_count("已挂起"));
+
+    g_fake_running = NULL;
+    game_auto_set_probe(NULL);
+    game_auto_set_suspender(NULL, NULL);
+}
+
 int main(void) {
     snprintf(g_http_root, sizeof(g_http_root), "%s/http", ROOT);
     if (stub_http_start(g_http_root) != 0) {
@@ -518,6 +677,7 @@ int main(void) {
     t_plan();
     t_sync();
     t_log();
+    t_freeze();
 
     stub_http_stop();
     printf("game_auto: %d checks, %d failures\n", g_checks, g_fails);
