@@ -1162,7 +1162,7 @@ app_id 必然失败，必须用**挂起时记下的那个**；`.152` 修 `.151` 
 **改成进程级 `SIGSTOP`**：游戏压根不离开前台，「切回前台」问题不存在；
 `.153` 修 `.152` 真机首轮暴露的「**SIGSTOP 主方案压根没跑起来**」——
 `KERN_PROC_PID` 单查在真机上失败 → 主方案在发信号前就放弃 → 回落 LncUtil → 游戏又跳后台。
-出包版 `NayePlmTools_0.5.2.153-me.elf` / `-ga.elf`。
+出包版 `NayePlmTools_0.5.2.153-me.elf` / `-ga.elf`（`.153` 已真机验收通过）。
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
@@ -1670,7 +1670,7 @@ LncUtil，游戏照样跳后台。
   只有「对照推进了、冻结后**还在**推进」才返回 -1（唯一允许回落的输入）。
 - 一次性把「`kinfo_proc` 编译期大小 vs 内核报的 `ki_structsize`」记进日志 ——
   `.152` 的「单查读不到」怀疑是 SDK 头与固件内核的**结构体版本错配**，有这两个数
-  下次一眼可判（**这一行至今还没在真机上看到过，`.153` 首轮要留意**）。
+  下次一眼可判。
 - 新日志：`冻结验证不可用（pid=… 的进程状态读不到，或 CPU 对照未推进）· 按 SIGSTOP 已投递处理`。
 
 **为什么导出纯函数**：`.152` 栽的是**策略**错，而真机那段代码整段在 `#ifdef GA_HOST` 里
@@ -1691,7 +1691,28 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
 冻结验证不可用（pid=… 的进程状态读不到，或 CPU 对照未推进）· 按 SIGSTOP 已投递处理
 ```
 第一行是**结构体版本错配**的判据；第二行若出现，说明验证仍然拿不到数据，
-但**游戏应该留在前台了**（这正是本轮的目的）。**`.153` 尚未推真机。**
+但**游戏应该留在前台了**（这正是本轮的目的）。
+
+**`.153` 真机验收通过（`192.168.1.214`，用户连开三次游戏）**：三次**全部**走
+`进程级 SIGSTOP`，一次都没回落 LncUtil。
+```
+[23:34:31] saves: kinfo_proc 编译期 1088 字节 · 内核报 1096 字节 · 共 88 条
+[23:34:32] saves: 冻结验证 pid=596：CPU 200ms +60089 us → +0 us · stat 2→4
+[23:34:32] saves: PPSA27836 已暂停（进程级 SIGSTOP）· 拉取完成后自动恢复
+[23:34:36] saves: 远程拉取 结束 · 成功 1 / 跳过 0 / 失败 0 · 用时 3559 ms
+[23:34:36] saves: PPSA27836 已恢复运行（pid=596）
+[23:34:57] saves: PPSA27836 已退出        ← 恢复后又正常玩了 21 秒，没被冻死
+```
+- **`KERN_PROC_PID` 失败的真因就此钉死**：`kinfo_proc` **编译期 1088 字节、内核报 1096 字节**
+  —— SDK 头比固件内核**小 8 字节**。FreeBSD 的 `sysctl_out()` 要求 `oldlen >= ki_structsize`，
+  给 1088 < 1096 → 直接 `ENOMEM`。**整表枚举不受影响**（缓冲按内核报的总长 `malloc`）。
+  那 8 字节在**结构体末尾**：`ki_stat` / `ki_runtime` 的偏移都是对的（`stat 2→4` 与 CPU 值都合理）。
+- **验证是真的，不是空转**：对照样本 `+60089 us / 200ms`（真在烧 CPU），SIGSTOP 后 `→ +0 us`。
+  三次分别 60 ms / 187 ms / 179 ms。
+- **`stat 2→4` = `SRUN` → `SSTOP`** —— 内核自己承认进程被停住了，比 CPU 时间更硬的证据。
+- 拉取 15,728,640 字节 / 3.0–3.6 秒（`.152` 那次 1.8 秒，SMB 波动）；**冻结总时长 ≈4.4 秒**
+  （含 600 ms 采样）。**用户没抱怨卡顿**；若要再压，`ki_stat == SSTOP` 本身就是终局判据，
+  可以省掉 SIGCONT 之前那 400 ms 双采样（→ 约 3.8 秒）。
 
 ### 2.2 React 前端（`frontend/src/`）
 - `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、ManageSources、CommonEntries、MoveFromUsb、Donate、PkgManagerFrame...）。
