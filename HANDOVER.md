@@ -1711,8 +1711,10 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
   三次分别 60 ms / 187 ms / 179 ms。
 - **`stat 2→4` = `SRUN` → `SSTOP`** —— 内核自己承认进程被停住了，比 CPU 时间更硬的证据。
 - 拉取 15,728,640 字节 / 3.0–3.6 秒（`.152` 那次 1.8 秒，SMB 波动）；**冻结总时长 ≈4.4 秒**
-  （含 600 ms 采样）。**用户没抱怨卡顿**；若要再压，`ki_stat == SSTOP` 本身就是终局判据，
-  可以省掉 SIGCONT 之前那 400 ms 双采样（→ 约 3.8 秒）。
+  （含 600 ms 采样）。**用户肉眼确认「留在前台，跟想象的一幕一样」** —— 画面冻住三四秒然后继续，
+  不跳主屏。至此 `.150` 起的这条链（挂起 → 拉取 → 恢复 → 不跳前台）**闭环**。
+  用户没觉得卡，所以「省掉 400 ms 双采样」的优化**没做**，留作 backlog
+  （`ki_stat == SSTOP` 本身就是终局判据，真要做可从那里下手）。
 
 ### 2.2 React 前端（`frontend/src/`）
 - `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、ManageSources、CommonEntries、MoveFromUsb、Donate、PkgManagerFrame...）。
