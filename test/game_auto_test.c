@@ -13,7 +13,11 @@
  *   ⑦ 拉取前挂起游戏 / 拉完恢复（`.150`）—— 顺序必须是
  *      「挂起 → 拉取 开始 → 拉取 结束 → 恢复」（用户口径：游戏启动 → 监测到启动 →
  *      暂停游戏 → 拉取存档 → 拉取成功 → 恢复游戏）。挂不住时拉取照跑但不恢复；
- *      游戏在 tick 与 ga_do 之间退出了则不挂不恢复；**手动拉取一律不挂起**。
+ *      游戏在 tick 与 ga_do 之间退出了则不挂不恢复；**手动拉取一律不挂起**；
+ *      恢复失败要留日志 + 弹屏幕通知。
+ *      ★ 还有一条不变量：**恢复拿到的 app_id 必须是挂起时报的那个**，不许再解析 ——
+ *      真机上挂起后 `GetAppIdOfRunningBigApp()` 返回 0xffffffff，再解析必然失败，
+ *      于是 ResumeApp 发不出去、游戏一直冻着（`.150` 真机首轮的坑）。
  *      这一节靠 `game_auto_tick()`（`.150` 为此从 static 导出）+ 两个桩驱动。
  *
  * 探测（sceLncUtilGetAppIdOfRunningBigApp）在宿主上没有那个符号，
@@ -527,16 +531,28 @@ static void t_log(void) {
 
 static int g_susp_n, g_resm_n;
 static char g_susp_tid[32], g_resm_tid[32];
+static unsigned int g_susp_id, g_resm_id; /* ★ 恢复必须收到**挂起报的那个** app_id */
 static int g_susp_rc, g_resm_rc;
 
-static int susp_stub(const char *tid) {
+/* 挂起桩：成功时**必须**写出一个 app_id（真机上是 LncUtil 给的那个）。
+ * 这里给一个假但稳定的值，好让「恢复拿到的是不是同一个」变成可断言的。
+ *
+ * 这条不变量是 `.150` 真机首轮的直接教训：真机上恢复代码**又解析了一次** app_id，
+ * 而应用被挂起后 `sceLncUtilGetAppIdOfRunningBigApp()` 返回 0xffffffff
+ * （系统认为没有「在运行的大应用」）→ 解析必然失败 → `ResumeApp` 根本没发出去 →
+ * 游戏一直冻着。日志原形：「恢复失败」的下一秒就是「已退出」。 */
+#define FAKE_APP_ID 0x10007u
+
+static int susp_stub(const char *tid, unsigned int *app_id_out) {
     g_susp_n++;
     snprintf(g_susp_tid, sizeof(g_susp_tid), "%s", tid ? tid : "");
+    if (g_susp_rc == 0 && app_id_out) *app_id_out = FAKE_APP_ID;
     return g_susp_rc;
 }
-static int resm_stub(const char *tid) {
+static int resm_stub(const char *tid, unsigned int app_id) {
     g_resm_n++;
     snprintf(g_resm_tid, sizeof(g_resm_tid), "%s", tid ? tid : "");
+    g_resm_id = app_id;
     return g_resm_rc;
 }
 
@@ -585,6 +601,7 @@ static void t_freeze(void) {
     g_susp_n = g_resm_n = 0;
     g_susp_rc = g_resm_rc = 0;
     g_susp_tid[0] = g_resm_tid[0] = 0;
+    g_susp_id = g_resm_id = 0;
 
     g_fake_running = TID;
     game_auto_tick(); /* 这一轮：启动 → 挂起 → 拉取 → 恢复 */
@@ -593,6 +610,11 @@ static void t_freeze(void) {
     CHECK(g_resm_n == 1, "该恢复一次（实得 %d）", g_resm_n);
     CHECK(!strcmp(g_susp_tid, TID), "挂起该作用在 %s 上（实得「%s」）", TID, g_susp_tid);
     CHECK(!strcmp(g_resm_tid, TID), "恢复该作用在 %s 上（实得「%s」）", TID, g_resm_tid);
+    /* ★ 恢复必须用**挂起时那个** app_id，不许再解析一次 ——
+     * 真机上挂起后 GetAppIdOfRunningBigApp 返回 0xffffffff，再解析必然拿不到，
+     * 于是 ResumeApp 发不出去、游戏一直冻着（`.150` 真机首轮的坑）。 */
+    CHECK(g_resm_id == FAKE_APP_ID,
+          "恢复必须用挂起时那个 app_id（实得 0x%x，期望 0x%x）", g_resm_id, FAKE_APP_ID);
     CHECK(exists(SAVE_FILE), "拉取没把存档拉回来");
 
     int fs = log_at("已挂起"), ps = log_at("远程拉取 开始");
@@ -661,6 +683,33 @@ static void t_freeze(void) {
     CHECK(log_count("已挂起") == 0, "手动拉取不该打「已挂起」（实得 %d）",
           log_count("已挂起"));
 
+    /* ── ⑤ 恢复失败：日志 + **屏幕通知** 都必须有 ──────────────────────────
+     * 游戏会一直冻着，用户看到的是「点了一下就死机了」。这条不报出来，用户只会
+     * 以为面板把游戏搞坏了 —— 而这恰恰是 `.150` 真机首轮真实发生的事。 */
+    g_fake_running = NULL;
+    game_auto_tick(); /* 归零 prev */
+    rm_rf(SAVE_DIR);
+    g_log_n = 0;
+    g_notify_n = 0;
+    g_susp_n = g_resm_n = 0;
+    g_susp_rc = 0;
+    g_resm_rc = -1;
+    g_resm_id = 0;
+    g_fake_running = TID;
+    game_auto_tick();
+
+    CHECK(g_susp_n == 1 && g_resm_n == 1, "该挂起一次、恢复一次（实得 %d / %d）",
+          g_susp_n, g_resm_n);
+    CHECK(log_count("恢复失败") == 1, "恢复失败要留一行日志（实得 %d）",
+          log_count("恢复失败"));
+    CHECK(notify_count("恢复失败") == 1, "恢复失败必须弹屏幕通知（实得 %d）",
+          notify_count("恢复失败"));
+    int rf = log_at("恢复失败");
+    CHECK(rf >= 0 && strstr(g_log[rf], TID) != NULL, "恢复失败的日志该带 tid：%s",
+          rf >= 0 ? g_log[rf] : "(没有这行)");
+    CHECK(exists(SAVE_FILE), "恢复失败不影响拉取本身（存档该拉回来还是拉回来）");
+
+    g_resm_rc = 0;
     g_fake_running = NULL;
     game_auto_set_probe(NULL);
     game_auto_set_suspender(NULL, NULL);

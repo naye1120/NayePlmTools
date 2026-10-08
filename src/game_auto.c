@@ -75,14 +75,23 @@ static int ga_running_app_id(const char *tid) {
 }
 #endif
 
-static int ga_susp_default(const char *tid) {
+static int ga_susp_default(const char *tid, unsigned int *app_id_out) {
 #ifdef GA_NO_LNCUTIL
     (void)tid;
+    (void)app_id_out;
     return -1;
 #else
     int app_id = ga_running_app_id(tid);
     if (app_id < 0) return -1;
-    if (sceLncUtilSuspendApp((unsigned int)app_id) != 0) return -1;
+    int rc = sceLncUtilSuspendApp((unsigned int)app_id);
+    if (rc != 0) {
+        pldmgr_log("[PLDMGR] saves: sceLncUtilSuspendApp(%d) 返回 0x%08x\n", app_id,
+                   (unsigned)rc);
+        return -1;
+    }
+    /* 把 app_id 交出去 —— **恢复只能用它**（挂起后 GetAppIdOfRunningBigApp
+     * 会返回 0xffffffff，见头文件）。 */
+    if (app_id_out) *app_id_out = (unsigned int)app_id;
     /* SuspendApp 是**请求**，返回时应用未必真的冻住了。与 ps5_launcher.c 的
      * `ps5_kill_disc_player` 同一口径（那里也是 Suspend → sleep(2) → 下一步）。
      * 这里没有轮询 IsAppSuspended：那个符号虽然也在 libSceSystemService.so 里，
@@ -92,16 +101,21 @@ static int ga_susp_default(const char *tid) {
 #endif
 }
 
-static int ga_resm_default(const char *tid) {
+static int ga_resm_default(const char *tid, unsigned int app_id) {
 #ifdef GA_NO_LNCUTIL
     (void)tid;
+    (void)app_id;
     return -1;
 #else
-    int app_id = ga_running_app_id(tid);
-    /* 找不到 = 游戏在我们拉取期间被关了（或已经不是这款）—— 没什么可恢复的。
-     * 这不算错误，调用方会照常收尾。 */
-    if (app_id < 0) return -1;
-    return sceLncUtilResumeApp((unsigned int)app_id) == 0 ? 0 : -1;
+    /* **不再解析 app_id**，直接用挂起时那个（头文件里有真机证据）。
+     * 顺带把「此刻 GetAppIdOfRunningBigApp 报什么」记进日志 —— 这一行是
+     * 「挂起后系统就不认这个大应用了」的直接证据，下次再出问题不用猜。 */
+    pldmgr_log("[PLDMGR] saves: 恢复 %s：挂起时 app_id=%u，此刻 GetAppIdOfRunningBigApp=%d\n",
+               tid, app_id, sceLncUtilGetAppIdOfRunningBigApp());
+    int rc = sceLncUtilResumeApp(app_id);
+    if (rc != 0)
+        pldmgr_log("[PLDMGR] saves: sceLncUtilResumeApp(%u) 返回 0x%08x\n", app_id, (unsigned)rc);
+    return rc == 0 ? 0 : -1;
 #endif
 }
 
@@ -113,36 +127,45 @@ void game_auto_set_suspender(ga_susp_fn susp, ga_resm_fn resm) {
     g_resm = resm ? resm : ga_resm_default;
 }
 
-/* 拉取前把正在跑的**这款**游戏冻住。返回 1 = 冻住了（拉完必须恢复）、0 = 没冻。
+/* 拉取前把正在跑的**这款**游戏冻住。返回 1 = 冻住了（*app_id_out 是那个应用，
+ * 拉完必须拿它去恢复）、0 = 没冻。
  *
  * 只冻目标那款：跑的是别的游戏时冻它是纯粹的伤害（人家跟我们这份存档没关系）。
  * 冻不住**不阻断拉取** —— 那只是退回到 `.149` 之前的老行为（有竞态、但比不拉强），
  * 而且「配了自动存档却什么都不做」比「拉了一次可能不生效」更难排查。 */
-static int ga_freeze_for_pull(const char *tid) {
+static int ga_freeze_for_pull(const char *tid, unsigned int *app_id_out) {
+    if (app_id_out) *app_id_out = 0;
+
     char run[32];
     run[0] = 0;
     /* 这里**再探一次**：ga_tick 探测到 ga_do 之间隔着读配置、可能还有别的一步，
      * 游戏完全可能已经退出（尤其换游戏那一轮，先推后拉之间还睡了 GA_EXIT_SETTLE）。 */
     if (!g_probe(run, sizeof(run)) || strcmp(run, tid) != 0) return 0;
 
-    if (g_susp(tid) != 0) {
+    unsigned int app_id = 0;
+    if (g_susp(tid, &app_id) != 0) {
         pldmgr_log("[PLDMGR] saves: %s 正在启动 · 挂起失败，仍继续拉取"
                    "（游戏可能已经读进旧存档，这次拉取未必生效）\n", tid);
         pldmgr_notify("远程拉取：无法暂停 %s\n存档可能不生效", tid);
         return 0;
     }
-    pldmgr_log("[PLDMGR] saves: %s 已挂起 · 拉取完成后自动恢复\n", tid);
+    pldmgr_log("[PLDMGR] saves: %s 已挂起（app_id=%u）· 拉取完成后自动恢复\n", tid, app_id);
+    if (app_id_out) *app_id_out = app_id;
     return 1;
 }
 
 /* 拉完放行。**恢复失败必须让人知道**：游戏会一直停在冻结状态，用户看到的是
- * 「点了一下就死机了」，而真正的原因在面板日志里 —— 所以屏幕通知也要弹。 */
-static void ga_thaw_after_pull(const char *tid) {
-    if (g_resm(tid) == 0) {
-        pldmgr_log("[PLDMGR] saves: %s 已恢复运行\n", tid);
+ * 「点了一下就死机了」，而真正的原因在面板日志里 —— 所以屏幕通知也要弹。
+ *
+ * `app_id` 是**挂起时记下的那个**，不是当场解析的（`.150` 真机首轮就是栽在
+ * 「恢复时又解析一次」上：挂起后系统不认这个大应用了，解析必然失败）。 */
+static void ga_thaw_after_pull(const char *tid, unsigned int app_id) {
+    if (g_resm(tid, app_id) == 0) {
+        pldmgr_log("[PLDMGR] saves: %s 已恢复运行（app_id=%u）\n", tid, app_id);
         return;
     }
-    pldmgr_log("[PLDMGR] saves: !!! %s 恢复失败 —— 请手动切回游戏（或退出重进）\n", tid);
+    pldmgr_log("[PLDMGR] saves: !!! %s 恢复失败（app_id=%u）—— 请手动切回游戏（或退出重进）\n",
+               tid, app_id);
     pldmgr_notify("!!! 远程拉取：%s 恢复失败\n请手动切回游戏", tid);
 }
 
@@ -504,8 +527,12 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
      * 而且「开始」这行说的确实是「存档真的要开始搬了」（不是「我打算搬，先冻两秒」）。
      *
      * `freeze_game` 只有守护线程的自动拉取传 1 —— 手动拉取时游戏早就把存档读进
-     * 内存了，冻它没有任何用（理由见 include/game_auto.h）。 */
-    int frozen = (freeze_game && act == GA_ACT_PULL) ? ga_freeze_for_pull(tid) : 0;
+     * 内存了，冻它没有任何用（理由见 include/game_auto.h）。
+     *
+     * `frozen_id` = **挂起时记下的那个 app_id**，恢复只能用它（挂起后系统不认
+     * 这个大应用了，当场解析必然失败 —— `.150` 真机首轮的坑，见头文件）。 */
+    unsigned int frozen_id = 0;
+    int frozen = (freeze_game && act == GA_ACT_PULL) ? ga_freeze_for_pull(tid, &frozen_id) : 0;
 
     /* 字段顺序是**按重要性倒着放**的：环形缓冲每行只有 MAX_LOG_LINE_LEN(256) 字节，
      * 目标里可能带着很长的 host/share/sub，超了就被截断。把「目标」放最后，
@@ -553,7 +580,7 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
      *
      * 失败也照样走到这儿：`frozen` 只在**真的冻住了**的时候才为 1，
      * 没冻过就绝不会去恢复（否则会平白把用户自己挂起的游戏叫醒）。 */
-    if (frozen) ga_thaw_after_pull(tid);
+    if (frozen) ga_thaw_after_pull(tid, frozen_id);
 }
 
 /* ── 手动推 / 拉（POST /game_save_sync）─────────────────────────────────── */

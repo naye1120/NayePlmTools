@@ -96,9 +96,19 @@ void game_auto_set_probe(ga_probe_fn fn);
  * 手动拉取时游戏早就把存档读进内存了，冻不冻都改变不了它内存里那份（白冻一场，
  * 还会平白把用户正在看的画面冻住）；真要生效得让游戏重读存档，那是另一件事。
  *
- * 宿主测试用 `-DGA_NO_LNCUTIL` 关掉真实现，再装桩。产品代码不要调 setter。 */
-typedef int (*ga_susp_fn)(const char *tid); /* 0 = 已挂起 */
-typedef int (*ga_resm_fn)(const char *tid); /* 0 = 已恢复 */
+ * 宿主测试用 `-DGA_NO_LNCUTIL` 关掉真实现，再装桩。产品代码不要调 setter。
+ *
+ * ── ⚠ 恢复**必须**用挂起时记下的那个 app_id（`.150` 真机首轮踩的坑）──────────
+ * 应用被挂起后 `sceLncUtilGetAppIdOfRunningBigApp()` 返回 `0xffffffff`
+ * —— 系统认为「没有正在运行的大应用」（挂起本来就是把它换出去）。
+ * 所以恢复时**再去解析一次 app_id 必然拿不到**，`ResumeApp` 根本发不出去，
+ * 游戏会一直冻着。真机日志的原形：`恢复失败` 的**下一秒**就是 `已退出` ——
+ * 那不是游戏真的退了，是我们自己丢了句柄（用户只能强退重进）。
+ *
+ * 所以 `ga_susp_fn` 成功时**必须**把 app_id 写出来，`ga_resm_fn` 收到的就是它。
+ * 这条不变量在宿主上有断言（恢复拿到的 app_id == 挂起报的那个）。 */
+typedef int (*ga_susp_fn)(const char *tid, unsigned int *app_id_out); /* 0 = 已挂起 */
+typedef int (*ga_resm_fn)(const char *tid, unsigned int app_id);      /* 0 = 已恢复 */
 void game_auto_set_suspender(ga_susp_fn susp, ga_resm_fn resm);
 
 /* 跑一轮扫描。守护线程每秒调一次（`GA_TICK`）。
