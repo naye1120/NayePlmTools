@@ -765,27 +765,102 @@ static int gs_copy_tree(const char *src, const char *dst, gs_cp_t *c, int depth)
     return rc;
 }
 
-/* ── 整份替换（上传与快照还原共用）───────────────────────────────────────
- * 把 src 目录换到 target。旧的先改名留一手，换失败还能退回来 ——
+/* 把 from 里的所有条目（不递归）rename 到 to。返回 0 全成功、-1 中途失败。
+ * **本函数不做回滚** —— 回滚顺序由调用方定，见 gs_swap_dir 的长注释。 */
+static int gs_move_entries(const char *from, const char *to) {
+    DIR *d = opendir(from);
+    if (!d) return -1;
+    char sp[1200], dp[1200];
+    struct dirent *e;
+    int rc = 0;
+    while ((e = readdir(d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (snprintf(sp, sizeof(sp), "%s/%s", from, e->d_name) >= (int)sizeof(sp) ||
+            snprintf(dp, sizeof(dp), "%s/%s", to, e->d_name) >= (int)sizeof(dp)) {
+            errno = ENAMETOOLONG;
+            rc = -1;
+            break;
+        }
+        if (rename(sp, dp) != 0) { rc = -1; break; }
+    }
+    closedir(d);
+    return rc;
+}
+
+/* ── 整份替换（上传 / 快照还原 / 远程拉取共用）───────────────────────────
+ * 把 src 目录的内容换到 target。旧的先留一手，换失败还能退回来 ——
  * 直接 rm -rf 再 rename 的话，中途任何一步失败都等于把用户原来的存档删了。
  * 调用方保证 src 与 target 在**同一文件系统**（都是 rename）。
- * 成功 0（src 已被搬走，无需清理）；失败 -1（target 保持原样，src 还在）。 */
+ * 成功 0（src 已清空并删掉，无需清理）；失败 -1（target 保持原样，src 还在）。
+ *
+ * [CN-FORK] v0.5.2.149 **target 已存在时，保住 target 这个目录本身**（inode 不变），
+ * 只换它里面的条目。
+ *
+ * 原来这里是无条件 `rename(target, old)` 把**整个目录**换掉。而真机上最要紧的那条
+ * 路恰恰是「游戏启动 → 引擎 2 秒后拉取 → 写存档」——**游戏此时已经把存档目录绑住了**。
+ * 换掉目录 = 换掉 inode，正在跑的游戏看到的还是那个被改名走的旧目录，于是：
+ *
+ *     手动拉取好用（那一刻没有游戏在跑），
+ *     游戏启动时拉取提示成功、但游戏里还是老存档。
+ *
+ * 真机实测（FTP 的 `MLSD` unique 字段就是 inode）：
+ *     拉取前 /user/home/<uid>/savedata_prospero/PPSA27836  unique=0.5b0
+ *     拉取后 同一条路径                                      unique=0.5ab
+ * 目录被整个换掉了。改成「目录不动、只换内容」之后这个值必须**不变** ——
+ * 真机断言见 `_ftp_probe/verify149_inode.py`，宿主断言见 `test/game_saves_test.c`。
+ *
+ * 两步走，每一步的回滚都是**无歧义**的。这是刻意选的顺序，别改成「一个名字换一个
+ * 名字」那种交错写法：那样回滚要先记住哪些名字搬过，出错路径就变成最容易写错的地方。
+ *   ① target 的条目 → old/        回滚：把 old/ 里的全搬回 target
+ *   ② src   的条目 → target/      回滚：先把 target 里刚搬进来的全退回 src，
+ *                                      再把 old/ 里的搬回 target
+ * 代价：①② 之间 target 会**短暂为空**（几个 rename 的时间）。正在读存档的游戏理论上
+ * 可能撞上这个窗口，但窗口是微秒级；而「换掉 inode」对跑着的游戏是**必然**失效 ——
+ * 两害相权取前者。
+ *
+ * target 不存在时（全新拉取 / 主机上还没有这份存档）没有绑定可言，仍走直接 rename。 */
 static int gs_swap_dir(const char *parent, const char *target, const char *src,
                        char *err, size_t errsz) {
     char old[800];
     snprintf(old, sizeof(old), "%s/.old_%u_%u", parent, (unsigned)getpid(), (unsigned)time(NULL));
-    int had_old = 0;
-    struct stat ost;
-    if (lstat(target, &ost) == 0) {
-        gs_rmtree(old);
-        if (rename(target, old) == 0) had_old = 1;
+
+    struct stat tst;
+    if (lstat(target, &tst) != 0 || !S_ISDIR(tst.st_mode)) {
+        /* 目标不存在（或不是目录，理论上不会发生）：没有 inode 要保，直接换。
+         * 这就是原来的行为，保留着 —— 它也是「换目录」唯一还正确的场合。 */
+        if (rename(src, target) != 0) {
+            if (err && errsz) snprintf(err, errsz, "无法写入存档目录（%s）", strerror(errno));
+            return -1;
+        }
+        return 0;
     }
-    if (rename(src, target) != 0) {
-        if (had_old) rename(old, target); /* 退回去 —— 用户原来那份还在 */
+
+    gs_rmtree(old);
+    if (ensure_dir_recursive(old) != 0) {
+        if (err && errsz) snprintf(err, errsz, "无法创建临时目录（%s）", strerror(errno));
+        return -1;
+    }
+
+    /* ① 旧内容先全部搬进 old/。这一步中途失败时 target 只是少了一部分条目，
+     * 把 old/ 里的搬回去就完全复原（两边名字不会撞：old/ 里装的正是刚从 target
+     * 搬走的那批名字）。 */
+    if (gs_move_entries(target, old) != 0) {
+        gs_move_entries(old, target);
+        gs_rmtree(old);
+        if (err && errsz) snprintf(err, errsz, "无法腾出存档目录（%s）", strerror(errno));
+        return -1;
+    }
+    /* ② 新内容搬进 target/。失败时：target 里现在只有刚搬进来的那批（① 已清空），
+     * 先全退回 src（src 里剩下的那批名字不同，不会撞），再把 old 搬回 target。 */
+    if (gs_move_entries(src, target) != 0) {
+        gs_move_entries(target, src);
+        gs_move_entries(old, target);
+        gs_rmtree(old);
         if (err && errsz) snprintf(err, errsz, "无法写入存档目录（%s）", strerror(errno));
         return -1;
     }
-    if (had_old) gs_rmtree(old);
+    gs_rmtree(old);
+    gs_rmtree(src); /* 空壳，清掉 —— 调用方按「src 已被搬走」的老约定不再管它 */
     return 0;
 }
 
@@ -912,7 +987,13 @@ static void gs_snap_evict_total(void) {
 #define GS_TMP_STALE_SEC 3600
 
 static int gs_name_is_temp(const char *n) {
-    return strncmp(n, ".tmp_", 5) == 0 || strncmp(n, ".rst_", 5) == 0;
+    /* [CN-FORK] v0.5.2.149 `.old_` 也收进来：gs_swap_dir 的「旧内容留一手」目录
+     * 就建在存档目录的父目录下。正常情况下它在同一次调用里就被 rmtree 了，但要是
+     * 那一下崩了，它就一直躺在 /user/home/<uid>/savedata_prospero 下面 ——
+     * 只有 gs_sweep_temp 能收拾它，而它原来只认 .tmp_ / .rst_。
+     * 一小时的新鲜度门槛（GS_TMP_STALE_SEC）保证不会误删正在用的那一份。 */
+    return strncmp(n, ".tmp_", 5) == 0 || strncmp(n, ".rst_", 5) == 0 ||
+           strncmp(n, ".old_", 5) == 0;
 }
 
 static void gs_sweep_temp(const char *dir) {

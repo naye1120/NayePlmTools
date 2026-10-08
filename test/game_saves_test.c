@@ -17,6 +17,9 @@
  *   ⑥ 端口既认 JSON 数字也认 "2121" 这种字符串 —— 前端 <input> 出来的是字符串
  *   ⑦ token_set 与 has_token 两个名都得给（前端按 `has_${f.key}` 拼提示）
  *   ⑧ 打包成 zip（源不动）/ 上传整份替换（旧的可回退）/ 删除
+ *   ⑧b **整份替换不许换掉存档目录本身**（v0.5.2.149）：目录 st_ino 上传/还原前后
+ *      必须一致，且父目录不留 .old_ / .tmp_ 半成品 —— 「游戏启动时拉取没效果」的
+ *      根因就是原来那句 `rename(target, old)` 把目录 inode 换掉了
  *   ⑨ 本地快照：立即备份 / 内容没变不新增 / 只改了哪个用户就只新增哪个 /
  *      保留数裁剪 / 一键还原 / 删除 / uid 与 ts 的路径穿越一律拒 /
  *      间隔与保留数的归一化（86400 不能被当成越界回落成 30 分钟）
@@ -36,6 +39,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <dirent.h> /* v0.5.2.149：数 .old_* 残留 */
 #include <pthread.h>
 #include <sys/stat.h>
 #include <sys/time.h> /* utimes：⑨c 要把 .tmp_* 的 mtime 拨回过去 */
@@ -140,6 +144,33 @@ static cJSON *get_list(const char *tid) {
 static int exists_reg(const char *p) {
     struct stat st;
     return stat(p, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+/* ── v0.5.2.149 的判据：**目录本身不许被换掉** ─────────────────────────────
+ * gs_swap_dir 原来是 `rename(target, old)` 把整个存档目录换成一个新 inode。
+ * 真机上「游戏启动 → 引擎 2 秒后拉取」那条路里，游戏已经把存档目录绑住了，
+ * 换掉 inode = 正在跑的游戏永远看到旧目录（手动拉取好用、启动时拉取没效果）。
+ * 所以这里盯的是**目录的 st_ino**，不是内容 —— 内容对不对是另外几条断言的事。
+ * 真机同一判据走 FTP 的 MLSD unique（见 _ftp_probe/verify149_inode.py）。 */
+static unsigned long long ino_of_dir(const char *p) {
+    struct stat st;
+    if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
+    return (unsigned long long)st.st_ino;
+}
+
+/* 数一个目录下还剩几个 .old_* / .tmp_* / .rst_* 半成品（正常必须是 0） */
+static int count_temp_in(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return -1;
+    struct dirent *e;
+    int n = 0;
+    while ((e = readdir(d)) != NULL) {
+        if (!strncmp(e->d_name, ".old_", 5) || !strncmp(e->d_name, ".tmp_", 5) ||
+            !strncmp(e->d_name, ".rst_", 5))
+            n++;
+    }
+    closedir(d);
+    return n;
 }
 
 /* 造一个内容为 n 个 'x' 的文件（快照用例要「改一下源存档」） */
@@ -517,7 +548,13 @@ int main(void) {
           "打包把源文件弄没了");
     unlink(zpath);
 
-    /* ── ⑧' 上传：整份替换（旧的先留一手，成功后清掉）───────────────────── */
+    /* ── ⑧' 上传：整份替换（旧内容先留一手，成功后清掉；**目录本身不换**）─────
+     * 这一节同时是 v0.5.2.149 的回归守卫：拉取/上传/还原三条路都走 gs_swap_dir，
+     * 而「换掉目录 inode」正是「游戏启动时拉取没效果」的根因。 */
+    const char *updir = HOME "/" U5 "/savedata_prospero/" TID_PS5;
+    unsigned long long ino_before = ino_of_dir(updir);
+    CHECK(ino_before != 0, "⑧' 前置：目标存档目录不存在（%s）", updir);
+
     long long uf = 0, usz = 0;
     const unsigned char raw[] = "hello saves";
     CHECK(game_saves_upload(TID_PS5, U5, raw, sizeof(raw) - 1,
@@ -534,6 +571,14 @@ int main(void) {
           "整份替换没生效 —— 旧文件还在（该被换掉）");
     CHECK(exists_reg(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
           "上传把另一个用户的存档删了");
+    /* ★ 本节的要害：目录 inode 必须原封不动。
+     * 变异对照（把 gs_swap_dir 改回 `rename(target, old)`）这一条必红。 */
+    CHECK(ino_of_dir(updir) == ino_before,
+          "存档**目录本身**被换掉了（ino %llu -> %llu）—— 跑着的游戏会一直看到旧目录",
+          ino_before, ino_of_dir(updir));
+    CHECK(count_temp_in(HOME "/" U5 "/savedata_prospero") == 0,
+          "父目录里留了 .old_*/.tmp_* 半成品（%d 个）",
+          count_temp_in(HOME "/" U5 "/savedata_prospero"));
 
     /* 主机上不存在的用户：拒绝，不许瞎建 */
     CHECK(game_saves_upload(TID_PS5, "99999999", raw, sizeof(raw) - 1,
@@ -646,6 +691,8 @@ int main(void) {
     unlink(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_NEW");
     CHECK(!exists_reg(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_STARBOARD"),
           "前置删除没生效，后面还原就测不出东西");
+    /* v0.5.2.149：还原走的是同一个 gs_swap_dir，目录 inode 同样不许被换掉 */
+    unsigned long long ino_rst = ino_of_dir(HOME "/" U2 "/savedata_prospero/" TID_PS5);
     snprintf(obuf, sizeof(obuf),
              "{\"tid\":\"" TID_PS5 "\",\"action\":\"restore\",\"uid\":\"" U2 "\",\"ts\":\"%s\"}",
              ts2b);
@@ -657,6 +704,12 @@ int main(void) {
           "还原没把 sdimg_NEW 放回来");
     CHECK(exists_reg(HOME "/" U5 "/savedata_prospero/" TID_PS5 "/data.bin"),
           "还原把另一个用户的存档牵连了（整份替换只该动目标用户）");
+    CHECK(ino_of_dir(HOME "/" U2 "/savedata_prospero/" TID_PS5) == ino_rst,
+          "还原把存档**目录本身**换掉了（ino %llu -> %llu）",
+          ino_rst, ino_of_dir(HOME "/" U2 "/savedata_prospero/" TID_PS5));
+    CHECK(count_temp_in(HOME "/" U2 "/savedata_prospero") == 0,
+          "还原在父目录里留了 .old_*/.rst_* 半成品（%d 个）",
+          count_temp_in(HOME "/" U2 "/savedata_prospero"));
 
     /* uid / ts 是路径的最后两段 —— 穿越一律在拼路径之前就被拒 */
     const char *bad[] = {
