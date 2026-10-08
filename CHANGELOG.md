@@ -1,4 +1,154 @@
-## v0.5.2.147 (CN-FORK)
+## v0.5.2.148 (CN-FORK)
+
+> **一轮真机数据完整性事故的根因修复**。用户口径：「你再帮我看一下，远程拉取回来的，
+> 显示拉取成功，但是存档不对。」+「7 点多中的时候，还是好用的」（= 明确指认为回归）。
+>
+> 查下来**存档内容一个字都没错**（整条链上 sha256 全程 `5b531b74…`），错的是**存档文件的
+> mtime**：每跑一轮「推送 → 拉取」，主机上那份存档的日期就往回退**一个月**，而且是**累积**的
+> （真机实测 10-08 → 09-08 → 08-08）。用户看到的「存档不对」就是文件管理器 / 系统里那个日期。
+>
+> 根因在 `src/zip_io.c` 的 `zx_dos_time()`：把 `struct tm` 里 **0-based** 的 `tm_mon`
+> 直接当成 DOS 日期字段里 **1-based** 的月份写进去，而读侧（`zip_extract`）按标准做
+> `tm_mon = 字段 - 1` —— **写读不互逆**。存档拉取的落盘链恰好是「解包 + 把包内 mtime
+> `utimes()` 到存档文件上」，于是错月份顺着这条链一路印到主机文件系统上。
+>
+> 顺带修掉第二条（`src/game_saves.c`）：`/game_save_remote_info` **恒返回 0 长度响应**
+> （HTTP 200、body 空），前端逐用户远程信息**一次都没渲染出来过**。
+>
+> 三处改动：① `src/zip_io.c` 月份 `+1`（含兜底日期改合法）② `src/game_saves.c`
+> `game_saves_remote_info()` 返回值语义对齐头文件契约 ③ `src/game_auto.c` 补两行
+> 「本该动作、却被开关挡住」的留痕日志（上一轮用户反馈「关闭（游戏）时的推送没有 debug」的
+> 正解 —— 推送 debug 是齐的，那台机器全局配置 `on_exit:false`，**没动作这件事本身没有痕迹**）。
+> 新增回归守卫 `test/zip_io_test.c`（37 checks，**不依赖 python3**，所以永远不会被 SKIP）。
+
+### ① `zx_dos_time()` 的 DOS 月份 off-by-one（后端 · 头号根因）
+
+**改了什么**（`src/zip_io.c`）
+
+```c
+-    *dd = (uint16_t)(((y - 1980) << 9) | (tmv.tm_mon << 5) | tmv.tm_mday);
++    *dd = (uint16_t)(((y - 1980) << 9) | ((tmv.tm_mon + 1) << 5) | tmv.tm_mday);
+```
+
+* DOS 日期字段的位布局是 `year = ((dd>>9)&0x7F)+1980`、`month = (dd>>5)&0x0F`（**1~12**）、
+  `day = dd & 0x1F`；DOS 时间字段 `hour = (dt>>11)&0x1F`、`min = (dt>>5)&0x3F`、
+  `sec = (dt&0x1F)*2`（2 秒粒度，这部分原来就是对的）。
+* 原来的写法：10 月（`tm_mon=9`）在包里变成月份字段 9 = **9 月**；11 月写成 10 月；
+  1 月（`tm_mon=0`）干脆写成「**0 月**」。
+* **读侧不动**（`zip_extract()` 的 `tm_mon = 字段 - 1` 是标准做法，是对的）。要改的是写侧。
+  这条注释写进了代码里，防止以后有人「修反」。
+* **兜底日期也一起修**：原来是 `*dd = 0x21`（月份字段 0、日 1），读回来 `tm_mon = -1`，
+  `mktime` 会把它规整成**上一年 12 月**。改成 `1980-01-01` 的合法编码。
+
+**为什么「只错日期」却让人以为「存档不对」**
+
+存档拉取的完整链是 `sr_finish_pull()` → `game_saves_import_file()` → `gs_upload_buf()`
+→ `zip_extract(gs_up_cb)`，而 `gs_up_cb()` 里有一句 `gs_up_set_mtime()`，会把**包内条目的
+mtime `utimes()` 到刚解出来的存档文件上**（`src/game_saves.c:1936-1972`）。所以包里的错月份
+不是「显示问题」，是**真的写进了主机文件系统**，一轮退一个月、逐轮累积。
+
+**附带伤害**：媒体包（磁贴图标 / 背景 / 视频）走的也是同一个编码器（`md_dos_time` 早已并进
+`zip_io.c`），所以**导出的媒体包里日期也是错月份**，对 Windows 资源管理器 / 7-Zip / Python
+`zipfile` 一视同仁地错。这次一起修好。
+
+**验证 ①（真机受控实验，内容刻意保持不变）**
+
+| 环节 | 远端 MDTM | 包内 zip 月份字段 | 内容 sha256 前 8 |
+|---|---|---|---|
+| 基线 | `20260908134158`（9 月 8 日）| 9 | `5b531b74` |
+| 推送后 | `20260908134158`（**不变**）| **8** ← 写侧把 `tm_mon`(8=9月) 当月份 | `5b531b74` |
+| 拉取后 | `20260808134158` ← **又掉一个月** | — | `5b531b74` |
+
+* **内容 sha256 全程一字不差** —— 这就是「显示成功、但看着不对」的完整解释。
+* 真机现场修回：把远端 `ps5save/PPSA27836/1a1d3627.zip` 的**本地头（+12）与中央目录（+14）
+  两个日期字段**从 8 月补到 10 月，再拉一次 → 主机 live 存档
+  `MDTM 20260808134158 → 20261008134158`（真值），sha256 仍是 `5b531b74…`。
+  备份留在 `_ftp_probe/evidence147/remote_before_fixdate.zip`。
+  ⚠️ 修远端 zip 时踩到的坑记一笔：**中央目录里 `date` 在 +14、`time` 在 +12**（跟本地头
+  的 10/12 不是一个偏移），第一次改错字段被自己的 `assert` 拦住没写进去。
+  另外真机 FTPSRV **不支持改 mtime**（`MFMT` / `SITE UTIME` 全回 `502 Command not recognized`），
+  所以只能改包内字段再拉一次 —— 这也是为什么要走这条路而不是直接 `MFMT`。
+
+**变异对照（mutation check）**：把 `+ 1` 用 `sed` 抹掉重跑 → **15 条判据变红**，
+且报错数字正好是 `-2592000 秒`（= 30 天）；1 月那组报 `2025-12 vs 2026-01`（因为旧代码
+写出「0 月」）。修复后 **37/37 全过**。这条对照证明测试真的咬得住这个 bug。
+
+### ② `/game_save_remote_info` 恒 0 长度响应（后端）
+
+**改了什么**（`src/game_saves.c`）
+
+* `game_saves_remote_info()` 的 4 条成功路径**全部** `return 0` → 改成 `return n`
+  （写进 buf 的字节数）；参数不合法从「写个 `{"error":...}` 再回 0」改成**直接回 `-1`**。
+* `include/game_saves.h` 的契约注释（「返回写入长度，<0 出错」）**本来就是这样写的**，
+  实现向头文件对齐；`src/http_server.c` 的 `ROUTE_GAME_SAVE_REMOTE_INFO` 分支
+  （`rn < 0` → 400，否则当长度建响应）**保持不动**。
+* 现象：`MHD_create_response_from_buffer((size_t)rn, …)` 拿到 `rn == 0` → 建出**0 长度响应**，
+  **HTTP 200 但 body 是空的**。前端 `getRemoteSaveInfo()` → `request()` 拿到空串，
+  `JSON.parse` 直接抛，「远程位置」卡里的逐用户远程信息**从 `.145` 上线起一次都没渲染出来过**。
+* 之所以藏了三个版本：**日志里 `GET /game_save_remote_info` 全是 200**，从状态码上完全看不出
+  问题；前端那侧又是 `try/catch` 逐用户吞掉（一个失败不影响别的用户）。
+* 顺带确认 mock 的盲区：`frontend/mock-server.js:1083` 的 `/game_save_remote_info`
+  **永远返回一份存在的远程存档**（`{configured:true,exists:true,mode:'smb',…}`，且不吃
+  `globalArchive()`），所以这个 bug 在 mock 里**结构性地看不出来**。
+
+### ③ 「本该动作、却被开关挡住」也要留痕（后端 · 上一轮用户反馈的正解）
+
+**改了什么**（`src/game_auto.c`，`ga_tick()` 里 `game_auto_plan()` 之后）
+
+* 两侧**各自独立**判断（不是 `else-if`）：`prev[0] && (!pe || !px)` → 记「已退出 · 跳过推送：
+  自动存档总开关关着 / 「退出游戏时回传」关着」；`cur[0] && (!ce || !cl)` → 记「已启动 ·
+  跳过拉取：…」。条件与 `game_auto_plan()` 里那两条一一对应，所以**动作真的发生时这里一声不响**，
+  不会出现「说要推、结果也推了」的矛盾。
+* **只写日志、不弹屏幕通知**：通知是给「真的动了」准备的，开关关着时每启动/退出一次就弹一条，
+  很快变成没人看的噪声。要看就来面板「日志」页。
+* 起因：用户说「只有拉取有 debug，关闭（游戏）时的推送没有 debug 信息」。真机日志显示
+  **推送自己的 debug 是齐的**（手动推送四条都在），真因是那台机器的全局配置里
+  `on_exit: false` —— 引擎按配置办事，没触发自然没有 debug。**问题不在推送，在于「没动作」
+  这件事没有任何痕迹**：日志里只有一串「拉取」，用户没法区分「游戏压根没退出过」和
+  「退出回传那个开关关着」，而这两件事该做的事完全不同。
+
+### ④ 新增回归守卫 `test/zip_io_test.c`（不需要 python3）
+
+* 纯 C，**不依赖 python3**，所以**永远不会被 SKIP** —— 数据完整性守卫不该被环境跳过。
+* 五段：① 10 月主用例（真机观测到的月份）② 1 / 2 / 11 / 12 月边界
+  ③ **负向对照**（包内月份字段**必须不等于** `tm_mon`）④ 多条目（两条各自日期互不串）
+  ⑤ 1980 年份下限。
+* 直接读**本地头偏移 12 的原始 DOS 日期位**（不解包），这样测的是编码器本身而不是解码器：
+  ```c
+  static uint16_t lh_dos_date(const char *path) { /* 读 30 字节头，校验 PK\003\004，取 [12]|[13]<<8 */ }
+  ```
+* 负向对照那条是防「修反」的：
+  ```c
+  CHECK(field != want.tm_mon,
+        "neg: 月份字段又变回 tm_mon(%d) 了 —— 就是 `.148` 修掉的 off-by-one", want.tm_mon);
+  ```
+* 已接进 `test/run_host_tests.sh`（放在 `check_stack_frames` 之后、`slot_resolve` 之前）：
+  ```bash
+  run_one zip_io src/zip_io.c \
+      -Iinclude -Isrc/psaccounts/third_party \
+      src/inflate.c src/game_job.c src/json_helpers.c src/utils.c
+  ```
+
+### ⑤ 清账
+
+* 仓库根那 4 个杂散的 `.su`（`clang -fstack-usage` 的残渣，从仓库根手跑量栈帧留下的）
+  清掉，并给 `.gitignore` 补三条：`*.su`、`delivery-*/`、`pldmanager-delivery-*.zip`。
+  （`tools/check_stack_frames.sh` 本身用的是 `mktemp -d`，不会往仓库里落东西。）
+
+**验证（宿主全套）**
+
+* `bash test/run_host_tests.sh` → `==== overall: PASS ====`。各关卡：
+  `zip_io: 37/0`（**新增**）、`media_scan: 178/0`、`game_saves: 142/0`、`save_remote: 76/0`、
+  `game_auto: 82/0`、`game_mgr: 100/0`、`param_rename: RESULT: PASS`、
+  `check_post_routes` **13 == 13**、`check_stack_frames` 全部函数栈帧 ≤ 32768 B。
+* 三处改动**没有新增 POST 路由**，所以 `gr_post_limit()` 不用动（守卫 13 == 13 也是这么报的）。
+
+⚠️ **给用户的提醒**：真机上已经被拉歪的存档日期，**必须重新推送一次**才会带上正确日期 ——
+远端 zip 里现在存的还是错的月份，光升包不重推，拉回来照样是旧月份。
+
+---
+
+
 
 > 四件事：① 「存档管理」弹窗第一行三栏重排 + **三栏等高**（本地快照一行没碰）；
 > ② 远程推 / 拉两个动作的**开始与结束各弹一条 PS5 屏幕通知 + 各打一条日志**；
@@ -13,9 +163,13 @@
 > 即 **PS5 系统通知弹窗**（不是面板的「日志」页）；
 > ③ 贴图指认那颗蓝色描边徽标 →「把这个标签去掉」；④「出包吧」。
 >
-> ⚠️ **本次没出包、没 bump `MENU_VERSION`**（`include/pldmgr.h` 仍是 `0.5.2.146`）。
-> 要出包按老流程：提交 → bump 到 `0.5.2.147` → `rm -rf frontend/dist` →
-> WSL `make frontend-build`（带 autocrlf env，看它打印的 title 行）→ `build_tiles.sh`。
+> **出包**：提交 `032b505` → `rm -rf frontend/dist` → `make frontend-build`（带 autocrlf env，
+> 打印的标题行 `NayePlmTools v0.5.2.147 by naye (032b505, built at 2026-10-08 13:33:41 UTC)`，
+> **短哈希是真哈希、不是 DEV**）→ `build_tiles.sh`。
+> 两包各 **10,999,176 字节**，titleId 自检 NAYE00001（-me 媒体栏）/ NAYE00004（-ga 游戏栏）通过；
+> 内嵌网页段与 `frontend/dist/index.html`（943,146 B）**逐字节一致**（偏移 +2,186,864）；
+> 上一版 `0.5.2.146` 残留 0 处。核对脚本 `~/.workbuddy-ai/binaries/node/workspace/pkg_147_verify.sh`
+> （六条全过）。⚠️ **未推真机**（连不上 `192.168.1.214`）。
 
 ### ① 存档弹窗第一行三栏重排（前端）
 

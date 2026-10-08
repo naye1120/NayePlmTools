@@ -2338,12 +2338,24 @@ static void gs_fill_remote_cfg(const char *json, sr_cfg_t *rc) {
  *   {"configured":false}                         没配远程位置
  *   {"configured":true,"exists":false,"mode":"smb"}  配了但远端还没有这份
  *   {"configured":true,"exists":true,"mode":"smb","size":N,"files":N,"mtime":"YYYY-MM-DD HH:MM"}
- *   {"configured":true,"exists":true,"mode":"smb","error":"..."}  连接/协议错误 */
+ *   {"configured":true,"exists":true,"mode":"smb","error":"..."}  连接/协议错误
+ *
+ * [CN-FORK] v0.5.2.148 **返回值是写进 buf 的字节数**，不是状态码。
+ * 头文件（include/game_saves.h）一开始就是这么写的，但实现里每条成功路径都
+ * `return 0` —— 而 http_server.c 那边是拿它当长度去建响应的：
+ *     int rn = game_saves_remote_info(...);
+ *     if (rn < 0) → 400;
+ *     MHD_create_response_from_buffer((size_t)rn, rb, MUST_FREE)
+ * 于是 `rn == 0` 建出的是 **0 长度响应**：HTTP 200、body 空。
+ * 现象是前端拿到的永远不是 JSON，`JSON.parse` 直接抛，「远程位置」卡里的逐用户
+ * 远程信息**一次都没渲染出来过**（而日志里 GET /game_save_remote_info 全是 200，
+ * 从状态码上完全看不出问题 —— 这也是它藏了三个版本的原因）。
+ * 现在统一回长度；参数不合法回 -1（路由映射 400）。 */
 int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t size) {
     if (!buf || size < 64) return -1;
     buf[0] = 0;
-    if (!gs_tid_ok(tid) || !gs_uid_ok(save))
-        return snprintf(buf, size, "{\"error\":\"参数不合法\"}") >= 0 ? 0 : -1;
+    /* 参数不合法 → **-1**（路由那边映射成 400），不写响应体。 */
+    if (!gs_tid_ok(tid) || !gs_uid_ok(save)) return -1;
 
     char jbuf[4096];
     int got = 0;
@@ -2352,7 +2364,7 @@ int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t 
     else if (game_saves_auto_json(tid, jbuf, sizeof(jbuf)) > 0) got = 1;
     if (!got) {
         int n = snprintf(buf, size, "{\"configured\":false}");
-        return (n > 0 && (size_t)n < size) ? 0 : -1;
+        return (n > 0 && (size_t)n < size) ? n : -1;
     }
 
     sr_cfg_t rc;
@@ -2368,7 +2380,7 @@ int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t 
         int n = snprintf(buf, size,
                          "{\"configured\":true,\"exists\":false,\"mode\":\"%s\"}",
                          rc.mode);
-        return (n > 0 && (size_t)n < size) ? 0 : -1;
+        return (n > 0 && (size_t)n < size) ? n : -1;
     }
     if (st != 0) {
         char esc[480];
@@ -2376,7 +2388,7 @@ int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t 
         int n = snprintf(buf, size,
                          "{\"configured\":true,\"exists\":true,\"mode\":\"%s\",\"error\":\"%s\"}",
                          rc.mode, esc);
-        return (n > 0 && (size_t)n < size) ? 0 : -1;
+        return (n > 0 && (size_t)n < size) ? n : -1;
     }
     char mtstr[32];
     struct tm tmv;
@@ -2388,5 +2400,5 @@ int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t 
                      "{\"configured\":true,\"exists\":true,\"mode\":\"%s\","
                      "\"size\":%lld,\"files\":%lld,\"mtime\":\"%s\"}",
                      rc.mode, sz, files, mtstr);
-    return (n > 0 && (size_t)n < size) ? 0 : -1;
+    return (n > 0 && (size_t)n < size) ? n : -1;
 }

@@ -28,3 +28,11 @@ lib/
 include/curl/
 include/openssl/
 pldmgr.elf.zip
+
+# clang -fstack-usage 产物（tools/check_stack_frames.sh 用的是 mktemp，这些是手工量栈帧
+# 时落在仓库根的残渣；统一挡掉，别让它们混进 git status）
+*.su
+
+# 出包/交付打包的中间目录与 zip（体积大、可重生成）
+delivery-*/
+pldmanager-delivery-*.zip

@@ -55,13 +55,38 @@ static void zx_p64(unsigned char *p, uint64_t v) {
     zx_p32(p + 4, (uint32_t)(v >> 32));
 }
 
+/* [CN-FORK] v0.5.2.148 **月份必须写 `tm_mon + 1`**。
+ *
+ * 这里原来写的是 `tmv.tm_mon << 5` —— 而 `struct tm` 的 tm_mon 是 **0-based**，
+ * DOS 日期字段的月份是 **1-based（1~12）**。于是 10 月（tm_mon=9）在包里变成
+ * 月份字段 9，也就是 9 月；11 月写成 10 月；1 月（tm_mon=0）干脆写成「0 月」。
+ *
+ * 与 zip_extract 那边**不是互逆的**：读侧按标准做 `tm_mon = 字段 - 1`
+ * （zip_io.c 的 zip_extract），所以拿我们自己的包解回来又少一个月：
+ *
+ *     真实 10-08 21:41 → 写进包 → 读回来 09-08 21:41
+ *
+ * 而存档拉取这条链正是「打包 → 传上去 → 拉回来 → 解包落盘」，落盘时
+ * `gs_up_cb` 会把包里的时间 `utimes()` 到存档文件上（game_saves.c）。于是
+ * **每跑一轮「推送→拉取」，主机上那份存档的 mtime 就往回退一个月，而且是累积的**
+ * （10 月 → 9 月 → 8 月 → …）。真机实测：内容 sha256 全程一字不差，只有日期在倒退。
+ * 用户看到的就是「拉取显示成功，但存档不对」。
+ *
+ * 附带伤害：包里的日期对**任何别的工具**（Windows 资源管理器 / 7-Zip / Python
+ * zipfile）也是错的月份 —— 媒体包走的也是这个编码器（md_dos_time 已并进来）。
+ *
+ * 回归守卫：test/zip_io_test.c（写→读 mtime 必须逐秒一致 + 原始月份字段必须 1-based）。
+ * 注意别把这条「修回去」成 `tm_mon`：读侧的 `- 1` 是**对的**（标准就是 1-based），
+ * 要改的是写侧。 */
 static void zx_dos_time(time_t t, uint16_t *dt, uint16_t *dd) {
     struct tm tmv;
-    if (!localtime_r(&t, &tmv)) { *dt = 0; *dd = 0x21; return; }
+    /* 兜底也得是**合法**日期：原来是 0x21 = 月 0、日 1，读回来 tm_mon = -1，
+     * mktime 会把它规整成上一年 12 月。改成 1980-01-01。 */
+    if (!localtime_r(&t, &tmv)) { *dt = 0; *dd = (uint16_t)(0x21 | (1 << 5)); return; }
     int y = tmv.tm_year + 1900;
     if (y < 1980) y = 1980;
     *dt = (uint16_t)((tmv.tm_hour << 11) | (tmv.tm_min << 5) | (tmv.tm_sec / 2));
-    *dd = (uint16_t)(((y - 1980) << 9) | (tmv.tm_mon << 5) | tmv.tm_mday);
+    *dd = (uint16_t)(((y - 1980) << 9) | ((tmv.tm_mon + 1) << 5) | tmv.tm_mday);
 }
 
 /* 整包写盘。返回 0 成功，1 已取消，-1 失败（*err 里给人话）。 */

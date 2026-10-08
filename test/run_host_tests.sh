@@ -31,6 +31,17 @@ bash tools/check_post_routes.sh || fail=1
 echo "=== check_stack_frames (静态守卫) ==="
 bash tools/check_stack_frames.sh || fail=1
 
+# [CN-FORK] v0.5.2.148 zip 编码器的 DOS 时间戳：写读必须互逆，且包本身要合规。
+# 之前 zx_dos_time 把 0-based 的 tm_mon 直接当 1-based 的月份字段写，读侧又按
+# 标准 `- 1` —— 于是「打包 → 解包」一轮日期退一个月，而且**累积**。存档拉取的
+# 落盘正是「解包 + 把包里的时间 utimes 到存档文件上」，所以每跑一次「推送→拉取」
+# 主机存档的 mtime 就退一个月（真机：内容 sha256 全程不变，日期 10-08 → 09-08 →
+# 08-08）。媒体包走的也是同一个编码器。
+# 这条**不需要 python3**，所以永远不会 SKIP —— 数据完整性守卫不该被环境跳过。
+run_one zip_io src/zip_io.c \
+    -Iinclude -Isrc/psaccounts/third_party \
+    src/inflate.c src/game_job.c src/json_helpers.c src/utils.c
+
 run_one slot_resolve   src/psaccounts/npsignin.c
 run_one offact_genid   src/psaccounts/offact.c
 # safety.c really creates SAFETY_DIR, so point it at a temp dir on the host.
