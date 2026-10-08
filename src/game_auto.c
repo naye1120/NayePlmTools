@@ -5,11 +5,20 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef GA_HOST
+/* sys/user.h **不是自包含的**（它链到的 x86/fpu.h 直接用 uint8_t 却不带 stdint.h），
+ * 上面那个 <stdint.h> 必须排在它前面 —— lnc_probe 探针上刚踩过这个坑。 */
+#include <sys/sysctl.h>
+#include <sys/user.h>
+#endif
 
 #include "cJSON.h"
 #include "config.h" /* [CN-FORK] v0.5.2.145 读全局存档配置（设置页「存档配置」） */
@@ -20,16 +29,23 @@
 #include "utils.h"
 
 /* ── 运行中游戏的探测 ───────────────────────────────────────────────────── */
-/* 这两个符号只有真机的 SDK 里有（ps5_launcher.c 已经在用）。宿主测试用
- * -DGA_NO_LNCUTIL 把默认探测换成「永远没有游戏在跑」，再自己装一个探针。 */
-#ifndef GA_NO_LNCUTIL
+/* 这两个符号只有真机的 SDK 里有（ps5_launcher.c 已经在用）。
+ *
+ * `-DGA_HOST` = **宿主构建**：既没有 `sceLncUtil*` 符号，也没有 PS5 那套
+ * `sysctl(KERN_PROC)` + `struct kinfo_proc`（Linux 的 `<sys/user.h>` 是另一回事，
+ * 根本没有 `kinfo_proc`）。所以凡是碰「真机进程 / 应用状态」的地方一律用它挡住，
+ * 宿主测试再自己装桩。
+ *
+ * 名字是 `.152` 从 `GA_NO_LNCUTIL` 改过来的：这一轮起它挡的已经不只是 LncUtil，
+ * 还挡进程枚举 —— 名字得跟实际含义对上，否则下一个人会以为宿主上只是没有 LncUtil。 */
+#ifndef GA_HOST
 extern int sceLncUtilGetAppIdOfRunningBigApp(void);
 extern int sceLncUtilGetAppTitleId(unsigned int app_id, char *title_id);
 #endif
 
 static int ga_probe_default(char *out, size_t osz) {
     if (out && osz) out[0] = 0;
-#ifdef GA_NO_LNCUTIL
+#ifdef GA_HOST
     return 0;
 #else
     int app_id = sceLncUtilGetAppIdOfRunningBigApp();
@@ -47,23 +63,75 @@ static ga_probe_fn g_probe = ga_probe_default;
 
 void game_auto_set_probe(ga_probe_fn fn) { g_probe = fn ? fn : ga_probe_default; }
 
-/* ── 挂起 / 恢复（拉取期间冻住正在启动的那款游戏）─────────────────────────── */
-/* 设计（为什么需要、为什么只用在自动拉取）见 include/game_auto.h 的文件尾。
+/* ── 冻结 / 放行（拉取期间冻住正在启动的那款游戏）─────────────────────────── */
+/* 设计（为什么需要、为什么最终落在进程级 SIGSTOP 上）见 include/game_auto.h 文件尾。
  *
- * 接口刻意收在 **tid** 而不是 app_id 上：app_id 每次启动都不一样、宿主上也没法造，
- * 而 tid 是测试本来就有的东西。tid → app_id 的解析放在默认实现里（真机那一步）。 */
-#ifndef GA_NO_LNCUTIL
+ * 接口刻意收在 **tid** 上而不是 app_id / pid 上：那两个每次启动都不一样、宿主上
+ * 也没法造，而 tid 是测试本来就有的东西。tid → 具体进程 / 应用 的解析放在默认
+ * 实现里（真机那一步）。
+ *
+ * `handle` 是**不透明的冻结凭据**：SIGSTOP 方案下它是 pid，回落方案下它是 app_id。
+ * 放行时**必须原样交回**，不许当场重新解析 —— `.150` 真机首轮就是栽在
+ * 「恢复时又解析一次 app_id」上（见头文件）。
+ *
+ * `GA_FREEZE_*` 三个取值定义在 include/game_auto.h 里（宿主测试也要用）。 */
+
+#ifndef GA_HOST
 extern int sceLncUtilSuspendApp(unsigned int app_id);
 extern int sceLncUtilResumeApp(unsigned int app_id);
+
+/* 枚举进程表找游戏主进程。判据 `comm == "eboot.bin"`（与 ps-game-state-lib 同）。
+ * 手法抄 src/ps5_launcher.c 的 get_pid_by_name —— 那边真机给 SceDiscPlayer 发过
+ * SIGKILL，`sysctl(KERN_PROC)` 枚举 + 跨用户发信号都是实证过的。
+ * 取**最大 pid**：游戏重启过时旧进程可能还在收尾，pid 大的才是当前那个。 */
+static pid_t ga_find_eboot_pid(void) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
+    size_t sz = 0;
+    void *buf;
+    pid_t best = -1;
+
+    if (sysctl(mib, 4, NULL, &sz, NULL, 0) != 0 || sz == 0) return -1;
+    buf = malloc(sz); /* 大缓冲一律 malloc：连接线程栈只有 1MB，别往栈上放 */
+    if (!buf) return -1;
+    if (sysctl(mib, 4, buf, &sz, NULL, 0) != 0) {
+        free(buf);
+        return -1;
+    }
+
+    for (char *p = (char *)buf; p < (char *)buf + sz;) {
+        struct kinfo_proc *ki = (struct kinfo_proc *)p;
+        if (ki->ki_structsize < (int)sizeof(struct kinfo_proc)) break;
+        if (strncmp(ki->ki_comm, "eboot.bin", 9) == 0 && ki->ki_pid > best)
+            best = ki->ki_pid;
+        p += ki->ki_structsize;
+    }
+
+    free(buf);
+    return best;
+}
+
+/* 读某个进程的「状态字 + 累计 CPU 时间（微秒）」。拿不到返回 -1。
+ * 这两样是**冻结验证**的全部依据：冻住之后 CPU 时间必须不再前进。 */
+static int ga_proc_stat(pid_t pid, int *state_out, unsigned long long *cpu_out) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+    struct kinfo_proc ki;
+    size_t sz = sizeof(ki);
+
+    memset(&ki, 0, sizeof(ki));
+    if (sysctl(mib, 4, &ki, &sz, NULL, 0) != 0) return -1;
+    if (state_out) *state_out = (int)ki.ki_stat;
+    if (cpu_out) *cpu_out = (unsigned long long)ki.ki_runtime;
+    return 0;
+}
 #endif
 
 /* 把 tid 解析成「正在跑的那个大应用」的 app_id；不是这款在跑就返回 -1。
  * 返回 int（而不是 unsigned）是因为 0xffffffff 这个「没有应用在跑」的哨兵值
  * 在 ps5_launcher.c 里就是按 int -1 比的。
  *
- * 整个函数包在 `#ifndef` 里：宿主构建（GA_NO_LNCUTIL）下两个默认实现都直接
- * 返回 -1，留着它只会换来一条 -Wunused-function。 */
-#ifndef GA_NO_LNCUTIL
+ * 整个函数包在 `#ifndef` 里：宿主构建下它没人用，留着只会换来一条
+ * -Wunused-function。 */
+#ifndef GA_HOST
 static int ga_running_app_id(const char *tid) {
     int app_id = sceLncUtilGetAppIdOfRunningBigApp();
     if (app_id == -1) return -1; /* 0xffffffff：没有大应用在跑 */
@@ -75,10 +143,92 @@ static int ga_running_app_id(const char *tid) {
 }
 #endif
 
-static int ga_susp_default(const char *tid, unsigned int *app_id_out) {
-#ifdef GA_NO_LNCUTIL
+/* ── 主方案：进程级冻结（SIGSTOP）─────────────────────────────────────────
+ * 调用方（ga_freeze_for_pull）已经确认「正在跑的就是 tid 这一款」，所以这里
+ * 找到的那个 eboot.bin 就是它，不必再比一次 tid。 */
+static int ga_sigstop_freeze(const char *tid, unsigned int *handle_out) {
+#ifdef GA_HOST
     (void)tid;
-    (void)app_id_out;
+    (void)handle_out;
+    return -1;
+#else
+    pid_t pid = ga_find_eboot_pid();
+    if (pid <= 0) {
+        pldmgr_log("[PLDMGR] saves: 找不到 %s 的游戏主进程（eboot.bin），进程级冻结跳过\n", tid);
+        return -1;
+    }
+
+    /* 先量一个**对照**：运行中的游戏在 200ms 里一定用掉 CPU。没有这个对照，
+     * 「冻住后 CPU 不动」会被「它本来就在 loading、也没在烧 CPU」蒙混过去 ——
+     * 验证就变成了自我安慰。 */
+    int st0 = 0, st1 = 0;
+    unsigned long long c0 = 0, c1 = 0, c2 = 0, c3 = 0;
+    if (ga_proc_stat(pid, &st0, &c0) != 0) {
+        pldmgr_log("[PLDMGR] saves: 读不到 pid=%d 的进程状态，进程级冻结跳过\n", (int)pid);
+        return -1;
+    }
+    usleep(200000);
+    ga_proc_stat(pid, &st1, &c1);
+
+    if (kill(pid, SIGSTOP) != 0) {
+        pldmgr_log("[PLDMGR] saves: kill(%d, SIGSTOP) 失败，errno=%d\n", (int)pid, errno);
+        return -1;
+    }
+    usleep(200000);
+    ga_proc_stat(pid, &st0, &c2);
+    usleep(200000);
+    ga_proc_stat(pid, &st1, &c3);
+
+    if (c3 != c2) {
+        /* 冻不住就**立刻放行**，绝不把一个半死的进程留在那儿，然后让调用方
+         * 走 LncUtil 回落 —— 那条路慢一点、会跳主屏，但至少是有效的。 */
+        pldmgr_log("[PLDMGR] saves: SIGSTOP 后 pid=%d 的 CPU 仍在涨（+%llu us）→ 冻结无效，"
+                   "改走 LncUtil 挂起\n", (int)pid, c3 - c2);
+        kill(pid, SIGCONT);
+        return -1;
+    }
+
+    /* 这行是**证据行**：留档之后，「SIGSTOP 到底有没有把这个进程停住」不用再猜。
+     * stat 那两个数也一并记下来 —— PS5 的 SSTOP 具体是几，目前只有这一处能告诉我们。 */
+    pldmgr_log("[PLDMGR] saves: 冻结验证 pid=%d：CPU 200ms +%llu us → +0 us · stat %d→%d\n",
+               (int)pid, c1 - c0, st1, st0);
+    if (handle_out) *handle_out = (unsigned int)pid;
+    return 0;
+#endif
+}
+
+static int ga_sigstop_thaw(const char *tid, unsigned int handle) {
+#ifdef GA_HOST
+    (void)tid;
+    (void)handle;
+    return -1;
+#else
+    pid_t pid = (pid_t)handle;
+    if (pid <= 0) return -1;
+    if (kill(pid, SIGCONT) != 0) {
+        pldmgr_log("[PLDMGR] saves: kill(%d, SIGCONT) 失败，errno=%d\n", (int)pid, errno);
+        return -1;
+    }
+    /* 顺手确认进程还在 —— 不在了说明游戏在我们冻着它的时候被系统清掉了，
+     * 那是完全另一类问题，得让它出现在日志里而不是被静悄悄吞掉。 */
+    if (ga_proc_stat(pid, NULL, NULL) != 0)
+        pldmgr_log("[PLDMGR] saves: 放行后 pid=%d 已不在进程表里\n", (int)pid);
+    return 0;
+#endif
+}
+
+/* ── 回落方案：LncUtil 挂起 / 恢复 ────────────────────────────────────────
+ * 只在 SIGSTOP 走不通时用（找不到 eboot.bin / 发不出信号 / 停不住）。
+ *
+ * ⚠ 它的代价是真机上**看得见**的：SuspendApp 会让系统把游戏换到后台（跳主屏），
+ * 而 `ResumeApp` **只解冻、不切回前台** —— `.152` 的探针把这件事钉死了：
+ * `SetAppFocus` / `SetControllerFocus` 两个候选都**返回 0 却毫无效果**，
+ * `ContinueApp` 直接 EBUSY(0x80020010)。所以走这条路时用户必须手动点一下游戏。
+ * 记在这里，免得以后有人以为「返回 0 就是成功了」。 */
+static int ga_lnc_freeze(const char *tid, unsigned int *handle_out) {
+#ifdef GA_HOST
+    (void)tid;
+    (void)handle_out;
     return -1;
 #else
     int app_id = ga_running_app_id(tid);
@@ -91,7 +241,7 @@ static int ga_susp_default(const char *tid, unsigned int *app_id_out) {
     }
     /* 把 app_id 交出去 —— **恢复只能用它**（挂起后 GetAppIdOfRunningBigApp
      * 会返回 0xffffffff，见头文件）。 */
-    if (app_id_out) *app_id_out = (unsigned int)app_id;
+    if (handle_out) *handle_out = (unsigned int)app_id;
     /* SuspendApp 是**请求**，返回时应用未必真的冻住了。与 ps5_launcher.c 的
      * `ps5_kill_disc_player` 同一口径（那里也是 Suspend → sleep(2) → 下一步）。
      * 这里没有轮询 IsAppSuspended：那个符号虽然也在 libSceSystemService.so 里，
@@ -101,40 +251,68 @@ static int ga_susp_default(const char *tid, unsigned int *app_id_out) {
 #endif
 }
 
-static int ga_resm_default(const char *tid, unsigned int app_id) {
-#ifdef GA_NO_LNCUTIL
+static int ga_lnc_thaw(const char *tid, unsigned int handle) {
+#ifdef GA_HOST
     (void)tid;
-    (void)app_id;
+    (void)handle;
     return -1;
 #else
     /* **不再解析 app_id**，直接用挂起时那个（头文件里有真机证据）。
      * 顺带把「此刻 GetAppIdOfRunningBigApp 报什么」记进日志 —— 这一行是
      * 「挂起后系统就不认这个大应用了」的直接证据，下次再出问题不用猜。 */
     pldmgr_log("[PLDMGR] saves: 恢复 %s：挂起时 app_id=%u，此刻 GetAppIdOfRunningBigApp=%d\n",
-               tid, app_id, sceLncUtilGetAppIdOfRunningBigApp());
-    int rc = sceLncUtilResumeApp(app_id);
+               tid, handle, sceLncUtilGetAppIdOfRunningBigApp());
+    int rc = sceLncUtilResumeApp(handle);
     if (rc != 0)
-        pldmgr_log("[PLDMGR] saves: sceLncUtilResumeApp(%u) 返回 0x%08x\n", app_id, (unsigned)rc);
+        pldmgr_log("[PLDMGR] saves: sceLncUtilResumeApp(%u) 返回 0x%08x\n", handle, (unsigned)rc);
     return rc == 0 ? 0 : -1;
 #endif
 }
 
-static ga_susp_fn g_susp = ga_susp_default;
-static ga_resm_fn g_resm = ga_resm_default;
+/* 默认冻结：**先试进程级 SIGSTOP，不行再回落 LncUtil 挂起**。
+ *
+ * 顺序不能反。SIGSTOP 只把游戏进程冻住，**游戏压根没离开前台** —— 于是
+ * 「拉完怎么把游戏切回前台」这个问题根本不存在。而 LncUtil 那条路会跳主屏、
+ * 又切不回来（`.152` 探针实证），是实打实的体验倒退。 */
+static int ga_frz_default(const char *tid, int *kind_out, unsigned int *handle_out) {
+    unsigned int h = 0;
 
-void game_auto_set_suspender(ga_susp_fn susp, ga_resm_fn resm) {
-    g_susp = susp ? susp : ga_susp_default;
-    g_resm = resm ? resm : ga_resm_default;
+    if (ga_sigstop_freeze(tid, &h) == 0) {
+        if (kind_out) *kind_out = GA_FREEZE_SIGSTOP;
+        if (handle_out) *handle_out = h;
+        return 0;
+    }
+    if (ga_lnc_freeze(tid, &h) == 0) {
+        if (kind_out) *kind_out = GA_FREEZE_LNC;
+        if (handle_out) *handle_out = h;
+        return 0;
+    }
+    return -1;
 }
 
-/* 拉取前把正在跑的**这款**游戏冻住。返回 1 = 冻住了（*app_id_out 是那个应用，
- * 拉完必须拿它去恢复）、0 = 没冻。
+static int ga_thaw_default(const char *tid, int kind, unsigned int handle) {
+    if (kind == GA_FREEZE_SIGSTOP) return ga_sigstop_thaw(tid, handle);
+    if (kind == GA_FREEZE_LNC) return ga_lnc_thaw(tid, handle);
+    return -1;
+}
+
+static ga_frz_fn g_frz = ga_frz_default;
+static ga_thaw_fn g_thaw = ga_thaw_default;
+
+void game_auto_set_freezer(ga_frz_fn frz, ga_thaw_fn thaw) {
+    g_frz = frz ? frz : ga_frz_default;
+    g_thaw = thaw ? thaw : ga_thaw_default;
+}
+
+/* 拉取前把正在跑的**这款**游戏冻住。返回 1 = 冻住了（`*kind_out` 是用了哪套机制、
+ * `*handle_out` 是那个不透明凭据，拉完必须原样交回去放行）、0 = 没冻。
  *
  * 只冻目标那款：跑的是别的游戏时冻它是纯粹的伤害（人家跟我们这份存档没关系）。
  * 冻不住**不阻断拉取** —— 那只是退回到 `.149` 之前的老行为（有竞态、但比不拉强），
  * 而且「配了自动存档却什么都不做」比「拉了一次可能不生效」更难排查。 */
-static int ga_freeze_for_pull(const char *tid, unsigned int *app_id_out) {
-    if (app_id_out) *app_id_out = 0;
+static int ga_freeze_for_pull(const char *tid, int *kind_out, unsigned int *handle_out) {
+    if (kind_out) *kind_out = GA_FREEZE_NONE;
+    if (handle_out) *handle_out = 0;
 
     char run[32];
     run[0] = 0;
@@ -142,30 +320,36 @@ static int ga_freeze_for_pull(const char *tid, unsigned int *app_id_out) {
      * 游戏完全可能已经退出（尤其换游戏那一轮，先推后拉之间还睡了 GA_EXIT_SETTLE）。 */
     if (!g_probe(run, sizeof(run)) || strcmp(run, tid) != 0) return 0;
 
-    unsigned int app_id = 0;
-    if (g_susp(tid, &app_id) != 0) {
-        pldmgr_log("[PLDMGR] saves: %s 正在启动 · 挂起失败，仍继续拉取"
+    int kind = GA_FREEZE_NONE;
+    unsigned int handle = 0;
+    if (g_frz(tid, &kind, &handle) != 0) {
+        pldmgr_log("[PLDMGR] saves: %s 正在启动 · 暂停失败（进程级与 LncUtil 都失败），仍继续拉取"
                    "（游戏可能已经读进旧存档，这次拉取未必生效）\n", tid);
         pldmgr_notify("远程拉取：无法暂停 %s\n存档可能不生效", tid);
         return 0;
     }
-    pldmgr_log("[PLDMGR] saves: %s 已挂起（app_id=%u）· 拉取完成后自动恢复\n", tid, app_id);
-    if (app_id_out) *app_id_out = app_id;
+    pldmgr_log("[PLDMGR] saves: %s 已暂停（%s）· 拉取完成后自动恢复\n", tid,
+               kind == GA_FREEZE_SIGSTOP ? "进程级 SIGSTOP" : "LncUtil 挂起");
+    if (kind_out) *kind_out = kind;
+    if (handle_out) *handle_out = handle;
     return 1;
 }
 
 /* 拉完放行。**恢复失败必须让人知道**：游戏会一直停在冻结状态，用户看到的是
  * 「点了一下就死机了」，而真正的原因在面板日志里 —— 所以屏幕通知也要弹。
  *
- * `app_id` 是**挂起时记下的那个**，不是当场解析的（`.150` 真机首轮就是栽在
- * 「恢复时又解析一次」上：挂起后系统不认这个大应用了，解析必然失败）。 */
-static void ga_thaw_after_pull(const char *tid, unsigned int app_id) {
-    if (g_resm(tid, app_id) == 0) {
-        pldmgr_log("[PLDMGR] saves: %s 已恢复运行（app_id=%u）\n", tid, app_id);
+ * `kind` / `handle` 是**冻结时记下的那一对**，不是当场重新解析的（`.150` 真机首轮
+ * 就是栽在「恢复时又解析一次 app_id」上：挂起后系统不认这个大应用了，解析必然失败）。
+ * 这条不变量对两套机制都成立 —— SIGSTOP 那边 handle 是 pid，**同样不许重找**：
+ * 游戏重启过一次的话，重找会拿到一个新进程，而真正被冻住的那个还停在那儿没人放。 */
+static void ga_thaw_after_pull(const char *tid, int kind, unsigned int handle) {
+    const char *kn = (kind == GA_FREEZE_SIGSTOP) ? "pid" : "app_id";
+    if (g_thaw(tid, kind, handle) == 0) {
+        pldmgr_log("[PLDMGR] saves: %s 已恢复运行（%s=%u）\n", tid, kn, handle);
         return;
     }
-    pldmgr_log("[PLDMGR] saves: !!! %s 恢复失败（app_id=%u）—— 请手动切回游戏（或退出重进）\n",
-               tid, app_id);
+    pldmgr_log("[PLDMGR] saves: !!! %s 恢复失败（%s=%u）—— 请手动切回游戏（或退出重进）\n",
+               tid, kn, handle);
     pldmgr_notify("!!! 远程拉取：%s 恢复失败\n请手动切回游戏", tid);
 }
 
@@ -518,21 +702,25 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
     const char *scope = (only_uid && only_uid[0]) ? only_uid : "全部用户";
 
     /* [CN-FORK] v0.5.2.150 **拉取前先冻住正在启动的这款游戏。**
+     * [CN-FORK] v0.5.2.152 冻的方式换成**进程级 SIGSTOP**（原来走 LncUtil 挂起，
+     * 那条路会把游戏换到后台且恢复时切不回前台 —— 详见 include/game_auto.h）。
      *
      * 顺序就是用户口径的那条（也是唯一的正确顺序）：
      *   游戏启动 → 引擎监测到启动 → **暂停游戏** → 拉取存档 → 拉取成功 → **恢复游戏**
      *
      * 放在「开始」那两条**之前**：日志的时间线于是逐字对上那句话
-     * `已挂起 → 远程拉取 开始 → 远程拉取 结束 → 已恢复`，
+     * `已暂停 → 远程拉取 开始 → 远程拉取 结束 → 已恢复`，
      * 而且「开始」这行说的确实是「存档真的要开始搬了」（不是「我打算搬，先冻两秒」）。
      *
      * `freeze_game` 只有守护线程的自动拉取传 1 —— 手动拉取时游戏早就把存档读进
      * 内存了，冻它没有任何用（理由见 include/game_auto.h）。
      *
-     * `frozen_id` = **挂起时记下的那个 app_id**，恢复只能用它（挂起后系统不认
-     * 这个大应用了，当场解析必然失败 —— `.150` 真机首轮的坑，见头文件）。 */
-    unsigned int frozen_id = 0;
-    int frozen = (freeze_game && act == GA_ACT_PULL) ? ga_freeze_for_pull(tid, &frozen_id) : 0;
+     * `frozen_kind` / `frozen_handle` = **冻结时记下的那一对**，放行只能原样交回
+     * （不许重新解析 —— `.150` 真机首轮的坑，见头文件）。 */
+    int frozen_kind = GA_FREEZE_NONE;
+    unsigned int frozen_handle = 0;
+    int frozen = (freeze_game && act == GA_ACT_PULL)
+                     ? ga_freeze_for_pull(tid, &frozen_kind, &frozen_handle) : 0;
 
     /* 字段顺序是**按重要性倒着放**的：环形缓冲每行只有 MAX_LOG_LINE_LEN(256) 字节，
      * 目标里可能带着很长的 host/share/sub，超了就被截断。把「目标」放最后，
@@ -580,7 +768,7 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
      *
      * 失败也照样走到这儿：`frozen` 只在**真的冻住了**的时候才为 1，
      * 没冻过就绝不会去恢复（否则会平白把用户自己挂起的游戏叫醒）。 */
-    if (frozen) ga_thaw_after_pull(tid, frozen_id);
+    if (frozen) ga_thaw_after_pull(tid, frozen_kind, frozen_handle);
 }
 
 /* ── 手动推 / 拉（POST /game_save_sync）─────────────────────────────────── */

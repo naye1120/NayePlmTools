@@ -245,7 +245,7 @@ if [ -n "$SR_CURL_INC" ] && [ -n "$SR_SMB_A" ] && clang /tmp/_curlprobe.c -lcurl
     echo "=== game_auto ==="
     if ! clang -Wall -Wextra -O0 -Iinclude -Isrc/psaccounts/third_party -Itest \
         -I"$SR_CURL_INC" -I"$SR_SMB_INC" \
-        -DGA_NO_LNCUTIL \
+        -DGA_HOST \
         -DROOT_DIR='"/tmp/pldmgr_ga_test"' \
         -DAUTO_PATH='"/tmp/pldmgr_ga_test/auto.json"' \
         -DGS_HOME='"/tmp/pldmgr_ga_test/home"' \

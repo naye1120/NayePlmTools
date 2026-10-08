@@ -75,7 +75,8 @@ int game_auto_state_json(const char *tid, char *buf, size_t size);
 typedef int (*ga_probe_fn)(char *tid, size_t osz);
 void game_auto_set_probe(ga_probe_fn fn);
 
-/* ── [CN-FORK] v0.5.2.150 拉取期间挂起 / 恢复游戏 ─────────────────────────────
+/* ── [CN-FORK] v0.5.2.150 拉取期间冻住游戏 ────────────────────────────────────
+ * [CN-FORK] v0.5.2.152 冻的方式从「LncUtil 挂起」换成「进程级 SIGSTOP」。
  *
  * ── 它补的是哪条竞态 ─────────────────────────────────────────────────────
  * 拉取 = 把盘上存档**整份换掉**。而游戏启动时会把它的存档读进内存 —— 如果那一下
@@ -86,30 +87,65 @@ void game_auto_set_probe(ga_probe_fn fn);
  * 游戏读存档之前。用户口径「偶尔成功，偶尔失败」就是这个 —— 快启动的游戏输、
  * 慢启动的游戏赢。`.149` 修的「必然失效」（目录 inode 被换掉）跟它不是一回事。
  *
- * 挂起把它变成**没有竞态**：先把游戏冻住（这段时间它读不到存档），我们慢慢拉，
- * 拉完再放行。`sceLncUtilResumeApp` 与 `sceLncUtilSuspendApp` 是成对的，
- * 两个符号都在真机 SDK 的 `libSceSystemService.so` 里（`ps5_launcher.c` 已在用
- * Suspend 那一半；**没有** SDK 头文件，靠 extern 声明，与 `GetAppIdOfRunningBigApp` 同）。
+ * 冻住它把竞态变成**没有竞态**：这段时间它读不到存档，我们慢慢拉，拉完再放行。
+ *
+ * ── 为什么是 SIGSTOP，不是 LncUtil 的 SuspendApp ────────────────────────────
+ * `.150`/`.151` 用的是 `sceLncUtilSuspendApp` / `ResumeApp`。冻结本身是有效的，
+ * 但真机验收暴露出一个**副作用**：`SuspendApp` 会让系统把游戏换到后台（跳回主屏），
+ * 而 `ResumeApp` **只解冻、不切回前台** —— 用户必须手动点一下游戏才回得去
+ * （用户口径：「点击开始，游戏会自动进后台……手动点击按钮会恢复，但是不自动恢复」）。
+ *
+ * `.152` 用 `lnc_probe` 探针（`_scratch/lnc_probe.c`）在真机上逐个试过「切回前台」
+ * 的候选 API，**全部失败**，而且失败方式很值得记一笔 —— 它们**返回 0 却毫无效果**：
+ *
+ *     sceLncUtilResumeApp(57369)               = 0x00000000
+ *     sceLncUtilSetAppFocus(57369, 0)          = 0x00000000   ← 成功但无效
+ *     sceLncUtilSetAppFocus(57369, 1)          = 0x00000000   ← 成功但无效
+ *     sceLncUtilSetControllerFocus(57369, 0)   = 0x00000000   ← 成功但无效
+ *     sceLncUtilSetControllerFocus(57369, 1)   = 0x00000000   ← 成功但无效
+ *     sceLncUtilContinueApp(57369)             = 0x80020010   ← EBUSY
+ *
+ * 结论：**display 归 ShellUI 的 scene manager 管，不是这几个 LncUtil 调用能撬的**。
+ * 公开资料里也查不到它们的签名（SDK 的 libSceSystemService.so 是桩库、所有符号同址
+ * 0xaae4；shadPS4 里是空桩；psdevwiki / grep.app / LightningMods 的 daemon writeup
+ * 全都只有名字没有参数），继续猜下去性价比太低。
+ *
+ * 于是换思路：**别让游戏离开前台**。`SIGSTOP` 只把游戏进程停住，系统状态一点没变，
+ * 所以「切回前台」这个问题**根本不存在**。它同时更贴近用户的原话「暂停游戏」——
+ * 用户看到的是游戏画面冻住一两秒然后继续，而不是被踢回主屏。
+ *
+ * 冻结/放行**都要验证**（`ki_stat` + `ki_runtime`，见 `src/game_auto.c`），不是
+ * 「kill 返回 0 就算冻住了」——`kill()` 返回 0 只说明信号发出去了。
+ * SIGSTOP 走不通时回落到原来的 LncUtil 挂起（慢、会跳主屏，但至少有效）。
  *
  * ── 为什么只用在「自动拉取」───────────────────────────────────────────────
  * 那一刻游戏还在启动、**还没读到存档** —— 冻住它才有效果。
  * 手动拉取时游戏早就把存档读进内存了，冻不冻都改变不了它内存里那份（白冻一场，
  * 还会平白把用户正在看的画面冻住）；真要生效得让游戏重读存档，那是另一件事。
  *
- * 宿主测试用 `-DGA_NO_LNCUTIL` 关掉真实现，再装桩。产品代码不要调 setter。
+ * 宿主测试用 `-DGA_HOST` 关掉真实现（宿主上既没有 `sceLncUtil*`，也没有 PS5 的
+ * `sysctl(KERN_PROC)` + `kinfo_proc`），再装桩。产品代码不要调 setter。
  *
- * ── ⚠ 恢复**必须**用挂起时记下的那个 app_id（`.150` 真机首轮踩的坑）──────────
- * 应用被挂起后 `sceLncUtilGetAppIdOfRunningBigApp()` 返回 `0xffffffff`
- * —— 系统认为「没有正在运行的大应用」（挂起本来就是把它换出去）。
+ * ── ⚠ 放行**必须**用冻结时记下的那个凭据（`.150` 真机首轮踩的坑）────────────
+ * LncUtil 那条路：应用被挂起后 `sceLncUtilGetAppIdOfRunningBigApp()` 返回
+ * `0xffffffff` —— 系统认为「没有正在运行的大应用」（挂起本来就是把它换出去）。
  * 所以恢复时**再去解析一次 app_id 必然拿不到**，`ResumeApp` 根本发不出去，
  * 游戏会一直冻着。真机日志的原形：`恢复失败` 的**下一秒**就是 `已退出` ——
  * 那不是游戏真的退了，是我们自己丢了句柄（用户只能强退重进）。
  *
- * 所以 `ga_susp_fn` 成功时**必须**把 app_id 写出来，`ga_resm_fn` 收到的就是它。
- * 这条不变量在宿主上有断言（恢复拿到的 app_id == 挂起报的那个）。 */
-typedef int (*ga_susp_fn)(const char *tid, unsigned int *app_id_out); /* 0 = 已挂起 */
-typedef int (*ga_resm_fn)(const char *tid, unsigned int app_id);      /* 0 = 已恢复 */
-void game_auto_set_suspender(ga_susp_fn susp, ga_resm_fn resm);
+ * SIGSTOP 那条路同理：凭据是 **pid**，重找会拿到一个新进程（游戏重启过的话），
+ * 而真正被冻住的那个还停在那儿没人放。
+ *
+ * 所以 `ga_frz_fn` 成功时**必须**把凭据写出来，`ga_thaw_fn` 收到的就是它。
+ * 这条不变量在宿主上有断言（放行拿到的 handle == 冻结报的那个）。 */
+typedef int (*ga_frz_fn)(const char *tid, int *kind_out, unsigned int *handle_out);
+typedef int (*ga_thaw_fn)(const char *tid, int kind, unsigned int handle);
+void game_auto_set_freezer(ga_frz_fn frz, ga_thaw_fn thaw);
+
+/* `kind_out` 的取值（与 src/game_auto.c 里那份保持一致）。 */
+#define GA_FREEZE_NONE 0    /* 没冻 */
+#define GA_FREEZE_SIGSTOP 1 /* handle = pid */
+#define GA_FREEZE_LNC 2     /* handle = app_id */
 
 /* 跑一轮扫描。守护线程每秒调一次（`GA_TICK`）。
  *

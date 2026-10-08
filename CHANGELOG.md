@@ -1,3 +1,80 @@
+## v0.5.2.152 (CN-FORK)
+
+> **把「拉取期间挂起游戏」换成进程级 SIGSTOP —— 顺手把「恢复后不回前台」这个死结绕开。**
+> `.150`/`.151` 的挂起是有效的（拉取期间游戏确实读不到存档），但它有个真机副作用：
+> `sceLncUtilSuspendApp` 会让系统把游戏换到后台（跳回主屏），而 `ResumeApp`
+> **只解冻、不切前台** —— 用户必须手动点一下才回得去。
+> 用户口径：「点击开始，游戏会自动进后台，出现图片这个画面后，手动点击按钮会恢复，
+> 但是不自动恢复」。
+
+### ① 先用探针把「切回前台」这条路**证伪**（不是猜的）
+
+`_scratch/lnc_probe.c`（独立 ELF，崩了只死自己，而且挂起之后立刻恢复）在真机上逐个
+试了候选 API，结果**全部返回 0 却毫无效果**：
+
+```
+sceLncUtilResumeApp(57369)               = 0x00000000
+sceLncUtilSetAppFocus(57369, 0)          = 0x00000000   ← 成功但无效
+sceLncUtilSetAppFocus(57369, 1)          = 0x00000000   ← 成功但无效
+sceLncUtilSetControllerFocus(57369, 0)   = 0x00000000   ← 成功但无效
+sceLncUtilSetControllerFocus(57369, 1)   = 0x00000000   ← 成功但无效
+sceLncUtilContinueApp(57369)             = 0x80020010   ← EBUSY
+```
+
+结论：**display 归 ShellUI 的 scene manager 管，不是这几个 LncUtil 调用能撬的**。
+公开资料里也查不到它们的签名（SDK 的 `libSceSystemService.so` 是桩库、所有符号同址
+`0xaae4`；shadPS4 里是空壳；psdevwiki / grep.app / LightningMods 的 daemon writeup
+全都只有名字没有参数）。
+
+**为什么不直接猜一个签名塞进主流程**：恢复跑在守护线程上，猜错让进程崩掉时游戏**正被
+挂起**，那就变成「游戏永久冻死、只能强退重进」。这个失败模式不能拿去赌 —— 能测就先测。
+
+### ② 换思路：**别让游戏离开前台**
+
+`SIGSTOP` 只把游戏进程停住，系统状态一点没变，所以「切回前台」这个问题**根本不存在**。
+它同时更贴近用户原话「暂停游戏」：用户看到的是游戏画面冻住一两秒然后继续，而不是被
+踢回主屏。
+
+* 进程判据 `comm == "eboot.bin"`（与 ps-game-state-lib 同），枚举手法抄
+  `src/ps5_launcher.c` 的 `get_pid_by_name` —— 那边真机给 SceDiscPlayer 发过 SIGKILL，
+  `sysctl(KERN_PROC)` 枚举 + 跨用户发信号都是实证过的。
+* **冻结要验证**，不是「`kill()` 返回 0 就算冻住了」：`kill()` 返回 0 只说明信号发出去了。
+  做法是先量 200ms 的 CPU 时间做**对照**（运行中的游戏一定在涨），SIGSTOP 之后再量两次，
+  要求 `ki_runtime` 不再前进。日志留一行证据：
+  `冻结验证 pid=543：CPU 200ms +… us → +0 us · stat …→…`。
+  停不住就**立刻 SIGCONT 放行**（绝不把半死的进程留在那儿），再回落 LncUtil 挂起 ——
+  慢一点、会跳主屏，但至少有效。
+* `GA_TICK` / `GA_BOOT_DELAY` / `GA_EXIT_SETTLE` 与「只用于自动拉取」的口径都没变。
+
+### ③ 冻结/放行接口从「挂起/恢复」改名，凭据变成**不透明 handle**
+
+* `ga_susp_fn` / `ga_resm_fn` → `ga_frz_fn` / `ga_thaw_fn`，`game_auto_set_suspender`
+  → `game_auto_set_freezer`；签名多一个 `kind`（`GA_FREEZE_SIGSTOP` / `GA_FREEZE_LNC`）。
+  放行必须知道冻的时候用的是哪套 —— 用 `ResumeApp` 去解一个被 SIGSTOP 停住的进程
+  = 它永远不会被放行。
+* `.150` 那条不变量原样保留：**放行必须用冻结时报的那个凭据，不许当场重新解析**
+  （SIGSTOP 那边凭据是 pid，重找会拿到新进程，而被冻住的那个就没人放了）。
+
+### ④ 宿主回归：113 checks（原 112）
+
+* 新增「放行该收到冻结时报的机制代号」。
+* 顺序那四条、凭据那一条、手动拉取不冻结、冻不住仍拉取……文案跟着改成冻结/放行，
+  断言一条没少。
+
+### ⑤ 变异对照扩到三个（`test/mutation_check_freeze.sh`）
+
+| 变异 | 期望 |
+| --- | --- |
+| `order`：把 freeze 挪到 `ga_do_inner` 之后 | 恰好 2 条红（顺序那两条）|
+| `handle`：冻结后不把凭据交上去 | 恰好 1 条红 |
+| `kind`：不把机制代号交上去 | 恰好 1 条红 |
+
+### ⑥ `-DGA_NO_LNCUTIL` 改名 `-DGA_HOST`
+
+`.152` 起它挡的已经不只是 LncUtil，还挡 `sysctl(KERN_PROC)` + `struct kinfo_proc`
+（Linux 的 `<sys/user.h>` 是另一回事，根本没有 `kinfo_proc`）。名字得跟实际含义对上，
+否则下一个人会以为宿主上只是没有 LncUtil。
+
 ## v0.5.2.151 (CN-FORK)
 
 > **`.150` 真机首轮的收尾修复：恢复时不许再解析 app_id。** `.150` 的挂起本身是对的

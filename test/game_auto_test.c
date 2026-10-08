@@ -21,7 +21,7 @@
  *      这一节靠 `game_auto_tick()`（`.150` 为此从 static 导出）+ 两个桩驱动。
  *
  * 探测（sceLncUtilGetAppIdOfRunningBigApp）在宿主上没有那个符号，
- * 用 -DGA_NO_LNCUTIL 关掉默认实现，测试自己装探针（game_auto_set_probe）。
+ * 用 -DGA_HOST 关掉默认实现，测试自己装探针（game_auto_set_probe）。
  *
  * 用法：由 test/run_host_tests.sh 拨起，也可单独跑。
  */
@@ -516,43 +516,56 @@ static void t_log(void) {
           log_count("远程推送 结束"));
 }
 
-/* ══ ⑧ 拉取前挂起游戏 / 拉完恢复（v0.5.2.150）═════════════════════════════
+/* ══ ⑧ 拉取前冻结游戏 / 拉完放行（v0.5.2.150，机制在 .152 换成 SIGSTOP）════
  * 用户口径的顺序：**游戏启动 → 引擎监测到启动 → 暂停游戏 → 拉取存档 → 拉取成功 → 恢复游戏**。
  *
- * 这条链路在宿主上原来是**零覆盖**的：`ga_tick` 是 static，而挂起那一段只有它走得到。
+ * 这条链路在宿主上原来是**零覆盖**的：`ga_tick` 是 static，而冻结那一段只有它走得到。
  * `.150` 把 tick 导出（`game_auto_tick`）就是为了让这里能把**顺序**钉死 ——
- * 挂起必须发生在「远程拉取 开始」之前、恢复必须在「远程拉取 结束」之后。
+ * 冻结必须发生在「远程拉取 开始」之前、放行必须在「远程拉取 结束」之后。
  * 顺序错了整个修复就没意义（先拉后冻 = 游戏照样读到旧存档），而它恰恰是最容易被
  * 后来的重构改坏的地方（比如顺手把 freeze 挪到 ga_do_inner 后面）。
  *
- * 为什么挂起能治「偶尔成功、偶尔失败」：拉取是把盘上存档**整份换掉**，而游戏启动时
+ * 为什么冻结能治「偶尔成功、偶尔失败」：拉取是把盘上存档**整份换掉**，而游戏启动时
  * 会把自己的存档读进内存。谁先谁后决定成败 —— 快启动的游戏输、慢启动的赢，这就是
- * 用户看到的「偶尔」。冻住它之后游戏读不到存档，等我们拉完再放行，竞态就没有了。 */
+ * 用户看到的「偶尔」。冻住它之后游戏读不到存档，等我们拉完再放行，竞态就没有了。
+ *
+ * `.152` 起真机默认走**进程级 SIGSTOP**（不再让游戏离开前台，见 include/game_auto.h）。
+ * 但这里断言的东西**与机制无关**，所以一个字都不用改：冻结一次、放行一次、
+ * 放行必须拿冻结时报的那个凭据、顺序固定。机制选择是 `ga_frz_default` 内部的事，
+ * 宿主上两套真实现都是「直接返回 -1」，本用例用桩替掉整个默认实现。 */
 
 static int g_susp_n, g_resm_n;
 static char g_susp_tid[32], g_resm_tid[32];
-static unsigned int g_susp_id, g_resm_id; /* ★ 恢复必须收到**挂起报的那个** app_id */
+/* ★ 放行必须收到**冻结时报的那个**凭据。`.150` 它是 app_id，`.152` 起可能只是
+ * 一个 pid —— 但「不许当场重新解析」这条不变量一模一样，所以断言照旧。 */
+static unsigned int g_susp_id, g_resm_id;
+static int g_resm_kind; /* 机制代号也要原样传回（SIGSTOP / LNC） */
 static int g_susp_rc, g_resm_rc;
 
-/* 挂起桩：成功时**必须**写出一个 app_id（真机上是 LncUtil 给的那个）。
- * 这里给一个假但稳定的值，好让「恢复拿到的是不是同一个」变成可断言的。
+/* 冻结桩：成功时**必须**写出一个凭据（真机上：SIGSTOP 给 pid、LncUtil 给 app_id）。
+ * 这里给一个假但稳定的值，好让「放行拿到的是不是同一个」变成可断言的。
  *
  * 这条不变量是 `.150` 真机首轮的直接教训：真机上恢复代码**又解析了一次** app_id，
  * 而应用被挂起后 `sceLncUtilGetAppIdOfRunningBigApp()` 返回 0xffffffff
  * （系统认为没有「在运行的大应用」）→ 解析必然失败 → `ResumeApp` 根本没发出去 →
- * 游戏一直冻着。日志原形：「恢复失败」的下一秒就是「已退出」。 */
+ * 游戏一直冻着。日志原形：「恢复失败」的下一秒就是「已退出」。
+ * SIGSTOP 那条路同理：重找一个 eboot.bin 会拿到新进程，被冻住的那个就没人放了。 */
 #define FAKE_APP_ID 0x10007u
 
-static int susp_stub(const char *tid, unsigned int *app_id_out) {
+static int susp_stub(const char *tid, int *kind_out, unsigned int *handle_out) {
     g_susp_n++;
     snprintf(g_susp_tid, sizeof(g_susp_tid), "%s", tid ? tid : "");
-    if (g_susp_rc == 0 && app_id_out) *app_id_out = FAKE_APP_ID;
+    if (g_susp_rc == 0) {
+        if (kind_out) *kind_out = GA_FREEZE_SIGSTOP; /* 真机默认走这条 */
+        if (handle_out) *handle_out = FAKE_APP_ID;
+    }
     return g_susp_rc;
 }
-static int resm_stub(const char *tid, unsigned int app_id) {
+static int resm_stub(const char *tid, int kind, unsigned int handle) {
     g_resm_n++;
     snprintf(g_resm_tid, sizeof(g_resm_tid), "%s", tid ? tid : "");
-    g_resm_id = app_id;
+    g_resm_kind = kind;
+    g_resm_id = handle;
     return g_resm_rc;
 }
 
@@ -570,7 +583,7 @@ static int probe_budget_fn(char *out, size_t osz) {
 }
 
 static void t_freeze(void) {
-    printf("-- 拉取前挂起游戏 / 拉完恢复\n");
+    printf("-- 拉取前冻结游戏 / 拉完放行\n");
     char url[600], body[300], out[2048], msg[300], rp[700];
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/ps5save", g_http_port);
 
@@ -588,7 +601,7 @@ static void t_freeze(void) {
     CHECK(exists(rp), "前置：远端没收到文件：%s", rp);
 
     game_auto_set_probe(probe_fn);
-    game_auto_set_suspender(susp_stub, resm_stub);
+    game_auto_set_freezer(susp_stub, resm_stub);
 
     /* ── ① 正常路径：挂起 → 拉取 → 恢复，顺序必须对 ─────────────────────── */
     g_fake_running = NULL;
@@ -602,6 +615,7 @@ static void t_freeze(void) {
     g_susp_rc = g_resm_rc = 0;
     g_susp_tid[0] = g_resm_tid[0] = 0;
     g_susp_id = g_resm_id = 0;
+    g_resm_kind = -1; /* 没放过行时该是 -1，别让上一轮的残留蒙混过关 */
 
     g_fake_running = TID;
     game_auto_tick(); /* 这一轮：启动 → 挂起 → 拉取 → 恢复 */
@@ -610,27 +624,33 @@ static void t_freeze(void) {
     CHECK(g_resm_n == 1, "该恢复一次（实得 %d）", g_resm_n);
     CHECK(!strcmp(g_susp_tid, TID), "挂起该作用在 %s 上（实得「%s」）", TID, g_susp_tid);
     CHECK(!strcmp(g_resm_tid, TID), "恢复该作用在 %s 上（实得「%s」）", TID, g_resm_tid);
-    /* ★ 恢复必须用**挂起时那个** app_id，不许再解析一次 ——
-     * 真机上挂起后 GetAppIdOfRunningBigApp 返回 0xffffffff，再解析必然拿不到，
-     * 于是 ResumeApp 发不出去、游戏一直冻着（`.150` 真机首轮的坑）。 */
+    /* ★ 放行必须用**冻结时报的那个**凭据，不许再解析一次 ——
+     * `.150`：真机上挂起后 GetAppIdOfRunningBigApp 返回 0xffffffff，再解析必然
+     * 拿不到，于是 ResumeApp 发不出去、游戏一直冻着。
+     * `.152`：SIGSTOP 那条路的凭据是 pid，重找会拿到新进程，而被冻住的那个就
+     * 没人放了。机制换了，不变量没换。 */
     CHECK(g_resm_id == FAKE_APP_ID,
-          "恢复必须用挂起时那个 app_id（实得 0x%x，期望 0x%x）", g_resm_id, FAKE_APP_ID);
+          "放行必须用冻结时报的凭据（实得 0x%x，期望 0x%x）", g_resm_id, FAKE_APP_ID);
+    /* 机制代号同样要原样传回：传错了会拿另一套 API 去放行（SIGSTOP 冻的用
+     * ResumeApp 去解 = 游戏一直冻着）。 */
+    CHECK(g_resm_kind == GA_FREEZE_SIGSTOP,
+          "放行该收到冻结时报的机制代号（实得 %d，期望 %d）", g_resm_kind, GA_FREEZE_SIGSTOP);
     CHECK(exists(SAVE_FILE), "拉取没把存档拉回来");
 
-    int fs = log_at("已挂起"), ps = log_at("远程拉取 开始");
+    int fs = log_at("已暂停"), ps = log_at("远程拉取 开始");
     int pe = log_at("远程拉取 结束"), rs = log_at("已恢复");
-    CHECK(fs >= 0, "日志里没有「已挂起」这一行");
+    CHECK(fs >= 0, "日志里没有「已暂停」这一行");
     CHECK(rs >= 0, "日志里没有「已恢复」这一行");
     /* ★ 这四条是这个用例存在的全部理由：顺序必须逐字对上用户口径那句话 ——
      *   「游戏启动 → 监测到启动 → 暂停游戏 → 拉取存档 → 拉取成功 → 恢复游戏」。
      *   先拉后冻 = 游戏照样读到旧存档，整个修复就没了意义；而它恰恰是最容易被
      *   后来的重构改坏的地方（比如顺手把 freeze 挪到 ga_do_inner 后面）。 */
-    CHECK(fs == 0, "「已挂起」该是拉取这条链上的**第一行**（实得 @%d）", fs);
+    CHECK(fs == 0, "「已暂停」该是拉取这条链上的**第一行**（实得 @%d）", fs);
     CHECK(fs >= 0 && ps >= 0 && fs < ps,
-          "挂起必须在「拉取 开始」之前（实得 挂起@%d / 开始@%d）", fs, ps);
+          "冻结必须在「拉取 开始」之前（实得 冻结@%d / 开始@%d）", fs, ps);
     CHECK(ps >= 0 && pe > ps, "「拉取 开始」必须在「拉取 结束」之前（实得 %d / %d）", ps, pe);
     CHECK(pe >= 0 && rs >= 0 && pe < rs,
-          "恢复必须在「拉取 结束」之后（实得 结束@%d / 恢复@%d）", pe, rs);
+          "放行必须在「拉取 结束」之后（实得 结束@%d / 放行@%d）", pe, rs);
 
     /* ── ② 挂不住时：拉取照跑，但**不恢复**（没冻过就不能去放）───────────── */
     g_fake_running = NULL;
@@ -647,8 +667,8 @@ static void t_freeze(void) {
     CHECK(g_susp_n == 1, "该**尝试**挂起一次（实得 %d）", g_susp_n);
     CHECK(g_resm_n == 0, "挂起失败时不该去恢复（实得 %d 次）", g_resm_n);
     CHECK(exists(SAVE_FILE), "挂起失败也必须照样拉取 —— 不能因为冻不住就什么都不做");
-    CHECK(log_count("挂起失败") == 1, "挂起失败要留一行痕（实得 %d）",
-          log_count("挂起失败"));
+    CHECK(log_count("暂停失败") == 1, "冻结失败要留一行痕（实得 %d）",
+          log_count("暂停失败"));
 
     /* ── ③ 探测到 ga_do 之间游戏退出了：不挂起、不恢复，拉取照跑 ─────────── */
     g_fake_running = NULL;
@@ -665,8 +685,8 @@ static void t_freeze(void) {
     CHECK(g_susp_n == 0, "游戏已经退出了，不该去挂起（实得 %d）", g_susp_n);
     CHECK(g_resm_n == 0, "没挂起过就不该恢复（实得 %d）", g_resm_n);
     CHECK(exists(SAVE_FILE), "游戏退出了也必须照样拉取");
-    CHECK(log_count("已挂起") == 0, "没挂成就不该打「已挂起」（实得 %d）",
-          log_count("已挂起"));
+    CHECK(log_count("已暂停") == 0, "没冻成就不该打「已暂停」（实得 %d）",
+          log_count("已暂停"));
 
     /* ── ④ 手动拉取**不**挂起（防「顺手给手动也加上」的回归）──────────────
      * 手动拉取时游戏早把存档读进内存了，冻它改变不了内存里那份，只会平白把
@@ -680,8 +700,8 @@ static void t_freeze(void) {
     (void)game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg));
     CHECK(g_susp_n == 0 && g_resm_n == 0,
           "手动拉取不该挂起 / 恢复游戏（实得 %d / %d）", g_susp_n, g_resm_n);
-    CHECK(log_count("已挂起") == 0, "手动拉取不该打「已挂起」（实得 %d）",
-          log_count("已挂起"));
+    CHECK(log_count("已暂停") == 0, "手动拉取不该打「已暂停」（实得 %d）",
+          log_count("已暂停"));
 
     /* ── ⑤ 恢复失败：日志 + **屏幕通知** 都必须有 ──────────────────────────
      * 游戏会一直冻着，用户看到的是「点了一下就死机了」。这条不报出来，用户只会
@@ -695,6 +715,7 @@ static void t_freeze(void) {
     g_susp_rc = 0;
     g_resm_rc = -1;
     g_resm_id = 0;
+    g_resm_kind = -1;
     g_fake_running = TID;
     game_auto_tick();
 
@@ -712,7 +733,7 @@ static void t_freeze(void) {
     g_resm_rc = 0;
     g_fake_running = NULL;
     game_auto_set_probe(NULL);
-    game_auto_set_suspender(NULL, NULL);
+    game_auto_set_freezer(NULL, NULL);
 }
 
 int main(void) {
