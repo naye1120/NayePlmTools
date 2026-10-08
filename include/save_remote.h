@@ -2,6 +2,7 @@
 #define SAVE_REMOTE_H
 
 #include <stddef.h>
+#include <time.h>   /* sr_stat 的 out_mtime 用 time_t；libsmb2 也要求先包含 */
 
 /* [CN-FORK] v0.5.2.142 存档的远程传输层（FTP / HTTP）。
  *
@@ -94,5 +95,16 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
  * *out_files / *out_bytes 回写进主机的量（可为 NULL）。 */
 int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
             long long *out_files, long long *out_bytes, char *err, size_t errsz);
+
+/* [CN-FORK] v0.5.2.145 **只读**地取一份远程存档的真实元数据，供前端「远程游戏」
+ * 标签展示与本地存档列表同款的信息（大小 / 修改时间 / 文件数）。
+ *   out_size  ← <uid>.zip 的字节数（smb2_stat / 协议 stat 直接拿，真实）
+ *   out_mtime ← <uid>.zip 的 mtime（真实打包时间，smb2_stat 拿）
+ *   out_files ← 推送时一并写的 <uid>.meta.json 里的 files；老存档没有 meta 时回 -1
+ * 0 成功；SR_ENOTFOUND = 远端还没有这份（语义同 sr_pull，前端当「没得显示」）；
+ * -1 = 配置 / 连接错误（err 人话）。FTP / HTTP 暂未实现，统一回 -1 + 说明。 */
+int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
+            long long *out_size, time_t *out_mtime, long long *out_files,
+            char *err, size_t errsz);
 
 #endif

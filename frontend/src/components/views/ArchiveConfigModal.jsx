@@ -75,7 +75,7 @@ export default function ArchiveConfigModal({ show, onClose, config, onSaveConfig
 
   const onSaveCfg = async () => {
     if (modeBad) {
-      addToast?.(t('game.mode_unsupported_toast', '传输方式认不出来，请改用 SMB / FTP / HTTP'), 'error')
+      addToast?.(t('game.mode_unsupported_toast', '传输方式认不出来，当前仅支持 SMB'), 'error')
       return
     }
     setSaving(true)
@@ -96,7 +96,7 @@ export default function ArchiveConfigModal({ show, onClose, config, onSaveConfig
 
   const onTest = async () => {
     if (modeBad) {
-      addToast?.(t('game.mode_unsupported_toast', '传输方式认不出来，请改用 SMB / FTP / HTTP'), 'error')
+      addToast?.(t('game.mode_unsupported_toast', '传输方式认不出来，当前仅支持 SMB'), 'error')
       return
     }
     setTesting(true)
@@ -141,7 +141,7 @@ export default function ArchiveConfigModal({ show, onClose, config, onSaveConfig
           />
           {modeBad && (
             <Note tone="error" icon={AlertTriangle} className="mt-2">
-              {t('game.mode_unsupported', '这个传输方式（{{mode}}）当前版本认不出来，请在 SMB / FTP / HTTP 里选一个。').replace('{{mode}}', mode)}
+              {t('game.mode_unsupported', '这个传输方式（{{mode}}）当前版本认不出来，当前仅支持 SMB。').replace('{{mode}}', mode)}
             </Note>
           )}
 

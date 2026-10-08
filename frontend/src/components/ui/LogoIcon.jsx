@@ -6,7 +6,7 @@ export default function LogoIcon({ className = "w-8 h-8" }) {
   return (
     <img
       src="/icon.png?v=0.5.1.12"
-      alt="NayePlmTools"
+      alt="NayePlm工具箱"
       className={className}
       draggable={false}
     />

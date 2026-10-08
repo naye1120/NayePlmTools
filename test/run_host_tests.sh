@@ -141,7 +141,8 @@ if command -v python3 >/dev/null 2>&1; then
             -DGAME_SAVES_SNAP_DIR='"/tmp/pldmgr_saves_test/snap"' \
             -DGS_SNAP_QUIET_SEC=0 \
             src/game_job.c src/json_helpers.c src/utils.c src/inflate.c src/zip_io.c \
-            src/psaccounts/third_party/cJSON.c test/stub_archive_global.c
+            src/psaccounts/third_party/cJSON.c test/stub_archive_global.c \
+            test/stub_sr_stat.c
     fi
 else
     echo "=== game_saves SKIPPED: 需要 python3 做夹具 ==="

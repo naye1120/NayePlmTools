@@ -135,9 +135,15 @@ int game_saves_auto_set(const char *tid, const char *body, size_t len,
 int game_saves_test(const char *body, size_t len, char *buf, size_t size);
 
 /* GET /game_save_download：把 <uid>/<TID>/ 整份打成 STORE zip 写到 out_path。
- * save = uid；zip 内的顶层目录用 tid。0 成功（调用方负责流完之后 unlink）。 */
+ * save = uid；zip 内的顶层目录用 tid。0 成功（调用方负责流完之后 unlink）。
+ * out_files 回实际打进 zip 的文件数（可为 NULL）。 */
 int game_saves_pack(const char *tid, const char *save, const char *out_path,
-                    char *msg, size_t msgsz);
+                    long long *out_files, char *msg, size_t msgsz);
+
+/* [CN-FORK] v0.5.2.145 GET /game_save_remote_info：取某用户远程存档的只读元数据
+ * （大小 / 文件数 / 修改时间），供前端「远程游戏」标签展示。返回写入长度，<0 出错。
+ * 配置解析全局优先 → per-game 回落。输出 JSON 见 game_saves.c 注释。 */
+int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t size);
 
 /* POST /game_save_upload：body 是用户挑的那个文件原样字节，save = uid
  * （空 = 落在第一个用户下）。**整份替换**：旧的先改名留一手，换成功才删。

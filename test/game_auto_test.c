@@ -7,6 +7,9 @@
  *   ③ 远端还没有存档时不算失败（第一次用必然遇到，不能给用户一条红报错）
  *   ④ 不支持的协议（smb）要说清原因
  *   ⑤ 运行期状态：running 跟着探测走、last 记下最后一次动作
+ *   ⑥ 推 / 拉的「开始 / 结束」两条 debug 行（`.147`）—— 走 pldmgr_log 进面板「日志」页，
+ *      所以是**用户看得见的产物**：成对、有序、带触发来源 / 目标 / 计数 / 用时，
+ *      且**提前返回的失败路径也必须成对**
  *
  * 探测（sceLncUtilGetAppIdOfRunningBigApp）在宿主上没有那个符号，
  * 用 -DGA_NO_LNCUTIL 关掉默认实现，测试自己装探针（game_auto_set_probe）。
@@ -21,15 +24,81 @@
 
 #include "game_auto.h"
 #include "game_saves.h"
+#include "notification.h" /* 下面那个 pldmgr_notify 桩要跟真声明对得上 */
 #include "stub_servers.h"
 
 #include <stdarg.h>
+
+/* [CN-FORK] v0.5.2.147 把日志抓下来。`.147` 给推 / 拉加了「开始 / 结束」两条 debug 行
+ * （用户口径：「远程拉取和推送远程的时候，两个动作的开始和结束都要 debug 到屏幕信息」），
+ * 它们走 pldmgr_log → 面板「日志」页的环形缓冲 —— 那是**用户看得见的产物**，
+ * 宿主上不抓就等于这两行完全没覆盖（同「宿主抹掉了真机前提」那一族）。 */
+#define LOG_CAP 64
+#define LOG_LEN 512
+static char g_log[LOG_CAP][LOG_LEN];
+static int g_log_n;
+
 void pldmgr_log(const char *fmt, ...) {
-    if (!getenv("SAVES_TEST_VERBOSE")) return;
+    char line[LOG_LEN];
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
+
+    if (g_log_n < LOG_CAP) {
+        snprintf(g_log[g_log_n], LOG_LEN, "%s", line);
+        g_log_n++;
+    }
+    if (!getenv("SAVES_TEST_VERBOSE")) return;
+    fputs(line, stderr);
+}
+
+/* 含 needle 的日志条数 / 第一条的下标（-1 = 没有）。 */
+static int log_count(const char *needle) {
+    int n = 0;
+    for (int i = 0; i < g_log_n; i++)
+        if (strstr(g_log[i], needle)) n++;
+    return n;
+}
+static int log_at(const char *needle) {
+    for (int i = 0; i < g_log_n; i++)
+        if (strstr(g_log[i], needle)) return i;
+    return -1;
+}
+
+/* [CN-FORK] v0.5.2.147 **屏幕通知**（`pldmgr_notify`）也得抓。
+ * 真机那条路是 `sceKernelSendNotificationRequest`（宿主没这个符号），所以这里必须是桩；
+ * 而它正是这次改动的**主要产物** —— 用户要的「屏幕信息」就是它（口径：「就跟这个一样」，
+ * 指 main.c 的 `NayePlmTools v%s Ready!`）。桩而不抓 = 主要产物零覆盖。 */
+#define NOTIFY_CAP 32
+static char g_notify[NOTIFY_CAP][512];
+static int g_notify_n;
+
+void pldmgr_notify(const char *fmt, ...) {
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+
+    if (g_notify_n < NOTIFY_CAP) {
+        snprintf(g_notify[g_notify_n], 512, "%s", line);
+        g_notify_n++;
+    }
+    if (!getenv("SAVES_TEST_VERBOSE")) return;
+    fprintf(stderr, "[NOTIFY] %s\n", line);
+}
+
+static int notify_count(const char *needle) {
+    int n = 0;
+    for (int i = 0; i < g_notify_n; i++)
+        if (strstr(g_notify[i], needle)) n++;
+    return n;
+}
+static int notify_at(const char *needle) {
+    for (int i = 0; i < g_notify_n; i++)
+        if (strstr(g_notify[i], needle)) return i;
+    return -1;
 }
 
 #define ROOT ROOT_DIR
@@ -298,6 +367,146 @@ static void t_sync(void) {
           "空请求必须失败");
 }
 
+/* ══ ⑦ 推 / 拉的「开始 / 结束」两条 debug 行（v0.5.2.147）═════════════════
+ * 用户口径：「远程拉取和推送远程的时候，两个动作的开始和结束都要 debug 到屏幕信息」。
+ * 这两行走 pldmgr_log → 面板「日志」页的环形缓冲，所以它们是**用户看得见的产物**：
+ * 少一条、或者两条不成对，用户点完按钮就还是「不知道到底跑没跑」。
+ * 这一节钉四件事：① 成功的一对、且「开始」在「结束」之前；② 开始行带触发来源与目标；
+ * ③ 结束行带计数与用时；④ **提前返回的失败路径也必须成对** —— 这正是把「开始」放在
+ * 包装层（而不是 ga_do_inner 里）的全部理由，不钉住它会被后来的重构改回去。 */
+static void t_log(void) {
+    printf("-- 推 / 拉的开始 / 结束 debug 行\n");
+    char url[600], body[300], out[2048], msg[300];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/ps5save", g_http_port);
+
+    fixture_reset();
+    write_cfg("http", url, 1, 1, 1);
+
+    /* ① 推送成功的一对 */
+    g_log_n = 0;
+    g_notify_n = 0;
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"push\"}", TID);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+          "手动推送失败：%s", msg);
+    CHECK(log_count("远程推送 开始") == 1, "推送该有且只有一条「开始」（实得 %d）",
+          log_count("远程推送 开始"));
+    CHECK(log_count("远程推送 结束") == 1, "推送该有且只有一条「结束」（实得 %d）",
+          log_count("远程推送 结束"));
+    int ps = log_at("远程推送 开始"), pe = log_at("远程推送 结束");
+    CHECK(ps >= 0 && pe > ps, "「开始」必须在「结束」之前（实得 %d / %d）", ps, pe);
+    CHECK(ps >= 0 && strstr(g_log[ps], TID) != NULL, "开始行该带 tid：%s",
+          ps >= 0 ? g_log[ps] : "(没有开始行)");
+    CHECK(ps >= 0 && strstr(g_log[ps], "触发=手动") != NULL, "开始行该标出是手动触发：%s",
+          ps >= 0 ? g_log[ps] : "(没有开始行)");
+    CHECK(ps >= 0 && strstr(g_log[ps], "范围=全部用户") != NULL, "不传 uid 时范围该是全部用户：%s",
+          ps >= 0 ? g_log[ps] : "(没有开始行)");
+    CHECK(ps >= 0 && strstr(g_log[ps], "目标=HTTP · ") != NULL && strstr(g_log[ps], url) != NULL,
+          "开始行该带配的那个远程 URL：%s", ps >= 0 ? g_log[ps] : "(没有开始行)");
+    CHECK(pe >= 0 && strstr(g_log[pe], "成功 1") != NULL, "结束行该报成功 1 份：%s",
+          pe >= 0 ? g_log[pe] : "(没有结束行)");
+    CHECK(pe >= 0 && strstr(g_log[pe], "失败 0") != NULL, "结束行该报失败 0：%s",
+          pe >= 0 ? g_log[pe] : "(没有结束行)");
+    CHECK(pe >= 0 && strstr(g_log[pe], "用时 ") != NULL, "结束行该带用时：%s",
+          pe >= 0 ? g_log[pe] : "(没有结束行)");
+    /* 推送只回字节数（sr_push 不填 files）→ 结束行**不许**报「个文件」，
+     * 否则就是「0 个文件 / 2648 字节」这种自相矛盾的一行。 */
+    CHECK(pe >= 0 && strstr(g_log[pe], "字节") != NULL && strstr(g_log[pe], "个文件") == NULL,
+          "推送的结束行只该报字节数：%s", pe >= 0 ? g_log[pe] : "(没有结束行)");
+
+    /* ①b 同一对也要出现在**屏幕通知**上（用户要的「屏幕信息」就是它） */
+    CHECK(notify_count("远程推送 开始") == 1, "推送该有且只有一条「开始」通知（实得 %d）",
+          notify_count("远程推送 开始"));
+    CHECK(notify_count("远程推送 结束") == 1, "推送该有且只有一条「结束」通知（实得 %d）",
+          notify_count("远程推送 结束"));
+    int pns = notify_at("远程推送 开始"), pne = notify_at("远程推送 结束");
+    CHECK(pns >= 0 && pne > pns, "通知里「开始」也必须在「结束」之前（实得 %d / %d）", pns, pne);
+    CHECK(pns >= 0 && strstr(g_notify[pns], TID) != NULL
+              && strstr(g_notify[pns], "触发=手动") != NULL
+              && strstr(g_notify[pns], "范围=全部用户") != NULL
+              && strstr(g_notify[pns], url) != NULL,
+          "开始通知该带 tid / 触发 / 范围 / 目标：%s",
+          pns >= 0 ? g_notify[pns] : "(没有开始通知)");
+    CHECK(pne >= 0 && strstr(g_notify[pne], "成功 1") != NULL
+              && strstr(g_notify[pne], "失败 0") != NULL
+              && strstr(g_notify[pne], "用时 ") != NULL,
+          "结束通知该带计数与用时：%s", pne >= 0 ? g_notify[pne] : "(没有结束通知)");
+    CHECK(pne >= 0 && strstr(g_notify[pne], "个文件") == NULL,
+          "推送的结束通知也只该报字节数：%s", pne >= 0 ? g_notify[pne] : "(没有结束通知)");
+
+    /* ② 拉取成功的一对，且不能串到「推送」那个动作名上 */
+    g_log_n = 0;
+    g_notify_n = 0;
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"pull\"}", TID);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+          "手动拉取失败：%s", msg);
+    CHECK(log_count("远程拉取 开始") == 1 && log_count("远程拉取 结束") == 1,
+          "拉取该有开始 / 结束各一条（实得 %d / %d）",
+          log_count("远程拉取 开始"), log_count("远程拉取 结束"));
+    CHECK(log_count("远程推送 开始") == 0, "拉取不该打出「推送」的行");
+    int pl = log_at("远程拉取 结束");
+    CHECK(pl >= 0 && strstr(g_log[pl], "个文件") != NULL,
+          "拉取的结束行该报文件数（拉回来的确实是文件）：%s",
+          pl >= 0 ? g_log[pl] : "(没有结束行)");
+    CHECK(notify_count("远程拉取 开始") == 1 && notify_count("远程拉取 结束") == 1,
+          "拉取的通知也该成对（实得 %d / %d）",
+          notify_count("远程拉取 开始"), notify_count("远程拉取 结束"));
+    int pln = notify_at("远程拉取 结束");
+    CHECK(pln >= 0 && strstr(g_notify[pln], "个文件") != NULL,
+          "拉取的结束通知该报文件数：%s", pln >= 0 ? g_notify[pln] : "(没有结束通知)");
+
+    /* ③ 指定 uid 时「范围」要跟着变 */
+    g_log_n = 0;
+    g_notify_n = 0;
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"pull\",\"uid\":\"%s\"}", TID, UID);
+    out[0] = msg[0] = 0;
+    (void)game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg));
+    int us = log_at("远程拉取 开始");
+    CHECK(us >= 0 && strstr(g_log[us], "范围=" UID) != NULL,
+          "指定 uid 时范围该是那个 uid：%s", us >= 0 ? g_log[us] : "(没有开始行)");
+
+    /* ④ **提前返回的失败路径也必须成对**（「开始」放包装层的全部理由）。
+     * 这里走「协议不支持」那条提前 return。 */
+    write_cfg("webdav", "192.168.1.10", 1, 1, 1);
+    g_log_n = 0;
+    g_notify_n = 0;
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"push\"}", TID);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == -1,
+          "不认识的协议必须失败");
+    CHECK(log_count("远程推送 开始") == 1, "失败路径也要有「开始」（实得 %d）",
+          log_count("远程推送 开始"));
+    CHECK(log_count("远程推送 结束") == 1, "失败路径也要有「结束」（实得 %d）",
+          log_count("远程推送 结束"));
+    int fe = log_at("远程推送 结束");
+    CHECK(fe >= 0 && strstr(g_log[fe], "失败 1") != NULL, "结束行该报失败 1：%s",
+          fe >= 0 ? g_log[fe] : "(没有结束行)");
+    CHECK(fe >= 0 && strstr(g_log[fe], "不支持") != NULL, "结束行该带上那句人话错误：%s",
+          fe >= 0 ? g_log[fe] : "(没有结束行)");
+    CHECK(notify_count("远程推送 开始") == 1 && notify_count("远程推送 结束") == 1,
+          "失败路径的通知也要成对（实得 %d / %d）",
+          notify_count("远程推送 开始"), notify_count("远程推送 结束"));
+    int fne = notify_at("远程推送 结束");
+    CHECK(fne >= 0 && strstr(g_notify[fne], "失败 1") != NULL
+              && strstr(g_notify[fne], "不支持") != NULL,
+          "失败通知该带失败计数与原因：%s", fne >= 0 ? g_notify[fne] : "(没有结束通知)");
+
+    /* ⑤ 连配置都没有时：开始行写「未配置」，不是留空 */
+    fixture_reset();
+    g_log_n = 0;
+    g_notify_n = 0;
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"push\"}", TID);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == -1,
+          "没有配置时必须失败");
+    int ns = log_at("远程推送 开始");
+    CHECK(ns >= 0 && strstr(g_log[ns], "目标=未配置") != NULL,
+          "读不到配置时开始行该写「未配置」：%s", ns >= 0 ? g_log[ns] : "(没有开始行)");
+    CHECK(log_count("远程推送 结束") == 1, "没有配置时也要有「结束」（实得 %d）",
+          log_count("远程推送 结束"));
+}
+
 int main(void) {
     snprintf(g_http_root, sizeof(g_http_root), "%s/http", ROOT);
     if (stub_http_start(g_http_root) != 0) {
@@ -308,6 +517,7 @@ int main(void) {
 
     t_plan();
     t_sync();
+    t_log();
 
     stub_http_stop();
     printf("game_auto: %d checks, %d failures\n", g_checks, g_fails);

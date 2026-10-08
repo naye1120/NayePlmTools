@@ -23,6 +23,7 @@
 #include <smb2/libsmb2.h>
 
 #include "game_saves.h"
+#include "cJSON.h"        /* [CN-FORK] v0.5.2.145 sr_stat 解析 <uid>.meta.json 的 files */
 #include "json_helpers.h" /* ensure_dir_recursive */
 #include "pldmgr.h"       /* pldmgr_log */
 #include "utils.h"        /* pldmgr_curl_init */
@@ -240,6 +241,57 @@ static size_t sr_read_file(char *ptr, size_t sz, size_t nm, void *ud) {
     return fread(ptr, 1, sz * nm, f);
 }
 
+/* 从内存块读（meta.json 这类小内容直接 PUT，不必落临时文件）。 */
+struct sr_mem_src { const char *p; size_t len; size_t off; };
+static size_t sr_read_mem(char *ptr, size_t sz, size_t nm, void *ud) {
+    struct sr_mem_src *m = (struct sr_mem_src *)ud;
+    if (!m || m->off >= m->len) return 0;
+    size_t want = sz * nm;
+    if (want > m->len - m->off) want = m->len - m->off;
+    memcpy(ptr, m->p + m->off, want);
+    m->off += want;
+    return want;
+}
+
+/* [CN-FORK] v0.5.2.145 把一小段字节（目前只给 <uid>.meta.json 用）上传到 url。
+ * 协议选项与 sr_push 的 FTP/HTTP 分支保持一致。失败只回 -1、不向上抛 ——
+ * meta 只是「展示用」辅助信息，写失败不能让一次成功的存档推送变成失败。 */
+static int sr_curl_put_bytes(const sr_cfg_t *c, const char *url,
+                             const char *body, size_t len) {
+    pldmgr_curl_init();
+    CURL *cu = curl_easy_init();
+    if (!cu) return -1;
+    struct curl_slist *hdrs = NULL;
+    sr_common_opts(cu, url);
+    curl_easy_setopt(cu, CURLOPT_UPLOAD, 1L);
+    struct sr_mem_src mb = { body, len, 0 };
+    curl_easy_setopt(cu, CURLOPT_READFUNCTION, sr_read_mem);
+    curl_easy_setopt(cu, CURLOPT_READDATA, &mb);
+    curl_easy_setopt(cu, CURLOPT_INFILESIZE_LARGE, (curl_off_t)len);
+    if (!strcmp(c->mode, "ftp")) {
+        if (c->user[0]) {
+            curl_easy_setopt(cu, CURLOPT_USERNAME, c->user);
+            curl_easy_setopt(cu, CURLOPT_PASSWORD, c->password);
+        }
+        curl_easy_setopt(cu, CURLOPT_FTP_CREATE_MISSING_DIRS, (long)CURLFTP_CREATE_DIR_RETRY);
+        curl_easy_setopt(cu, CURLOPT_FTP_USE_EPSV, 1L);
+    } else {
+        curl_easy_setopt(cu, CURLOPT_CUSTOMREQUEST, "PUT");
+        hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
+        hdrs = curl_slist_append(hdrs, "Expect:");
+        if (c->token[0]) {
+            char auth[400];
+            snprintf(auth, sizeof(auth), "Authorization: Bearer %s", c->token);
+            hdrs = curl_slist_append(hdrs, auth);
+        }
+        curl_easy_setopt(cu, CURLOPT_HTTPHEADER, hdrs);
+    }
+    CURLcode rc = curl_easy_perform(cu);
+    if (hdrs) curl_slist_free_all(hdrs);
+    curl_easy_cleanup(cu);
+    return (rc == CURLE_OK) ? 0 : -1;
+}
+
 /* 临时归档的落点。用 GAME_SAVES_PACK_DIR（与「下载存档」共用那个目录）——
  * 它本来就不是存档目录，专门用来放这种一次性的包，见 game_saves.h。 */
 static int sr_tmp_path(const char *what, const char *tid, const char *uid,
@@ -389,14 +441,14 @@ static int smb_mkdirs(struct smb2_context *s, const char *dir,
 }
 
 static int sr_smb_push(const sr_cfg_t *c, const char *tid, const char *uid,
-                       const char *local, long long *out_bytes,
+                       const char *local, long long *out_bytes, long long pack_files,
                        char *err, size_t errsz) {
     smb_sess_t ss;
     struct smb2fh *fh = NULL;
     uint8_t *buf = NULL;
     FILE *f = NULL;
     char finalp[SR_SMB_PATH_MAX], tmpp[SR_SMB_PATH_MAX];
-    char nm[200], tnm[220];
+    char nm[200], tnm[220], mnm[240], metap[SR_SMB_PATH_MAX];
     long long total = 0;
     int rc = -1;
 
@@ -472,6 +524,29 @@ static int sr_smb_push(const sr_cfg_t *c, const char *tid, const char *uid,
         smb2_unlink(ss.s, tmpp);
         if (err) snprintf(err, errsz, "替换远程存档失败：%s", smb_human(ss.s, r));
         goto out;
+    }
+    /* [CN-FORK] v0.5.2.145 推送成功后**顺便**写一份 <uid>.meta.json，记录这个包
+     * 的真实文件数 / 字节数 / 打包时间（time_t）。前端「远程游戏」标签要展示和本地
+     * 存档列表同款的信息，文件数没法从裸 <uid>.zip 直接拿到，只能我们写一份。
+     * meta 与 zip 同目录、同名换后缀；libsmb2 没有 O_TRUNC，先 unlink 旧的再写新的。
+     * 写 meta 失败**不**算推送失败（zip 本体已经到位），只打日志，前端降级显示。 */
+    snprintf(mnm, sizeof(mnm), "%s.meta.json", uid);
+    smb_join(metap, sizeof(metap), ss.dir, mnm);
+    char metab[160];
+    int mlen = snprintf(metab, sizeof(metab),
+                        "{\"files\":%lld,\"size\":%lld,\"mtime\":%lld}",
+                        pack_files, total, (long long)time(NULL));
+    smb2_unlink(ss.s, metap);
+    struct smb2fh *mfh = smb2_open(ss.s, metap, O_CREAT | O_WRONLY);
+    if (mfh) {
+        int w = smb2_write(ss.s, mfh, (uint8_t *)metab, (uint32_t)mlen);
+        if (w != mlen)
+            pldmgr_log("[PLDMGR] saves: meta write short (%d/%d) for %s/%s\n",
+                       w, mlen, tid, uid);
+        smb2_close(ss.s, mfh);
+    } else {
+        pldmgr_log("[PLDMGR] saves: cannot open remote meta %s (%s)\n",
+                   metap, smb_human(ss.s, 0));
     }
     rc = 0;
 
@@ -579,7 +654,8 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
 
     char pmsg[SR_ERR_MAX];
     pmsg[0] = 0;
-    if (game_saves_pack(tid, uid, tmp, pmsg, sizeof(pmsg)) != 0) {
+    long long pack_files = 0;
+    if (game_saves_pack(tid, uid, tmp, &pack_files, pmsg, sizeof(pmsg)) != 0) {
         if (err) snprintf(err, errsz, "%s", pmsg[0] ? pmsg : "打包失败");
         unlink(tmp);
         return -1;
@@ -589,7 +665,7 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
      * 打包这一步是共用的，分岔只发生在「怎么把包送出去」。 */
     if (!strcmp(c->mode, "smb")) {
         long long b = 0;
-        int rc = sr_smb_push(c, tid, uid, tmp, &b, err, errsz);
+        int rc = sr_smb_push(c, tid, uid, tmp, &b, pack_files, err, errsz);
         unlink(tmp);
         if (rc == 0 && out_bytes) *out_bytes = b;
         return rc;
@@ -662,6 +738,20 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
         if (err) snprintf(err, errsz, "远程拒绝了这次上传（HTTP %ld）", http);
         return -1;
     }
+    /* [CN-FORK] v0.5.2.145 推送成功后写一份 .meta.json（与 SMB 分支同款）。
+     * meta 与 zip 同目录、同名换后缀；失败不影响推送结果，前端降级显示。 */
+    char metab[160];
+    int mlen = snprintf(metab, sizeof(metab),
+                        "{\"files\":%lld,\"size\":%lld,\"mtime\":%lld}",
+                        pack_files, sz, (long long)time(NULL));
+    char meta_url[SR_URL_MAX];
+    size_t ul = strlen(url);
+    if (ul > 4 && strcmp(url + ul - 4, ".zip") == 0)
+        snprintf(meta_url, sizeof(meta_url), "%.*s.meta.json", (int)(ul - 4), url);
+    else
+        snprintf(meta_url, sizeof(meta_url), "%s.meta.json", url);
+    if (sr_curl_put_bytes(c, meta_url, metab, (size_t)mlen) != 0)
+        pldmgr_log("[PLDMGR] saves: meta put failed for %s\n", meta_url);
     if (out_bytes) *out_bytes = sz;
     return 0;
 }
@@ -782,4 +872,81 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
     }
 
     return sr_finish_pull(tid, uid, tmp, out_files, out_bytes, err, errsz);
+}
+
+/* ── 只读元数据（方案 A：前端「远程游戏」标签展示用）────────────────────── */
+/* [CN-FORK] v0.5.2.145 只读取一份远程存档的真实元数据，**不上传也不下载**存档本身。
+ * 供前端「远程游戏」标签展示与本地存档列表同款的信息（大小 / 修改时间 / 文件数）。
+ *   out_size  ← <uid>.zip 的字节数（smb2_stat 直接拿，真实）
+ *   out_mtime ← <uid>.zip 的 mtime（真实打包时间）
+ *   out_files ← 推送时一并写的 <uid>.meta.json 里的 files；老存档没有 meta 时回 -1
+ * 0 成功；SR_ENOTFOUND = 远端还没有这份（语义同 sr_pull，前端当「没得显示」）；
+ * -1 = 配置 / 连接错误（err 人话）。FTP / HTTP 当前前端已禁用，统一回 -1。 */
+int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
+            long long *out_size, time_t *out_mtime, long long *out_files,
+            char *err, size_t errsz) {
+    if (out_size) *out_size = 0;
+    if (out_mtime) *out_mtime = 0;
+    if (out_files) *out_files = -1;
+    if (err && errsz) err[0] = 0;
+    if (!c) {
+        if (err) snprintf(err, errsz, "没有配置远程位置");
+        return -1;
+    }
+    if (!sr_seg_ok(tid) || !sr_seg_ok(uid)) {
+        if (err) snprintf(err, errsz, "标题 ID 或用户标识不合法");
+        return -1;
+    }
+
+    if (!strcmp(c->mode, "smb")) {
+        smb_sess_t ss;
+        if (smb_sess_open(c, tid, &ss, err, errsz) != 0) return -1;
+        char nm[200], rp[SR_SMB_PATH_MAX], mnm[240], metap[SR_SMB_PATH_MAX];
+        snprintf(nm, sizeof(nm), "%s.zip", uid);
+        smb_join(rp, sizeof(rp), ss.dir, nm);
+        struct smb2_stat_64 st;
+        memset(&st, 0, sizeof(st));
+        int r = smb2_stat(ss.s, rp, &st);
+        if (r < 0) {
+            if (r == -ENOENT) {
+                if (err) snprintf(err, errsz, "远程还没有这个游戏的存档");
+                smb_sess_close(&ss);
+                return SR_ENOTFOUND;
+            }
+            if (err) snprintf(err, errsz, "查不到远程存档：%s", smb_human(ss.s, r));
+            smb_sess_close(&ss);
+            return -1;
+        }
+        if (out_size) *out_size = (long long)st.smb2_size;
+        if (out_mtime) *out_mtime = (time_t)st.smb2_mtime;
+        /* 读 <uid>.meta.json 拿 files；没有 meta（老存档）时保持 -1，前端降级显示。
+         * 256 字节足够装下我们写的那条 {"files":N,"size":N,"mtime":N}。 */
+        snprintf(mnm, sizeof(mnm), "%s.meta.json", uid);
+        smb_join(metap, sizeof(metap), ss.dir, mnm);
+        struct smb2fh *mfh = smb2_open(ss.s, metap, O_RDONLY);
+        if (mfh) {
+            uint8_t *mbuf = (uint8_t *)malloc(256);
+            if (mbuf) {
+                int got = smb2_read(ss.s, mfh, mbuf, 255);
+                if (got > 0) {
+                    mbuf[got] = 0;
+                    cJSON *root = cJSON_Parse((const char *)mbuf);
+                    if (root) {
+                        cJSON *fj = cJSON_GetObjectItem(root, "files");
+                        if (cJSON_IsNumber(fj) && out_files)
+                            *out_files = (long long)fj->valuedouble;
+                        cJSON_Delete(root);
+                    }
+                }
+                free(mbuf);
+            }
+            smb2_close(ss.s, mfh);
+        }
+        smb_sess_close(&ss);
+        return 0;
+    }
+
+    /* FTP / HTTP 暂未实现：前端当前已禁用这两档，保持返回 -1 让前端降级。 */
+    if (err) snprintf(err, errsz, "当前仅支持 SMB 的远程信息读取（FTP / HTTP 暂未实现）");
+    return -1;
 }

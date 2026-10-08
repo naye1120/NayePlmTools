@@ -22,6 +22,7 @@
 
 #include "cJSON.h"
 #include "config.h" /* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）*/
+#include "save_remote.h" /* [CN-FORK] v0.5.2.145 sr_stat */
 #include "inflate.h"
 #include "json_helpers.h"
 #include "pldmgr.h"
@@ -1882,8 +1883,9 @@ static void gs_pack_walk(const char *dir, const char *rel, int depth, gs_pack_t 
  * zip 内的顶层目录用 **tid** 而不是 uid：包本身该像「这个游戏的存档」，
  * 是哪个用户的由 URL 上的 save 参数决定，上传时也按它落位。 */
 int game_saves_pack(const char *tid, const char *save, const char *out_path,
-                    char *msg, size_t msgsz) {
+                    long long *out_files, char *msg, size_t msgsz) {
     if (msg && msgsz) msg[0] = 0;
+    if (out_files) *out_files = 0;
     if (!gs_tid_ok(tid) || !gs_uid_ok(save)) {
         if (msg) snprintf(msg, msgsz, "参数不合法");
         return -1;
@@ -1918,6 +1920,7 @@ int game_saves_pack(const char *tid, const char *save, const char *out_path,
         if (msg) snprintf(msg, msgsz, "%s", err);
         return -1;
     }
+    if (out_files) *out_files = t.n;
     pldmgr_log("[PLDMGR] saves: %s/%s packed -> %s\n", tid, save, out_path);
     return 0;
 }
@@ -2291,4 +2294,99 @@ int game_saves_remove(const char *tid, const char *save, char *msg, size_t msgsz
     }
     pldmgr_log("[PLDMGR] saves: %s removed %s (%s)\n", tid, r.uid, r.path);
     return 0;
+}
+
+/* ── 远程存档只读元数据（方案 A：前端「远程游戏」标签展示用）────────────── */
+/* [CN-FORK] v0.5.2.145 把一份存档配置 JSON 解析进 sr_cfg_t。与 game_auto.c 的
+ * ga_fill_cfg 同一口径：端口缺省跟协议走（ftp 21 / smb 445），字符串与数字端口都认。
+ * 全局配置与 per-game 配置是**同一个 JSON 结构**，所以这同一个解析器两处都能用。 */
+static void gs_fill_remote_cfg(const char *json, sr_cfg_t *rc) {
+    memset(rc, 0, sizeof(*rc));
+    snprintf(rc->mode, sizeof(rc->mode), "ftp");
+    rc->port = 21;
+    cJSON *o = cJSON_Parse(json);
+    if (!o) return;
+    cJSON *f = cJSON_GetObjectItem(o, "mode");
+    if (cJSON_IsString(f) && f->valuestring && f->valuestring[0])
+        snprintf(rc->mode, sizeof(rc->mode), "%s", f->valuestring);
+    /* 端口缺省值跟协议走：smb 445、其余 21（HTTP 不用端口）。 */
+    rc->port = strcmp(rc->mode, "smb") == 0 ? 445 : 21;
+    cJSON *sub = cJSON_GetObjectItem(o, rc->mode);
+    if (sub && cJSON_IsObject(sub)) {
+#define GS_STR(k, dst) do { \
+            cJSON *x = cJSON_GetObjectItem(sub, k); \
+            if (cJSON_IsString(x) && x->valuestring) \
+                snprintf(rc->dst, sizeof(rc->dst), "%s", x->valuestring); \
+        } while (0)
+        GS_STR("host", host); GS_STR("path", path); GS_STR("share", share);
+        GS_STR("sub", sub); GS_STR("user", user); GS_STR("password", password);
+        GS_STR("url", url); GS_STR("token", token);
+#undef GS_STR
+        cJSON *p = cJSON_GetObjectItem(sub, "port");
+        int v = 0;
+        if (cJSON_IsNumber(p)) v = (int)p->valuedouble;
+        else if (cJSON_IsString(p) && p->valuestring && p->valuestring[0]) v = atoi(p->valuestring);
+        if (v > 0 && v < 65536) rc->port = v;
+    }
+    cJSON_Delete(o);
+}
+
+/* GET /game_save_remote_info?tid=&save= —— 取某用户远程存档的真实元数据。
+ * **全局配置优先 → per-game 回落**（与 ga_load_cfg 同口径），这样「设置页设一次、
+ * 所有游戏生效」的全局方案在这里也成立。
+ * 输出 JSON（前端直接消费）：
+ *   {"configured":false}                         没配远程位置
+ *   {"configured":true,"exists":false,"mode":"smb"}  配了但远端还没有这份
+ *   {"configured":true,"exists":true,"mode":"smb","size":N,"files":N,"mtime":"YYYY-MM-DD HH:MM"}
+ *   {"configured":true,"exists":true,"mode":"smb","error":"..."}  连接/协议错误 */
+int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t size) {
+    if (!buf || size < 64) return -1;
+    buf[0] = 0;
+    if (!gs_tid_ok(tid) || !gs_uid_ok(save))
+        return snprintf(buf, size, "{\"error\":\"参数不合法\"}") >= 0 ? 0 : -1;
+
+    char jbuf[4096];
+    int got = 0;
+    /* 全局（设置页「存档配置」）优先；读不到才回落 per-game。 */
+    if (config_read_archive_global(jbuf, sizeof(jbuf)) > 0) got = 1;
+    else if (game_saves_auto_json(tid, jbuf, sizeof(jbuf)) > 0) got = 1;
+    if (!got) {
+        int n = snprintf(buf, size, "{\"configured\":false}");
+        return (n > 0 && (size_t)n < size) ? 0 : -1;
+    }
+
+    sr_cfg_t rc;
+    gs_fill_remote_cfg(jbuf, &rc);
+
+    long long sz = 0;
+    time_t mt = 0;
+    long long files = -1;
+    char err[256];
+    err[0] = 0;
+    int st = sr_stat(&rc, tid, save, &sz, &mt, &files, err, sizeof(err));
+    if (st == SR_ENOTFOUND) {
+        int n = snprintf(buf, size,
+                         "{\"configured\":true,\"exists\":false,\"mode\":\"%s\"}",
+                         rc.mode);
+        return (n > 0 && (size_t)n < size) ? 0 : -1;
+    }
+    if (st != 0) {
+        char esc[480];
+        pldmgr_json_escape(err, esc, sizeof(esc));
+        int n = snprintf(buf, size,
+                         "{\"configured\":true,\"exists\":true,\"mode\":\"%s\",\"error\":\"%s\"}",
+                         rc.mode, esc);
+        return (n > 0 && (size_t)n < size) ? 0 : -1;
+    }
+    char mtstr[32];
+    struct tm tmv;
+    if (mt > 0 && gmtime_r(&mt, &tmv))
+        strftime(mtstr, sizeof(mtstr), "%Y-%m-%d %H:%M", &tmv);
+    else
+        mtstr[0] = 0;
+    int n = snprintf(buf, size,
+                     "{\"configured\":true,\"exists\":true,\"mode\":\"%s\","
+                     "\"size\":%lld,\"files\":%lld,\"mtime\":\"%s\"}",
+                     rc.mode, sz, files, mtstr);
+    return (n > 0 && (size_t)n < size) ? 0 : -1;
 }

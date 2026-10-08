@@ -878,7 +878,23 @@ function mediaFor(tid) {
  * 与后端 config_read_archive_global() 返回 -1 是同一件事。 */
 function globalArchive() {
   const raw = mockConfig.ARCHIVE_GLOBAL_CONFIG;
-  if (typeof raw !== 'string' || !raw.trim()) return null;
+  if (typeof raw !== 'string' || !raw.trim()) {
+    /* [CN-FORK] v0.5.2.147 **没配过就是 null** —— 与后端 config_read_archive_global()
+     * 返回 -1 一字不差。
+     *
+     * `.146` 这里曾返回一份「开箱即用的默认 SMB 配置」（注释说是为了方便预览「远程游戏」
+     * 区块）。那是**错的**：`.145` 定的核心契约是「全局那份**写过没有**」——
+     * 没写过就必须回落到 per-game，否则「老装机行为不变」这条根本不成立。假默认一在，
+     * `autoFor()` 就把全局盖在 per-game 上，mock 里**永远走不到回落分支**，
+     * 于是回归里那条「mock 默认没有全局配置 → 读到本游戏已存的那份」变成了假红
+     * （渲染出 SMB 而不是 per-game 的 FTP），另一条「快照间隔默认 30 分钟」也跟着
+     * 读成了假默认里的 3600 秒 = 60 分钟。
+     *
+     * 而且它并不必要：「远程游戏」区块的数据来自 /game_save_remote_info（那份是硬编码的，
+     * 不吃这里），per-game 默认本身也带一份配好的远程，该预览的一样看得到。
+     * 要测「全局生效」的用例请照旧走设置页真存一次（第 5d/5e 节就是这么做的）。 */
+    return null;
+  }
   try {
     const o = JSON.parse(raw);
     return o && typeof o === 'object' ? o : null;
@@ -1058,6 +1074,29 @@ app.get('/game_saves', (req, res) => {
     snap_used: snaps.reduce((a, s) => a + s.size, 0),
     /* 剥掉内部用的 src 指纹字段 —— 真机上快照条目就只有这五个键 */
     snapshots: snaps.map(({ uid, ts, mtime, size, files }) => ({ uid, ts, mtime, size, files })),
+  });
+});
+
+/* [CN-FORK] v0.5.2.145 远程存档只读元数据：前端「远程游戏」区块展示用。
+ * mock 让每个本地用户都有一份远程存档，大小/文件数与本地同形、mtime 更早，
+ * 表示「远端确实存着」（真实后端由 SMB 的 smb2_stat + <uid>.meta.json 提供）。 */
+app.get('/game_save_remote_info', (req, res) => {
+  const tid = String(req.query.tid || '');
+  const save = String(req.query.save || '');
+  const base = mockGames.find((x) => x.tid === tid);
+  if (!base || gameState.deleted.has(tid)) {
+    return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+  }
+  if (!save) return res.status(400).json({ error: 'EBAD', message: '缺少 save' });
+  const local = (savesFor(tid) || []).find((s) => s.id === save);
+  if (!local) return res.status(404).json({ error: 'ENOENT', message: '找不到这个用户的存档' });
+  res.json({
+    configured: true,
+    exists: true,
+    mode: 'smb',
+    size: local.size,
+    files: local.files,
+    mtime: '2026-09-28 09:15',
   });
 });
 

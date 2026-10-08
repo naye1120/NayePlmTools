@@ -480,7 +480,11 @@ int main(void) {
     /* ── ⑧ 打包：整份存档下载 ───────────────────────────────────────────── */
     const char *zpath = ROOT "/out.zip";
     unlink(zpath);
-    CHECK(game_saves_pack(TID_PS5, U2, zpath, msg, sizeof(msg)) == 0,
+    /* [CN-FORK] v0.5.2.147 补第 4 个实参 `out_files`。`.146` 那份未提交的 WIP 给
+     * game_saves_pack 加了 `long long *out_files`（推送时写 <uid>.meta.json 用），
+     * 但**没同步改这条调用** —— 于是整个 game_saves 关卡直接编不过、run_host_tests.sh
+     * 恒 `overall: FAIL`。这里只补参数把它恢复成可编译，不动本关原有的断言口径。 */
+    CHECK(game_saves_pack(TID_PS5, U2, zpath, NULL, msg, sizeof(msg)) == 0,
           "打包失败: %s", msg);
     CHECK(exists_reg(zpath), "zip 没落盘");
     {

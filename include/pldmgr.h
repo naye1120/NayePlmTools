@@ -87,6 +87,9 @@
 /* [CN-FORK] v0.5.2.142 自动存档的**手动**推 / 拉（自动的那份由守护线程做）。
  * 用户手点「立即拉取 / 立即推送」走这里 —— 不依赖「游戏起没起」的探测。 */
 #define ROUTE_GAME_SAVE_SYNC "/game_save_sync"
+/* [CN-FORK] v0.5.2.145 只读地取某用户远程存档的元数据（大小 / 文件数 / 修改时间），
+ * 供前端「远程游戏」标签展示。GET，tid / save 走 query。 */
+#define ROUTE_GAME_SAVE_REMOTE_INFO "/game_save_remote_info"
 #define ROUTE_GAME_RENAME "/game_rename"
 /* [CN-FORK] v0.5.2.137 名字回填：把面板里的 name.txt 重放到主机 app.db/appinfo.db
  * （folder 类再写一次源 sce_sys/param.json）。见 game_title.h 的 game_title_sync_all。 */
@@ -103,7 +106,7 @@
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
 
-#define MENU_VERSION "0.5.2.145" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.145，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.147" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.147，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
 /* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）单独一份 JSON 文件。

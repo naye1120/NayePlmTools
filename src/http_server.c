@@ -2009,6 +2009,25 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         resp = MHD_create_response_from_buffer((size_t)sn, (void *)sb, MHD_RESPMEM_MUST_FREE);
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_SAVE_REMOTE_INFO) == 0) {
+        /* [CN-FORK] v0.5.2.145 远程存档只读元数据：前端「远程游戏」标签展示用。
+         * tid / save 都走 query，与 /game_saves 一致；save 缺省回 400。 */
+        const char *xr = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        const char *xrs = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "save");
+        if (!xr || !xrs)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid 或 save");
+        char *rb;
+        struct MHD_Response *room = alloc_response_buffer(&rb);
+        if (room)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, room);
+        int rn = game_saves_remote_info(xr, xrs, rb, RESPONSE_BUFFER_SIZE);
+        if (rn < 0) {
+            free(rb);
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "参数不合法");
+        }
+        resp = MHD_create_response_from_buffer((size_t)rn, (void *)rb, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_GAME_SAVE_DOWNLOAD) == 0) {
         /* [CN-FORK] v0.5.2.116 打包即下：没有任务槽可复用（契约里这条路不产生 job_id），
          * 所以同步打完、fd 直出、流完自动清理。文件名只用 tid（alnum），
@@ -2024,7 +2043,7 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         zmsg[0] = 0;
         snprintf(zpath, sizeof(zpath), "%s/%s_%lld_%d.zip", GAME_SAVES_PACK_DIR, xd,
                  (long long)time(NULL), (int)getpid());
-        if (game_saves_pack(xd, xs2, zpath, zmsg, sizeof(zmsg)) != 0)
+        if (game_saves_pack(xd, xs2, zpath, NULL, zmsg, sizeof(zmsg)) != 0)
             return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT",
                                     zmsg[0] ? zmsg : "找不到这个存档");
         snprintf(disp, sizeof(disp), "attachment; filename=\"%s_saves.zip\"", xd);

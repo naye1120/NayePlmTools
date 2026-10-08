@@ -14,6 +14,7 @@
 #include "cJSON.h"
 #include "config.h" /* [CN-FORK] v0.5.2.145 读全局存档配置（设置页「存档配置」） */
 #include "game_saves.h"
+#include "notification.h" /* [CN-FORK] v0.5.2.147 推 / 拉的「开始 / 结束」屏幕通知 */
 #include "pldmgr.h"
 #include "save_remote.h"
 #include "utils.h"
@@ -207,8 +208,8 @@ int game_auto_state_json(const char *tid, char *buf, size_t size) {
     if (!buf || size < 64) return -1;
     buf[0] = 0;
 
-    /* running 用**当场探测**而不是守护线程记的那个值：守护线程 5 秒才醒一次，
-     * 用户刚点了「立即推送」再看界面，滞后 5 秒的状态会让人以为没生效。 */
+    /* running 用**当场探测**而不是守护线程记的那个值：守护线程 GA_TICK 秒才醒一次，
+     * 用户刚点了「立即推送」再看界面，滞后的状态会让人以为没生效。 */
     char run[32];
     run[0] = 0;
     g_probe(run, sizeof(run));
@@ -272,22 +273,24 @@ static int ga_tid_ok(const char *t) {
  * 没有的 uid，但枚举远端要么靠 FTP LIST、要么靠对面给个列表接口，
  * 两条路都不可靠；而「主机上有存档的用户」永远是自动同步真正要保的那些。
  * 拉取是唯一例外：本地那份没了的时候，候选集退化成主机上全部用户目录（见下）。 */
-static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res) {
+static void ga_do_inner(const char *tid, int act, const char *only_uid,
+                        const ga_cfg_t *cfg, ga_res_t *res) {
     memset(res, 0, sizeof(*res));
 
     /* 配置与协议先判。这两条不看文件系统状态、也最可操作（「你选的协议这个 SDK
      * 编不出来」比「没有存档」更能告诉用户该干什么），所以排在枚举之前 ——
      * 否则配了 smb 的用户点了推送只会看到「主机上还没有这个游戏的存档」，
-     * 而真正的原因被一条无关的信息盖住。 */
-    ga_cfg_t cfg;
-    if (ga_load_cfg(tid, &cfg) != 0) {
+     * 而真正的原因被一条无关的信息盖住。
+     * 配置由调用方（ga_do）**只读一次**再传进来 —— 那里还要拿它给「开始」那条
+     * 日志拼目标，重复读一遍既浪费又可能读到两份不同的东西。 */
+    if (!cfg) {
         snprintf(res->first_err, sizeof(res->first_err), "读不到这个游戏的自动存档配置");
         res->failed = 1;
         return;
     }
-    if (!sr_mode_supported(cfg.rc.mode)) {
+    if (!sr_mode_supported(cfg->rc.mode)) {
         snprintf(res->first_err, sizeof(res->first_err),
-                 "当前 SDK 不支持 %s 传输，请改用 FTP 或 HTTP", cfg.rc.mode);
+                 "当前 SDK 不支持 %s 传输，请改用 FTP 或 HTTP", cfg->rc.mode);
         res->failed = 1;
         return;
     }
@@ -319,8 +322,8 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res)
         long long bytes = 0, files = 0;
         err[0] = 0;
         int rc = (act == GA_ACT_PUSH)
-                     ? sr_push(tid, uids[i], &cfg.rc, &bytes, err, sizeof(err))
-                     : sr_pull(tid, uids[i], &cfg.rc, &files, &bytes, err, sizeof(err));
+                     ? sr_push(tid, uids[i], &cfg->rc, &bytes, err, sizeof(err))
+                     : sr_pull(tid, uids[i], &cfg->rc, &files, &bytes, err, sizeof(err));
         if (rc == 0) {
             res->ok++;
             res->files += files;
@@ -333,11 +336,102 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res)
         }
     }
     pthread_mutex_unlock(&g_sync_mu);
+}
 
-    pldmgr_log("[PLDMGR] saves: 自动%s %s —— 成功 %d / 跳过 %d / 失败 %d（%lld 字节）%s%s\n",
-               act == GA_ACT_PUSH ? "推送" : "拉取", tid,
-               res->ok, res->skipped, res->failed, res->bytes,
+/* [CN-FORK] v0.5.2.147 日志用的一句话目标描述（**绝不含密码**）。
+ * 口径与前端 `utils/saveConfig.js` 的 `remoteSummary()` 逐字一致 —— 界面上显示的
+ * 和日志里打的必须是同一句，否则「界面写 SMB、日志里写 FTP」这种对照根本没法用。
+ * 后端不引前端代码，就地写一份最小版；改一边记得改另一边。 */
+static void ga_target_desc(const sr_cfg_t *c, char *out, size_t osz) {
+    if (!c || !c->mode[0]) {
+        snprintf(out, osz, "未配置");
+        return;
+    }
+    if (!strcmp(c->mode, "smb"))
+        snprintf(out, osz, "SMB · %s%s%s%s%s",
+                 c->host[0] ? c->host : "?",
+                 c->share[0] ? "/" : "", c->share[0] ? c->share : "",
+                 c->sub[0] ? "/" : "", c->sub[0] ? c->sub : "");
+    else if (!strcmp(c->mode, "ftp"))
+        snprintf(out, osz, "FTP · %s:%d%s", c->host[0] ? c->host : "?", c->port, c->path);
+    else if (!strcmp(c->mode, "http"))
+        snprintf(out, osz, "HTTP · %s", c->url[0] ? c->url : "?");
+    else
+        snprintf(out, osz, "%s（未知协议）", c->mode);
+}
+
+/* 推 / 拉的唯一入口：手动（`POST /game_save_sync`）与守护线程都走这里。
+ *
+ * [CN-FORK] v0.5.2.147 **开始与结束各打一条日志 + 各弹一条屏幕通知**（用户口径：
+ * 「远程拉取和推送远程的时候，两个动作的开始和结束都要 debug：到屏幕信息」，
+ * 并指明「屏幕信息就跟这个一样」= main.c 的 `NayePlmTools v%s Ready!` 那条
+ * `pldmgr_notify`，即 **PS5 系统通知弹窗**）。
+ *
+ * 两条通路一起打，因为它们解决的不是同一件事：
+ *   · `pldmgr_notify` —— **当场看得见**（屏幕右上角的系统通知），不用切页面；
+ *   · `pldmgr_log`    —— **事后查得到**（面板「日志」页的环形缓冲 + /data/nayeplmtools/pldmgr.log
+ *     留档，界面定住 / 断电后照样有）。
+ * 只做前者，通知一划走就没证据了；只做后者，用户点完按钮得自己跑去日志页翻。
+ *
+ * 为什么「开始」放在这一层、而不是塞进 ga_do_inner：inner 有多条**提前返回**的分支
+ * （读不到配置 / 协议不支持 / 没有可同步的用户），把开始行放进去必然出现「有结束没开始」
+ * 或「有开始没结束」—— 而用户点完按钮最想知道的恰恰是「它到底有没有开始跑」。
+ * 放在包装层则天然成对：inner 无论从哪条路出去，结束行一定跟着来。
+ *
+ * 用 CLOCK_MONOTONIC 计时（不受系统改时间影响，同 game_media.c）。手动点一下正常是
+ * 几百毫秒到几秒；真卡在网络上（或卡在 g_sync_mu 上等另一次同步）时，「用时」自己说话。 */
+static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
+                  const char *src) {
+    const char *an = (act == GA_ACT_PUSH) ? "推送" : "拉取";
+
+    /* 只读一次配置：既是 inner 的输入，也让「开始」这行带得上目标。
+     * 读不到就传 NULL，inner 自己会填那句人话错误。 */
+    ga_cfg_t cfg;
+    int have = (ga_load_cfg(tid, &cfg) == 0);
+    char tgt[400];
+    ga_target_desc(have ? &cfg.rc : NULL, tgt, sizeof(tgt));
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    const char *scope = (only_uid && only_uid[0]) ? only_uid : "全部用户";
+
+    /* 字段顺序是**按重要性倒着放**的：环形缓冲每行只有 MAX_LOG_LINE_LEN(256) 字节，
+     * 目标里可能带着很长的 host/share/sub，超了就被截断。把「目标」放最后，
+     * 长路径最多把自己截掉，不会把「是推还是拉 / 谁触发的 / 范围」一起带走。 */
+    pldmgr_log("[PLDMGR] saves: 远程%s 开始 · %s · 触发=%s · 范围=%s · 目标=%s\n",
+               an, tid, src ? src : "?", scope, tgt);
+    /* [CN-FORK] v0.5.2.147 屏幕上那一条 —— PS5 系统通知，与 main.c 的
+     * `NayePlmTools v%s Ready!` 是同一个 `pldmgr_notify`（用户口径：「屏幕信息就跟这个一样」）。
+     * 通知正文的缓冲有 3075 字节，所以这里放得下与日志同一套字段，两处能对着看。
+     * `pldmgr_notify` 内部还会补一条 `[Notify] …` 进日志 —— 那正好是「通知确实发出去了」的证据。 */
+    pldmgr_notify("远程%s 开始\n%s · 触发=%s · 范围=%s\n目标=%s",
+                  an, tid, src ? src : "?", scope, tgt);
+
+    ga_do_inner(tid, act, only_uid, have ? &cfg : NULL, res);
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+                + (double)(t1.tv_nsec - t0.tv_nsec) / 1000000.0;
+
+    /* 量：**推送不报文件数** —— sr_push 只回字节数（res->files 恒 0），
+     * 照着拉取那样打就成了「0 个文件 / 2648 字节」这种自相矛盾的一行，
+     * 排查时反而会把人带偏。 */
+    char qty[96];
+    if (act == GA_ACT_PUSH)
+        snprintf(qty, sizeof(qty), "%lld 字节", res->bytes);
+    else
+        snprintf(qty, sizeof(qty), "%lld 个文件 / %lld 字节", res->files, res->bytes);
+
+    pldmgr_log("[PLDMGR] saves: 远程%s 结束 · %s · 成功 %d / 跳过 %d / 失败 %d · "
+               "%s · 用时 %.0f ms%s%s\n",
+               an, tid, res->ok, res->skipped, res->failed, qty, ms,
                res->first_err[0] ? " · " : "", res->first_err);
+    /* 屏幕上那一条。失败原因**另起一行**打 —— 通知是给人扫一眼的，
+     * 混在计数那一行里最容易被当成背景噪声划过去。 */
+    pldmgr_notify("远程%s 结束\n%s · 成功 %d / 跳过 %d / 失败 %d\n%s · 用时 %.0f ms%s%s",
+                  an, tid, res->ok, res->skipped, res->failed, qty, ms,
+                  res->first_err[0] ? "\n" : "", res->first_err);
 }
 
 /* ── 手动推 / 拉（POST /game_save_sync）─────────────────────────────────── */
@@ -378,7 +472,7 @@ int game_auto_sync_action(const char *body, size_t len,
     }
 
     ga_res_t res;
-    ga_do(tid, act, uid, &res);
+    ga_do(tid, act, uid, &res, "手动");
     pthread_mutex_lock(&g_ga_mu);
     ga_mark(tid, act, res.ok > 0 || (res.failed == 0), res.first_err);
     pthread_mutex_unlock(&g_ga_mu);
@@ -410,7 +504,7 @@ int game_auto_sync_action(const char *body, size_t len,
 
 /* ── 守护线程 ───────────────────────────────────────────────────────────── */
 #define GA_BOOT_DELAY 20 /* 避开启动期 IO（与本地快照守护同一理由） */
-#define GA_TICK 5        /* 游戏起没起，5 秒的粒度足够 —— 启动/退出不是瞬时的 */
+#define GA_TICK 2        /* 扫描周期：游戏起没起，2 秒一轮（用户口径 —— 启动后要尽快拉取） */
 #define GA_EXIT_SETTLE 5 /* 退出后再等这么久才推，给主机收尾写盘的时间 */
 #define GA_THREAD_STACK (1u << 20)
 
@@ -446,7 +540,8 @@ static void ga_tick(void) {
          * 那时候存档目录还没被写过，没有「拷到半截」的问题。 */
         if (steps[i].act == GA_ACT_PUSH) sleep(GA_EXIT_SETTLE);
         ga_res_t res;
-        ga_do(steps[i].tid, steps[i].act, NULL, &res);
+        ga_do(steps[i].tid, steps[i].act, NULL, &res,
+              steps[i].act == GA_ACT_PUSH ? "自动（退出游戏时）" : "自动（启动游戏时）");
         pthread_mutex_lock(&g_ga_mu);
         ga_mark(steps[i].tid, steps[i].act, res.ok > 0 || (res.failed == 0), res.first_err);
         pthread_mutex_unlock(&g_ga_mu);

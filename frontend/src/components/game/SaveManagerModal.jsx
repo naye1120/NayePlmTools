@@ -9,7 +9,7 @@ import { Block, Chip, Note, MiniEmpty, ProgressBar, GridRow } from './parts'
 import { formatSizeAlways, formatStamp } from './format'
 import {
   getSaves, saveDownloadUrl, uploadSave, deleteSave, snapAction,
-  syncSaves,
+  syncSaves, getRemoteSaveInfo,
 } from '../../utils/gameApi'
 import {
   resolveAutoForGame, resolveRemoteForGame, remoteSummary,
@@ -21,8 +21,11 @@ import {
  *   「把配置功能迁移过去，配置一个全局生效。单个游戏包开启 拉取和推送按钮。」
  * 所以本弹窗**不再有可编辑的配置**，只剩三件事：
  *   ① 这个游戏**实际生效**的自动存档状态（开关 / 两个时机）—— 只读，来自设置页「存档配置」；
- *   ② 远程位置只读摘要 + 「立即拉取 / 立即推送」+ 引擎上次干了什么（auto_state）；
+ *   ② 远程位置只读摘要 + 逐用户远程信息（`.147` 并进本卡，原来是并排的第三张卡）
+ *      + 「立即拉取 / 立即推送」+ 引擎上次干了什么（auto_state）；
  *   ③ 存档列表（下载 / 上传覆盖 / 删除 / 上传新的）与本地快照列表（立即备份 / 还原 / 删除）。
+ *
+ * 版式（`.147`）：第一行三栏 = ① / ② / ③，各占 1/3；本地快照仍单独满宽铺开。
  * 配置（远程位置 / 自动存档 / 快照参数）全部在「设置 → 存档配置」一处，对所有游戏生效。
  *
  * 为什么把「配置」和「动作」这样分：配置是**跨游戏共享的一份**（同一台 NAS、同一个节奏），
@@ -54,6 +57,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   const [snapping, setSnapping] = useState(false)    // 「立即备份」进行中
   const [busySnap, setBusySnap] = useState('')       // `${uid}/${ts}`，该行正在还原/删除
   const [syncing, setSyncing] = useState('')         // '' | 'push' | 'pull'：立即同步进行中
+  const [remoteInfos, setRemoteInfos] = useState({}) // { [uid]: 远程只读元数据（大小/文件数/时间）}
   const fileRef = useRef(null)
   const pendingSlot = useRef(null)                   // null = 新存档；字符串 = 覆盖该槽
   const aliveRef = useRef(true)
@@ -79,6 +83,18 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
       setRemote(resolveRemoteForGame(config, d.auto))
       setRemoteFrom(resolveAutoForGame(config, d.auto).from)
       setErr('')
+      /* [CN-FORK] v0.5.2.145 逐个用户拉远程存档的只读元数据，供「远程游戏」区块展示。
+       * 一次失败不影响其它用户（catch 后该 uid 记成 {error}）。数据来自
+       * /game_save_remote_info，是远端真实信息，不是本地。 */
+      const infos = {}
+      await Promise.all((d.saves || []).map(async (sv) => {
+        try {
+          infos[sv.id] = await getRemoteSaveInfo(tid, sv.id)
+        } catch (e) {
+          infos[sv.id] = { configured: true, exists: false, error: (e && e.message) || '查询失败' }
+        }
+      }))
+      if (aliveRef.current) setRemoteInfos(infos)
     }
     if (failed) setErr(failed)
   }, [tid, t, config])
@@ -94,6 +110,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     setRemote(null); setRemoteFrom('none')
     setBusyId(''); setUploading(null)
     setSnapping(false); setBusySnap(''); setSyncing('')
+    setRemoteInfos({})
   }
 
   useEffect(() => {
@@ -253,8 +270,8 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
       layout="panel"
     >
       {/* [CN-FORK] v0.5.2.112 面板形态（用户：「存档管理页面打开后铺满右边整个区域」）。
-       * 两块内容在宽屏上并排：左边是「配置」（开关 + 远程位置摘要），右边是「存档列表」。
-       * 窄屏（<1280px）自动退回单列。 */}
+       * [CN-FORK] v0.5.2.147 第一行三块并排（各 1/3）：自动存档 / 远程位置（含逐用户远程信息）/
+       * 存档列表；本地快照仍在下面单独满宽铺开。窄屏（<1280px）第一行退回单列。 */}
       <div className="panel-body leading-relaxed font-normal flex flex-col gap-5">
         <p className="text-zinc-500 panel-note">
           {game.name || tid}
@@ -271,48 +288,108 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
         )}
 
         {data && (
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] gap-5 items-start">
-            {/* ── ① 自动存档（只读展示 + 立即推拉）── */}
-            <Block
-              className="min-w-0"
-              title={t('game.auto_title', '自动存档')}
-              icon={Save}
-              actions={
-                <>
-                  {/* 「游戏正在运行」是引擎**当场探测**的结果（不是守护线程 5 秒前的记忆）。
-                      有它在，用户才能理解「为什么我一打开游戏存档就变了」。 */}
-                  {st.running && (
-                    <Chip tone="info" title={t('game.running_hint', '这款游戏此刻正在运行，退出时若开了自动回传会自动推送')}>
-                      <Activity className="w-3.5 h-3.5 mr-1" />
-                      {t('game.running', '游戏运行中')}
-                    </Chip>
-                  )}
-                  <Chip tone={eff.enabled ? 'ok' : 'muted'}>{eff.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}</Chip>
-                </>
-              }
-            >
-              {/* 只读状态行。**没有开关**：开关在设置页「存档配置」，全局生效。
-                  用 GridRow 而不是灰掉的 Switch —— 灰开关会让人一直点它。 */}
-              <GridRow
-                cols={RO_COLS}
-                label={t('game.auto_enable', '启用自动存档')}
-                value={eff.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
-              />
-              <GridRow
-                cols={RO_COLS}
-                label={t('game.auto_on_launch', '启动游戏时拉取')}
-                value={eff.on_launch ? t('game.on', '已启用') : t('game.off', '未启用')}
-              />
-              <GridRow
-                cols={RO_COLS}
-                label={t('game.auto_on_exit', '退出游戏时回传')}
-                value={eff.on_exit ? t('game.on', '已启用') : t('game.off', '未启用')}
-              />
+          <div className="flex flex-col gap-5">
+            {/* [CN-FORK] v0.5.2.147 第一行三板块并排，每个占 1/3：
+                自动存档 / 远程位置（配置摘要 + 逐用户远程信息）/ 存档列表。
+                `.146` 时第三栏是独立的「远程存档」卡、`存档列表` 满宽另起一行；
+                现在把远程信息并进「远程位置」、让出位置给「存档列表」。
+                **刻意不加 `items-start`**（用户口径：「让这三个高度一致保持一样，不管哪个变高，
+                另外两个同步变高」）—— 默认的 `items-stretch` 会让三张卡跟着最高那张一起长，
+                底边对齐；`items-start` 则各长各的、三栏参差。 */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+              {/* ── ① 自动存档（只读展示 + 立即推拉）── */}
+              <Block
+                className="min-w-0"
+                title={t('game.auto_title', '自动存档')}
+                icon={Save}
+                actions={
+                  <>
+                    {/* 「游戏正在运行」是引擎**当场探测**的结果（不是守护线程 5 秒前的记忆）。
+                        有它在，用户才能理解「为什么我一打开游戏存档就变了」。 */}
+                    {st.running && (
+                      <Chip tone="info" title={t('game.running_hint', '这款游戏此刻正在运行，退出时若开了自动回传会自动推送')}>
+                        <Activity className="w-3.5 h-3.5 mr-1" />
+                        {t('game.running', '游戏运行中')}
+                      </Chip>
+                    )}
+                    <Chip tone={eff.enabled ? 'ok' : 'muted'}>{eff.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}</Chip>
+                  </>
+                }
+              >
+                {/* 只读状态行。**没有开关**：开关在设置页「存档配置」，全局生效。
+                    用 GridRow 而不是灰掉的 Switch —— 灰开关会让人一直点它。
+                    `.147` 起回到满宽单栏：`.146` 的 `md:grid-cols-2` 本来只是为了给右半边
+                    的「远程游戏」徽标让位；徽标撤掉后左右分栏就只剩副作用 —— 三行被压到半宽，
+                    窄窗（1280–1660px，`xl:grid-cols-3` 刚生效那档）下 `RO_COLS` 的 124px 标签列
+                    吃掉一半，值列只剩二十几像素，「未启用」一个字一行。 */}
+                <div className="min-w-0">
+                  <GridRow
+                    cols={RO_COLS}
+                    label={t('game.auto_enable', '启用自动存档')}
+                    value={eff.enabled ? t('game.on', '已启用') : t('game.off', '未启用')}
+                  />
+                  <GridRow
+                    cols={RO_COLS}
+                    label={t('game.auto_on_launch', '启动游戏时拉取')}
+                    value={eff.on_launch ? t('game.on', '已启用') : t('game.off', '未启用')}
+                  />
+                  <GridRow
+                    cols={RO_COLS}
+                    label={t('game.auto_on_exit', '退出游戏时回传')}
+                    value={eff.on_exit ? t('game.on', '已启用') : t('game.off', '未启用')}
+                  />
+                </div>
 
-              {/* 远程位置：只读摘要。来源（全局 / 本游戏已存）标出来，
-                  用户才知道该去哪儿改 —— 见文件头「一个控件只有一个家」。 */}
-              <div className="mt-4">
-                <span className="block panel-tiny font-semibold text-zinc-400 mb-1.5">{t('game.remote_location', '远程位置')}</span>
+                {/* 唯一的「去改配置」出口。单游戏这边一个可编辑控件都没有，
+                    不给这条提示的话用户会在弹窗里找不到开关干瞪眼。 */}
+                <p className="panel-tiny text-zinc-500 mt-2">
+                  {t('game.remote_global_hint', '以上开关与远程位置都在「设置 → 存档配置」里统一设置，对所有游戏生效。')}
+                </p>
+
+                <div className="flex flex-wrap items-center gap-2 mt-4">
+                  {/* [CN-FORK] v0.5.2.142 立即推 / 拉。**不受总开关影响** ——
+                      手动就是手动，用户想试一次不该被迫先把自动打开。后端读的是它自己
+                      那份已保存的配置（全局或本游戏的），与这里的只读展示同源。 */}
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    disabled={!!syncing}
+                    onClick={() => onSync('pull')}
+                  >
+                    <CloudDownload className="w-4 h-4" />
+                    <span>{syncing === 'pull' ? t('game.syncing', '同步中…') : t('game.sync_pull', '立即拉取')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    disabled={!!syncing}
+                    onClick={() => onSync('push')}
+                  >
+                    <CloudUpload className="w-4 h-4" />
+                    <span>{syncing === 'push' ? t('game.syncing', '同步中…') : t('game.sync_push', '立即推送')}</span>
+                  </button>
+                </div>
+
+                {/* 引擎上次干了什么。没有这一段的话，「开关打开了但什么都没发生」完全没法自查。 */}
+                {last && (
+                  <p className={`panel-tiny mt-2 ${last.ok ? 'text-zinc-500' : 'text-amber-400/90'}`}>
+                    {t('game.last_sync', '上次：{{act}} · {{at}}{{why}}', {
+                      act: last.action === 'push' ? t('game.act_push', '推送') : t('game.act_pull', '拉取'),
+                      at: last.at || '',
+                      why: last.ok ? '' : ` · ${last.message || t('game.failed', '失败')}`,
+                    })}
+                  </p>
+                )}
+              </Block>
+
+              {/* ── ② 远程位置（配置摘要 + 逐用户远程信息）── */}
+              <Block
+                className="min-w-0"
+                title={t('game.remote_location', '远程位置')}
+                icon={CloudUpload}
+              >
+                {/* 远程位置：只读摘要。来源（全局 / 本游戏已存）标出来，
+                    用户才知道该去哪儿改 —— 见文件头「一个控件只有一个家」。 */}
                 {remote && remoteFrom !== 'none' ? (
                   <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
                     <p className="text-white panel-note font-semibold">{remoteSummary(remote)}</p>
@@ -327,144 +404,145 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                     {t('game.remote_unset', '尚未配置远程位置，请到「设置 → 存档配置」填写。')}
                   </Note>
                 )}
-              </div>
 
-              {/* 唯一的「去改配置」出口。单游戏这边一个可编辑控件都没有，
-                  不给这条提示的话用户会在弹窗里找不到开关干瞪眼。 */}
-              <p className="panel-tiny text-zinc-500 mt-2">
-                {t('game.remote_global_hint', '以上开关与远程位置都在「设置 → 存档配置」里统一设置，对所有游戏生效。')}
-              </p>
-
-              <div className="flex flex-wrap items-center gap-2 mt-4">
-                {/* [CN-FORK] v0.5.2.142 立即推 / 拉。**不受总开关影响** ——
-                    手动就是手动，用户想试一次不该被迫先把自动打开。后端读的是它自己
-                    那份已保存的配置（全局或本游戏的），与这里的只读展示同源。 */}
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  disabled={!!syncing}
-                  onClick={() => onSync('pull')}
-                >
-                  <CloudDownload className="w-4 h-4" />
-                  <span>{syncing === 'pull' ? t('game.syncing', '同步中…') : t('game.sync_pull', '立即拉取')}</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  disabled={!!syncing}
-                  onClick={() => onSync('push')}
-                >
-                  <CloudUpload className="w-4 h-4" />
-                  <span>{syncing === 'push' ? t('game.syncing', '同步中…') : t('game.sync_push', '立即推送')}</span>
-                </button>
-              </div>
-
-              {/* 引擎上次干了什么。没有这一段的话，「开关打开了但什么都没发生」完全没法自查。 */}
-              {last && (
-                <p className={`panel-tiny mt-2 ${last.ok ? 'text-zinc-500' : 'text-amber-400/90'}`}>
-                  {t('game.last_sync', '上次：{{act}} · {{at}}{{why}}', {
-                    act: last.action === 'push' ? t('game.act_push', '推送') : t('game.act_pull', '拉取'),
-                    at: last.at || '',
-                    why: last.ok ? '' : ` · ${last.message || t('game.failed', '失败')}`,
-                  })}
-                </p>
-              )}
-            </Block>
-
-            {/* ── ② 存档列表 ── */}
-            <Block
-              className="min-w-0"
-              title={t('game.saves_list', '存档列表')}
-              icon={HardDrive}
-              actions={
-                <>
-                  <button type="button" className="icon-btn" title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} onClick={load}>
-                    <RefreshCw className="w-4 h-4" />
-                  </button>
-                  <button type="button" className="btn btn-outline" disabled={!!uploading} onClick={() => pickFile(null)}>
-                    <Upload className="w-4 h-4" />
-                    <span>{t('game.save_upload_new', '上传存档')}</span>
-                  </button>
-                </>
-              }
-            >
-              {uploading && (
-                <div className="mb-3">
-                  <div className="flex items-center gap-2 panel-note text-zinc-400 mb-1.5">
-                    <FileArchive className="w-3.5 h-3.5" />
-                    <span className="truncate">{t('game.save_uploading', '正在上传 {{name}}…', { name: uploading.name })}</span>
+                {/* [CN-FORK] v0.5.2.147 逐用户远程信息 —— 原来它是并排的第三张卡（「远程存档」），
+                    现在并进本卡。理由：它和「存档列表」是**同一批用户的两份列表**，各占一张
+                    1/3 宽的卡反而看不出对应关系；并进来还能把并排的位置让给「存档列表」。
+                    数据来源不变：/game_save_remote_info 的远端真实元数据（不是本地），
+                    展示口径与「存档列表」一致 —— 用户 · PS5 · 3.63 MB · 8 个文件 · 时间。 */}
+                {remoteFrom !== 'none' && (
+                  <div className="mt-3">
+                    <p className="panel-tiny text-zinc-500 mb-1.5">{t('game.remote_saves', '远程存档')}</p>
+                    {saves.length === 0 ? (
+                      <Note tone="muted">{t('game.remote_no_local', '本地还没有存档，无法定位远程用户')}</Note>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {saves.map((sv) => {
+                          const ri = remoteInfos[sv.id]
+                          return (
+                            <div key={sv.id} className="rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-sm">
+                              <span className="text-white font-medium">{t('game.user', '用户')} {sv.id}</span>
+                              <span className="text-zinc-500"> · PS5 · </span>
+                              {ri === undefined ? (
+                                <span className="text-zinc-500">{t('game.remote_loading', '加载中…')}</span>
+                              ) : !ri.configured ? (
+                                <span className="text-zinc-500">{t('game.remote_unset_short', '未配置远程位置')}</span>
+                              ) : !ri.exists ? (
+                                <span className="text-zinc-500">{t('game.remote_no_save', '远端暂无此用户存档')}</span>
+                              ) : ri.error ? (
+                                <span className="text-amber-400/90">{ri.error}</span>
+                              ) : (
+                                <span className="text-zinc-400">
+                                  {formatSizeAlways(ri.size)} · {ri.files >= 0 ? `${ri.files} ${t('game.files_unit', '个文件')}` : '—'} · {ri.mtime || '—'}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
-                  <ProgressBar indeterminate />
-                </div>
-              )}
+                )}
+              </Block>
 
-              {saves.length === 0 ? (
-                <MiniEmpty icon={HardDrive}>{t('game.saves_empty', '这个游戏还没有存档')}</MiniEmpty>
-              ) : (
-                <ul className="space-y-1.5">
-                  {saves.map((sv) => (
-                    <li
-                      key={sv.id}
-                      className="flex items-center gap-3 p-2.5 rounded-lg border border-white/10 bg-white/[0.02]"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-white panel-body font-semibold truncate">
-                            {t('game.save_user', '用户 {{uid}}', { uid: sv.name || sv.id })}
-                          </span>
-                          {sv.kind && <Chip tone="info">{sv.kind}</Chip>}
-                        </div>
-                        <div className="panel-tiny text-zinc-500 mt-0.5 tabular-nums">
-                          {formatSizeAlways(sv.size)}
-                          {sv.files ? ` · ${t('game.n_files', '{{n}} 个文件', { n: sv.files })}` : ''}
-                          {formatStamp(sv.mtime) ? ` · ${formatStamp(sv.mtime)}` : ''}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <a
-                          className="icon-btn"
-                          href={saveDownloadUrl(tid, sv.id)}
-                          download
-                          title={t('game.save_download', '下载')}
-                          aria-label={t('game.save_download', '下载')}
-                        >
-                          <Download className="w-4 h-4" />
-                        </a>
-                        <button
-                          type="button"
-                          className="icon-btn"
-                          disabled={!!uploading || busyId === sv.id}
-                          title={t('game.save_overwrite', '上传覆盖')}
-                          aria-label={t('game.save_overwrite', '上传覆盖')}
-                          onClick={() => pickFile(sv.id)}
-                        >
-                          <Upload className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          className="icon-btn is-danger"
-                          disabled={busyId === sv.id}
-                          title={t('game.save_delete', '删除')}
-                          aria-label={t('game.save_delete', '删除')}
-                          onClick={() => onDelete(sv)}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              {/* ── ③ 存档列表 ──
+               * [CN-FORK] v0.5.2.147 从「满宽另起一行」提到并排的第三栏：满宽时内容贴左、按钮贴右，
+               * 中间一大段是空的；并排后与「远程位置」里的逐用户远程信息挨在一起，同一批用户
+               * 的本地/远程两份数据在同一屏内可对照。 */}
+              <Block
+                className="min-w-0"
+                title={t('game.saves_list', '存档列表')}
+                icon={HardDrive}
+                actions={
+                  <>
+                    <button type="button" className="icon-btn" title={t('common.refresh', '刷新')} aria-label={t('common.refresh', '刷新')} onClick={load}>
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                    <button type="button" className="btn btn-outline" disabled={!!uploading} onClick={() => pickFile(null)}>
+                      <Upload className="w-4 h-4" />
+                      <span>{t('game.save_upload_new', '上传存档')}</span>
+                    </button>
+                  </>
+                }
+              >
+                {uploading && (
+                  <div className="mb-3">
+                    <div className="flex items-center gap-2 panel-note text-zinc-400 mb-1.5">
+                      <FileArchive className="w-3.5 h-3.5" />
+                      <span className="truncate">{t('game.save_uploading', '正在上传 {{name}}…', { name: uploading.name })}</span>
+                    </div>
+                    <ProgressBar indeterminate />
+                  </div>
+                )}
 
-              <p className="panel-tiny text-zinc-500 mt-3">
-                {t('game.save_hint', '一行 = 一个用户在这个游戏上的整份存档（含主机自己的 _bu_ 备份）。下载与上传都是整份 zip，上传会整份替换。')}
-              </p>
-            </Block>
+                {saves.length === 0 ? (
+                  <MiniEmpty icon={HardDrive}>{t('game.saves_empty', '这个游戏还没有存档')}</MiniEmpty>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {saves.map((sv) => (
+                      <li
+                        key={sv.id}
+                        className="flex items-center gap-3 p-2.5 rounded-lg border border-white/10 bg-white/[0.02]"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-white panel-body font-semibold truncate">
+                              {t('game.save_user', '用户 {{uid}}', { uid: sv.name || sv.id })}
+                            </span>
+                            {sv.kind && <Chip tone="info">{sv.kind}</Chip>}
+                          </div>
+                          <div className="panel-tiny text-zinc-500 mt-0.5 tabular-nums">
+                            {formatSizeAlways(sv.size)}
+                            {sv.files ? ` · ${t('game.n_files', '{{n}} 个文件', { n: sv.files })}` : ''}
+                            {formatStamp(sv.mtime) ? ` · ${formatStamp(sv.mtime)}` : ''}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <a
+                            className="icon-btn"
+                            href={saveDownloadUrl(tid, sv.id)}
+                            download
+                            title={t('game.save_download', '下载')}
+                            aria-label={t('game.save_download', '下载')}
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            disabled={!!uploading || busyId === sv.id}
+                            title={t('game.save_overwrite', '上传覆盖')}
+                            aria-label={t('game.save_overwrite', '上传覆盖')}
+                            onClick={() => pickFile(sv.id)}
+                          >
+                            <Upload className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn is-danger"
+                            disabled={busyId === sv.id}
+                            title={t('game.save_delete', '删除')}
+                            aria-label={t('game.save_delete', '删除')}
+                            onClick={() => onDelete(sv)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <p className="panel-tiny text-zinc-500 mt-3">
+                  {t('game.save_hint', '一行 = 一个用户在这个游戏上的整份存档（含主机自己的 _bu_ 备份）。下载与上传都是整份 zip，上传会整份替换。')}
+                </p>
+              </Block>
+            </div>
           </div>
         )}
 
-        {/* ── ③ 本地快照（v0.5.2.140）──
-         * 与上面两块并排会太挤（配置 + 列表已经占满两列），所以单独一行铺开。
+        {/* ── ⑤ 本地快照（v0.5.2.140）──
+         * 与上面并排会太挤，所以单独一行铺开。
          * 语义上与「远程同步」是**两件不同的事**：远程要网络、要对面在线；
          * 本地快照不依赖任何外部条件，是存档的最后一层兜底。 */}
         {data && (

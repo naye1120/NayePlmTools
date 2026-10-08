@@ -81,6 +81,8 @@
  *   GET  /game_save_download?tid=&save=  → 二进制（zip）
  *   POST /game_save_upload?tid=&save=    裸 body（zip） → {ok, files, size}
  *   GET  /game_save_delete?tid=&save=    → {ok}
+ *   GET  /game_save_remote_info?tid=&save= → {configured,exists,mode?,size?,files?,mtime?,error?}
+ *        [CN-FORK] v0.5.2.145 远程存档只读元数据（大小/文件数/修改时间），供「远程游戏」区块展示。
  *   POST /game_save_snap         {tid, action:"run"}                  → {ok, made}
  *                                {tid, action:"restore", uid, ts}     → {ok}
  *                                {tid, action:"delete",  uid, ts}     → {ok}
@@ -363,6 +365,13 @@ export function watchJob(jobId, onTick, { intervalMs = 1000 } = {}) {
 /* ── 存档 ─────────────────────────────────────────────────────────────── */
 export function getSaves(tid, opts) {
   return request(`/game_saves${q({ tid })}`, opts)
+}
+
+/* [CN-FORK] v0.5.2.145 取某用户远程存档的只读元数据（大小 / 文件数 / 修改时间），
+ * 供「存档管理」弹窗的「远程游戏」区块展示。后端直出 JSON：
+ *   { configured, exists, mode?, size?, files?, mtime?, error? } */
+export function getRemoteSaveInfo(tid, saveId, opts) {
+  return request(`/game_save_remote_info${q({ tid, save: saveId })}`, opts)
 }
 
 export function saveAutoConfig(tid, cfg, opts) {

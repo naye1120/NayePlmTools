@@ -5,11 +5,11 @@
  * 抽到这里，避免两份一样的 MODES / MODE_FIELDS / EMPTY_CFG 互相跑偏。
  */
 
-/* SMB 已解禁（走 libsmb2）；三种协议都可选。 */
+/* SMB 已解禁（走 libsmb2）；FTP / HTTP 暂时禁用，后续开发。 */
 export const MODES = [
   { value: 'smb', label: 'SMB' },
-  { value: 'ftp', label: 'FTP' },
-  { value: 'http', label: 'HTTP' },
+  { value: 'ftp', label: 'FTP', disabled: true, title: '后续开发，暂不可用' },
+  { value: 'http', label: 'HTTP', disabled: true, title: '后续开发，暂不可用' },
 ]
 
 /* 每种协议各自的字段定义。加协议只改这张表。 */
@@ -50,7 +50,7 @@ export const FIELD_LABEL = {
 
 export const EMPTY_CFG = {
   enabled: false,
-  mode: 'ftp',
+  mode: 'smb',
   on_launch: true,
   on_exit: true,
   smb: { host: '', port: '', share: '', sub: '', user: '', password: '' },
@@ -108,7 +108,7 @@ export function isRemoteConfigured(cfg) {
 /* 取出一份 cfg 的远程段（{mode, smb, ftp, http}），缺字段用 EMPTY_CFG 补齐。 */
 export function remoteOf(cfg) {
   return {
-    mode: cfg.mode || 'ftp',
+    mode: cfg.mode || 'smb',
     smb: { ...EMPTY_CFG.smb, ...(cfg.smb || {}) },
     ftp: { ...EMPTY_CFG.ftp, ...(cfg.ftp || {}) },
     http: { ...EMPTY_CFG.http, ...(cfg.http || {}) },
@@ -175,7 +175,7 @@ export function toLocalCfg(auto) {
   if (!auto) return { ...EMPTY_CFG }
   return {
     enabled: !!auto.enabled,
-    mode: auto.mode || 'ftp',
+    mode: auto.mode || 'smb',
     on_launch: auto.on_launch !== false,
     on_exit: auto.on_exit !== false,
     smb: { ...EMPTY_CFG.smb, ...(auto.smb || {}), password: '' },
