@@ -1715,6 +1715,9 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
   不跳主屏。至此 `.150` 起的这条链（挂起 → 拉取 → 恢复 → 不跳前台）**闭环**。
   用户没觉得卡，所以「省掉 400 ms 双采样」的优化**没做**，留作 backlog
   （`ki_stat == SSTOP` 本身就是终局判据，真要做可从那里下手）。
+- **端到端也验了**：用户先还原旧快照 `20261008-191114` 再进游戏，确认**游戏里用的就是
+  拉取回来的那份存档**。所以 `.148`→`.153` 的「远程存档同步」整链**真机验收通过**：
+  拉取成功 → 游戏被冻住 → 盘上存档换掉 → 放行 → 游戏读到新存档 → 全程留在前台。
 
 ### 2.2 React 前端（`frontend/src/`）
 - `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、ManageSources、CommonEntries、MoveFromUsb、Donate、PkgManagerFrame...）。
