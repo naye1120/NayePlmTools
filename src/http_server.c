@@ -283,6 +283,12 @@ static void add_disposition(struct MHD_Response *resp, const char *name) {
  * 而不是 404 / 500，在真机上极难从现象反推回这里。 */
 static size_t gr_post_limit(const char *url) {
     if (strcmp(url, ROUTE_GAME_SAVE_UPLOAD) == 0) return (size_t)512 << 20;
+    /* [CN-FORK] v0.5.2.154 garlic 导入收的是**加密镜像**（一个存档目录里的单个
+     * sdimg_ 文件，真机实测几 MB 到二十几 MB），与上传同一档上限。
+     * ⚠ 新加 POST 路由**必须**在这儿登记 —— 只加分发不登记的话，客户端会看到
+     * 「请求被直接关掉」（没有 Content-Length 上限 → 走到默认 0 → 不读 body）。
+     * 守卫 tools/check_post_routes.sh 会抓这个。 */
+    if (strcmp(url, ROUTE_GAME_SAVE_GARLIC) == 0) return (size_t)512 << 20;
     if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0 ||
         strcmp(url, ROUTE_GAME_TILE_BACKGROUND) == 0)
         return (size_t)64 << 20;
@@ -423,6 +429,29 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
                                msg[0] ? msg : "上传失败");
         *code = MHD_HTTP_OK;
         int n = snprintf(out, size, "{\"ok\":true,\"files\":%lld,\"size\":%lld}", files, bytes);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    /* [CN-FORK] v0.5.2.154 garlic 兼容导入。与上传走同一个「收完 body 再分发」的
+     * 通路（不是 repo_install 那种流式上传），因为镜像只有几 MB，内存里放得下，
+     * 而 game_saves_import_garlic 要能一次看全 body 才判得出「是 zip 还是裸镜像」。
+     * save 允许缺省（= 第一个用户），name 是**原始文件名** —— 裸镜像时全靠它，
+     * 主机认的就是那个名字（`sdimg_<名>`），我们不去猜。 */
+    if (strcmp(url, ROUTE_GAME_SAVE_GARLIC) == 0) {
+        const char *name = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "name");
+        char msg[192];
+        long long files = 0;
+        msg[0] = 0;
+        if (!tid)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (!body || !len)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "导入的文件是空的");
+        if (game_saves_import_garlic(tid, save, name, (const unsigned char *)body, len,
+                                     &files, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "导入失败");
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true,\"files\":%lld}", files);
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 

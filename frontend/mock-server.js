@@ -627,6 +627,12 @@ const gameState = {
   snaps: {},            // [CN-FORK] v0.5.2.140 tid -> 本地快照数组（新的在前）
   autoState: {},        // [CN-FORK] v0.5.2.142 tid -> 自动存档引擎的运行期状态（auto_state）
   runningTid: '',       // [CN-FORK] v0.5.2.142 模拟「此刻哪个游戏在跑」，空 = 没有
+  /* [CN-FORK] v0.5.2.154 garlic 兼容导入的流水账。**只记账、不写 saves** ——
+   * 导入的语义是「逐文件合并」（不是整份替换），一个存档目录里除了当前镜像还有主机自己的
+   * 记账（sdimg_sce_bu_* / sdimg_sce_sdmemory），合并不会动它们，列表也不该多出一条。
+   * 回归靠它钉住「前端有没有把 file.name 当 name 传上来」—— 那是纯 query 拼装，
+   * mock 不记这笔账就完全测不到（同族：坑 25 的「mock 抹掉了真机的前提」）。 */
+  garlicImports: [],
   remoteFiles: new Set(), // [CN-FORK] v0.5.2.142 远端已有的 `${tid}/${uid}`（推送往里加，拉取查它）
   jobs: {},             // job_id -> 任务
   nextJob: 1,
@@ -1300,6 +1306,40 @@ app.get('/game_save_delete', (req, res) => {
   res.json({ ok: true });
 });
 
+/* [CN-FORK] v0.5.2.154 garlic 兼容导入（earthonion/garlic-savemgr 的**加密**导出）。
+ * 与后端 game_saves_import_garlic 同形：
+ *   query: tid, save(=uid，可空 = 第一个用户), name(=原始文件名，裸镜像时必需)
+ *   body : 裸的 `sdimg_<名>` 镜像，或 garlic 的 PS4 包（zip 内 sdimg_<名> + <名>.bin）
+ * 语义是**逐文件合并**，不是整份替换 —— 所以这里只记一笔账、不动 saves 列表
+ * （后端也一样：合并只覆盖同名的镜像，主机自己的记账原样保留）。
+ * `name` 走 query 是关键契约（裸镜像没有后缀、也不是 zip，后端只能靠它决定落盘叫什么），
+ * 而这条纯粹是前端拼 query —— mock 不把收到的 name 记下来，回归就完全测不到。 */
+app.post('/game_save_import_garlic', express.raw({ type: () => true, limit: '512mb' }), (req, res) => {
+  const tid = String(req.query.tid || '');
+  const uid = String(req.query.save || '');
+  const name = String(req.query.name || '');
+  const body = req.body || Buffer.alloc(0);
+  if (!tid) return res.status(400).json({ error: 'EINVAL', message: '缺少 tid' });
+  if (!body.length) return res.status(400).json({ error: 'EINVAL', message: '导入的文件是空的' });
+  const isZip = body.length >= 4
+    && body[0] === 0x50 && body[1] === 0x4b && body[2] === 0x03 && body[3] === 0x04;
+  /* 裸镜像必须带文件名 —— 与后端同一判据（后端是在建目录之前就判掉的）。 */
+  if (!isZip && !name) {
+    return res.status(400).json({
+      error: 'EBAD', message: '缺少文件名（这个文件不是 zip，需要知道它叫什么）',
+    });
+  }
+  const user = resolveSaveUser(uid);
+  if (!user) {
+    return res.status(400).json({ error: 'EBAD', message: `主机上没有这个用户（${uid}）` });
+  }
+  const files = isZip ? 2 : 1;
+  gameState.garlicImports.push({
+    tid, uid: user, name: isZip ? (name || '(zip 内自带)') : name, files, size: body.length, isZip,
+  });
+  res.json({ ok: true, files });
+});
+
 /* 多媒体 */
 app.get('/game_media', (req, res) => {
   const tid = String(req.query.tid || '');
@@ -1457,6 +1497,12 @@ app.post('/_set_running', (req, res) => {
   res.json({ ok: true, running: gameState.runningTid });
 });
 app.get('/_remote_files', (req, res) => res.json({ files: [...gameState.remoteFiles].sort() }));
+
+/* [CN-FORK] v0.5.2.154 garlic 导入的流水账（只读）。
+ * 记的是「后端收到了什么」：tid / 落到了哪个 uid / name 是什么 / 判成 zip 还是裸镜像。
+ * 回归靠它验两件事：① 前端把 file.name 原样传上来了（裸镜像全靠它）；② 导入**没有**
+ * 让存档列表多出一条（合并 ≠ 整份替换）。 */
+app.get('/_garlic_imports', (req, res) => res.json({ imports: gameState.garlicImports }));
 
 /* ══════════════════════════════════════════════════════════════════════════════
  * [CN-FORK] v0.5.2.112 磁贴背景的 DDS 转换（PNG 解码 + DXT1 编码），在 mock 里**真做一遍**
@@ -2007,6 +2053,9 @@ app.post('/reset', (req, res) => {
   gameState.autoState = {};
   gameState.runningTid = '';
   gameState.remoteFiles.clear();
+  /* [CN-FORK] v0.5.2.154 garlic 导入的流水账也清 —— 不清的话下一节读到的还是
+   * 上一节导入过的那笔，断言「这次导入传了正确的 name」就变成假绿。 */
+  gameState.garlicImports = [];
   /* [CN-FORK] v0.5.2.142 把 /loadpayload: 起过的程序桩（10101）一并关掉。
    * 不关的话，第二遍 game112 的 1a 节「前置：10101 必须真的没人监听」必红 ——
    * 而那条前置正是「先探后开」整条链路的立足点。之前只能靠重启 mock 进程绕开。 */

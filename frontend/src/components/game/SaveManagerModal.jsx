@@ -2,14 +2,15 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Save, RefreshCw, Download, Upload, Trash2, AlertTriangle, HardDrive, FileArchive,
-  History, RotateCcw, CloudDownload, CloudUpload, Activity,
+  History, RotateCcw, CloudDownload, CloudUpload, Activity, PackagePlus,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
+import Segmented from '../ui/Segmented'
 import { Block, Chip, Note, MiniEmpty, ProgressBar, GridRow } from './parts'
 import { formatSizeAlways, formatStamp } from './format'
 import {
   getSaves, saveDownloadUrl, uploadSave, deleteSave, snapAction,
-  syncSaves, getRemoteSaveInfo,
+  syncSaves, getRemoteSaveInfo, importGarlic,
 } from '../../utils/gameApi'
 import {
   resolveAutoForGame, resolveRemoteForGame, remoteSummary,
@@ -23,7 +24,8 @@ import {
  *   ① 这个游戏**实际生效**的自动存档状态（开关 / 两个时机）—— 只读，来自设置页「存档配置」；
  *   ② 远程位置只读摘要 + 逐用户远程信息（`.147` 并进本卡，原来是并排的第三张卡）
  *      + 「立即拉取 / 立即推送」+ 引擎上次干了什么（auto_state）；
- *   ③ 存档列表（下载 / 上传覆盖 / 删除 / 上传新的）与本地快照列表（立即备份 / 还原 / 删除）。
+ *   ③ 存档列表（下载 / 上传覆盖 / 删除 / 上传新的 / **garlic 兼容导入**）
+ *     与本地快照列表（立即备份 / 还原 / 删除）。
  *
  * 版式（`.147`）：第一行三栏 = ① / ② / ③，各占 1/3；本地快照仍单独满宽铺开。
  * 配置（远程位置 / 自动存档 / 快照参数）全部在「设置 → 存档配置」一处，对所有游戏生效。
@@ -38,6 +40,19 @@ import {
  *
  * 历史包袱：后端永远不回传密码明文（per-game 路径），全局配置那份原样存（见
  * ArchiveConfigModal 注释）；本条只在「回退到本游戏已存」时相关，密码一律按「不修改」处理。
+ *
+ * ── [CN-FORK] v0.5.2.154 三处 ──────────────────────────────────────────────
+ * ① **游戏运行中置灰「立即拉取 / 立即推送」**。后端 game_auto_sync_action 已经会拒拦并回
+ *    人话，但让用户白点一次才被告知是坏体验；更实际的理由是推拉都是**整份替换**存档目录，
+ *    而游戏此刻正把存档读在内存里、退出时还要写回去 —— 这时候动它最容易把进度搞丢。
+ *    判据用 st.running（后端当场探测，不是守护线程的滞后值），与那颗「游戏运行中」芯片同源。
+ * ② **garlic 兼容导入**（earthonion/garlic-savemgr）。与「上传存档」是**两回事**：
+ *    上传 = 整份替换（把整个 <TID> 目录换掉）；导入 = **逐文件合并**（只覆盖 garlic 导出的
+ *    那几个镜像）。一个存档目录里除了当前镜像还有主机自己的记账（`sdimg_sce_bu_<名>` 备份、
+ *    `sdimg_sce_sdmemory` 系统存档），整份替换会把它们一起抹掉，主机很可能就认不出这份存档了
+ *    —— 所以从 garlic 搬过来的东西**不能**走上传那条路。单独一块、不去挤标题栏。
+ * ③ **快照只读行删掉「间隔（分钟）」**：定时快照已废，触发时机改成了「游戏退出时」，
+ *    留一个恒定的数字只会让人以为还能调（参数在设置页「存档配置」里也只剩开关 + 保留份数）。
  */
 
 /* 只读状态行的标签列要宽一些：`GridRow` 默认的 86px 是给详情页那种短标签
@@ -58,7 +73,10 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   const [busySnap, setBusySnap] = useState('')       // `${uid}/${ts}`，该行正在还原/删除
   const [syncing, setSyncing] = useState('')         // '' | 'push' | 'pull'：立即同步进行中
   const [remoteInfos, setRemoteInfos] = useState({}) // { [uid]: 远程只读元数据（大小/文件数/时间）}
+  const [importing, setImporting] = useState(false)  // garlic 兼容导入进行中
+  const [gxUid, setGxUid] = useState('')             // garlic 导入的目标用户（多用户时才让人选）
   const fileRef = useRef(null)
+  const gxRef = useRef(null)                         // garlic 导入用的独立 input（accept 与去向都不同）
   const pendingSlot = useRef(null)                   // null = 新存档；字符串 = 覆盖该槽
   const aliveRef = useRef(true)
 
@@ -110,6 +128,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     setRemote(null); setRemoteFrom('none')
     setBusyId(''); setUploading(null)
     setSnapping(false); setBusySnap(''); setSyncing('')
+    setImporting(false); setGxUid('')
     setRemoteInfos({})
   }
 
@@ -174,6 +193,51 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
       addToast?.(e.message || t('game.save_upload_fail', '上传失败'), 'error')
     }
     if (aliveRef.current) setUploading(null)
+  }
+
+  /* ── garlic 兼容导入（v0.5.2.154）────────────────────────────────────────
+   * 独立一个 file input，不复用上传那个：accept 与去向都不同 —— garlic 导出的
+   * PS5 存档是**没有后缀**的 `sdimg_<名>`，`accept=".zip,..."` 会在文件选择器里
+   * 直接把它藏起来（用户会以为「我明明导出了，怎么找不到」）。所以这里 accept 留空
+   * = 任意文件，靠后端按内容判「是 zip 还是裸镜像」。
+   *
+   * 目标用户：`saves` 里有多个人时才让人选（单人主机多一步选择纯属打扰）；
+   * 一个都没有时传空串 —— 后端按「第一个用户」建目录（与上传同口径），
+   * 换机 / 刚装好还没玩过的机器也能直接导入。 */
+  const pickGarlic = () => {
+    if (gxRef.current) { gxRef.current.value = ''; gxRef.current.click() }
+  }
+
+  const doGarlicImport = async (file, uid) => {
+    setImporting(true)
+    try {
+      const r = await importGarlic(tid, uid, file.name, file)
+      addToast?.(t('game.garlic_imported', '已导入 {{n}} 个文件', { n: (r && r.files) || '?' }))
+      await load()
+    } catch (e) {
+      addToast?.(e.message || t('game.garlic_import_fail', '导入失败'), 'error')
+    }
+    if (aliveRef.current) setImporting(false)
+  }
+
+  const onGarlicFile = (ev) => {
+    const file = ev.target.files && ev.target.files[0]
+    if (!file) return
+    /* 单人主机直接用那个人；多用户时用选中的那个，没选则第一个。 */
+    const uid = gxUid || (saves[0] && saves[0].id) || ''
+    if (!showConfirm) { doGarlicImport(file, uid); return }
+    showConfirm(
+      t('game.garlic_import_title', '兼容导入 Garlic 存档'),
+      t('game.garlic_import_confirm',
+        '把「{{name}}」导入到{{target}}？只覆盖同名的存档镜像，主机自己的备份（_bu_）与系统存档不会被删。',
+        {
+          name: file.name,
+          target: uid
+            ? t('game.garlic_to_user', '用户 {{uid}}', { uid })
+            : t('game.garlic_to_default', '默认用户'),
+        }),
+      () => doGarlicImport(file, uid),
+    )
   }
 
   const onDelete = (sv) => {
@@ -349,11 +413,15 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                 <div className="flex flex-wrap items-center gap-2 mt-4">
                   {/* [CN-FORK] v0.5.2.142 立即推 / 拉。**不受总开关影响** ——
                       手动就是手动，用户想试一次不该被迫先把自动打开。后端读的是它自己
-                      那份已保存的配置（全局或本游戏的），与这里的只读展示同源。 */}
+                      那份已保存的配置（全局或本游戏的），与这里的只读展示同源。
+                      [CN-FORK] v0.5.2.154 游戏运行中一律置灰：后端会拒拦并回人话，
+                      但让用户白点一次才被告知是坏体验；而且推拉都是**整份替换**存档目录，
+                      游戏正把存档读在内存里、退出时还要写回去，这时候动它最容易丢进度。 */}
                   <button
                     type="button"
                     className="btn btn-outline"
-                    disabled={!!syncing}
+                    disabled={!!syncing || !!st.running}
+                    title={st.running ? t('game.running_no_sync', '游戏正在运行，请先退出游戏再推送 / 拉取存档。') : undefined}
                     onClick={() => onSync('pull')}
                   >
                     <CloudDownload className="w-4 h-4" />
@@ -362,13 +430,22 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                   <button
                     type="button"
                     className="btn btn-outline"
-                    disabled={!!syncing}
+                    disabled={!!syncing || !!st.running}
+                    title={st.running ? t('game.running_no_sync', '游戏正在运行，请先退出游戏再推送 / 拉取存档。') : undefined}
                     onClick={() => onSync('push')}
                   >
                     <CloudUpload className="w-4 h-4" />
                     <span>{syncing === 'push' ? t('game.syncing', '同步中…') : t('game.sync_push', '立即推送')}</span>
                   </button>
                 </div>
+
+                {/* 置灰的按钮必须给一句「为什么」—— 只有 title 的话，电视端遥控器用户
+                    根本看不到（没有 hover）。 */}
+                {st.running && (
+                  <p className="panel-tiny text-amber-400/90 mt-2">
+                    {t('game.running_no_sync', '游戏正在运行，请先退出游戏再推送 / 拉取存档。')}
+                  </p>
+                )}
 
                 {/* 引擎上次干了什么。没有这一段的话，「开关打开了但什么都没发生」完全没法自查。 */}
                 {last && (
@@ -536,6 +613,46 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                 <p className="panel-tiny text-zinc-500 mt-3">
                   {t('game.save_hint', '一行 = 一个用户在这个游戏上的整份存档（含主机自己的 _bu_ 备份）。下载与上传都是整份 zip，上传会整份替换。')}
                 </p>
+
+                {/* ── garlic 兼容导入（v0.5.2.154）──
+                    单独一块、用一根发丝线隔开，而不是挤进标题栏那颗按钮旁边：
+                    它和「上传存档」是**两回事**（整份替换 vs 逐文件合并），
+                    并排放在一起用户会以为「都是上传，选一个就行」。 */}
+                <div className="mt-3 pt-3 border-t border-white/10">
+                  {saves.length > 1 && (
+                    <div className="mb-2">
+                      <p className="panel-tiny text-zinc-500 mb-1.5">
+                        {t('game.garlic_target', '导入到哪个用户')}
+                      </p>
+                      <Segmented
+                        options={saves.map((sv) => ({ value: sv.id, label: `${t('game.user', '用户')} ${sv.id}` }))}
+                        value={gxUid || saves[0].id}
+                        onChange={setGxUid}
+                        label={t('game.garlic_target', '导入到哪个用户')}
+                        className="w-full"
+                        itemClassName="flex-1"
+                      />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-outline w-full"
+                    disabled={!!importing || !!uploading}
+                    onClick={pickGarlic}
+                  >
+                    <PackagePlus className="w-4 h-4" />
+                    <span>
+                      {importing
+                        ? t('game.garlic_importing', '正在导入…')
+                        : t('game.garlic_import', '兼容导入（Garlic）')}
+                    </span>
+                  </button>
+                  {importing && <div className="mt-2"><ProgressBar indeterminate /></div>}
+                  <p className="panel-tiny text-zinc-500 mt-2 leading-snug">
+                    {t('game.garlic_hint',
+                      '导入 garlic-savemgr 导出的加密存档：PS5 是一个 sdimg_ 开头的镜像文件（没有后缀），PS4 是一个 zip 包。只覆盖同名的镜像，主机自己的备份与系统存档不动。')}
+                  </p>
+                </div>
               </Block>
             </div>
           </div>
@@ -566,9 +683,12 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
               </>
             }
           >
-            {/* 参数只读：开关 / 间隔 / 保留数都在设置页「存档配置」里改。
+            {/* 参数只读：开关 / 保留数都在设置页「存档配置」里改。
                 「立即备份」与下面的列表留在这里 —— 备份的是**这个游戏**的存档，
-                本来就属于这个弹窗。 */}
+                本来就属于这个弹窗。
+                [CN-FORK] v0.5.2.154 删掉「间隔（分钟）」那一行：定时快照已废，
+                触发时机改成了「游戏退出时」，留一个恒定数字只会让人以为还能调
+                （设置页那边也只剩开关 + 保留份数）。 */}
             <GridRow
               cols={RO_COLS}
               label={t('game.snap_enable', '启用本地快照')}
@@ -576,8 +696,8 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
             />
             <GridRow
               cols={RO_COLS}
-              label={t('game.snap_interval', '间隔（分钟）')}
-              value={String(Math.max(1, Math.round((Number(eff.snap.interval) || 0) / 60)))}
+              label={t('game.snap_when', '备份时机')}
+              value={t('game.snap_when_exit', '每次游戏退出后')}
             />
             <GridRow
               cols={RO_COLS}
@@ -660,6 +780,18 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
           accept=".zip,.tar,.gz,.tgz"
           className="hidden"
           onChange={onFile}
+        />
+
+        {/* [CN-FORK] v0.5.2.154 garlic 导入的独立 input：**刻意不写 accept**。
+            garlic 在 PS5 上导出的是一个没有后缀的 `sdimg_<名>` 文件，上面那条
+            `.zip,.tar,.gz,.tgz` 会在文件选择器里直接把它藏起来（用户会以为
+            「我明明导出了，怎么找不到」）。这里是「任意文件」，由后端按内容判
+            「是 zip 还是裸镜像」。 */}
+        <input
+          ref={gxRef}
+          type="file"
+          className="hidden"
+          onChange={onGarlicFile}
         />
       </div>
     </Modal>

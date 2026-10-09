@@ -1,12 +1,16 @@
 #!/bin/bash
 # [CN-FORK] v0.5.2.152 变异对照（四个变异，都必须被抓住）。
+# [CN-FORK] v0.5.2.154 又加三个（gate / snap / runblock），共七个。
 #
-# 跑法：bash test/mutation_check_freeze.sh            （EXIT 0 = 四个都被抓住）
+# 跑法：bash test/mutation_check_freeze.sh            （EXIT 0 = 全部都被抓住）
 #       bash test/mutation_check_freeze.sh order      （只跑顺序那个）
 #       bash test/mutation_check_freeze.sh handle     （只跑「凭据没交出去」那个）
 #       bash test/mutation_check_freeze.sh kind       （只跑「机制代号没交出去」那个）
 #       bash test/mutation_check_freeze.sh verdict    （只跑「验证不可用就回落」那个）
-# 不接进 run_host_tests.sh：它要重编四遍（与 mutation_check_media.sh 同一理由）。
+#       bash test/mutation_check_freeze.sh gate       （只跑「本地更新还去拉」那个）
+#       bash test/mutation_check_freeze.sh snap       （只跑「退出时不快照」那个）
+#       bash test/mutation_check_freeze.sh runblock   （只跑「运行中也让推拉」那个）
+# 不接进 run_host_tests.sh：它要重编七遍（与 mutation_check_media.sh 同一理由）。
 #
 # ── 变异 ①「order」：把 freeze 挪到 ga_do_inner **之后**（先拉后冻）──────────
 # 这个修复的全部价值就在**顺序**上（用户口径：暂停游戏 → 拉取存档）。而顺序恰恰是
@@ -35,6 +39,24 @@
 # 游戏拉到前台」）。判定策略被抽成纯函数 `ga_freeze_verdict()` 就是为了这一格，
 # 所以这个变异必须被抓住 —— 它等价于「把 `.152` 的 bug 原样放回去」。
 # 期望：恰好 3 条红（判定表那条 + 两条「不许回落」的策略断言）。
+#
+# ── 变异 ⑤「gate」：拉取前不再比新旧（= 用旧存档盖掉新进度）───────────────
+# `.154` 用户口径：「如果本地存档比远程存档要更新，则不拉取」。这条判定的全部价值
+# 就是**跳过那一次拉取**，而「跳过」在真机上是个看不出来的结果 —— 面板上就是一次
+# 没动静的拉取，没报错。所以必须用「本地那份的字节一个都没变」来证，而不是看返回码。
+# 变异把 `local_mtime > remote_mtime` 那条出口掐掉 → 本地更新时照样拉。
+# 期望：纯函数 2 条 + 端到端 2 条（提示文案 + 本地被覆盖）= 恰好 4 条红。
+#
+# ── 变异 ⑥「snap」：退出时不生成快照步骤（= 功能静默消失）──────────────────
+# `.154` 用户口径：「每次游戏结束后，在本地快照存一份存档；定时的功能不要了」——
+# 触发点整个从定时守护搬到 `game_auto_plan` 的 GA_ACT_SNAP。把它删掉，面板上
+# **一点异常都看不出来**（快照列表只是不再增长），所以这条变异必须被抓住。
+# 期望：`game_auto_plan` 那一段里所有提到「快照」的断言全红。
+#
+# ── 变异 ⑦「runblock」：不拦运行中的手动推拉（= 游戏正写盘时去打包）────────
+# `.154` 用户口径：「游戏进行中，拉取和推送存档的动作不让做」。删掉那道闸门，
+# 用户点按钮会拿到一个**看起来成功**的结果，而盘上那份可能是撕裂的半截存档。
+# 期望：推 / 拉各 2 条（返回码 + 提示文案）+ 「不该留下开始日志」1 条 = 恰好 5 条红。
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -159,9 +181,77 @@ PY
     rm -rf "$W"
 fi
 
+if [ "$WANT" = "both" ] || [ "$WANT" = "gate" ]; then
+    W=$(mktemp -d)
+    # 掐掉「本地更新 → 不拉」那条出口 = 每次拉取都会把本地覆盖掉。
+    python3 - "$W/game_auto.c" <<'PY'
+import sys, pathlib
+src = pathlib.Path('src/game_auto.c').read_text(encoding='utf-8')
+OLD = '    if (local_mtime > remote_mtime) return 0;  /* 本地更新 → 不拿旧的盖新的 */'
+NEW = '    if (0 && local_mtime > remote_mtime) return 0;'
+assert src.count(OLD) == 1, '变异锚点（ga_pull_needed 的本地更新出口）没找到或不止一处'
+out = src.replace(OLD, NEW, 1)
+assert out != src and NEW in out, 'mutation failed'
+pathlib.Path(sys.argv[1]).write_text(out, encoding='utf-8')
+print('  变异已注入：拉取前不再比新旧（= 本地更新时也照拉，用旧的盖新的）')
+PY
+    run_case gate "$W/game_auto.c" 4 4 '本地更新\|本地只新\|本地比远程新' || bad=1
+    rm -rf "$W"
+fi
+
+if [ "$WANT" = "both" ] || [ "$WANT" = "snap" ]; then
+    W=$(mktemp -d)
+    # 删掉退出时的快照步骤 = 「每次游戏结束后在本地快照存一份」这条需求静默失效。
+    python3 - "$W/game_auto.c" <<'PY'
+import sys, pathlib
+src = pathlib.Path('src/game_auto.c').read_text(encoding='utf-8')
+SNAP = ('    if (p && prev_snap) {\n'
+        '        out[n].act = GA_ACT_SNAP;\n'
+        '        snprintf(out[n].tid, sizeof(out[n].tid), "%s", p);\n'
+        '        n++;\n'
+        '    }\n')
+assert src.count(SNAP) == 1, '变异锚点（GA_ACT_SNAP 那一段）没找到或不止一处'
+out = src.replace(SNAP, '', 1)
+assert out != src and SNAP not in out, 'mutation failed'
+pathlib.Path(sys.argv[1]).write_text(out, encoding='utf-8')
+print('  变异已注入：退出时不生成快照步骤（= 本地快照功能静默消失）')
+PY
+    run_case snap "$W/game_auto.c" 6 6 '快照\|退出第二步' || bad=1
+    rm -rf "$W"
+fi
+
+if [ "$WANT" = "both" ] || [ "$WANT" = "runblock" ]; then
+    W=$(mktemp -d)
+    # 拆掉「游戏运行中不许手动推拉」那道闸门。
+    python3 - "$W/game_auto.c" <<'PY'
+import sys, pathlib
+src = pathlib.Path('src/game_auto.c').read_text(encoding='utf-8')
+BLOCK = '''    {
+        char run[32];
+        run[0] = 0;
+        g_probe(run, sizeof(run));
+        if (run[0] && !strcmp(run, tid)) {
+            if (msg) snprintf(msg, msgsz,
+                              "「%s」正在运行，请先退出游戏再%s存档（运行中操作可能丢失进度）",
+                              tid, act == GA_ACT_PUSH ? "推送" : "拉取");
+            return -1;
+        }
+    }
+'''
+assert src.count(BLOCK) == 1, '变异锚点（运行中拒拦那一段）没找到或不止一处'
+out = src.replace(BLOCK, '', 1)
+assert out != src and BLOCK not in out, 'mutation failed'
+pathlib.Path(sys.argv[1]).write_text(out, encoding='utf-8')
+print('  变异已注入：不拦运行中的手动推拉（= 游戏正写盘时去打包）')
+PY
+    run_case runblock "$W/game_auto.c" 5 5 '必须被拦\|要说清是因为在运行\|不该.*留下「开始」日志' || bad=1
+    rm -rf "$W"
+fi
+
 echo
 if [ "$bad" -eq 0 ]; then
-    echo "MUTATION OK：变异都被抓住了 —— 顺序 / 凭据 / 机制代号 / 判定策略 四条断言都不是虚的"
+    echo "MUTATION OK：变异都被抓住了 —— 顺序 / 凭据 / 机制代号 / 判定策略 /"
+    echo "            拉取前比新旧 / 退出时快照 / 运行中拒拦 七条断言都不是虚的"
     exit 0
 fi
 echo "MUTATION BAD：有变异没被抓住（守卫不可信）"

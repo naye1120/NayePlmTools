@@ -194,14 +194,19 @@ void game_saves_set_state_provider(gs_state_fn fn);
 /* GET /game_save_delete：删掉这个用户在这个游戏上的整份存档。0 成功。 */
 int game_saves_remove(const char *tid, const char *save, char *msg, size_t msgsz);
 
-/* ── 本地快照（v0.5.2.140）─────────────────────────────────────────────────
- * 守护线程：读每款游戏配置里的 snap，按各自的间隔做快照。main.c 启动时调用一次。
- * safe_mode 下整条跳过（与风扇、名字自愈两条守护同一原则）。 */
-void game_saves_snap_start_daemon(void);
+/* ── 本地快照（v0.5.2.140 / 触发方式于 v0.5.2.154 改为「游戏退出时」）──────────
+ * [CN-FORK] v0.5.2.154 **定时守护整条删除**（用户口径：「每次游戏结束后，在本地
+ * 快照存一份存档，本地自动存储快照删除（定时的功能不要了）」）。触发点改到
+ * game_auto.c 的扫描线程 —— 检测到某款游戏退出时调 game_saves_snap_run_now。
+ * 于是这里不再有 start_daemon，也不再需要「按每款游戏各自的间隔判定到期」。 */
 
-/* 立即给这个游戏做一份快照（不等间隔，也不看「内容没变」以外的前置条件）。
+/* 立即给这个游戏做一份快照（游戏退出时自动触发 / 用户点「立即备份」）。
  * 返回已生成/跳过的份数（>=0），msg 回一句人话；<0 是参数或目录层面的硬错误。 */
 int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz);
+
+/* [CN-FORK] v0.5.2.154 这个游戏的本地快照开着没有（全局优先，与内部 gs_snap_cfg 同口径）。
+ * 给 game_auto.c 的扫描线程用：游戏退出时先问一句，开着才备份。 */
+int game_saves_snap_enabled(const char *tid);
 
 /* POST /game_save_snap：body 是 JSON
  *   {tid, action:"run"}                       → 立即备份
@@ -210,5 +215,24 @@ int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz);
  * 0 成功（buf 已填完整 JSON 响应体），-1 参数非法（调用方回 400）。 */
 int game_saves_snap_action(const char *body, size_t len,
                            char *buf, size_t size, char *msg, size_t msgsz);
+
+/* ── [CN-FORK] v0.5.2.154 ────────────────────────────────────────────────── */
+
+/* 这个用户在这个游戏上的存档目录「最近被写过的时刻」（所有普通文件的最大 mtime）。
+ * 给「拉取前先比新旧」用（判定是纯函数 game_auto.h 的 ga_pull_needed）。
+ * 返回 1 = 本地有存档（*out_mtime 已填，unix 秒）；0 = 本地没有（换机/误删/从没存过）。 */
+int game_saves_local_mtime(const char *tid, const char *uid, long long *out_mtime);
+
+/* POST /game_save_import_garlic：导入 garlic-savemgr（earthonion）导出的**加密**存档。
+ *   query: tid, save(=uid，可空 = 第一个用户), name(=原始文件名，裸镜像时必需)
+ *   body : 裸的 `sdimg_<名>` 镜像，或 garlic 的 PS4 包（zip 内 `sdimg_<名>` + `<名>.bin`）
+ *
+ * 与 game_saves_upload 的语义差别是刻意的：上传是**整份替换**，这里是**逐文件合并**
+ * —— 只覆盖同名的镜像，保留主机自己的记账（sdimg_sce_bu_* / sdimg_sce_sdmemory）。
+ * 详细理由见 src/game_saves.c 里那段注释。
+ * 0 成功（*out_files 回写入的文件数），-1 失败（msg 回人话）。 */
+int game_saves_import_garlic(const char *tid, const char *save, const char *name,
+                             const unsigned char *body, size_t len,
+                             long long *out_files, char *msg, size_t msgsz);
 
 #endif

@@ -9,7 +9,8 @@ import {
   Terminal,
   X,
   Link2,
-  Gamepad2
+  Gamepad2,
+  Info
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -28,7 +29,9 @@ import LogoIcon from './components/ui/LogoIcon'
 import StorageHub from './components/views/StorageHub'
 import AutoloadView from './components/views/AutoloadView'
 import SettingsView from './components/views/SettingsView'
-import DonateView from './components/views/DonateView'
+// [CN-FORK] v0.5.2.154 「关于」页取代了原来的「支持作者」页（`DonateView` 已删）：
+// 更新日志 + 支持作者 + 本 Fork 署名 + 参考致谢 四块合并成一页，挂在设置下面。
+import AboutView from './components/views/AboutView'
 import AutoloadOverlay from './components/views/AutoloadOverlay'
 import MoveFromUsbView from './components/views/MoveFromUsbView'
 import LogViewer from './components/views/LogViewer'
@@ -58,16 +61,51 @@ const NAV_ITEMS = [
   { id: 'game_manage', group: 'main', icon: Gamepad2, label: ['app.nav.game_manage', 'Game Manager'], mobile: ['app.nav.game_manage_mobile', 'Games'] },
   { id: 'processes', group: 'system', icon: Cpu, label: ['app.nav.processes', 'Active Processes'], mobile: ['app.nav.processes_mobile', 'Processes'] },
   { id: 'settings', group: 'system', icon: Settings, label: ['app.nav.settings', 'Settings'], mobile: ['app.nav.settings', 'Settings'] },
+  /* [CN-FORK] v0.5.2.154 用户口径：「在设置下边增加一个菜单叫关于，把更新日志和支持作者的
+   * 内容全部放到关于里面」。所以它紧跟在设置之后、同属「系统管理」组，并取代了原来
+   * 藏在设置页里的「更新日志」入口与独立的「支持作者」页。 */
+  { id: 'about', group: 'system', icon: Info, label: ['app.nav.about', 'About'], mobile: ['app.nav.about_mobile', 'About'] },
 ]
 const NAV_GROUPS = [
   { id: 'main', label: ['app.nav.group_main', 'Main'] },
   { id: 'system', label: ['app.nav.group_system', 'System'] },
 ]
 
+/* [CN-FORK] v0.5.2.154 刷新后停在当前页（用户口径：「所有页面刷新后停留在当前页面」）。
+ *
+ * 存的是**视图 id 本身**，读回来先过一遍白名单 —— localStorage 用户能改，一个不认识的
+ * id 会让下面那一串 `view === '…'` 一条都不命中，整页变成空白，比「刷新回首页」更糟。
+ * 白名单 = 「刷新之后仍然成立」的那些页：`move_from_usb` 刻意不在里面 —— 它靠一个只在
+ * 内存里的路径（从 USB 导入时选中的那个），刷新后那个路径就没了，留在那一页只会看到空白。
+ * 不认的 id 一律回落到默认页 'storage'。 */
+const VIEW_STORE_KEY = 'pldmgrView'
+const RESTORABLE_VIEWS = new Set([...NAV_ITEMS.map((i) => i.id), 'sources'])
+const DEFAULT_VIEW = 'storage'
+
+function readStoredView() {
+  try {
+    const v = localStorage.getItem(VIEW_STORE_KEY)
+    return v && RESTORABLE_VIEWS.has(v) ? v : DEFAULT_VIEW
+  } catch {
+    return DEFAULT_VIEW
+  }
+}
+
 function App() {
   const { t, i18n } = useTranslation();
-  const [view, setView] = useState('storage') /* [CN-FORK] v0.5.1.64 默认页改 payload 管理页，主页已删除 */
+  const [view, setView] = useState(readStoredView) /* [CN-FORK] v0.5.1.64 默认页 payload 管理页；v0.5.2.154 起刷新后回到上次那一页 */
   const mainRef = useRef(null)
+
+  /* [CN-FORK] v0.5.2.154 把当前页写回去。**只写白名单里的页**：像 move_from_usb 这种
+   * 「离开就失效」的页不写，免得它把上一次那个好页面盖掉、刷新后又被回落成首页。 */
+  useEffect(() => {
+    if (!RESTORABLE_VIEWS.has(view)) return
+    try {
+      localStorage.setItem(VIEW_STORE_KEY, view)
+    } catch {
+      /* 存不进去也不影响使用，下次刷新回默认页而已 */
+    }
+  }, [view])
 
   useEffect(() => {
     if (mainRef.current) {
@@ -719,7 +757,9 @@ function App() {
             />
           )}
 
-          {view === 'donate' && <DonateView version={version} />}
+          {/* [CN-FORK] v0.5.2.154 「关于」页：设置下面的新菜单，取代原来的「支持作者」页
+              （`view === 'donate'` 那条已删 —— 内容全在 AboutView 里了）。 */}
+          {view === 'about' && <AboutView version={version} />}
 
           {/* [CN-FORK] 常用入口 / 游戏管理 / PKG安装（内嵌 PKG Manager 界面） */}
           {view === 'common_entries' && <CommonEntriesView showConfirm={showConfirm} addToast={addToast} />}

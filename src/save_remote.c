@@ -292,6 +292,86 @@ static int sr_curl_put_bytes(const sr_cfg_t *c, const char *url,
     return (rc == CURLE_OK) ? 0 : -1;
 }
 
+/* [CN-FORK] v0.5.2.154 把一个小文件（目前只给 <uid>.meta.json 用）读进内存。
+ * 与 sr_curl_put_bytes 对称：FTP 走 RETR、HTTP 走 GET，选项与 sr_pull 的
+ * FTP/HTTP 分支保持一致（少一处不一致就多一种「推送能上、读取读不到」）。
+ * 0 成功（*out_len 是读到的字节数，已补 '\0' 结尾）；
+ * SR_ENOTFOUND = 远端明确没有这个文件；-1 = 说不清（连接 / 权限 / 其它）。
+ *
+ * 写回调刻意**不因超出容量而失败**：meta.json 只有一百来字节，真超了说明对面
+ * 回的不是我们的文件，多出来的部分丢掉、照样回成功长度即可 —— 让 curl 中途
+ * 报错反而会把「读到了一个怪文件」说成「网络断了」。 */
+struct sr_mem_dst { char *p; size_t cap; size_t len; };
+static size_t sr_write_mem(void *ptr, size_t sz, size_t nm, void *ud) {
+    struct sr_mem_dst *m = (struct sr_mem_dst *)ud;
+    if (!m) return 0;
+    size_t n = sz * nm;
+    if (m->len + n > m->cap) n = m->cap - m->len;
+    if (n) {
+        memcpy(m->p + m->len, ptr, n);
+        m->len += n;
+    }
+    return sz * nm; /* 必须回「原样收下」，否则 curl 判写失败 */
+}
+
+static int sr_curl_get_mem(const sr_cfg_t *c, const char *url,
+                           char *out, size_t cap, size_t *out_len,
+                           char *err, size_t errsz) {
+    if (out_len) *out_len = 0;
+    if (!out || cap < 2) return -1;
+    out[0] = 0;
+    pldmgr_curl_init();
+    CURL *cu = curl_easy_init();
+    if (!cu) {
+        if (err) snprintf(err, errsz, "初始化传输失败");
+        return -1;
+    }
+    struct curl_slist *hdrs = NULL;
+    struct sr_mem_dst md = { out, cap - 1, 0 };
+    sr_common_opts(cu, url);
+    curl_easy_setopt(cu, CURLOPT_WRITEFUNCTION, sr_write_mem);
+    curl_easy_setopt(cu, CURLOPT_WRITEDATA, &md);
+    curl_easy_setopt(cu, CURLOPT_FOLLOWLOCATION, 1L);
+    if (!strcmp(c->mode, "ftp")) {
+        if (c->user[0]) {
+            curl_easy_setopt(cu, CURLOPT_USERNAME, c->user);
+            curl_easy_setopt(cu, CURLOPT_PASSWORD, c->password);
+        }
+        curl_easy_setopt(cu, CURLOPT_FTP_USE_EPSV, 1L);
+    } else if (c->token[0]) {
+        char auth[400];
+        snprintf(auth, sizeof(auth), "Authorization: Bearer %s", c->token);
+        hdrs = curl_slist_append(hdrs, auth);
+        curl_easy_setopt(cu, CURLOPT_HTTPHEADER, hdrs);
+    }
+    CURLcode rc = curl_easy_perform(cu);
+    long http = 0;
+    curl_easy_getinfo(cu, CURLINFO_RESPONSE_CODE, &http);
+    if (hdrs) curl_slist_free_all(hdrs);
+    curl_easy_cleanup(cu);
+    if (rc != CURLE_OK) {
+        /* 与 sr_pull 同一套口径：FTP 上「文件不存在」和「CWD 到不存在的目录」
+         * 都是 550，libcurl 分别报 FILE_NOT_FOUND / ACCESS_DENIED，都算「没有」。 */
+        if (rc == CURLE_REMOTE_FILE_NOT_FOUND || rc == CURLE_REMOTE_ACCESS_DENIED) {
+            if (err) snprintf(err, errsz, "远程没有这个文件");
+            return SR_ENOTFOUND;
+        }
+        if (err) snprintf(err, errsz, "%s", sr_curl_msg(rc));
+        return -1;
+    }
+    if (http == 404) {
+        if (err) snprintf(err, errsz, "远程没有这个文件");
+        return SR_ENOTFOUND;
+    }
+    if (http >= 400) {
+        if (err) snprintf(err, errsz, "远程拒绝了这次读取（HTTP %ld）", http);
+        return -1;
+    }
+    out[md.len] = 0;
+    if (out_len) *out_len = md.len;
+    return 0;
+}
+
 /* 临时归档的落点。用 GAME_SAVES_PACK_DIR（与「下载存档」共用那个目录）——
  * 它本来就不是存档目录，专门用来放这种一次性的包，见 game_saves.h。 */
 static int sr_tmp_path(const char *what, const char *tid, const char *uid,
@@ -881,7 +961,10 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
  *   out_mtime ← <uid>.zip 的 mtime（真实打包时间）
  *   out_files ← 推送时一并写的 <uid>.meta.json 里的 files；老存档没有 meta 时回 -1
  * 0 成功；SR_ENOTFOUND = 远端还没有这份（语义同 sr_pull，前端当「没得显示」）；
- * -1 = 配置 / 连接错误（err 人话）。FTP / HTTP 当前前端已禁用，统一回 -1。 */
+ * -1 = 配置 / 连接错误（err 人话）。
+ * [CN-FORK] v0.5.2.154 起 FTP / HTTP 也实现了（读 <uid>.meta.json，见下方分支）。
+ * ⚠ 只有 SMB 会回 SR_ENOTFOUND；FTP / HTTP **一律回 -1**，理由见那条分支里
+ *   的长注释（「meta.json 不在」分不清是「没存档」还是「老存档没写 meta」）。 */
 int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
             long long *out_size, time_t *out_mtime, long long *out_files,
             char *err, size_t errsz) {
@@ -946,7 +1029,46 @@ int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
         return 0;
     }
 
-    /* FTP / HTTP 暂未实现：前端当前已禁用这两档，保持返回 -1 让前端降级。 */
-    if (err) snprintf(err, errsz, "当前仅支持 SMB 的远程信息读取（FTP / HTTP 暂未实现）");
-    return -1;
+    /* FTP / HTTP：[CN-FORK] v0.5.2.154 用推送时一并写下的 <uid>.meta.json 拿时间戳。
+     *
+     * 为什么不实现 FTP `MDTM` / HTTP `HEAD`：那两条各协议语义不一 —— 有的 FTP
+     * 服务器不认 MDTM，自建的小 HTTP 服务未必实现 HEAD，真机上要一个个踩才知道
+     * 哪条能用；而 meta.json 是**我们自己写的**文件，三个协议上都是同一次普通
+     * 读取（RETR / GET），复用已经跑熟的那条路。
+     *
+     * ⚠ **一律「说不清就回 -1」，绝不在这里回 SR_ENOTFOUND。**
+     * 调用方是「拉取前的新旧判定」，它把 -1 当「说不清 → 照旧拉」、把
+     * SR_ENOTFOUND 当「远端还没有存档 → 跳过拉取」。而 meta.json 只有 .145 起
+     * 推送才会写，老存档必然没有 —— 若在这里回 SR_ENOTFOUND，那些用户的自动
+     * 拉取会**整个失效**（明明有存档却再也不拉）。宁可少判一次，不能把功能关掉。
+     *
+     * 读到了 meta 却解不开、或里面没有 mtime → 同样回 -1（说不清）。 */
+    {
+        char zurl[SR_URL_MAX], murl[SR_URL_MAX];
+        if (sr_build_url(c, tid, uid, zurl, sizeof(zurl), err, errsz) != 0) return -1;
+        size_t ul = strlen(zurl);
+        if (ul > 4 && strcmp(zurl + ul - 4, ".zip") == 0)
+            snprintf(murl, sizeof(murl), "%.*s.meta.json", (int)(ul - 4), zurl);
+        else
+            snprintf(murl, sizeof(murl), "%s.meta.json", zurl);
+
+        char body[512];
+        size_t blen = 0;
+        if (sr_curl_get_mem(c, murl, body, sizeof(body), &blen, err, errsz) != 0) return -1;
+        if (blen == 0) return -1;
+        cJSON *root = cJSON_Parse(body);
+        if (!root) return -1;
+        cJSON *mj = cJSON_GetObjectItem(root, "mtime");
+        if (!cJSON_IsNumber(mj)) {
+            cJSON_Delete(root);
+            return -1;
+        }
+        if (out_mtime) *out_mtime = (time_t)mj->valuedouble;
+        cJSON *sj = cJSON_GetObjectItem(root, "size");
+        if (cJSON_IsNumber(sj) && out_size) *out_size = (long long)sj->valuedouble;
+        cJSON *fj = cJSON_GetObjectItem(root, "files");
+        if (cJSON_IsNumber(fj) && out_files) *out_files = (long long)fj->valuedouble;
+        cJSON_Delete(root);
+        return 0;
+    }
 }

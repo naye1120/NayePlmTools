@@ -35,6 +35,10 @@
 #define GA_ACT_NONE 0
 #define GA_ACT_PULL 1
 #define GA_ACT_PUSH 2
+/* [CN-FORK] v0.5.2.154 本地快照改由「游戏退出」触发（原来是定时守护，已删）。
+ * 它和推 / 拉走同一条扫描线程，所以也做成一个 step —— 这样「退出那一刻该做哪几件
+ * 事、按什么顺序」全在一张表里（game_auto_plan），宿主能穷举，不用真机试。 */
+#define GA_ACT_SNAP 3
 
 /* 一步动作：act + 作用在哪个游戏上。 */
 typedef struct {
@@ -43,16 +47,17 @@ typedef struct {
 } ga_step_t;
 
 /* 纯函数（宿主可穷举）：上一轮在跑 prev、这一轮在跑 cur 时该做什么。
- * 返回步数（0~2），顺序恒为「先推 prev、再拉 cur」。
+ * 返回步数（0~3），顺序恒为「先本地快照、再推 prev、最后拉 cur」。
  *
  * prev / cur 为空串 = 那一轮没有游戏在跑。`*_enabled` 是那款游戏的自动存档
- * 总开关，`*_on_exit` / `*_on_launch` 是两个时机的开关。
+ * 总开关，`*_on_exit` / `*_on_launch` 是两个时机的开关，`prev_snap` 是本地快照
+ * 总开关（**独立于自动存档总开关** —— 本地快照不依赖网络，不该被远程那套连坐）。
  * 单独抽出来是因为这是整条链上**唯一有分支逻辑**的地方，而它跑在真机上 ——
- * 宿主能把 2×2×2 组合全部跑一遍，比在真机上试靠谱得多。 */
+ * 宿主能把组合全部跑一遍，比在真机上试靠谱得多。 */
 int game_auto_plan(const char *prev, const char *cur,
-                   int prev_enabled, int prev_on_exit,
+                   int prev_enabled, int prev_on_exit, int prev_snap,
                    int cur_enabled, int cur_on_launch,
-                   ga_step_t out[2]);
+                   ga_step_t out[3]);
 
 /* 守护线程。main.c 启动时调用一次。safe_mode 下整条跳过（与风扇、名字自愈、
  * 本地快照三条守护同一原则：死机后要能止血，后台自动动作一律不做）。 */
@@ -154,6 +159,26 @@ void game_auto_set_freezer(ga_frz_fn frz, ga_thaw_fn thaw);
  * 是**策略**错（验证读不到数据时错误地放弃了 SIGSTOP → 回落 → 游戏跳后台切不回来），
  * 而真机那段代码在 `#ifdef GA_HOST` 里、宿主编不到 —— 不导出就等于这个坑零覆盖。 */
 int ga_freeze_verdict(int have_ctl, int ctl_adv, int post_ok, int post_adv);
+
+/* ── [CN-FORK] v0.5.2.154 拉取前的「谁更新」判定（纯函数，宿主穷举）──────────
+ *
+ * 起因（用户口径）：「远程拉取游戏的时候要做一个判定，如果本地存档比远程存档要
+ * 更新，则不拉取；本地存档比远程存档旧，可以直接拉取覆盖」。
+ *
+ * 为什么必须判：拉取是**整份覆盖**。用户昨晚玩到很晚但没推上去，今天开机自动拉取
+ * 就把昨晚的进度用远程那份（更旧）盖掉了 —— 这是数据丢失，比「拉不动」严重得多。
+ *
+ * 参数（`*_have` = 那一侧到底有没有这份存档）：
+ *   local_have  = game_saves_local_mtime() 的返回值
+ *   remote_have = 远端 <uid>.zip 是否存在（sr_stat 拿到了元数据）
+ * 返回 1 = 该拉（本地没有，或远程不比本地旧）· 0 = 跳过（本地更新，或远端根本没有）。
+ *
+ * **「说不清」一律按「该拉」处理**：时间戳是拿来做优化判断的，不是安全边界。
+ * 读不到时间戳（FTP/HTTP 的 sr_stat 暂未实现）时不能因此不拉 —— 那会让拉取
+ * 功能在这两种协议上直接失效，而用户真正想要的是「别用旧盖新」，不是「宁可不拉」。
+ * 这条与 `.153` 冻结验证那条同一个道理：**验证不可用 ≠ 该放弃**。 */
+int ga_pull_needed(long long local_mtime, int local_have,
+                   long long remote_mtime, int remote_have);
 
 /* 跑一轮扫描。守护线程每秒调一次（`GA_TICK`）。
  *

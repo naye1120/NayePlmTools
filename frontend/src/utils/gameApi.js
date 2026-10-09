@@ -81,6 +81,15 @@
  *   GET  /game_save_download?tid=&save=  → 二进制（zip）
  *   POST /game_save_upload?tid=&save=    裸 body（zip） → {ok, files, size}
  *   GET  /game_save_delete?tid=&save=    → {ok}
+ *   POST /game_save_import_garlic?tid=&save=&name=   裸 body（镜像或 zip） → {ok, files}
+ *        [CN-FORK] v0.5.2.154 导入 garlic-savemgr（earthonion）的**加密**存档。
+ *        与 /game_save_upload 的差别是刻意的：上传 = **整份替换**（整个 <TID> 目录换掉）；
+ *        导入 = **逐文件合并**（只覆盖同名的那几个 sdimg_ 镜像，主机自己的记账
+ *        sdimg_sce_bu_* / sdimg_sce_sdmemory 原样保留）。整份替换会把它们一起抹掉，
+ *        主机很可能就认不出这份存档了 —— 而 garlic 导出的只是**一个**镜像。
+ *        name 是**原始文件名**，走 query：裸的 `sdimg_<名>` 镜像没有后缀也不是 zip，
+ *        后端只能靠它决定落盘叫什么（主机认的就是这个名字，我们不去猜）。PS4 的 zip
+ *        包里自带名字，用不到它，传了也无害。save 可空 = 第一个用户（与上传同口径）。
  *   GET  /game_save_remote_info?tid=&save= → {configured,exists,mode?,size?,files?,mtime?,error?}
  *        [CN-FORK] v0.5.2.145 远程存档只读元数据（大小/文件数/修改时间），供「远程游戏」区块展示。
  *   POST /game_save_snap         {tid, action:"run"}                  → {ok, made}
@@ -394,6 +403,21 @@ export function uploadSave(tid, saveId, blob, opts) {
 
 export function deleteSave(tid, saveId, opts) {
   return request(`/game_save_delete${q({ tid, save: saveId })}`, opts)
+}
+
+/* [CN-FORK] v0.5.2.154 garlic 兼容导入（earthonion/garlic-savemgr 的加密导出）。
+ *
+ * 与 uploadSave 是两条不同的路，别混：
+ *   uploadSave   → /game_save_upload?tid=&save=          整份替换（必须是 zip）
+ *   importGarlic → /game_save_import_garlic?tid=&save=&name=  逐文件合并（镜像或 zip）
+ *
+ * name 一定要传 file.name 原样：裸镜像（PS5 的「Download Encrypted」就是一个
+ * 无后缀的 sdimg_*）后端认不出内容，只能按这个名字落盘。
+ * save 可空 = 这个游戏在主机上的第一个用户。→ { ok:true, files } */
+export function importGarlic(tid, saveId, name, blob, opts) {
+  return request(`/game_save_import_garlic${q({ tid, save: saveId, name })}`, {
+    ...opts, method: 'POST', body: blob, timeoutMs: TIMEOUTS.upload,
+  })
 }
 
 /* [CN-FORK] v0.5.2.140 本地快照。action = 'run' | 'restore' | 'delete'；

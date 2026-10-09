@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "game_saves.h"
@@ -294,6 +295,54 @@ static void t_roundtrip(const char *what, int use_ftp, const char *root) {
           "%s 远端收到的不像 zip（头 %02x %02x）", what,
           (unsigned char)got[0], (unsigned char)got[1]);
     CHECK(!strcmp(rp + strlen(rp) - 4, ".zip"), "%s 远端文件名该是 .zip", what);
+
+    /* ── [CN-FORK] v0.5.2.154 sr_stat 在 FTP / HTTP 上也必须读得到 ─────────
+     * 它不再只是「远程游戏」标签的展示数据，而是**拉取前新旧判定**的唯一输入：
+     * 读不到就等于那条判定永远「说不清」，用户要的「本地存档更新就不拉」直接失效。
+     * 三个协议上的取数方式不同（SMB 直接 stat、FTP/HTTP 读推送时写的 meta.json），
+     * 但对外语义必须一致，所以这三条断言两个协议各跑一遍。 */
+    {
+        long long sz = -1, mfiles = -1;
+        time_t mt = 0;
+        err[0] = 0;
+        CHECK(sr_stat(&c, TID, UID, &sz, &mt, &mfiles, err, sizeof(err)) == 0,
+              "%s sr_stat 该能读到刚推上去的元数据：%s", what, err);
+        CHECK(sz > 0, "%s sr_stat 的字节数不对：%lld", what, sz);
+        CHECK(mt > 0, "%s sr_stat 的 mtime 没读到（%lld）", what, (long long)mt);
+        CHECK(mfiles >= 2, "%s sr_stat 的文件数不对：%lld（夹具是 2 个）", what, mfiles);
+        /* 时间戳得真能拿来比较：刚推的必须落在「现在」附近 —— 单位（秒 / 毫秒）
+         * 或时区错一位，判定就会得出「本地更新」而**永远不拉**，真机上极难看出来。 */
+        long long d = (long long)time(NULL) - (long long)mt;
+        CHECK(d >= -300 && d <= 300, "%s sr_stat 的 mtime 偏离当前时间 %lld 秒", what, d);
+
+        /* 远端还没有这份 → **回 -1（说不清），不是 SR_ENOTFOUND**。
+         *
+         * 这是 FTP / HTTP 与 SMB 的**故意差异**，不是漏了：这三档的探测手段不同 ——
+         * SMB 能直接 stat <uid>.zip，文件不在就是不在；FTP / HTTP 只能读 meta.json，
+         * 而「meta.json 不在」有两种可能：① 远端确实没有这份存档；② 远端有存档但
+         * 是 `.145` 之前推的、当时还没有 meta。**从这一侧分不开。**
+         *
+         * 既然分不开，就必须按**后果更轻**的那边倒：回 SR_ENOTFOUND 会被拉取前的
+         * 判定当成「远端没有存档 → 跳过拉取」，于是②那些用户的自动拉取整个失效
+         * （明明有存档却再也不拉）；回 -1 只是「说不清 → 照旧拉」，最坏是白拉一次。
+         * 代价是 FTP / HTTP 下「远端没有」不会在「远程游戏」标签上显示成「没得显示」，
+         * 而是显示成读取失败 —— 两害相权，取这个。 */
+        err[0] = 0;
+        CHECK(sr_stat(&c, "PPSA99999", UID, &sz, &mt, &mfiles, err, sizeof(err)) == -1,
+              "%s 远端没有时 sr_stat 该回 -1（说不清），实得 err=%s", what, err);
+        CHECK(err[0] != 0, "%s 读不到时要给人话：%s", what, err);
+
+        /* **meta.json 被删（`.145` 之前推的老存档）→ 必须回 -1（说不清）**，
+         * 绝不能回 SR_ENOTFOUND —— 那会被拉取前判定当成「远端没有存档」而跳过拉取，
+         * 老存档用户的自动拉取会整个失效，而他们恰恰是最需要拉取的人。 */
+        char mp[1200];
+        snprintf(mp, sizeof(mp), "%.*s.meta.json", (int)(strlen(rp) - 4), rp);
+        CHECK(exists(mp), "%s 推送该在远端一并写下 meta.json：%s", what, mp);
+        unlink(mp);
+        err[0] = 0;
+        int st2 = sr_stat(&c, TID, UID, &sz, &mt, &mfiles, err, sizeof(err));
+        CHECK(st2 == -1, "%s 没有 meta.json 时必须回 -1（说不清），实得 %d", what, st2);
+    }
 
     /* 删掉本地整份，再拉回来 —— 这才是「推拉真的搬了字节」的证明 */
     rm_rf(SAVE_DIR);

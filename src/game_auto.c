@@ -439,9 +439,9 @@ static void ga_thaw_after_pull(const char *tid, int kind, unsigned int handle) {
 
 /* ── 纯函数：状态机 ─────────────────────────────────────────────────────── */
 int game_auto_plan(const char *prev, const char *cur,
-                   int prev_enabled, int prev_on_exit,
+                   int prev_enabled, int prev_on_exit, int prev_snap,
                    int cur_enabled, int cur_on_launch,
-                   ga_step_t out[2]) {
+                   ga_step_t out[3]) {
     if (!out) return 0;
     const char *p = (prev && prev[0]) ? prev : NULL;
     const char *c = (cur && cur[0]) ? cur : NULL;
@@ -449,6 +449,19 @@ int game_auto_plan(const char *prev, const char *cur,
     if (p && c && !strcmp(p, c)) return 0;
 
     int n = 0;
+    /* [CN-FORK] v0.5.2.154 退出那一刻的顺序：**先本地快照、再推送、最后拉下一款**。
+     *
+     * 本地快照排在最前是因为它是**不依赖任何外部条件**的那一层（网络断了、对面没开、
+     * 密码错了都不影响它）—— 先把这份稳稳落盘，再去折腾网络。它与推送读的是同一份
+     * 源目录，谁先谁后在数据上没差别，但「先本地后远程」出问题时更容易解释。
+     *
+     * 快照只看 `prev_snap`（本地快照自己的开关），**不跟 `prev_enabled` 联动**：
+     * 那是远程同步的总开关，本地备份不该被它连坐。 */
+    if (p && prev_snap) {
+        out[n].act = GA_ACT_SNAP;
+        snprintf(out[n].tid, sizeof(out[n].tid), "%s", p);
+        n++;
+    }
     if (p && prev_enabled && prev_on_exit) {
         out[n].act = GA_ACT_PUSH;
         snprintf(out[n].tid, sizeof(out[n].tid), "%s", p);
@@ -460,6 +473,19 @@ int game_auto_plan(const char *prev, const char *cur,
         n++;
     }
     return n;
+}
+
+/* [CN-FORK] v0.5.2.154 拉取前的「谁更新」判定。纯函数，理由与全部边界见 game_auto.h。
+ *
+ * 一句话：**只有能确定「本地不比远程旧」时才跳过**，其余一律拉。
+ * 特别注意 `local_have == 0`（本地那份已经没了：换机 / 误删 / 重装）—— 那正是
+ * 拉取要救的场景，永远该拉，哪怕时间戳看起来「本地更新」（本地都没有，哪来的新）。 */
+int ga_pull_needed(long long local_mtime, int local_have,
+                   long long remote_mtime, int remote_have) {
+    if (!remote_have) return 0;        /* 远端没有 → 没得拉 */
+    if (!local_have) return 1;         /* 本地没有 → 必须拉（换机/误删） */
+    if (local_mtime > remote_mtime) return 0;  /* 本地更新 → 不拿旧的盖新的 */
+    return 1;                          /* 相等也拉：远端至少不更旧，拉了无害 */
 }
 
 /* ── 配置 ───────────────────────────────────────────────────────────────── */
@@ -643,6 +669,10 @@ typedef struct {
     int ok;       /* 成功份数 */
     int skipped;  /* 远端还没有（不算失败） */
     int failed;
+    /* [CN-FORK] v0.5.2.154 本地比远程新 → 主动跳过（用户口径：本地更新就不拉）。
+     * 与 skipped 分开计数：一个是「没得拉」，一个是「不该拉」，日志里混在一起
+     * 就分不清「对面没开」和「我这边更新」—— 而这两件事该做的动作完全不同。 */
+    int newer;
     long long files;
     long long bytes;
     char first_err[200];
@@ -711,6 +741,42 @@ static void ga_do_inner(const char *tid, int act, const char *only_uid,
         char err[256];
         long long bytes = 0, files = 0;
         err[0] = 0;
+
+        /* [CN-FORK] v0.5.2.154 拉取前先比一比新旧（用户口径：「如果本地存档比远程
+         * 存档要更新，则不拉取；本地存档比远程存档旧，可以直接拉取覆盖」）。
+         *
+         * 拉取是**整份覆盖**，所以「远程那份其实是旧的」是真正会丢数据的场景：
+         * 昨晚玩到很晚没推上去，今天开机自动拉取就把昨晚的进度盖掉了。
+         *
+         * 三条出口：
+         *   SR_ENOTFOUND → 远端还没有这份，算跳过（与原来一致）；
+         *   sr_stat == 0 → 拿到了远程时间戳，交给纯函数 ga_pull_needed 判；
+         *   sr_stat < 0  → 这条协议取不到时间戳（FTP/HTTP 的 sr_stat 暂未实现）
+         *                  → **说不清就照旧拉**，不能因为读不到时间戳让功能失效。
+         * 判定纯函数的全部边界见 include/game_auto.h。 */
+        if (act == GA_ACT_PULL) {
+            long long rsz = 0, rfiles = 0;
+            time_t rmt = 0;
+            char serr[200];
+            serr[0] = 0;
+            int st = sr_stat(&cfg->rc, tid, uids[i], &rsz, &rmt, &rfiles, serr, sizeof(serr));
+            if (st == SR_ENOTFOUND) {
+                res->skipped++;
+                continue;
+            }
+            if (st == 0) {
+                long long lmt = 0;
+                int lhave = game_saves_local_mtime(tid, uids[i], &lmt);
+                if (!ga_pull_needed(lmt, lhave, (long long)rmt, 1)) {
+                    res->newer++;
+                    pldmgr_log("[PLDMGR] saves: %s/%s 本地存档更新"
+                               "（本地 %lld · 远程 %lld）→ 跳过拉取，不拿旧的盖新的\n",
+                               tid, uids[i], lmt, (long long)rmt);
+                    continue;
+                }
+            }
+        }
+
         int rc = (act == GA_ACT_PUSH)
                      ? sr_push(tid, uids[i], &cfg->rc, &bytes, err, sizeof(err))
                      : sr_pull(tid, uids[i], &cfg->rc, &files, &bytes, err, sizeof(err));
@@ -837,14 +903,20 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
     else
         snprintf(qty, sizeof(qty), "%lld 个文件 / %lld 字节", res->files, res->bytes);
 
-    pldmgr_log("[PLDMGR] saves: 远程%s 结束 · %s · 成功 %d / 跳过 %d / 失败 %d · "
+    /* 「本地更新」只在真的发生时露出来 —— 常驻一个 0 只会让这行更难扫。 */
+    char newer[56];
+    newer[0] = 0;
+    if (res->newer > 0)
+        snprintf(newer, sizeof(newer), " · 本地更新 %d（未覆盖）", res->newer);
+
+    pldmgr_log("[PLDMGR] saves: 远程%s 结束 · %s · 成功 %d / 跳过 %d / 失败 %d%s · "
                "%s · 用时 %.0f ms%s%s\n",
-               an, tid, res->ok, res->skipped, res->failed, qty, ms,
+               an, tid, res->ok, res->skipped, res->failed, newer, qty, ms,
                res->first_err[0] ? " · " : "", res->first_err);
     /* 屏幕上那一条。失败原因**另起一行**打 —— 通知是给人扫一眼的，
      * 混在计数那一行里最容易被当成背景噪声划过去。 */
-    pldmgr_notify("远程%s 结束\n%s · 成功 %d / 跳过 %d / 失败 %d\n%s · 用时 %.0f ms%s%s",
-                  an, tid, res->ok, res->skipped, res->failed, qty, ms,
+    pldmgr_notify("远程%s 结束\n%s · 成功 %d / 跳过 %d / 失败 %d%s\n%s · 用时 %.0f ms%s%s",
+                  an, tid, res->ok, res->skipped, res->failed, newer, qty, ms,
                   res->first_err[0] ? "\n" : "", res->first_err);
 
     /* 拉完了才放行 —— 收尾在「结束」之后，这样用户看到的是
@@ -892,6 +964,31 @@ int game_auto_sync_action(const char *body, size_t len,
             }
     }
 
+    /* [CN-FORK] v0.5.2.154 游戏正在运行 → 手动推 / 拉一律不做（用户口径：
+     * 「游戏进行中，拉取和推送存档的动作不让做」）。
+     *
+     * 理由两条，都是数据安全：
+     *   · 拉取会把盘上存档**整份换掉**，而游戏早把存档读进内存了 —— 换完它不知道，
+     *     之后存档 / 退出还会把内存里那份写回去，等于白换，还把用户刚玩的进度弄乱；
+     *   · 推送会在游戏**正写盘时**去打包，拷到的可能是撕裂的半截存档，推上去就是
+     *     把一份坏存档留在了远端 —— 那比不推糟糕得多。
+     *
+     * **只拦手动这条路**：自动那条链有它自己的处理 —— 「启动时拉取」发生在游戏
+     * 刚起来的瞬间，靠 SIGSTOP 冻住进程再拉（见 ga_do 的 freeze_game）；「退出时
+     * 推送」发生在探测到游戏已经退出之后（还额外等 GA_EXIT_SETTLE 秒）。两条都不
+     * 走这里，所以不会被这条规则误伤。 */
+    {
+        char run[32];
+        run[0] = 0;
+        g_probe(run, sizeof(run));
+        if (run[0] && !strcmp(run, tid)) {
+            if (msg) snprintf(msg, msgsz,
+                              "「%s」正在运行，请先退出游戏再%s存档（运行中操作可能丢失进度）",
+                              tid, act == GA_ACT_PUSH ? "推送" : "拉取");
+            return -1;
+        }
+    }
+
     ga_res_t res;
     /* 最后一参 0 = **不**挂起游戏：手动拉取时游戏早把存档读进内存了，
      * 冻住它改变不了内存里那份，只会平白把用户正在看的画面冻一下。 */
@@ -907,7 +1004,12 @@ int game_auto_sync_action(const char *body, size_t len,
 
     const char *an = act == GA_ACT_PUSH ? "push" : "pull";
     char note[240];
-    if (res.ok == 0 && res.skipped > 0)
+    if (res.ok == 0 && res.newer > 0)
+        /* 这一条**必须排在 skipped 之前**：本地更新时我们一份都没拉，如果先去判
+         * skipped 就会报成「远程还没有这个游戏的存档」—— 与事实正好相反。 */
+        snprintf(note, sizeof(note),
+                 "本地存档比远程新，已跳过拉取（%d 份未覆盖）", res.newer);
+    else if (res.ok == 0 && res.skipped > 0)
         snprintf(note, sizeof(note), act == GA_ACT_PUSH ? "没有可推送的存档"
                                                         : "远程还没有这个游戏的存档");
     else if (act == GA_ACT_PUSH)
@@ -958,9 +1060,13 @@ void game_auto_tick(void) {
     int pe = 0, px = 0, ce = 0, cl = 0;
     if (prev[0] && ga_load_cfg(prev, &pc) == 0) { pe = pc.enabled; px = pc.on_exit; }
     if (cur[0] && ga_load_cfg(cur, &cc) == 0) { ce = cc.enabled; cl = cc.on_launch; }
+    /* [CN-FORK] v0.5.2.154 本地快照的开关**单独问**（不走 ga_load_cfg）：它跟远程那套
+     * 不是一个总开关，本地备份不该被「自动存档关着」连坐。口径与设置页「存档配置」
+     * 里的「启用本地快照」一致（全局优先 → per-game 回落，见 gs_snap_cfg）。 */
+    int psnap = prev[0] ? game_saves_snap_enabled(prev) : 0;
 
-    ga_step_t steps[2];
-    int ns = game_auto_plan(prev, cur, pe, px, ce, cl, steps);
+    ga_step_t steps[3];
+    int ns = game_auto_plan(prev, cur, pe, px, psnap, ce, cl, steps);
 
     /* [CN-FORK] v0.5.2.148 「本该动作、却被开关挡住」也要留一行痕。
      *
@@ -984,10 +1090,25 @@ void game_auto_tick(void) {
         pldmgr_log("[PLDMGR] saves: %s 已启动 · 跳过拉取：%s\n", cur,
                    !ce ? "自动存档总开关关着" : "「启动游戏时拉取」关着");
 
+    /* 退出后先等几秒（见设计 ②），给主机收尾写盘的时间。**只等一次**：
+     * 退出这一刻可能同时要做「本地快照」与「推送」，各等一遍就变成十秒。 */
+    int settled = 0;
     for (int i = 0; i < ns; i++) {
-        /* 退出后先等几秒（见设计 ②）。只对推送等 —— 拉取发生在游戏刚起来时，
-         * 那时候存档目录还没被写过，没有「拷到半截」的问题。 */
-        if (steps[i].act == GA_ACT_PUSH) sleep(GA_EXIT_SETTLE);
+        if ((steps[i].act == GA_ACT_PUSH || steps[i].act == GA_ACT_SNAP) && !settled) {
+            sleep(GA_EXIT_SETTLE);
+            settled = 1;
+        }
+
+        /* [CN-FORK] v0.5.2.154 退出时的本地快照（原来是定时守护，已删）。 */
+        if (steps[i].act == GA_ACT_SNAP) {
+            char smsg[200];
+            smsg[0] = 0;
+            int made = game_saves_snap_run_now(steps[i].tid, smsg, sizeof(smsg));
+            pldmgr_log("[PLDMGR] saves: %s 已退出 · 本地快照：%s（%d）\n",
+                       steps[i].tid, smsg[0] ? smsg : "已处理", made);
+            continue;
+        }
+
         ga_res_t res;
         /* 最后一参 1 = 拉取前挂起游戏（`.150`）。
          * 顺序：监测到启动 → 挂起 → 拉取 → 恢复。只有这条路上传 1 —— 见

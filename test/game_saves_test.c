@@ -25,6 +25,10 @@
  *      间隔与保留数的归一化（86400 不能被当成越界回落成 30 分钟）
  *   ⑨c 崩溃留下的 .tmp_* / .rst_* 会被清掉，且**不误删正在写的那一份**
  *   ⑩ **整条快照链必须能在 32KB 线程栈上跑完**（真机连接线程只有 64KB 上下）
+ *   ⑪ garlic 兼容导入（`.154`）：逐文件合并 / 裸镜像必须带文件名 /
+ *      带目录层级的名字压平且绝不写到存档目录外 / 坏包**整包拒收、一个字节不落**
+ *   ⑫ 快照只剩「游戏退出时」这一个触发点（`.154`）—— 定时那条链已删，
+ *      这里钉住引擎做决定用的两个查询：快照开关、本地存档最晚写入时刻
  *
  * 测不了的部分（写在前面，免得有人以为是漏了）：
  *   - HTTP 那一层（tid 到底在 query 还是 body）在 http_server.c，主机上没有
@@ -46,6 +50,7 @@
 
 #include "game_saves.h"
 #include "cJSON.h"
+#include "zip_io.h" /* ⑪ garlic 导入要现造一个真 zip（与 garlic 的 PS4 包同构） */
 
 /* log_server.c 的头要 microhttpd.h，主机上没有 —— 这里给个等价实现。
  * 默认静音，要看就 export SAVES_TEST_VERBOSE=1。 */
@@ -185,6 +190,17 @@ static void put_blob(const char *path, int n) {
         n -= k;
     }
     close(fd);
+}
+
+/* 把整个文件读进 out（返回字节数；-1 = 打不开 / 空）。
+ * [CN-FORK] v0.5.2.154 ⑪ garlic 导入要往内存里造一个真 zip 再喂进去 ——
+ * 那是二进制，不能用字符串那套。 */
+static long read_all(const char *p, char *out, size_t cap) {
+    int fd = open(p, O_RDONLY);
+    if (fd < 0) return -1;
+    ssize_t n = read(fd, out, cap);
+    close(fd);
+    return n > 0 ? (long)n : -1;
 }
 
 /* 在 snapshots[] 里找第 skip 个属于 uid 的条目（列表是新的在前，skip=0 即最新那份） */
@@ -808,6 +824,167 @@ int main(void) {
         snprintf(inner, sizeof(inner), "%s/sdimg_part", fresh);
         unlink(inner);
         rmdir(fresh);
+    }
+
+    /* ── ⑪ garlic 兼容导入（`.154`）────────────────────────────────────────
+     * 兼容对象是 garlic-savemgr（earthonion）导出的**加密**镜像，也就是它在主机
+     * 盘上原样看到的那个东西：
+     *   · PS5 → 裸的一个 `sdimg_<名>`（前端把文件名一起带上来）
+     *   · PS4 → zip，里面是 `sdimg_<名>` 与配套的 `<名>.bin` 密封密钥
+     *
+     * 为什么只做「原样搬运」、不做 garlic 那种在主机上**新建**加密镜像：后者要
+     * /dev/pfsmgr 的 ioctl（0xc0845302）+ libSceFsInternalForVsh 的 dlsym + 进程提权，
+     * 是内核级动作（本项目 `.54` 有整机死机的前科），不该顺手加进来。只接受已经
+     * 加密好的镜像，与「下载存档」是同一层东西。
+     *
+     * 这一节钉四条不变量：
+     *   ① 是**逐文件合并**，不是上传那种整份替换 —— 别的文件必须原样留着
+     *      （存档目录里还有主机自己的记账：`sdimg_sce_bu_<名>`、`sdimg_sce_sdmemory`，
+     *        整份替换会把它们一起抹掉，主机很可能就认不出这份存档了）；
+     *   ② 裸镜像**必须**带文件名（主机认的就是那个名字，我们不猜）；
+     *   ③ 名字里带目录层级一律压平，**绝不在存档目录之外落任何字节**；
+     *   ④ 空 body / 坏 tid / 坏 uid 一律拒。 */
+    {
+        const char *sdir = HOME "/" U2 "/savedata_prospero/" TID_PS5;
+        const char *keep = HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_KEEP";
+        char p[900];
+        long long nf = 0;
+
+        /* 合并的反向证据：一个与导入无关的既有文件 */
+        put_blob(keep, 40);
+
+        unsigned char raw[300];
+        memset(raw, 'G', sizeof(raw));
+
+        /* ① 裸镜像（PS5 形态）：带文件名 */
+        CHECK(game_saves_import_garlic(TID_PS5, U2, "sdimg_GARLIC", raw, sizeof(raw),
+                                       &nf, msg, sizeof(msg)) == 0,
+              "裸镜像导入失败: %s", msg);
+        CHECK(nf == 1, "裸镜像该导入 1 个文件，实得 %lld", nf);
+        snprintf(p, sizeof(p), "%s/sdimg_GARLIC", sdir);
+        {
+            struct stat st;
+            CHECK(stat(p, &st) == 0 && st.st_size == (off_t)sizeof(raw),
+                  "导入的镜像不在或长度不对: %s", p);
+        }
+        CHECK(exists_reg(keep),
+              "逐文件合并把无关文件弄没了 —— 这是整份替换，不是合并");
+
+        /* ② 裸镜像**没有文件名** → 必须拒（我们不猜主机认的那个名字） */
+        CHECK(game_saves_import_garlic(TID_PS5, U2, NULL, raw, sizeof(raw), &nf,
+                                       msg, sizeof(msg)) < 0,
+              "裸镜像没有文件名居然成功了");
+        CHECK(strstr(msg, "文件名") != NULL, "拒的理由要说清缺文件名: %s", msg);
+        CHECK(game_saves_import_garlic(TID_PS5, U2, "", raw, sizeof(raw), &nf,
+                                       msg, sizeof(msg)) < 0,
+              "空文件名居然成功了");
+
+        /* ③ 名字里带目录层级 → 只取 basename（前端 <input type=file> 给的就是
+         *    basename，这里只是把「外部字节拼路径」这件事挡死在存档目录里） */
+        CHECK(game_saves_import_garlic(TID_PS5, U2, "../evil", raw, sizeof(raw), &nf,
+                                       msg, sizeof(msg)) == 0,
+              "带层级的文件名该被压平后接受: %s", msg);
+        CHECK(access(ROOT "/evil", F_OK) != 0, "存档目录**外**被写出了文件！");
+        CHECK(access(HOME "/" U2 "/evil", F_OK) != 0, "用户目录下被写出了文件！");
+        snprintf(p, sizeof(p), "%s/evil", sdir);
+        CHECK(exists_reg(p), "压平之后该落在存档目录里: %s", p);
+        unlink(p);
+
+        /* ④ PS4 形态：zip（`sdimg_<名>` + `<名>.bin`）。用自研 zip 现造一个 ——
+         *    与 garlic 的包同构（平铺、STORE，没有目录层级）。 */
+        const char *z1 = ROOT "/gx_a";
+        const char *z2 = ROOT "/gx_b";
+        const char *gz = ROOT "/garlic.zip";
+        put_blob(z1, 120);
+        put_blob(z2, 60);
+        zip_ent_t ents[2];
+        memset(ents, 0, sizeof(ents));
+        snprintf(ents[0].abs, sizeof(ents[0].abs), "%s", z1);
+        snprintf(ents[0].zname, sizeof(ents[0].zname), "sdimg_CUSA12345");
+        snprintf(ents[1].abs, sizeof(ents[1].abs), "%s", z2);
+        snprintf(ents[1].zname, sizeof(ents[1].zname), "CUSA12345.bin");
+        const char *zerr = NULL;
+        CHECK(zip_write(gz, ents, 2, NULL, &zerr) == 0, "造 garlic zip 失败: %s",
+              zerr ? zerr : "?");
+        long zn = read_all(gz, g_buf, sizeof(g_buf));
+        CHECK(zn > 22, "zip 读不进来: %ld", zn);
+        CHECK(game_saves_import_garlic(TID_PS5, U2, NULL, (unsigned char *)g_buf, (size_t)zn,
+                                       &nf, msg, sizeof(msg)) == 0,
+              "zip 形态导入失败: %s", msg);
+        CHECK(nf == 2, "zip 该导入 2 个文件（镜像 + 密封密钥），实得 %lld", nf);
+        snprintf(p, sizeof(p), "%s/sdimg_CUSA12345", sdir);
+        CHECK(exists_reg(p), "zip 里的镜像没落盘: %s", p);
+        snprintf(p, sizeof(p), "%s/CUSA12345.bin", sdir);
+        CHECK(exists_reg(p), "zip 里的 .bin 密封密钥没落盘: %s", p);
+        CHECK(exists_reg(keep), "zip 导入把无关文件弄没了");
+
+        /* ⑤ 带路径穿越的包 → **整包拒收**（zip_extract 那一层就挡了，且不许落一半） */
+        zip_ent_t bad[2];
+        memset(bad, 0, sizeof(bad));
+        snprintf(bad[0].abs, sizeof(bad[0].abs), "%s", z1);
+        snprintf(bad[0].zname, sizeof(bad[0].zname), "sdimg_EVIL");
+        snprintf(bad[1].abs, sizeof(bad[1].abs), "%s", z1);
+        snprintf(bad[1].zname, sizeof(bad[1].zname), "../evil");
+        zerr = NULL;
+        CHECK(zip_write(gz, bad, 2, NULL, &zerr) == 0, "造穿越包失败: %s", zerr ? zerr : "?");
+        zn = read_all(gz, g_buf, sizeof(g_buf));
+        CHECK(game_saves_import_garlic(TID_PS5, U2, NULL, (unsigned char *)g_buf, (size_t)zn,
+                                       &nf, msg, sizeof(msg)) < 0,
+              "带路径穿越的包居然被接受了");
+        CHECK(access(ROOT "/evil", F_OK) != 0, "路径穿越写到了存档目录外！");
+        snprintf(p, sizeof(p), "%s/sdimg_EVIL", sdir);
+        CHECK(access(p, F_OK) != 0, "整包该被拒收，却已经落了一半: %s", p);
+
+        /* ⑥ 空 body / 坏参数 */
+        CHECK(game_saves_import_garlic(TID_PS5, U2, "sdimg_X", raw, 0, &nf, msg, sizeof(msg)) < 0,
+              "空文件居然成功了");
+        CHECK(game_saves_import_garlic("../etc", U2, "sdimg_X", raw, sizeof(raw), &nf,
+                                       msg, sizeof(msg)) < 0,
+              "带 .. 的 tid 居然成功了");
+        CHECK(game_saves_import_garlic(TID_PS5, "a/b", "sdimg_X", raw, sizeof(raw), &nf,
+                                       msg, sizeof(msg)) < 0,
+              "带 / 的 uid 居然成功了");
+
+        unlink(z1);
+        unlink(z2);
+        unlink(gz);
+    }
+
+    /* ── ⑫ 本地快照只剩「游戏退出时」这一个触发点（`.154`）────────────────
+     * 用户口径：「每次游戏结束后，在本地快照存一份存档；本地自动存储快照删除
+     * （定时的功能不要了）」。定时那整条链（gs_snap_due / g_snap_marks /
+     * gs_snap_sweep / gs_snap_main / 按配置枚举游戏）已经删掉，触发点只剩
+     * game_auto.c 的 GA_ACT_SNAP（由「上一轮在跑的游戏已退出」驱动）。
+     *
+     * 这一节钉住留下来的两个**查询**接口 —— 它们是引擎做决定时的全部输入：
+     *   · game_saves_snap_enabled()  → 这个游戏自己的开关（不看远程总开关：
+     *     本地备份不依赖网络，不该被远程那套连坐）；
+     *   · game_saves_local_mtime()   → 「这份存档最晚被写过的时刻」，即拉取前
+     *     新旧判定的本地一侧（纯函数 ga_pull_needed 的入参就来自这里）。 */
+    {
+        CHECK(game_saves_snap_enabled(TID_PS5) == 1,
+              "TID_PS5 的快照开关该是开的（上面刚存过 enabled:true）");
+        CHECK(game_saves_snap_enabled(TID_PS4) == 0,
+              "没配过的游戏该回默认（关），别被别的游戏的配置串味");
+        CHECK(game_saves_snap_enabled("../etc") == 0, "坏 tid 该回 0 而不是崩");
+
+        const char *off = "{\"tid\":\"" TID_PS5 "\",\"snap\":{\"enabled\":false}}";
+        CHECK(game_saves_auto_set(TID_PS5, off, strlen(off), msg, sizeof(msg)) == 0,
+              "关掉快照开关失败: %s", msg);
+        CHECK(game_saves_snap_enabled(TID_PS5) == 0, "关掉之后开关还是开的");
+
+        /* 本地存档时间戳：有存档 → 1 + 一个真实时刻；没有 → 0（**不是** 1 + 0，
+         * 否则拉取前的判定会把「读不到」当成「本地是 1970 年」，白拉一次） */
+        long long mt = 0;
+        CHECK(game_saves_local_mtime(TID_PS5, U2, &mt) == 1 && mt > 0,
+              "U2 的本地存档时间戳该读得到，实得 %lld", mt);
+        CHECK(mt <= (long long)time(NULL) + 60,
+              "时间戳跑到未来去了（%lld）—— 单位 / 时区搞错了？", mt);
+        CHECK(game_saves_local_mtime(TID_PS5, "00000009", &mt) == 0,
+              "没有存档的用户该回 0");
+        CHECK(game_saves_local_mtime(TID_NONE, U2, &mt) == 0, "没存过的游戏该回 0");
+        CHECK(game_saves_local_mtime("../etc", U2, &mt) == 0, "坏 tid 该回 0");
+        CHECK(game_saves_local_mtime(TID_PS5, "a/b", &mt) == 0, "坏 uid 该回 0");
     }
 
     /* ⑩ 小栈。放在最后：它会动 U2 的源、也会给 U5 补一份快照（上面刚删掉），

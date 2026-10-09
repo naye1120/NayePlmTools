@@ -325,15 +325,41 @@ int config_handle_set_json(const char *json_data) {
 
                 FILE *f = fopen(AUTOLOAD_CONFIG_PATH, "w");
                 if (f) {
+                    /* [CN-FORK] v0.5.2.154 「逗号列表 ↔ txt 行」必须**幂等**。
+                     *
+                     * 病灶（用户口径：「自动加载页面，自己多次增加 1 秒延时」）：
+                     * `/get_config` 是把 autoload.txt 的**每一行**（含 `!1000` 这种延时行）
+                     * 用逗号拼起来回传的，所以前端拿到的列表里本来就**带着延时项**；
+                     * 而这里旧实现给**每个** token 都补一行默认延时 —— 于是 token `!1000`
+                     * 自己也被补成两行 `!1000`。一次保存行数就翻一倍，再保存再翻：
+                     * `!1000,name` → `!1000,!1000,!1000,name` → …
+                     *
+                     * 修法：记住「上一条写出去的已经是延时行」，那样当前这个载荷名就不必
+                     * 再补默认延时。载荷名后面**紧跟着**一条延时行时同理（延时行自己会写）。
+                     * 于是列表与文件一一对应，来回存多少次都不变。
+                     *
+                     * 保留的旧行为：连续两个载荷名之间没有任何延时行时，仍按老规矩补一条
+                     * （查得到历史的用历史延时，查不到用 !1000）—— 那是 `.60` 刻意加的，
+                     * 为的是老配置里「每个载荷前都有 !1000」的格式不被悄悄改掉。 */
+                    int prev_is_delay = 0;
                     char *token = strtok(list_val, ",");
                     while (token) {
                         pldmgr_utils_strip_config_line(token);
                         if (*token) {
-                            const char *d = "!1000";
-                            for (int i = 0; i < old_cnt; i++) {
-                                if (strcmp(old_names[i], token) == 0) { d = old_delays[i]; break; }
+                            if (token[0] == '!') {
+                                fprintf(f, "%s\n", token);
+                                prev_is_delay = 1;
+                            } else {
+                                if (!prev_is_delay) {
+                                    const char *d = "!1000";
+                                    for (int i = 0; i < old_cnt; i++) {
+                                        if (strcmp(old_names[i], token) == 0) { d = old_delays[i]; break; }
+                                    }
+                                    fprintf(f, "%s\n", d);
+                                }
+                                fprintf(f, "%s\n", token);
+                                prev_is_delay = 0;
                             }
-                            fprintf(f, "%s\n%s\n", d, token);
                         }
                         token = strtok(NULL, ",");
                     }

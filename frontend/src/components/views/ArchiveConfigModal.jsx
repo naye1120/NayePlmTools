@@ -16,7 +16,13 @@ import { testRemote } from '../../utils/gameApi'
  * 三块，全部全局生效（`.144` 收远程位置，`.145` 再把自动存档与本地快照也收过来）：
  *   ① 远程位置      —— 协议（SMB / FTP / HTTP）+ 主机 / 共享 / 账号
  *   ② 自动存档      —— 总开关 + 两个时机（启动游戏时拉取 / 退出游戏时回传）
- *   ③ 本地快照      —— 总开关 + 间隔（分钟）+ 保留份数
+ *   ③ 本地快照      —— 总开关 + 保留份数
+ *
+ * [CN-FORK] v0.5.2.154 ③ 里的「间隔（分钟）」**删掉了**：用户口径「每次游戏结束后，
+ * 在本地快照存一份存档；本地自动存储快照删除（定时的功能不要了）」。触发点从
+ * 「定时守护」改成「探测到游戏退出」（后端 game_auto.c 的 GA_ACT_SNAP），
+ * 于是间隔这个参数没有任何东西会读它 —— 留着一个填了没用的输入框比没有更坏。
+ * 保留份数照旧（它是「存几份」，不是「多久存一次」）。
  *
  * 单游戏弹窗（SaveManagerModal）里这三块都变成**只读展示 + 动作按钮**
  * （立即拉取 / 立即推送 / 立即备份 + 该游戏的存档与快照列表）—— 用户口径是
@@ -68,8 +74,6 @@ export default function ArchiveConfigModal({ show, onClose, config, onSaveConfig
   const modeCfg = cfg[mode] || {}
   const modeBad = !MODES.some((m) => m.value === mode)
   const configured = isRemoteConfigured(cfg)
-  /* 间隔用分钟输入（用户口径），存的是秒 —— 与后端 gs_snap_clamp_interval 同一单位。 */
-  const snapMin = Math.max(1, Math.round((Number(cfg.snap.interval) || EMPTY_CFG.snap.interval) / 60))
 
   const setModeField = (key, val) => setCfg((c) => ({ ...c, [mode]: { ...c[mode], [key]: val } }))
 
@@ -119,7 +123,7 @@ export default function ArchiveConfigModal({ show, onClose, config, onSaveConfig
     >
       <div className="panel-body leading-relaxed font-normal flex flex-col gap-5">
         <Note tone="info">
-          {t('settings.archive_config_hint', '这里配置的三件事对所有游戏生效：远程位置、自动存档的开关与时机、本地快照的间隔与保留份数。单个游戏的「存档管理」里只显示这些设置并执行（立即拉取 / 立即推送 / 立即备份），不重复配置。')}
+          {t('settings.archive_config_hint', '这里配置的三件事对所有游戏生效：远程位置、自动存档的开关与时机、本地快照的开关与保留份数。单个游戏的「存档管理」里只显示这些设置并执行（立即拉取 / 立即推送 / 立即备份），不重复配置。')}
         </Note>
 
         {/* ── ① 远程位置 ── */}
@@ -245,7 +249,7 @@ export default function ArchiveConfigModal({ show, onClose, config, onSaveConfig
             <div className="min-w-0">
               <p className="text-white panel-body font-semibold">{t('game.snap_enable', '启用本地快照')}</p>
               <p className="text-zinc-500 panel-tiny mt-0.5">
-                {t('settings.snap_enable_hint_global', '不依赖网络：主机按下面的间隔把存档整份复制到本地 /data 下，超保留数自动删最旧。远程同步连不上时，这一条是最后的兜底。对所有游戏生效。')}
+                {t('settings.snap_enable_hint_global', '不依赖网络：每次游戏退出后，主机自动把存档整份复制到本地 /data 下，超保留数自动删最旧。远程同步连不上时，这一条是最后的兜底。对所有游戏生效。')}
               </p>
             </div>
             <Switch
@@ -256,25 +260,9 @@ export default function ArchiveConfigModal({ show, onClose, config, onSaveConfig
           </div>
 
           <div className={cfg.snap.enabled ? 'mt-4' : 'mt-4 opacity-50 pointer-events-none'}>
+            {/* [CN-FORK] v0.5.2.154 「间隔（分钟）」输入框已删（定时快照不要了）。
+                触发时机固定是「游戏退出时」，说明写在上面那条提示里，这里只剩保留份数。 */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field
-                label={t('game.snap_interval', '间隔（分钟）')}
-                hint={t('game.snap_interval_hint', '最短 1 分钟，最长 1440（一天）。改完记得点保存。')}
-              >
-                <input
-                  className="field"
-                  type="number"
-                  min="1"
-                  max="1440"
-                  inputMode="numeric"
-                  value={snapMin}
-                  disabled={!cfg.snap.enabled}
-                  onChange={(e) => {
-                    const v = Math.min(1440, Math.max(1, Number(e.target.value) || 1))
-                    setCfg((c) => ({ ...c, snap: { ...c.snap, interval: v * 60 } }))
-                  }}
-                />
-              </Field>
               <Field
                 label={t('game.snap_keep', '保留份数')}
                 hint={t('game.snap_keep_hint', '每份存档最多留这么多份，超了删最旧（1~20）。')}

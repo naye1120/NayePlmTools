@@ -261,15 +261,15 @@ int main(int argc, char *argv[]) {
      * 已经一致的款一次写都不发，所以可以每次开机无条件跑。safe_mode 下整条跳过。 */
     game_title_sync_start_daemon();
 
-    /* [CN-FORK] v0.5.2.140 本地快照守护：存档的**本地兜底**。远程同步要网络、
-     * 要对面在线；这一条不依赖任何外部条件，按每款游戏自己的间隔把存档整份
-     * 复制到 /data/nayeplmtools/saves_snap/，超保留数就删最旧。safe_mode 下整条跳过。 */
-    game_saves_snap_start_daemon();
+    /* [CN-FORK] v0.5.2.154 本地快照守护**已删除**：快照改成「游戏退出时触发一次」，
+     * 由下面的自动存档引擎线程在做（见 game_auto.c 的 game_auto_tick 与
+     * include/game_auto.h 的 GA_ACT_SNAP）。用户口径：「每次游戏结束后，在本地快照
+     * 存一份存档，本地自动存储快照删除（定时的功能不要了）」。 */
 
     /* [CN-FORK] v0.5.2.142 自动存档执行引擎：`on_launch` / `on_exit` 这两个开关
      * 在这之前**只被读写、没有任何人在跑**。这里起一条线程探测「前台大应用是谁」
-     * （sceLncUtil），游戏启动时把远程那份拉下来、退出时把主机这份推上去。
-     * 传输只做 FTP + HTTP（SDK 的 curl 没编 SMB）。safe_mode 下整条跳过。 */
+     * （sceLncUtil），游戏启动时把远程那份拉下来、退出时把主机这份推上去
+     * （`.154` 起还负责在退出那一刻做一次本地快照）。safe_mode 下整条跳过。 */
     game_auto_start_daemon();
 
     if (cfg.auto_browser_open) {

@@ -165,12 +165,6 @@ static int gs_uid_cmp(const void *a, const void *b) {
     return strcmp((const char *)a, (const char *)b);
 }
 
-/* [CN-FORK] v0.5.2.145 同一件事，只是元素宽度是 32 而不是 64（tid 表）。
- * 与 gs_uid_cmp 一样只比字符串 —— qsort 给的是元素首地址，宽度由调用方保证。 */
-static int gs_tid_cmp(const void *a, const void *b) {
-    return strcmp((const char *)a, (const char *)b);
-}
-
 static int gs_user_ids(char ids[][64], int max) {
     DIR *d = opendir(GS_HOME);
     if (!d) return 0;
@@ -567,9 +561,8 @@ static int gs_app(char *b, size_t cap, size_t *pos, const char *fmt, ...) {
 #define GS_SNAP_MAX_DEPTH 24
 #define GS_SNAP_MAX_LIST 64     /* 单个 (tid,uid) 下最多认这么多份 */
 #define GS_SNAP_MAX_REFS 512    /* 全局预算淘汰时一次最多收集这么多份 */
-#define GS_SNAP_BOOT_DELAY 90   /* 守护线程起来后先等这么久，避开启动期 IO */
-#define GS_SNAP_TICK 30         /* 守护线程醒来周期（按每款各自的 interval 判定） */
-#define GS_SNAP_MAX_GAMES 64    /* 一次扫描最多处理这么多款（配置里开了快照的） */
+/* [CN-FORK] v0.5.2.154 GS_SNAP_BOOT_DELAY / GS_SNAP_TICK / GS_SNAP_MAX_GAMES
+ * 随「定时快照守护」一起删除（见下面那段说明）。 */
 
 /* 源目录最近这么多秒内被写过 → 本轮跳过（正在写的存档拷出来是撕裂的）。
  * 可被 -D 覆盖：宿主测试里夹具是**刚造出来**的，文件 mtime 就是「现在」，
@@ -578,7 +571,7 @@ static int gs_app(char *b, size_t cap, size_t *pos, const char *fmt, ...) {
 #define GS_SNAP_QUIET_SEC 20
 #endif
 
-/* 一把锁串起「守护线程」与「立即备份 / 还原 / 删除」四条路径：
+/* 一把锁串起「退出时自动快照」与「立即备份 / 还原 / 删除」四条路径：
  * 同一时刻只允许一份快照在动，免得两个方向同时往同一个目录里写。 */
 static pthread_mutex_t g_snap_mu = PTHREAD_MUTEX_INITIALIZER;
 
@@ -1183,173 +1176,34 @@ static void gs_snap_cfg(const char *tid, int *enabled, int *interval, int *keep)
     if (keep) *keep = gs_snap_clamp_keep(kp);
 }
 
-/* 列出配置里开了本地快照的全部游戏。 */
-typedef struct { char tid[32]; int interval; int keep; } gs_snap_cfg_t;
-
-/* [CN-FORK] v0.5.2.145 扫出主机上**有存档的全部游戏**。
- *
- * 为什么需要它：全局配了一开，快照要覆盖的就是「所有有存档的游戏」，而这些游戏
- * 在 per-game 配置里**根本没有条目**（用户从没进过它们的存档弹窗），所以照旧
- * 从配置枚举的话，全局开了也一个都扫不到 —— 这正是「全局不生效」的另一种表现。
- * 反过来从「存档目录里实际有什么」枚举，才是对的口径：没存档的游戏本来也没什么可备份。
- * uid 排序 + 逐目录扫描与 gs_user_ids/gs_find_roots 一致，保证顺序稳定（回归可比对）。 */
-static int gs_all_tids(char out[][32], int max) {
-    if (!out || max <= 0) return 0;
-    char ids[16][64];
-    int nu = gs_user_ids(ids, 16);
-    /* 与 gs_find_roots 同一顺序（PS5 优先），保证枚举顺序稳定、回归可比对。 */
-    static const char *const dirs[2] = {"savedata_prospero", "savedata"};
-    int n = 0;
-    for (int d = 0; d < 2 && n < max; d++) {
-        for (int i = 0; i < nu && n < max; i++) {
-            char p[512];
-            if (snprintf(p, sizeof(p), "%s/%s/%s", GS_HOME, ids[i], dirs[d])
-                >= (int)sizeof(p)) continue;
-            DIR *dd = opendir(p);
-            if (!dd) continue;
-            struct dirent *e;
-            while ((e = readdir(dd)) != NULL && n < max) {
-                if (e->d_name[0] == '.' || e->d_name[0] == 0) continue;
-                if (!gs_tid_ok(e->d_name)) continue;
-                /* 已有就别重复加（PS5 那档先扫，命中一次就够）。 */
-                int dup = 0;
-                for (int k = 0; k < n; k++)
-                    if (strcmp(out[k], e->d_name) == 0) { dup = 1; break; }
-                if (dup) continue;
-                snprintf(out[n], 32, "%s", e->d_name);
-                n++;
-            }
-            closedir(dd);
-        }
-    }
-    if (n > 1) qsort(out, (size_t)n, 32, gs_tid_cmp);
-    return n;
-}
-
-static int gs_snap_enabled_games(gs_snap_cfg_t *out, int max) {
-    int n = 0;
-    /* ① 全局配了本地快照 → 覆盖所有有存档的游戏，用全局的间隔/保留。 */
-    int gen = 0, giv = 0, gkp = 0;
-    if (gs_global_snap(&gen, &giv, &gkp) && gen) {
-        char (*tids)[32] = (char (*)[32])malloc(sizeof(char[32]) * GS_SNAP_MAX_GAMES);
-        if (!tids) return 0;
-        int nt = gs_all_tids(tids, GS_SNAP_MAX_GAMES);
-        for (int i = 0; i < nt && n < max; i++) {
-            snprintf(out[n].tid, sizeof(out[n].tid), "%s", tids[i]);
-            out[n].interval = giv;
-            out[n].keep = gkp;
-            n++;
-        }
-        free(tids);
-        return n;
-    }
-    /* ② 没配全局 → 老口径：只扫 per-game 里显式开着的那些。 */
-    pthread_mutex_lock(&g_auto_mu);
-    cJSON *all = gs_auto_load();
-    for (cJSON *it = all ? all->child : NULL; it && n < max; it = it->next) {
-        if (!it->string || !gs_tid_ok(it->string) || !cJSON_IsObject(it)) continue;
-        cJSON *s = cJSON_GetObjectItem(it, "snap");
-        if (!s || !cJSON_IsObject(s)) continue;
-        if (!gs_field_bool(s, "enabled", 0)) continue;
-        snprintf(out[n].tid, sizeof(out[n].tid), "%s", it->string);
-        out[n].interval = gs_snap_clamp_interval((int)gs_get_int(
-            cJSON_GetObjectItem(s, "interval"), GAME_SAVES_SNAP_INTERVAL_DEF, 0, 1000000000));
-        out[n].keep = gs_snap_clamp_keep((int)gs_get_int(
-            cJSON_GetObjectItem(s, "keep"), GAME_SAVES_SNAP_KEEP_DEF, 0, 1000000000));
-        n++;
-    }
-    cJSON_Delete(all);
-    pthread_mutex_unlock(&g_auto_mu);
-    return n;
-}
-
 /* ── 守护线程 ───────────────────────────────────────────────────────────── */
-/* 「上一轮是什么时候」只记在内存里。重启后第一次会对所有开着的款各做一轮，
- * 但去重会挡住「内容没变」的那些，所以不会产生重复快照。 */
-typedef struct { char tid[32]; time_t last; } gs_snap_mark_t;
-static gs_snap_mark_t g_snap_marks[GS_SNAP_MAX_GAMES];
-static int g_snap_mark_n = 0;
-
-/* 到期判断 + 记账。必须在 g_snap_mu 里调用（只有守护线程碰它，但保持一致）。 */
-static int gs_snap_due(const char *tid, int interval) {
-    time_t now = time(NULL);
-    for (int i = 0; i < g_snap_mark_n; i++) {
-        if (strcmp(g_snap_marks[i].tid, tid) != 0) continue;
-        if (now - g_snap_marks[i].last < interval) return 0;
-        g_snap_marks[i].last = now;
-        return 1;
-    }
-    if (g_snap_mark_n < GS_SNAP_MAX_GAMES) {
-        snprintf(g_snap_marks[g_snap_mark_n].tid, sizeof(g_snap_marks[0].tid), "%s", tid);
-        g_snap_marks[g_snap_mark_n].last = now;
-        g_snap_mark_n++;
-    }
-    return 1;
-}
-
-static void gs_snap_sweep(void) {
-    gs_snap_cfg_t games[GS_SNAP_MAX_GAMES];
-    int ng = gs_snap_enabled_games(games, GS_SNAP_MAX_GAMES);
-    if (ng <= 0) return;
-
-    pthread_mutex_lock(&g_snap_mu);
-    for (int i = 0; i < ng; i++) {
-        if (!gs_snap_due(games[i].tid, games[i].interval)) continue;
-        /* roots 走堆：这一帧原来 14.2KB（games[64] + gs_root_t[16]），
-         * 而守护线程和连接线程一样是 pthread 默认栈 —— 同样顶不住。 */
-        int nr = 0;
-        gs_root_t *roots = gs_roots_find(games[i].tid, &nr);
-        if (!roots) continue;
-        for (int k = 0; k < nr; k++) {
-            char ts[24], note[160];
-            ts[0] = note[0] = 0;
-            gs_snap_take(games[i].tid, &roots[k], games[i].keep,
-                         ts, sizeof(ts), note, sizeof(note));
-        }
-        free(roots);
-    }
-    pthread_mutex_unlock(&g_snap_mu);
-}
-
-static void *gs_snap_main(void *arg) {
-    (void)arg;
-    sleep(GS_SNAP_BOOT_DELAY);
-    for (;;) {
-        if (!pldmgr_utils_safe_mode()) gs_snap_sweep();
-        sleep(GS_SNAP_TICK);
-    }
-    return NULL;
-}
-
-/* 守护线程的栈显式给足。真机 pthread 默认栈只有 64KB 上下（宿主上量出来的
- * 临界点是 56KB），而这条线程要跑整条复制链。栈占用现在虽然已经压到几 KB，
- * 但「以后谁多加一个局部数组」不该再把面板打死一次 —— 一次性给 1MB。
- * setstacksize 失败就退回默认（不要因为一个优化项把守护整条丢掉）。 */
-#define GS_SNAP_THREAD_STACK (1u << 20)
-
-void game_saves_snap_start_daemon(void) {
-    /* safe_mode：与风扇、名字自愈两条守护同一原则 —— 死机后要能止血，
-     * 后台的自动动作一律不做。想留档就手动点「立即备份」。 */
-    if (pldmgr_utils_safe_mode()) {
-        pldmgr_log("[PLDMGR] saves: SAFE MODE，跳过本地快照守护\n");
-        return;
-    }
-    pthread_attr_t at;
-    pthread_attr_init(&at);
-    int sized = (pthread_attr_setstacksize(&at, GS_SNAP_THREAD_STACK) == 0);
-    pthread_t th;
-    int rc = pthread_create(&th, sized ? &at : NULL, gs_snap_main, NULL);
-    pthread_attr_destroy(&at);
-    if (rc == 0) {
-        pthread_detach(th);
-        pldmgr_log("[PLDMGR] saves: 本地快照守护已启动（首次运行延后 %ds，栈 %uKB）\n",
-                   GS_SNAP_BOOT_DELAY, (unsigned)(GS_SNAP_THREAD_STACK >> 10));
-    } else {
-        pldmgr_log("[PLDMGR] saves: 本地快照守护线程创建失败\n");
-    }
-}
+/* [CN-FORK] v0.5.2.154 定时快照守护**整条删除**（用户口径：「每次游戏结束后，在本地
+ * 快照存一份存档，本地自动存储快照删除（定时的功能不要了）」）。
+ *
+ * 原来这里是「每 GS_SNAP_TICK 秒醒一次，按每款游戏各自的 interval 判定到期没有」。
+ * 改成**游戏退出时触发一次**（由 game_auto.c 的扫描线程在检测到游戏退出时调
+ * game_saves_snap_run_now），所以：
+ *   · 到期判断（gs_snap_due）、内存记账（g_snap_marks）、扫描（gs_snap_sweep）、
+ *     按配置枚举要备份的游戏（gs_snap_enabled_games / gs_all_tids）全部不再需要；
+ *   · 不再需要「哪款游戏配了快照」这件事 —— 退出那一刻按 tid 现读配置就行。
+ *
+ * 为什么退出时触发更对：存档真正变化的时刻就是「玩完那一刻」，定时轮询要么在没玩
+ * 的时候白拷（被「内容没变就不新增」挡掉）、要么在玩得正久时错过刚写的进度。
+ * 代价是「游戏在面板没运行时退出」这一次不会被记 —— 可以接受，手动「立即备份」仍在。
+ *
+ * 去重（内容没变不新增）、源目录最近被写过就跳过、临时目录成功才 rename 三条设计
+ * 都在 gs_snap_take 里，与触发方式无关，全部保留。 */
 
 /* ── 立即备份 / 还原 / 删除 ─────────────────────────────────────────────── */
+/* [CN-FORK] v0.5.2.154 这个游戏的本地快照开着没有（全局优先，与 gs_snap_cfg 同口径）。
+ * 给 game_auto.c 的扫描线程用：检测到游戏退出时先问一句，开着才去备份。 */
+int game_saves_snap_enabled(const char *tid) {
+    int en = 0;
+    if (!gs_tid_ok(tid)) return 0;
+    gs_snap_cfg(tid, &en, NULL, NULL);
+    return en;
+}
+
 int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
     if (msg && msgsz) msg[0] = 0;
     if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
@@ -2482,4 +2336,213 @@ int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t 
                      "\"size\":%lld,\"files\":%lld,\"mtime\":\"%s\"}",
                      rc.mode, sz, files, mtstr);
     return (n > 0 && (size_t)n < size) ? n : -1;
+}
+
+/* ══ [CN-FORK] v0.5.2.154 存档目录的「最近被写过的时刻」 ══════════════════════
+ *
+ * 给「拉取前先比一比新旧」用（game_auto.c 的 ga_do_inner）：本地这份比远程新时
+ * 就不该再拿远程的盖回去 —— 用户玩了半天，远程还是上次退出时推的，一启动游戏
+ * 反而把进度退回上一次。判定本身是纯函数（ga_pull_needed），这里只负责取数。
+ *
+ * 取的是**目录里所有普通文件的最大 mtime**（gs_walk 已经在算，与本地快照去重
+ * 用的是同一个量），不是目录自身的 mtime：目录 mtime 只反映「有没有增删条目」，
+ * 游戏原地改写 sdimg_ 时它根本不变。
+ *
+ * 返回 1 = 本地有存档（*out_mtime 已填），0 = 本地没有（换机 / 误删 / 从没存过）。 */
+int game_saves_local_mtime(const char *tid, const char *uid, long long *out_mtime) {
+    if (out_mtime) *out_mtime = 0;
+    if (!gs_tid_ok(tid)) return 0;
+    if (uid && *uid && !gs_uid_ok(uid)) return 0;
+
+    gs_root_t r;
+    if (gs_root_by_uid(tid, uid, &r) != 0) return 0;
+
+    gs_stat_t acc;
+    memset(&acc, 0, sizeof(acc));
+    unsigned budget = 65536;   /* 与列表统计同一档预算 */
+    gs_walk(r.path, &acc, 0, &budget);
+    if (acc.files <= 0) return 0;
+    if (out_mtime) *out_mtime = (long long)acc.max_mtime;
+    return 1;
+}
+
+/* ══ [CN-FORK] v0.5.2.154 garlic 兼容导入 ═════════════════════════════════════
+ *
+ * 兼容对象是 garlic-savemgr（earthonion）的**加密**导出，也就是它在主机盘上
+ * 原样看到的那个存档镜像：
+ *   · PS5 → 裸的一个 `sdimg_<名>` 文件（garlic 的「Download Encrypted」）
+ *   · PS4 → 一个 zip，里面是 `sdimg_<名>` 与配套的 `<名>.bin` 密封密钥
+ *
+ * 为什么只做到「原样搬运」：garlic 的「解密」是把加密 PFS 镜像用主机密钥挂载成
+ * 明文目录，「加密」是在主机上**新建**一个加密镜像。后者要 /dev/pfsmgr 的 ioctl、
+ * libSceFsInternalForVsh 与进程提权，属于内核级动作（本项目 `.54` 有整机死机的
+ * 前科），不适合顺手加进来。所以这里只接受**已经加密好**的镜像 —— 它与我们
+ * 自己的「下载存档」是同一层东西（<uid>/savedata_prospero/<TID>/ 里的文件）。
+ *
+ * 语义与「上传存档」**不同**，这是刻意的：
+ *   上传 = 整份替换（把整个 <TID> 目录换掉）；
+ *   导入 = **逐文件合并**（只覆盖同名的那几个镜像，其余原样保留）。
+ * 因为一个存档目录里除了当前镜像还有主机自己的记账（`sdimg_sce_bu_<名>` 备份、
+ * `sdimg_sce_sdmemory` 系统存档）。整份替换会把它们一起抹掉，主机很可能就认不出
+ * 这份存档了 —— 而 garlic 导出的只是**一个**镜像。
+ *
+ * 目标目录：这个用户在这个游戏上**已有**的存档根（PS4 的存档就落在 savedata/ 下，
+ * 不会被我们挪到 savedata_prospero/）；还没有就按 PS5 建一个（与上传同一口径）。
+ *
+ * ⚠ **先落到暂存目录、整包成功才合并进存档目录**（见下面的 stage 一段）：
+ * zip_extract 是**遇到坏条目才整包拒收**的，直接往存档目录里写的话，包里第 N 个
+ * 条目名字不合法时前 N-1 个已经躺在用户的存档目录里了 —— 那会让主机把这份存档
+ * 认成损坏的。暂存目录放在存档根的**父目录**（与 .tmp_* / .rst_* 同一处、同一个
+ * 文件系统，所以最后一步是 rename 而不是拷贝），命名带 `.tmp_` 前缀，好让
+ * gs_sweep_temp() 能收拾掉崩溃留下的残留。 */
+typedef struct {
+    const char *dir;
+    long long files;
+    long long bytes;
+    int bad;
+} gs_gx_t;
+
+/* zip_extract 用的落盘回调：**只取 basename**，不接受任何目录层级。
+ * garlic 的 PS4 包是平铺的，压平不会丢东西；而「外部字节拼路径」这件事，
+ * 越简单越安全 —— gs_slot_ok 挡掉空名 / 点开头 / 含分隔符 / 控制字符。 */
+static int gs_gx_cb(void *user, const char *name, const unsigned char *data,
+                    size_t len, time_t mt) {
+    gs_gx_t *g = (gs_gx_t *)user;
+    if (g->bad) return 1;
+    if (g->files >= (long long)GAME_SAVES_MAX_ENTRIES ||
+        (unsigned long long)g->bytes + len > GAME_SAVES_MAX_BYTES) {
+        g->bad = 2;
+        return 1;
+    }
+    const char *base = strrchr(name, '/');
+    base = base ? base + 1 : name;
+    if (!gs_slot_ok(base)) return 0;   /* 跳过而不是中止：包里可能有我们不认识的东西 */
+    char dst[1400];
+    if (snprintf(dst, sizeof(dst), "%s/%s", g->dir, base) >= (int)sizeof(dst)) {
+        g->bad = 2;
+        return 1;
+    }
+    if (write_file_text(dst, (const char *)data, len) != 0) {
+        g->bad = 2;
+        return 1;
+    }
+    gs_up_set_mtime(dst, mt);
+    g->files++;
+    g->bytes += (long long)len;
+    return 0;
+}
+
+/* 把暂存目录里的普通文件逐个 rename 进存档目录（同名覆盖）。
+ * 只搬普通文件：gs_gx_cb 已经把包里所有名字压平了，暂存目录里不可能有子目录。 */
+static int gs_gx_merge(const char *stage, const char *dst) {
+    DIR *d = opendir(stage);
+    if (!d) return -1;
+    struct dirent *e;
+    char sp[1200], dp[1200];
+    int rc = 0;
+    while ((e = readdir(d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (snprintf(sp, sizeof(sp), "%s/%s", stage, e->d_name) >= (int)sizeof(sp) ||
+            snprintf(dp, sizeof(dp), "%s/%s", dst, e->d_name) >= (int)sizeof(dp)) {
+            rc = -1;
+            break;
+        }
+        struct stat st;
+        if (lstat(sp, &st) != 0) continue;
+        if (!S_ISREG(st.st_mode)) continue;
+        if (rename(sp, dp) != 0) { rc = -1; break; }
+    }
+    closedir(d);
+    return rc;
+}
+
+int game_saves_import_garlic(const char *tid, const char *save, const char *name,
+                             const unsigned char *body, size_t len,
+                             long long *out_files, char *msg, size_t msgsz) {
+    if (out_files) *out_files = 0;
+    if (msg && msgsz) msg[0] = 0;
+    if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
+    if (save && *save && !gs_uid_ok(save)) {
+        if (msg) snprintf(msg, msgsz, "用户标识不合法");
+        return -1;
+    }
+    if (!body || len == 0) { if (msg) snprintf(msg, msgsz, "文件是空的"); return -1; }
+    if (len > GAME_SAVES_MAX_BYTES) { if (msg) snprintf(msg, msgsz, "文件太大"); return -1; }
+
+    /* 裸镜像必须带文件名 —— 这条**要在建目录之前**判：不然用户传了个没名字的
+     * 文件，我们却先给他把存档目录建出来了，白留一个空目录。 */
+    int is_zip = (len >= 4 && !memcmp(body, "PK\x03\x04", 4));
+    if (!is_zip && (len >= 4 && !memcmp(body, "PK\x05\x06", 4))) {
+        if (msg) snprintf(msg, msgsz, "这个 zip 里没有任何文件");
+        return -1;
+    }
+    if (!is_zip && (!name || !*name)) {
+        if (msg) snprintf(msg, msgsz, "缺少文件名（这个文件不是 zip，需要知道它叫什么）");
+        return -1;
+    }
+
+    gs_root_t r;
+    char rerr[256];
+    rerr[0] = 0;
+    if (gs_root_or_create(tid, save, &r, rerr, sizeof(rerr)) != 0) {
+        if (msg) snprintf(msg, msgsz, "%s", rerr[0] ? rerr : "找不到主机上的存档目录");
+        return -1;
+    }
+
+    /* 暂存目录：存档根的**父目录**下（同一个文件系统 → 最后一步是 rename）。
+     * 名字带 `.tmp_` 前缀，gs_sweep_temp() 才会把崩溃留下的残骸扫掉。 */
+    char stage[1300];
+    {
+        char parent[1300];
+        snprintf(parent, sizeof(parent), "%s", r.path);
+        char *sl = strrchr(parent, '/');
+        if (sl) *sl = 0;
+        if (snprintf(stage, sizeof(stage), "%s/.tmp_gx_%d_%u",
+                     parent, (int)getpid(), (unsigned)time(NULL)) >= (int)sizeof(stage)) {
+            if (msg) snprintf(msg, msgsz, "存档目录路径过长");
+            return -1;
+        }
+    }
+    gs_rmtree(stage); /* 万一 pid / 秒级时间戳撞上了上一次的残骸 */
+    if (ensure_dir_recursive(stage) != 0) {
+        if (msg) snprintf(msg, msgsz, "建不了临时目录");
+        return -1;
+    }
+
+    gs_gx_t g;
+    memset(&g, 0, sizeof(g));
+    g.dir = stage;
+
+    char err[256];
+    err[0] = 0;
+    int rc;
+    if (is_zip) {
+        rc = zip_extract(body, len, gs_gx_cb, &g, err, sizeof(err));
+        if (rc == -2) { snprintf(err, sizeof(err), "解包被中止"); rc = -1; }
+        if (rc == 0 && g.bad) { snprintf(err, sizeof(err), "写入失败或超过大小限制"); rc = -1; }
+    } else {
+        if (gs_gx_cb(&g, name, body, len, 0) != 0) {
+            snprintf(err, sizeof(err), "文件名不合法或写入失败");
+            rc = -1;
+        } else {
+            rc = 0;
+        }
+    }
+
+    if (rc != 0 || g.files == 0) {
+        gs_rmtree(stage); /* 整包失败 → 一个字节都不进用户的存档目录 */
+        if (msg) snprintf(msg, msgsz, "%s", err[0] ? err : "这个文件里没有可导入的存档镜像");
+        return -1;
+    }
+    if (gs_gx_merge(stage, r.path) != 0) {
+        gs_rmtree(stage);
+        if (msg) snprintf(msg, msgsz, "写入存档目录失败（磁盘满？）");
+        return -1;
+    }
+    gs_rmtree(stage);
+
+    pldmgr_log("[PLDMGR] saves: %s garlic 导入 ok -> %s (%lld files, %lld bytes)\n",
+               tid, r.path, g.files, g.bytes);
+    if (out_files) *out_files = g.files;
+    return 0;
 }

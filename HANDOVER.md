@@ -5,7 +5,7 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-> - 版本：`MENU_VERSION = 0.5.2.153`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+> - 版本：`MENU_VERSION = 0.5.2.154`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 - 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。`.102` 是**修掉 `.101` 改名取证代码的堆溢出（整 payload 崩）+ 按钮按功能转实心六色（样张 A + I2）+ 页头去粘顶**（正式出包版 `NayePlmTools_0.5.2.102-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `be7fa8f`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 的包已过期。`.103`–`.105` 是**纯前端/文档改动、从未单独出包**（`.103` 收敛上色 + 深空黑 + 舒展留白；`.104` 账号板块按钮状态分色 + 主色换朱橙 `#F43E06`；`.105` 同步按钮补图标 + PIN 进度条重做），`.106` 把这四轮**一次性出包**（正式出包版 `NayePlmTools_0.5.2.106-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `0e9afb2`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.102` 的包已过期。`.107` 是**头像上传/裁剪四项缺陷修复**（变形 / 卡死 / 拖拽裁剪 / 拖放选图）+ **账号「登出」不再连带反激活**（备份层加来源维度，按钮 `[登出]` = 只登出、`[反激活]` = 登出并反激活，文字不变）—— 详见 §2.1.1 与 §2.2.1。正式出包版 `NayePlmTools_0.5.2.107-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `8065f19`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.106` 的包已过期。`.108` 是**账号按钮语义修正** —— 用户否掉了 `.107` 的文案（「逻辑做错了，登出 就是只登出，反激活 即 登出并反激活，**但是按钮文字不要改**」）：按钮行恒为 `[登出]` + `[反激活]`，已登录时 `[反激活]` 走 `signout-full`（登出 + 反激活一步到位），未登录时走 `deactivate`；后端契约沿用 `.107`，本轮只动前端/语言包/文档。正式出包版 `NayePlmTools_0.5.2.108-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `12e2ba5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.107` 的包已过期。`.109` 是**修掉「头像上传一直显示上传中、不报错也不结束」**（真根因在 MHD 流式状态回收的判据，见 §2.2.2；前端同时把「超时」与「用户取消」区分开）+ **通知条挪到底部居中并缩小**（见 §2.2.3）+ mock 里头像改成真闭环。正式出包版 `NayePlmTools_0.5.2.109-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `b8ea772`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.108` 的包已过期。`.110` 是**修掉电视端「确定」生效在鼠标指针位置、而不是彩色光圈所在的那个控件上**（见 §2.2.4；结论：网页无法移动系统鼠标指针，改为让 OK 的落点脱离指针）+ 新增 `?navdebug=1` 排障面板。正式出包版 `NayePlmTools_0.5.2.110-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `dcfb48b`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.109` 的包已过期。`.111` 是**四件事一起做**：① 遥控器模式下藏掉系统光标（见 §2.2.4 延伸 —— 网页无法移动指针，只能让它消失）；② **改名不再影响账号 ID**（ID 改由 uid 派生，见 §2.1.1）；③ **登入/登出/激活/改名/接口错误全部中文化**，不再报英文诊断串；④ **去掉「反激活」** —— 激活成功后那颗按钮整颗收起（见 §2.2.5）；⑤ 修掉**「第一次登出失败、第二次才成功」**（`fill_status()` 改为 uid 优先解槽位，见 §2.1.1）。正式出包版 `NayePlmTools_0.5.2.111-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `e908ef5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.110` 的包已过期。`.112` 是**游戏管理三个面板改「铺满右侧」+ 磁贴图拆成图标/背景两层 + 电视端焦点那套逻辑整体回退到上游做法**（用户口径两轮：「存档管理页面打开后铺满右边整个区域。多媒体管理也是铺满右边。修改名称也是铺满，但是你只把修改磁贴图标放出来了，还要增加一个修改背景的」/「刚才铺满的几个页面圆角全部取消，修改名称哪里将磁贴图标与游戏名称放在一行，磁贴背景放在下面，磁贴背景预览图是16:9的dds图片。图标是png图片。另外修复一个历史bug。ps5真机上焦点鼠标移动的方式最好改回跟上游一样，现在这样很别扭」）。具体：① `Modal` 新增 `layout="panel"`、四角直角、`--sidebar-w` 令牌 + `html[data-sidebar]`、`.panel-sheet` 的 `margin:0!important`（躲 `.space-y-6` 的 `> * + *`）—— 见 §2.2.6；② 磁贴两层图（**图标 1:1 PNG / 背景 16:9 1920×1080 DXT1 DDS，DDS 由后端转**，`/game_tile_icon` 与 `/game_tile_background` 拆分，`game_list` 新增 `icon` 版本号字段）；③ **电视端「光圈/光标」整层回退**：删掉自己搬焦点、抢确定键、藏光标三层，改成光圈跟着指针走 —— 见 §2.2.7；④ 修掉 `.92` 起就存在的「弹窗里按返回键连带退页」—— 见 §2.2.8；⑤ `Modal` 焦点进出独立 effect —— 见 §2.2.9。**本轮为纯前端/mock/文档改动，未出包**（后端 C 代码一行未动）。`.113` 是**三件事 + 一处版本号清账**（用户口径：「这几个铺满页面的字体太小了，跟其他父级菜单一样大。这里点击也可以上传图片，上传完要有一个应用的动作；这里的缩略图也要调大。太小了，预览都看不清。改把，改完直接打包成elf」）：① 铺满面板里的字号与侧栏菜单拉平 —— 立 `.panel-body` / `.panel-note` / `.panel-tiny` / `.panel-micro` 四条语义档，替掉 60 处硬编码 `text-[13px]` 之类的 px 字号（见 §2.2.6 末尾）；② 改名页两层图改「**点预览也能选图 + 应用才生效**」（预览本身是按钮、选图先暂存并本地预览、点「应用」才提交，另有「取消」）；③ 多媒体缩略图列宽下限由写死的 112px 改成 `--thumb-w` 令牌（移动 140 / 桌面 200 / 电视 320px）；④ 顺手清掉三处**手抄的版本号**（设置页捐赠说明、支持作者页兜底值、mock 的 `/version`）并加回归守卫。正式出包版 `NayePlmTools_0.5.2.113-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `81c42c1`，两包各 9,957,216 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.112` 的包已过期。`.114` 是**磁贴再放大 1/4（`--tile-w` 这根令牌的第三次调档：PC/手机 210px → 262.5px、电视 300px → 375px）+ 改名页「磁贴背景」块从竖排改回左右分栏**（正式出包版 `NayePlmTools_0.5.2.114-me.elf` / `-ga.elf`，短哈希 `91fa4fb`，两包各 9,957,216 字节，`.113` 的包已过期；⚠️ 这一轮**包出了文档漏了**，到 `.115` 才补上 CHANGELOG），`.115` 是**游戏管理 → 多媒体管理（截图/录屏）后端**——新增 `src/game_media.c` + `include/game_media.h`、八条路由（六条 `/game_media*` + `/game_job_status` / `/game_job_cancel`），主机关卡从 3 条增至 4 条（新 `media_scan` 98 项断言），详见 §2.1.0 与 CHANGELOG `.115`。`.116` 是**游戏管理后端一次补完 + 修掉「预览只剩顶部一条 / 打包下载失败」** —— 新增 19 条端点与六个模块（`game_title` / `game_saves` / `game_runtime` / `game_job` / `zip_io` / `inflate`，详见 §2.1.2），并把**文件直出从 `MHD_create_response_from_fd64` 换成自写 32KB 回调 `gr_file_response()`**（fd 直出那条分支在真机上会把 Content-Length 报全、字节发短，导致图片只剩顶部一条、zip 下载判失败；三个调用点一起换），出包版 `NayePlmTools_0.5.2.116-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.115` 的包已过期。`.117` 是**修真机报的「游戏管理的列表变空了」** —— 根因是 `.116` 给 `enum_arg_t` 加了 `want`，而 `build_game_json` 仍逐字段赋值**漏了它**，`want` 成栈上垃圾、`gm_append_item` 第一行 `if (a->want)` 把每个条目都早退、`count` 恒 0（症状「先好后坏」，跑过一次 `/game_detail` 才把非空指针留在栈上）；同轮另修**详情页 5 个字段读错列**（`st_cb_row` 拿 `GM_DB_*` 枚举序号当列号，把 `gm_sql_col_index` 的解析结果整个丢掉）与 **`version` 吐栈上垃圾**。同时**把「三道门为什么拦不住」补上**：`src/game_mgr.c` 第一次能在主机上编译（`test/host_mnt_compat.h` 顶掉 `getmntinfo` 三个 BSD 符号 + `GAME_MGR_APPDB_PATH` 加 `#ifndef` + 合成 app.db 夹具），新增 `game_mgr` 主机关卡 **65 项断言**，核心手法是 `seed_stack()` **主动把栈播种成非空指针**（见 §2.1.3）。出包版 `NayePlmTools_0.5.2.117-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.116` 的包已过期。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。。`.128` **改错了地方，已回退**（用户：「退回上一版，你改错了，我要的是将游戏详情里面的按钮全部去掉，改为『去 ShadowMount 管理』」）——它删的是**磁贴下**那四颗动作按钮（存档管理 / 多媒体管理 / 名称与背景 / 待定功能），而那四颗是我们自己的功能，必须留。`.129` 把磁贴恢复到 `.127` 的样貌，把手术做到**游戏详情弹窗**里：`GameDetailModal.jsx` 515 → 250 行，改成**纯只读信息面板 + 一颗「去 ShadowMount 管理」按钮**——只读挂载 / 读写挂载 / 卸载挂载 / 卸载 / 删除源 五颗按钮全部下线，连带整条删除任务链（`busy`/`job` state、`watchJob`/`cancelJob` 轮询、删除进度面板、「取消任务」按钮、`PHASE_LABEL`/`BUSY_REASON`、`deleting`/`stopWatch`）一起删干净，不留半死代码（否则 `no-unused-vars` 与维护陷阱）。动机同 `.128` 那次：ShadowMount 挂的镜像/裸目录游戏调 `sceAppInstUtilAppUnInstall` 会删掉 app.db 注册与 `/user/app/<TID>/`（连带 `mount.lnk`）后返回非零，而 `game_runtime_uninstall()` 只在 rc==0 时清缓存，于是图标先还在、刷新后消失且**无从挂回**——外部源 `/mnt/ext1/PPSA21567-宇宙机器人` 完好、SMP 侧仍列着，但我们没有挂载/重注册能力，所以干脆撤掉挂载类入口，交给 ShadowMount 自己管；**这次详情里那颗「卸载」也一起撤了**，不再有「留着以后决定」的欠账。SMP 按钮的行为沿用 `.128` 那套（回归已验证）：点击走 `.84` 的老套路——手势内 `window.open("about:blank", "_blank")` 占位再 `win.location.replace(url)`，**目标 `http://${location.hostname}:10101/`**（用页面自己的 host，主机上 `127.0.0.1`、PC 上 `192.168.x.x` 零配置都对）。**`window.open` 第三个参数千万别加 `noopener,noreferrer`**——加了返回 `null`，兜底分支再开一个真标签页，用户看到两个标签而 `about:blank` 那个还挂着；`catch` 里要 `win.close()` 再兜底。存档 / 多媒体 两条 `GridRow`（`打开存档管理` / `打开多媒体管理`）**保留在详情里**，同时磁贴上四颗按钮也在，所以两条路都能到；「名称与背景」现在**只能从磁贴进**（`.128` 给详情加的那行 `打开名称与背景` 随回退一起没了），「待定功能」那颗空壳按钮也回来了。`GameSection.jsx` 的 `GameDetailModal` 调用点顺势收掉 `addToast` / `showConfirm` / `onChanged` 三个回调（详情不再发操作，它自己的 SMP 按钮不经过我们）；**`showConfirm` 在存档 / 多媒体两个弹窗里仍在用，别误删**。正式出包版 `NayePlmTools_0.5.2.129-me.elf` / `-ga.elf`（提交 `ead334d`，内嵌标题 `ead334d`），两包各 10,785,872 字节、titleId 自检 NAYE00001/NAYE00004 通过，`frontend/dist/index.html`（910,858 字节）与 ELF 内嵌 blob 在偏移 2007072 **逐字节一致**，`0.5.2.128` / `.127` / `.126` 残留各 0 处、`cancelJob` / `watchJob` 各 0 处；`.128` 的包已过期。回归：`game112` 171/171、`nav112` 20/20。**断言口径翻转了**：磁贴上必须**有**四颗（`length === 4` 且磁贴上没有 SMP 按钮），详情里必须**只有一颗** SMP 按钮，且挂载/卸载/删除源/取消任务**一颗都不剩**（用正则扫弹窗内所有 `<button>` 的 aria-label + text——这条反面断言是刻意加的，防止以后把按钮偷偷加回来还静默通过；`.128` 只有正向断言，就是它的教训）。负向对照：把 `GameDetailModal.jsx` checkout 回 `HEAD~1`，6 条断言立刻全红，恢复后全绿。`.129` 出包版 `NayePlmTools_0.5.2.129-me.elf` / `-ga.elf`（提交 `ead334d`），已推真机 `192.168.1.214` 验收。
 
 `.130` 是**真机验收 `.129` 时抓到的一条死链文案**：`GameSection.jsx:321` 渲染的磁贴提示还写着
@@ -1164,6 +1164,49 @@ app_id 必然失败，必须用**挂起时记下的那个**；`.152` 修 `.151` 
 `KERN_PROC_PID` 单查在真机上失败 → 主方案在发信号前就放弃 → 回落 LncUtil → 游戏又跳后台。
 出包版 `NayePlmTools_0.5.2.153-me.elf` / `-ga.elf`（`.153` 已真机验收通过）。
 
+**`.154`（2026-10-09）八条需求一次做完 —— 存档链路的行为收敛 + 前端两个新页面。**
+逐条见 `CHANGELOG.md` 顶部，这里只留**改代码前必读的三条**：
+
+* **游戏运行中禁推拉**（`game_auto_sync_action()` 当场探测 + 前端置灰并**写出理由**）——
+  理由不只是「麻烦」：推 / 拉都是**整份替换**存档目录，而游戏正把存档读在内存里、
+  退出时还要写回去。判据用 `auto_state.running`，与那颗「游戏运行中」芯片同源。
+  回归里必须有一条「**在跑的是别的游戏时不误拦**」——「恒灰」的实现能让所有正向断言都过。
+* **本地快照的触发点从「定时守护」换成「游戏退出」**（`game_auto_plan()` 7 参 / `out[3]`，
+  顺序恒为 **快照 → 推送 → 拉取**；退出结算只等一次 `GA_EXIT_SETTLE`）。整条定时守护
+  （`gs_snap_main` / `gs_snap_due` / `gs_snap_sweep` / `start_daemon` / `GS_SNAP_TICK`）
+  **已删**，`main.c` 那次调用同步去掉。**本地快照不跟随远程总开关**（它是最后一层兜底），
+  所以引擎用新增的 `game_saves_snap_enabled()` 单独问一句。
+  `EMPTY_CFG.snap.interval` 与 `normalizeCfg()` 里的 `interval` **刻意保留** ——
+  旧全局配置要能原样往返，后端 `gs_snap_cfg()` 还在解析它，只是界面上不再可编辑。
+* **拉取前先比新旧**（纯函数 `ga_pull_needed()`，总原则「说不清一律按该拉处理」）：
+  取数走 `game_saves_local_mtime()`（**所有普通文件的最大 mtime**，不是目录自身的 mtime ——
+  目录 mtime 只反映「有没有增删条目」，游戏原地改写 `sdimg_` 时它根本不变）。
+  `sr_stat()` 这一轮才**补齐 FTP / HTTP**（读推送时一并写下的 `<uid>.meta.json`）：
+  `.153` 及以前这两档一律回 -1 = 永远「说不清」，判定等于完全失效。
+  ⚠ **只有 SMB 回 `SR_ENOTFOUND`，FTP / HTTP 一律回 -1** ——「meta.json 不在」分不清是
+  「远端没存档」还是「`.145` 之前推的老存档没写 meta」，而回 `SR_ENOTFOUND` 会让
+  老存档用户的自动拉取**整个失效**。
+
+**garlic 兼容导入**（`POST /game_save_import_garlic`）单独记一条：它**只做「原样搬运」**，
+接受的是 garlic 已经加密好的镜像（PS5 裸 `sdimg_<名>` / PS4 的 zip），
+**不做** garlic 那种「在主机上新建 PFS 加密镜像」的内核级动作（`/dev/pfsmgr` ioctl +
+`libSceFsInternalForVsh` + 提权，本项目 `.54` 有整机死机前科）。
+语义与「上传存档」**刻意不同**：上传 = 整份替换；导入 = **逐文件合并**（一个存档目录里
+除了当前镜像还有主机自己的记账 `sdimg_sce_bu_*` / `sdimg_sce_sdmemory`，整份替换会把它们
+一起抹掉）。⚠ **必须先落暂存目录、整包成功才 rename 合并** —— `zip_extract` 是「遇到坏条目
+才整包拒收」的，直接往存档目录里写时包里第 N 个条目不合法，前 N-1 个已经躺在用户目录里了。
+`name` 走 query 是硬契约（裸镜像没有后缀、内容也不是 zip，只能靠这个原始文件名落盘）。
+前端那个 file input **刻意不写 `accept`**（写了 `.zip` 会在文件选择器里把无后缀的镜像藏起来）。
+
+前端另有两条小改动：**刷新后停在当前页**（`localStorage['pldmgrView']` + 白名单，
+`move_from_usb` **刻意排除** —— 它靠只在内存里的路径，留在那页只会空白）；
+**设置下面新增「关于」页**（`AboutView.jsx`，`DonateView.jsx` 删除；更新日志从
+`SettingsView` 的数组 + `<Modal>` 搬成页内 `<Section>`）。
+`game112` 第 11 节的扫描名单里 `DonateView.jsx` → `AboutView.jsx`（那页是**用户唯一能看到
+版本号的地方**）。回归基线：`game112` **291**、`nav112` 20、`acct111` 23、`avatar109` 19、
+`cropfix` 75、`pack125` 15；宿主 `game_saves` 183 / `save_remote` 94 / `game_auto` 152，
+`mutation_check_freeze.sh` **7 个变异全 OK**。
+
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
 | --- | --- |
@@ -1719,8 +1762,73 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
   拉取回来的那份存档**。所以 `.148`→`.153` 的「远程存档同步」整链**真机验收通过**：
   拉取成功 → 游戏被冻住 → 盘上存档换掉 → 放行 → 游戏读到新存档 → 全程留在前台。
 
+#### 2.1.7 拉取前先比新旧 + 游戏运行中禁推拉 + garlic 兼容导入（`.154`，改存档链路前必读）
+
+**① 拉取前先比新旧**（用户口径：「如果本地存档比远程存档要更新，则不拉取，本地存档比
+远程存档旧，可以直接拉取覆盖」）。
+
+- 判定是**纯函数** `ga_pull_needed(local_have, local_mtime, remote_have, remote_mtime)`
+  （`include/game_auto.h` 里导出 + 四条出口写在注释里）。**总原则：说不清一律按该拉处理。**
+  宁可白拉一次（结果是「内容没变」），也不能因为判不出来就把用户的进度退回上一次。
+- 取数两边各一处：
+  * 本地 —— `game_saves_local_mtime()`，走 `gs_walk` 取**目录里所有普通文件的最大 mtime**。
+    **不是目录自身的 mtime**：那玩意只反映「有没有增删条目」，游戏原地改写 `sdimg_` 时它根本不变。
+    `acc.files <= 0` 回 0（= 本地没有 → 该拉）。
+  * 远程 —— `sr_stat()`。**这一轮才补齐 FTP / HTTP**（读推送时一并写下的 `<uid>.meta.json`）；
+    `.153` 及以前这两档一律回 -1，判定永远「说不清」= 功能完全失效。
+- ⚠ **`sr_stat()` 的三协议差异是故意的，别去「修统一」**：
+  **只有 SMB 会回 `SR_ENOTFOUND`，FTP / HTTP 一律回 -1。**
+  因为「`<uid>.meta.json` 不在」分不清是「远端根本没存档」还是「`.145` 之前推的老存档
+  没写 meta」，而回 `SR_ENOTFOUND` 会让**老存档用户的自动拉取整个失效**。
+  宿主测试里两条 `== -1` 的断言就是钉这个的（不是写错期望值）。
+- 结果落日志与通知：`… · 本地更新 %d（未覆盖）`。`note` 组装里 **`newer` 分支必须排在
+  `skipped` 之前**，否则用户看到的是「跳过」而不是「本地更新」。
+- 只用在**自动拉取**（启动游戏时那条）。手动拉取不判 —— 用户点了就是要覆盖。
+
+**② 游戏运行中禁推拉**（用户口径：「游戏进行中，拉取和推送存档的动作不让做」）。
+
+- 后端：`game_auto_sync_action()` 在手动推 / 拉前**当场探一次**「这个游戏在不在跑」，
+  在跑就 400 拒拦，人话只说一句「请先退出游戏再推送/拉取存档」。
+- 前端：`SaveManagerModal` 里 `st.running` 时两颗按钮置灰，**并在按钮下面写一行理由** ——
+  只挂 `title` 不行，电视端遥控器用户没有 hover。
+- 为什么不是「只是麻烦」：推 / 拉都是**整份替换**存档目录，而游戏此刻正把存档读在内存里、
+  退出时还要写回去。
+- 判据用 `auto_state.running`（后端**当场探测**，不是守护线程的滞后值），
+  与那颗「游戏运行中」芯片同源。回归里必须有「**在跑的是别的游戏时不误拦**」——
+  「恒灰」的实现能让所有正向断言都过。
+
+**③ garlic 兼容导入**（`POST /game_save_import_garlic`，用户口径：「添加一个兼容导入按钮
+兼容 garlic 的存档。同时解释一下 garlic 的加密和解密代表什么」）。
+
+- **只做「原样搬运」**：接受 garlic **已经加密好**的镜像（PS5 = 裸的 `sdimg_<名>` 一个文件；
+  PS4 = 一个 zip，里面 `sdimg_<名>` + 配套的 `<名>.bin` 密封密钥）。
+  **不做** garlic 的「加密 / 解密」那两个动作 —— 那是**内核级**的：
+  * **解密** = 用主机密钥把加密 PFS 镜像**挂载**成明文目录（好让 PC 端读里面）；
+  * **加密** = 在**主机上新建**一个加密 PFS 镜像，把明文目录塞回去。
+  两者都要 `/dev/pfsmgr` 的 ioctl + `libSceFsInternalForVsh` + 进程提权，
+  而本项目 `.54` 有**整机死机**的前科 —— 不适合顺手加进来。
+  我们接受的这层东西与自己的「下载存档」是**同一层**
+  （`<uid>/savedata_prospero/<TID>/` 里的文件），纯文件操作、零内核调用。
+- **语义与「上传存档」刻意不同**：上传 = **整份替换**（整个 `<TID>` 目录换掉）；
+  导入 = **逐文件合并**（只覆盖同名的那几个镜像）。因为一个存档目录里除了当前镜像还有
+  主机自己的记账（`sdimg_sce_bu_<名>` 备份、`sdimg_sce_sdmemory` 系统存档），
+  整份替换会把它们一起抹掉，主机很可能就认不出这份存档了 —— 而 garlic 导出的只是**一个**镜像。
+- ⚠ **必须先落暂存目录、整包成功才 `rename` 合并**（`.tmp_gx_<pid>_<ts>`，放在存档根的
+  **父目录**下 → 同一文件系统，最后一步才是 rename）：`zip_extract` 是「**遇到坏条目才整包
+  拒收**」的，直接往存档目录里写时，包里第 N 个条目名字不合法时前 N-1 个已经躺在用户的
+  存档目录里了 —— 那会让主机把这份存档认成损坏的。失败整包 `gs_rmtree`，一个字节都不进。
+  （宿主测试里那条「穿越包整包拒收且 `sdimg_EVIL` 不许落一半」就是钉这个的。）
+- **路径安全**：`gs_gx_cb` **只取 basename**（`../evil` 被压平成 `evil`），
+  `gs_slot_ok` 挡掉空名 / 点开头 / 含分隔符 / 控制字符。
+- **`name` 走 query 是硬契约**：裸镜像没有后缀、内容也不是 zip，后端只能靠这个**原始文件名**
+  决定落盘叫什么（主机认的就是这个名字，我们不去猜）。**前端那个 file input 刻意不写
+  `accept`** —— 写了 `.zip,.tar,...` 会在文件选择器里把无后缀的 `sdimg_*` 直接藏起来
+  （用户会以为「我明明导出了，怎么找不到」）。
+- 回归：`game112` 5f 去 mock 的 `/_garlic_imports` 读**后端收到了什么**（tid / uid / name /
+  判成 zip 还是裸镜像），而不是只断言「按钮能点」—— 同族教训见 §7 的坑 25。
+
 ### 2.2 React 前端（`frontend/src/`）
-- `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、ManageSources、CommonEntries、MoveFromUsb、Donate、PkgManagerFrame...）。
+- `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、**About（`.154`，更新日志 + 支持作者 + 参考致谢）**、ManageSources、CommonEntries、MoveFromUsb、PkgManagerFrame...）。
 - `i18n.js` 加载 locale（子模块）+ **合并 `locales-overlay/<lang>.json`（后者优先）**；完成度 <70% 的语言不注册。
 - `components/ui/` 共用件：`Section`（板块 = `.panel-card` + 板块头 + body，`headless`/`bodyPad` 供自带头的卡片复用）、`PageHead`（页头 + 粘顶，`back`/`bleed`）、`EmptyState`、`LoadingState`、`Modal`、`Toast`、`Switch`（唯一开关）、`Segmented`（唯一互斥分段）、`NavButton`、`PayloadName`。**新页面一律用这些件，不要再手写板块容器 / 空态 / spinner。**
 - `utils/spatialNav.js`：仅 `isPS5` 挂载的遥控器空间导航。
@@ -1958,10 +2066,12 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
 
 - **原则：一个控件只有一个家。** 存档相关的**配置**全部归**设置页**「存档配置」
   （`views/ArchiveConfigModal.jsx`），三块：① 远程位置（协议 / 主机 / 共享 / 账号）；
-  ② 自动存档（总开关 + 启动时拉取 + 退出时回传）；③ 本地快照（总开关 + 间隔 + 保留份数）。
+  ② 自动存档（总开关 + 启动时拉取 + 退出时回传）；③ 本地快照（总开关 + 保留份数）。
+  `.154` 起 ③ 里的**「间隔（分钟）」输入框已删**（定时快照不要了，触发点改成「游戏退出」，
+  见 §2.1.7）；单游戏弹窗那边对应地把只读行换成了「备份时机 / 每次游戏退出后」。
   单游戏弹窗（`game/SaveManagerModal.jsx`）里**只剩只读状态 + 动作按钮**
-  （立即拉取 / 立即推送 / 立即备份 + 存档列表 + 快照列表 + `auto_state` 状态行），
-  **一个 switch、一个输入框都没有**。
+  （立即拉取 / 立即推送 / 立即备份 + 存档列表 + garlic 兼容导入 + 快照列表 + `auto_state`
+  状态行），**一个 switch、一个输入框都没有**。
   `.142` 之前这三块都在每个游戏弹窗里；`.144` 先搬了远程位置；`.145` 把另外两块也搬了。
 - **「全局生效」的判据是「那份配置写过没有」**，不是「填了几个字段」。前端
   `saveConfig.js` 的 `hasGlobalArchive(config)`（主配置里 `ARCHIVE_GLOBAL_CONFIG` 是
@@ -1982,9 +2092,16 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
     老的 `strstr` 找引号：这个值是内容为 JSON 的 JSON **字符串**，里面全是 `\"`，
     手扫会在第一个内层引号处截断。
   - `/get_config` 要把它发出去，否则前端每次刷新就丢，用户填的全局配置看起来像没保存。
-- **快照枚举在全局模式下换口径**：`gs_snap_enabled_games()` 在全局开启时**扫存档目录
-  枚举游戏**（`gs_all_tids()`），而不是从 per-game 配置里挑 —— 因为「该快照的游戏」里
-  绝大多数在配置里**根本没有条目**，照旧枚举的话全局开了也一个都扫不到。
+- **⚠ `.154` 起「快照该给谁做」不再由配置枚举决定**：定时守护整条删掉了，
+  触发点是 `game_auto.c` 探测到**游戏退出**（`GA_ACT_SNAP`），而它手上已经有那个 tid ——
+  所以 `gs_snap_enabled_games()` / `gs_all_tids()` 这两个函数**已删**。
+  引擎退出时只问一句 `game_saves_snap_enabled(tid)`（全局优先，与 `gs_snap_cfg()` 同口径）。
+  **本地快照不跟随远程总开关** —— 它是存档的最后一层兜底，远程连不上时它必须还在。
+  改这块时别去翻 `gs_snap_enabled_games`，它已经不存在了。
+- **`snap.interval` 这个字段还在，但没有任何东西读它了**：`EMPTY_CFG.snap.interval` 与
+  `normalizeCfg()` 都**刻意保留**（旧全局配置要能原样往返、后端 `gs_snap_cfg()` 还在解析它，
+  让 normalize 把它算成 NaN 就是给后端塞垃圾）。**界面上不再可编辑**，
+  `game112` 5e 有一条断言钉着「数字输入框只剩保留份数一个」。
 - **`config` 要传到单游戏弹窗**（`App → GameManageView → GameSection → SaveManagerModal`），
   且 `App` 进 `game_manage` 视图时补一次 `refreshConfig()`：全局配置是被**另一条路**改的
   （FTP / 另一台设备）时，进页要能拿到最新的。
@@ -1997,8 +2114,31 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
 - **回归怎么盯**：`game112` 第 5 节有一组反面断言专门盯「旧 UI 有没有删干净」
   （0 个 `button[role=switch]`、无「保存设置」、无 `input[type=text|password|number]`）；
   5d 验「全局三项同时对单游戏生效」，分**显示面**与**引擎面**两面；
-  5e 验设置页那个弹窗本身（三块都在 + 保存真写回 `ARCHIVE_GLOBAL_CONFIG` + 重开仍在）。
-  改这块 UI 后**这五节必须一起过**。
+  5e 验设置页那个弹窗本身（三块都在 + 保存真写回 `ARCHIVE_GLOBAL_CONFIG` + 重开仍在）；
+  5f（`.154` 新增）验「游戏运行中禁推拉」与「garlic 兼容导入」。
+  改这块 UI 后**这几节必须一起过**。
+- ⚠ **数存档行只能数 `a[download]`，不能数 `li`**：弹窗里「本地快照」那一段也是 `<li>`，
+  同一个游戏只要做过快照，`li` 就会恒多几条（`game112` 5f 第一次就红在这，
+  mock 的 `/reset` 注释里也记着同一个坑）。
+
+#### 2.2.11 刷新后停在当前页 + 「关于」页（`.154`）
+
+- **视图持久化**：`localStorage['pldmgrView']`，读的时候过一遍 `RESTORABLE_VIEWS`
+  白名单（`NAV_ITEMS` 全部 id + `sources`），读不出来 / 不在白名单 / 存储抛错
+  （隐私模式、老 WebKit）一律回落 `storage`。
+  **`move_from_usb` 刻意不在白名单**：它靠只在内存里的路径，刷新后留在那页只会是空白
+  —— 白名单是**按「这页刷新后还有没有意义」**定的，不是按「它是不是一个 view」。
+- **「关于」页**（`AboutView.jsx`）：支持作者（QR / 链接，`isPS5` 分流）、关于本 Fork
+  （版本读构建时烧入的 `__APP_VERSION__`，**不许手抄**）、参考与致谢、更新日志。
+  `DonateView.jsx` **已删除**（内容全并进来），`NAV_ITEMS` 加了 `about`
+  （紧跟 `settings`，侧栏与手机底部栏**一处定义两处渲染**）。
+  更新日志原来是 `SettingsView` 里一个 46 条的数组 + `<Modal>`，现在改成页内 `<Section>`
+  —— 内容长，弹窗里滚不如直接看。`SettingsView` 里那条「更新日志」NavRow 与整个
+  `id="donate"` 的 Section 一并删掉（留注释指明搬去哪了）。
+- ⚠ **`game112` 第 11 节的扫描名单要跟着改**：原来扫 `DonateView.jsx`，现在扫
+  `AboutView.jsx` —— 那页是**用户唯一能看到版本号的地方**，必须留在守卫里。
+  更新日志数组里的历史版本号写成 `"v0.5.2.67"`（**带 `v` 前缀**），
+  所以不会被 `/["']0\.5\.2\.(\d+)["']/` 那条「写死的旧版本号」规则误伤。
 
 
 ## 3. 构建与部署
@@ -2155,10 +2295,14 @@ wsl bash -c "cd /mnt/d/pldmanager/ps5-payload-manager && bash test/mutation_chec
 - **存档的远程同步目前只做 FTP + HTTP；但「SMB 做不到」是错的（2026-10-07 复核）**：SDK 那份 `libcurl 8.18.0` 确实没编 `smb`（协议表：`http/https/ftp/file/dict/imap/ldap/pop3/smtp`）—— 那只是说**走 libcurl 的这条路**不通。**PS5 上 SMB 是可以做的**：`libsmb2`（SMB2/3 用户态客户端）是 `ps5-payload-dev/pacbrew-repo` 里的正式包 `ps5-payload-libsmb2`，上游 `ps5-payload-dev/websrv` 就在用。已实测：用本仓库同一套工具链（`prospero-clang` + `prospero.cmake`）能把 `libsmb2 6.2` 编成 `libsmb2.a` 并链进 PS5 ELF，写路径符号齐（`smb2_write`/`smb2_open(O_CREAT)`/`smb2_unlink`/`smb2_mkdir`/`smb2_rmdir`/`smb2_rename`/`smb2_fsync`），协议覆盖 SMB 2.0.2–3.1.1。代价 **+约 241 KB**（约 +2.2%）。所以正确说法是**「当前构建没编入 SMB」**，不是「SDK 不支持」。默认值已前后端 + mock 一起改成 `ftp`；UI 上 SMB 一档是**看得见、点不动、写明原因**（不从选项表里删 —— 老用户存的就是 `mode:"smb"`，删了会变成「一个都没选中」）。远端布局 `<base>/<TID>/<uid>.zip`（一个用户一份、文件名恒定、整份覆盖），推与拉**逐字一致**。改传输层前先读 `include/save_remote.h` 与 `include/game_auto.h` 的文件头（四条硬约定 + 三条刻意设计）。
 - **同一时刻只能有一次存档同步**：`src/game_auto.c` 的 `g_sync_mu`。**这是正确性要求不是性能优化** —— 「整份替换」= 「旧的改名 → 换上去 → 删旧的」，并发跑同一目录会互相把对方刚改名的目录当垃圾删掉。守护线程（退出推送）与手点「立即推送」完全可能同时发生。
 - **「远端还没有这个文件」不是失败**：`SR_ENOTFOUND (-2)` 单独一类。FTP 侧两种表现都要归进来 —— `CURLE_REMOTE_FILE_NOT_FOUND` 与 **`CURLE_REMOTE_ACCESS_DENIED`**（远端根目录不存在时 `CWD` 得到 550，libcurl 报的是后者）。首次使用必然遇到，给用户一条红报错是不对的。
+- **`sr_stat()` 的三协议差异是故意的，别去「修统一」（`.154`）**：`<uid>.meta.json` 是推送时一并写下的远程元数据。**只有 SMB 会回 `SR_ENOTFOUND`，FTP / HTTP 一律回 `-1`** —— 因为「meta.json 不在」分不清是「远端根本没存档」还是「`.145` 之前推的老存档没写 meta」，而回 `SR_ENOTFOUND` 会让**老存档用户的自动拉取整个失效**（判定 `ga_pull_needed()` 会把「远端确定没有」当成「不用拉」）。宿主 `save_remote_test.c` 里那两条 `== -1` 是**故意**的期望值，不是写错。
+- **凡「先建临时目录再 rename」的路径，都要先想「崩在这里谁清」（`.141` / `.154`）**：`.141` 是快照的 `.tmp_*` / `.rst_*`（`gs_sweep_temp()` 扫 mtime>1h 的残骸），`.154` 是 garlic 导入的 `.tmp_gx_<pid>_<ts>`。**暂存目录必须放在目标的父目录下**（同一文件系统，最后一步才是 `rename` 而不是拷贝），且名字要能被打扫的函数认出来。garlic 那条还多一个理由：`zip_extract` 是「**遇到坏条目才整包拒收**」的，直接往用户存档目录里写，包里第 N 个条目不合法时前 N-1 个已经躺进去了。
+- **garlic 导入只做「原样搬运」，不做「加密 / 解密」**（`.154`）：接受的是 garlic **已经加密好**的镜像（PS5 裸 `sdimg_<名>` / PS4 的 zip）。garlic 的「解密」= 用主机密钥把加密 PFS 镜像挂载成明文目录；「加密」= 在主机上**新建**加密 PFS 镜像 —— 两者都要 `/dev/pfsmgr` ioctl + `libSceFsInternalForVsh` + 提权（内核级，本项目 `.54` 有整机死机前科）。**导入是逐文件合并，不是整份替换**（一个存档目录里还有主机自己的记账 `sdimg_sce_bu_*` / `sdimg_sce_sdmemory`，整份替换会把它们一起抹掉）。`name` 走 query 是硬契约，前端那个 file input **刻意不写 `accept`**（写了会把无后缀的 `sdimg_*` 在文件选择器里藏起来）。
 - **curl 的全局初始化在 `src/curl_init.c`，别搬回 `utils.c`**：`utils.c` 被一堆纯文件系统的宿主测试链着（game_saves / media_scan / game_mgr），`curl_global_init` 一进 `utils.o` 它们立刻 `undefined reference`。宿主测试要 curl 头时**只软链 SDK 的 `curl/` 一个目录**（`-I/tmp/pldmgr_curl_inc`），**直接 `-I` 整个 SDK include 会把 glibc 的 `stdio.h` 盖掉**，链接期一片 `undefined reference to __error / __stderrp / _CurrentRuneLocale`。
 - **i18n 键重名是静默失败（`.142` 栽过）**：JSON 与 i18next 都取最后一个，前面那条被无声吃掉 —— 新增 `game.f_path`（远程路径）撞上详情弹窗已有的 `game.f_path`（物理路径），详情里那一行当场变成「远程路径」，而当时所有断言几乎全绿。存档的字段键在独立命名空间 `game.sf_*`；`game112` 第 11 节有一条「两份语言包都不许有重复键」的静态守卫。
 - **`Segmented` 支持 `disabled`（`.142`）**：选项对象上的 `disabled: true` 让那一档点不动、且不显示选中档；`title` 给原因。用来表达「这个选项存在但当前环境用不了」，比从选项表里删掉好。
-- **mock 的 `/reset` 必须把「会串场的东西」清干净（`.142` 补齐）**：`snaps`（快照，`.140` 加的时候漏了）、`autoState` / `remoteFiles`（`.142`），以及 `/loadpayload:` 起过的 10101 程序桩。漏了的话，同一个 mock 进程跑第二遍 `game112` 必红（5b「还没做过快照时列表是空的」、1a「10101 必须真的没人监听」）—— 而这两条恰恰是各自那节立足点的前置。
+- **mock 的 `/reset` 必须把「会串场的东西」清干净（`.142` 补齐，`.154` 再加一条）**：`snaps`（快照，`.140` 加的时候漏了）、`autoState` / `remoteFiles`（`.142`）、`garlicImports`（`.154`），以及 `/loadpayload:` 起过的 10101 程序桩。漏了的话，同一个 mock 进程跑第二遍 `game112` 必红（5b「还没做过快照时列表是空的」、1a「10101 必须真的没人监听」）—— 而这两条恰恰是各自那节立足点的前置。**加任何新的 mock 状态时，顺手在 `/reset` 里补上清空**。
+- **回归里数「存档行」只能数 `a[download]`，不能数 `li`**（`.154` 踩到）：存档弹窗里「本地快照」那一段也是 `<li>`，同一个游戏只要做过快照，`li` 就恒多几条 —— `game112` 5f 的「导入没让列表多一条」第一次就红在这（`2 → 3`）。同理，凡是「两种东西渲染成同一种标签」的列表，计数断言都要换成**只属于那一种东西的选择器**。
 - **风扇温控（安全红线）**：只通过 `/dev/icc_fan` autoservo ioctl 设「目标温度」交固件闭环（GET `0xC01C8F08` / SET `0xC01C8F07`，28 字节对象，byte[2]=selector、byte[5]=目标 °C）。必须 GET → 只改 byte5 → SET 整个对象 → 回读校验，**绝不全零 SET**；目标夹 60~85 °C。进游戏/待机会复位目标，靠常驻守护线程（`FAN_INTERVAL` 默认 7s）拉回；`safe_mode` 短路。
 - **自启**：`autoload.txt` 延时行 `!` 前缀 + 前导空行需自愈规范化；安装 payload 后同步登记到 `ps5_autoloader`（全局覆盖）。
 - **网络**：用户态代码用 socket 前必须 `sceNetCtlInit` + `sceUserServiceInitialize(256)`。

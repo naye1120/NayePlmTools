@@ -33,6 +33,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h> /* utimes：把本地存档的 mtime 拨到过去 / 未来 */
+#include <time.h>
 #include <unistd.h>
 
 #include "game_auto.h"
@@ -185,6 +187,14 @@ static void remote_path(char *out, size_t osz, const char *tid) {
     snprintf(out, osz, "%s/ps5save/%s/%s.zip", g_http_root, tid, UID);
 }
 
+/* [CN-FORK] v0.5.2.154 远端那款游戏的整个目录（zip + meta.json 都在里面）。
+ * 「远端还没有这份存档」必须**整目录删掉**：`.154` 起拉取前的新旧判定会去读
+ * <uid>.meta.json，只删 zip 而留着 meta 的话，判定会拿到一个「比本地旧」的
+ * 时间戳、于是正确地跳过拉取 —— 那测的就不是「远端没有」这条路径了。 */
+static void remote_dir(char *out, size_t osz, const char *tid) {
+    snprintf(out, osz, "%s/ps5save/%s", g_http_root, tid);
+}
+
 /* 配置就写在 GAME_SAVES_AUTO_PATH 指的那个文件里 —— 引擎读的就是它。 */
 static void write_cfg(const char *mode, const char *url,
                       int enabled, int on_launch, int on_exit) {
@@ -214,57 +224,194 @@ static void fixture_reset(void) {
     mkdir_p(g_http_root);
 }
 
-/* ══ ① 状态机（穷举）═══════════════════════════════════════════════════ */
+/* ══ ① 状态机（穷举）═══════════════════════════════════════════════════
+ * 参数表：game_auto_plan(prev, cur, prev_enabled, prev_on_exit, prev_snap,
+ *                        cur_enabled, cur_on_launch, out)
+ * `prev_snap` 是 [CN-FORK] v0.5.2.154 加的：本地快照从「定时守护」改成
+ * 「游戏退出时触发」，它和推 / 拉同属「退出那一刻要做的事」，所以也进这张表。 */
 static void t_plan(void) {
     printf("-- game_auto_plan（穷举）\n");
-    ga_step_t s[2];
+    ga_step_t s[3];
     int n;
 
-    n = game_auto_plan("", "", 0, 0, 0, 0, s);
+    n = game_auto_plan("", "", 0, 0, 0, 0, 0, s);
     CHECK(n == 0, "都没在跑 → 不该有动作，实得 %d", n);
 
     /* 启动：把远程那份拉下来 */
-    n = game_auto_plan("", TID, 0, 0, 1, 1, s);
+    n = game_auto_plan("", TID, 0, 0, 0, 1, 1, s);
     CHECK(n == 1 && s[0].act == GA_ACT_PULL && !strcmp(s[0].tid, TID),
           "启动该拉取，实得 n=%d act=%d", n, n ? s[0].act : -1);
-    n = game_auto_plan("", TID, 0, 0, 1, 0, s);
+    n = game_auto_plan("", TID, 0, 0, 0, 1, 0, s);
     CHECK(n == 0, "没开 on_launch → 不该拉，实得 %d", n);
-    n = game_auto_plan("", TID, 0, 0, 0, 1, s);
+    n = game_auto_plan("", TID, 0, 0, 0, 0, 1, s);
     CHECK(n == 0, "总开关没开 → 不该拉，实得 %d", n);
 
     /* 退出：把主机这份推上去 */
-    n = game_auto_plan(TID, "", 1, 1, 0, 0, s);
+    n = game_auto_plan(TID, "", 1, 1, 0, 0, 0, s);
     CHECK(n == 1 && s[0].act == GA_ACT_PUSH && !strcmp(s[0].tid, TID),
           "退出该推送，实得 n=%d act=%d", n, n ? s[0].act : -1);
-    n = game_auto_plan(TID, "", 1, 0, 0, 0, s);
+    n = game_auto_plan(TID, "", 1, 0, 0, 0, 0, s);
     CHECK(n == 0, "没开 on_exit → 不该推，实得 %d", n);
-    n = game_auto_plan(TID, "", 0, 1, 0, 0, s);
+    n = game_auto_plan(TID, "", 0, 1, 0, 0, 0, s);
     CHECK(n == 0, "总开关没开 → 不该推，实得 %d", n);
 
-    /* 换游戏：**先推旧的、再拉新的**，顺序写死才有一份可预期的日志 */
-    n = game_auto_plan(TID, TID2, 1, 1, 1, 1, s);
+    /* [CN-FORK] v0.5.2.154 退出时的本地快照：**排在推送之前**，且只看自己的开关 */
+    n = game_auto_plan(TID, "", 1, 1, 1, 0, 0, s);
+    CHECK(n == 2, "退出时「快照 + 推送」该有两步，实得 %d", n);
+    CHECK(n == 2 && s[0].act == GA_ACT_SNAP && !strcmp(s[0].tid, TID),
+          "退出第一步该是本地快照，实得 act=%d", n ? s[0].act : -1);
+    CHECK(n == 2 && s[1].act == GA_ACT_PUSH, "退出第二步该是推送");
+    /* 远程总开关关着 / on_exit 关着，都不影响本地快照 —— 本地备份不依赖网络，
+     * 不该被远程那套连坐（这是刻意的，不是漏判）。 */
+    n = game_auto_plan(TID, "", 0, 0, 1, 0, 0, s);
+    CHECK(n == 1 && s[0].act == GA_ACT_SNAP,
+          "远程开关全关也要做本地快照，实得 n=%d act=%d", n, n ? s[0].act : -1);
+    n = game_auto_plan(TID, "", 1, 1, 0, 0, 0, s);
+    CHECK(n == 1 && s[0].act == GA_ACT_PUSH, "快照没开 → 只剩推送，实得 %d", n);
+
+    /* 换游戏：**先快照旧的、再推旧的、最后拉新的**，顺序写死才有一份可预期的日志 */
+    n = game_auto_plan(TID, TID2, 1, 1, 0, 1, 1, s);
     CHECK(n == 2, "换游戏该有两步，实得 %d", n);
     CHECK(n == 2 && s[0].act == GA_ACT_PUSH && !strcmp(s[0].tid, TID),
           "换游戏第一步该是推旧的");
     CHECK(n == 2 && s[1].act == GA_ACT_PULL && !strcmp(s[1].tid, TID2),
           "换游戏第二步该是拉新的");
 
-    n = game_auto_plan(TID, TID2, 0, 0, 1, 1, s);
+    n = game_auto_plan(TID, TID2, 1, 1, 1, 1, 1, s);
+    CHECK(n == 3, "换游戏 + 快照该有三步，实得 %d", n);
+    CHECK(n == 3 && s[0].act == GA_ACT_SNAP && s[1].act == GA_ACT_PUSH
+              && s[2].act == GA_ACT_PULL && !strcmp(s[0].tid, TID)
+              && !strcmp(s[2].tid, TID2),
+          "换游戏顺序该是 快照(旧) → 推(旧) → 拉(新)");
+
+    n = game_auto_plan(TID, TID2, 0, 0, 0, 1, 1, s);
     CHECK(n == 1 && s[0].act == GA_ACT_PULL, "旧的没开 → 只拉新的，实得 %d", n);
-    n = game_auto_plan(TID, TID2, 1, 1, 0, 0, s);
+    n = game_auto_plan(TID, TID2, 1, 1, 0, 0, 0, s);
     CHECK(n == 1 && s[0].act == GA_ACT_PUSH, "新的没开 → 只推旧的，实得 %d", n);
 
-    /* 同一款连着两轮 —— 绝大多数轮次走这里 */
-    n = game_auto_plan(TID, TID, 1, 1, 1, 1, s);
-    CHECK(n == 0, "同一款连着跑不该有动作，实得 %d", n);
+    /* 同一款连着两轮 —— 绝大多数轮次走这里。快照开着也一样：**不能每轮都备份一次**
+     * （那就是把刚删掉的定时快照换个名字又请回来了）。 */
+    n = game_auto_plan(TID, TID, 1, 1, 1, 1, 1, s);
+    CHECK(n == 0, "同一款连着跑不该有动作（快照开着也是），实得 %d", n);
 
     /* NULL 与空串等价 */
-    n = game_auto_plan(NULL, NULL, 0, 0, 0, 0, s);
+    n = game_auto_plan(NULL, NULL, 0, 0, 0, 0, 0, s);
     CHECK(n == 0, "NULL 该安全，实得 %d", n);
-    n = game_auto_plan(TID, NULL, 1, 1, 0, 0, s);
+    n = game_auto_plan(TID, NULL, 1, 1, 0, 0, 0, s);
     CHECK(n == 1 && s[0].act == GA_ACT_PUSH, "cur=NULL 该当没在跑（推送）");
-    n = game_auto_plan(NULL, TID, 0, 0, 1, 1, s);
+    n = game_auto_plan(NULL, TID, 0, 0, 0, 1, 1, s);
     CHECK(n == 1 && s[0].act == GA_ACT_PULL, "prev=NULL 该当之前没在跑（拉取）");
+    /* prev 为空时快照也不该冒出来（没东西可备份） */
+    n = game_auto_plan(NULL, TID, 1, 1, 1, 1, 1, s);
+    CHECK(n == 1 && s[0].act == GA_ACT_PULL, "prev=NULL 时不该有快照步骤，实得 %d", n);
+}
+
+/* ══ 拉取前的新旧判定（穷举）═══════════════════════════════════════════
+ * [CN-FORK] v0.5.2.154 用户口径：「如果本地存档比远程存档要更新，则不拉取；
+ * 本地存档比远程存档旧，可以直接拉取覆盖」。
+ * 这个判定的**每一条边界**都在这里钉死 —— 它是唯一能阻止「用旧存档盖掉新进度」
+ * 的地方，错一格就是丢数据。 */
+static void t_pull_gate(void) {
+    printf("-- ga_pull_needed（拉取前先比新旧）\n");
+    /* 远端没有 → 没得拉 */
+    CHECK(ga_pull_needed(100, 1, 0, 0) == 0, "远端没有 → 不该拉");
+    CHECK(ga_pull_needed(0, 0, 0, 0) == 0, "两边都没有 → 不该拉");
+    /* 本地没有 → 必须拉（换机 / 误删 / 重装，正是拉取要救的场景） */
+    CHECK(ga_pull_needed(0, 0, 100, 1) == 1, "本地没有 → 必须拉");
+    CHECK(ga_pull_needed(999999, 0, 100, 1) == 1,
+          "本地没有（哪怕传了个怪时间戳）→ 必须拉");
+    /* 本地更新 → 不拿旧的盖新的 */
+    CHECK(ga_pull_needed(200, 1, 100, 1) == 0, "本地更新 → 不该拉");
+    CHECK(ga_pull_needed(101, 1, 100, 1) == 0, "本地只新 1 秒 → 也不该拉");
+    /* 远程更新 / 一样新 → 拉（一样新时拉了无害，跳过反而可能因为时钟偏差漏掉） */
+    CHECK(ga_pull_needed(100, 1, 200, 1) == 1, "远程更新 → 该拉");
+    CHECK(ga_pull_needed(100, 1, 100, 1) == 1, "一样新 → 该拉（拉了无害）");
+    /* 时间戳读不到（都是 0）但两边都有 → 该拉：**说不清不能变成不拉** */
+    CHECK(ga_pull_needed(0, 1, 0, 1) == 1, "时间戳都读不到 → 该拉");
+}
+
+/* ══ 拉取前的新旧判定：端到端（真协议 · HTTP 桩）═══════════════════════════
+ * [CN-FORK] v0.5.2.154 上面那一节只测纯函数。这一节把**整条链**跑通，因为链上有
+ * 两处纯函数测不到的东西，而它们任何一处错了都会让判定永远「说不清」：
+ *   · 远端那份的时间戳**从哪来** —— 推送时一并写下的 <uid>.meta.json；
+ *     FTP / HTTP 这条读取路径正是 `.154` 才补上的（原来一律回 -1）；
+ *   · 本地那份的时间戳**怎么取** —— gs_walk 的「最晚被写过的时刻」。
+ *
+ * 为什么非要端到端：真机上「跳过拉取」是个**看不出来**的结果 —— 面板上就是一次
+ * 没动静的拉取，没报错、没日志重点。只有把本地文件的内容和 mtime 都钉住，
+ * 才能证明「确实一份都没动」。 */
+static void set_mtime(const char *p, long long t) {
+    struct timeval tv[2];
+    tv[0].tv_sec = (time_t)t;
+    tv[0].tv_usec = 0;
+    tv[1].tv_sec = (time_t)t;
+    tv[1].tv_usec = 0;
+    utimes(p, tv);
+}
+
+static void t_pull_gate_e2e(void) {
+    printf("-- 拉取前的新旧判定（端到端 · HTTP 桩）\n");
+    char url[600], body[300], out[2048], msg[300];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/ps5save", g_http_port);
+
+    fixture_reset();
+    write_cfg("http", url, 1, 1, 1);
+
+    /* ① 先推一份上去 —— 远端由此得到 zip + meta.json */
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"push\"}", TID);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+          "端到端：推送失败：%s", msg);
+
+    char want[8192];
+    long wn = rd(SAVE_FILE, want, sizeof(want));
+    CHECK(wn > 0, "端到端：夹具没造出来");
+
+    char rdir[700], mp[800];
+    remote_dir(rdir, sizeof(rdir), TID);
+    snprintf(mp, sizeof(mp), "%s/%s.meta.json", rdir, UID);
+    CHECK(exists(mp), "推送该在远端一并写下 meta.json：%s", mp);
+
+    long long now = (long long)time(NULL);
+    snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"pull\"}", TID);
+
+    /* ② 本地比远程新 → 跳过，且**绝不许动本地** */
+    put(SAVE_FILE, 100, 'Z'); /* 内容换成一眼认得出来的 */
+    set_mtime(SAVE_FILE, now + 3600);
+    set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now + 3600);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+          "端到端：本地更新时拉取不该算失败：%s", msg);
+    CHECK(strstr(out, "本地存档比远程新") != NULL,
+          "端到端：该说清是「本地比远程新，已跳过拉取」：%s", out);
+    char got[8192];
+    long gn = rd(SAVE_FILE, got, sizeof(got));
+    CHECK(gn == 100 && got[0] == 'Z',
+          "端到端：本地更新时**绝不能**被远程覆盖（实得 %ld 字节）", gn);
+
+    /* ③ 本地比远程旧 → 真的拉下来覆盖 */
+    set_mtime(SAVE_FILE, now - 3600);
+    set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now - 3600);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+          "端到端：本地较旧时拉取失败：%s", msg);
+    gn = rd(SAVE_FILE, got, sizeof(got));
+    CHECK(gn == wn && !memcmp(got, want, (size_t)wn),
+          "端到端：本地较旧时该被远程覆盖（实得 %ld / 期望 %ld 字节）", gn, wn);
+
+    /* ④ 远端时间戳读不到（meta.json 被删 = `.145` 之前推的老存档）→ **照旧拉**。
+     *    说不清不能变成不拉：老存档用户要是被跳过，等于自动拉取整个失效，
+     *    而他们恰恰是最需要拉取的人（换了机 / 重装了游戏）。 */
+    unlink(mp);
+    put(SAVE_FILE, 100, 'Z');
+    set_mtime(SAVE_FILE, now + 3600);
+    set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now + 3600);
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+          "端到端：没有 meta.json 时拉取失败：%s", msg);
+    gn = rd(SAVE_FILE, got, sizeof(got));
+    CHECK(gn == wn && !memcmp(got, want, (size_t)wn),
+          "端到端：没有 meta.json 时必须照旧拉（实得 %ld 字节）", gn);
 }
 
 /* ══ 探针（宿主上没有 sceLncUtil）══════════════════════════════════════ */
@@ -334,8 +481,47 @@ static void t_sync(void) {
     g_fake_running = NULL;
     game_auto_set_probe(NULL);
 
+    /* ⑥ 游戏正在运行时手动推 / 拉一律不做（`.154` 用户口径：「游戏进行中，拉取和
+     * 推送存档的动作不让做」）。两条理由都是数据安全：
+     *   · 拉取把盘上存档**整份换掉**，而游戏早把存档读进内存了 —— 换完它不知道，
+     *     之后存档 / 退出还会把内存那份写回去，等于白换还搅乱了用户刚玩的进度；
+     *   · 推送会在游戏**正写盘时**去打包，拷到的可能是撕裂的半截存档，
+     *     把一份坏存档留在远端，比不推糟糕得多。
+     * 所以这里钉三件事：两条都拦、理由说得清、而且**在碰网络之前就拦下来**
+     * （用「开始」日志的条数证明：一次都没尝试过）。 */
+    {
+        /* 反向对照：在跑的是**另一款**时不能误拦 —— 那是完全正常的操作 */
+        g_fake_running = TID2;
+        game_auto_set_probe(probe_fn);
+        snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"push\"}", TID);
+        out[0] = msg[0] = 0;
+        CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+              "在跑的是另一款时不该误拦：%s", msg);
+
+        /* 这一行**必须**在对照推送之后取：对照那条会正常留下「开始」日志 */
+        int lb = log_count("远程拉取 开始") + log_count("远程推送 开始");
+
+        g_fake_running = TID;
+        for (int k = 0; k < 2; k++) {
+            const char *a = (k == 0) ? "push" : "pull";
+            snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"%s\"}", TID, a);
+            out[0] = msg[0] = 0;
+            CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == -1,
+                  "游戏正在运行时 %s 必须被拦", a);
+            CHECK(strstr(msg, "正在运行") != NULL,
+                  "%s 被拦时要说清是因为在运行：%s", a, msg);
+        }
+        CHECK(log_count("远程拉取 开始") + log_count("远程推送 开始") == lb,
+              "被拦的操作**不该**留下「开始」日志（说明是拦在碰网络之前）");
+
+        g_fake_running = NULL;
+        game_auto_set_probe(NULL);
+    }
+
     /* ③ 远端还没有这个文件 —— 不是失败 */
-    unlink(rp);
+    remote_dir(rp, sizeof(rp), TID);
+    rm_rf(rp);
+    CHECK(!exists(rp), "远端目录没删干净：%s", rp);
     snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"pull\"}", TID);
     out[0] = msg[0] = 0;
     CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
@@ -792,6 +978,8 @@ int main(void) {
     t_log();
     t_freeze();
     t_verdict();
+    t_pull_gate();
+    t_pull_gate_e2e();
 
     stub_http_stop();
     printf("game_auto: %d checks, %d failures\n", g_checks, g_fails);
