@@ -16,6 +16,20 @@ import {
   resolveAutoForGame, resolveRemoteForGame, remoteSummary,
 } from '../../utils/saveConfig'
 
+/* [CN-FORK] v0.5.2.156 从 garlic 导出的文件名里认游戏（与后端 gs_tid_from_name() 同一条规则）。
+ *
+ * 用户口径：「存档导入的时候要有游戏判定，不是当前游戏的不让导入」。
+ * garlic（earthonion/garlic-savemgr）的存档目录名是 `<TID>_<存档目录名>`，
+ * 导出的镜像名也带着这一段（`PPSA27836_savedata01_enc`），所以**文件名里就有 TID**
+ * —— 这是唯一能用的判据：镜像本身是加密的，内容里读不出游戏身份。
+ *
+ * 认不出来返回 ''：那只是「说不清」（用户可能改过名），不是「不匹配」，调用方要放行，
+ * 否则正常导入会被整个挡住。 */
+const tidFromName = (name) => {
+  const m = /(^|[^A-Za-z0-9])([A-Za-z]{4}\d{5})([^A-Za-z0-9]|$)/.exec(String(name || ''))
+  return m ? m[2].toUpperCase() : ''
+}
+
 /* [CN-FORK] v0.5.2.112 存档管理弹窗（磁贴第一颗按钮）
  *
  * 用户口径（`.145` 收束后的最终形态）：
@@ -223,6 +237,18 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   const onGarlicFile = (ev) => {
     const file = ev.target.files && ev.target.files[0]
     if (!file) return
+    /* [CN-FORK] v0.5.2.156 先认一下这是不是当前游戏的存档 —— 后端还会再判一次，
+     * 前端这道只是为了不让用户白等一次 11MB 上传。认不出来就放行（说不清 ≠ 不匹配）。 */
+    const gxTid = tidFromName(file.name)
+    if (gxTid && gxTid !== String(tid).toUpperCase()) {
+      addToast?.(
+        t('game.garlic_wrong_game',
+          '这个存档是 {{other}} 的，不是当前游戏（{{tid}}）—— 请到对应游戏里导入',
+          { other: gxTid, tid }),
+        'error',
+      )
+      return
+    }
     /* 单人主机直接用那个人；多用户时用选中的那个，没选则第一个。 */
     const uid = gxUid || (saves[0] && saves[0].id) || ''
     if (!showConfirm) { doGarlicImport(file, uid); return }

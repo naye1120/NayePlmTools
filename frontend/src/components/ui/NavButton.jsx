@@ -33,7 +33,10 @@ const NavButton = ({ active, onClick, icon: Icon, label, mobileLabel, className,
       {sidebar ? (
         <span className={cn(
           "uppercase tracking-tighter transition-all duration-300 whitespace-nowrap overflow-hidden",
-          sidebarExpanded ? "opacity-100 w-auto font-bold text-[16.5px]" : "opacity-0 w-0" /* 仅侧栏标签字号，较正文 text-base 大 2px（不影响全局）*/
+          sidebarExpanded ? "opacity-100 w-auto font-bold text-[1.03125rem]" : "opacity-0 w-0" /* 仅侧栏标签字号（16.5px @ 16px 根字号）。
+            [CN-FORK] v0.5.2.156 由 text-[16.5px] 改成 rem：写死 px 不跟着 html[data-device="ps5"]
+            的根字号缩，电视端整体缩小后只有这一处不缩，看着比周围大一圈。16.5/16 = 1.03125rem，
+            桌面档的取值一字未变。 */
         )}>
           {label}
         </span>

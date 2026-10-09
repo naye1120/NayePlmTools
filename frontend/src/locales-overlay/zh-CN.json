@@ -341,6 +341,7 @@
   "game.garlic_importing": "正在导入…",
   "game.garlic_imported": "已导入 {{n}} 个文件",
   "game.garlic_import_fail": "导入失败",
+  "game.garlic_wrong_game": "这个存档是 {{other}} 的，不是当前游戏（{{tid}}）—— 请到对应游戏里导入",
   "game.garlic_target": "导入到哪个用户",
   "game.garlic_hint": "导入 garlic-savemgr 导出的加密存档：PS5 是一个 sdimg_ 开头的镜像文件（没有后缀），PS4 是一个 zip 包。只覆盖同名的镜像，主机自己的备份与系统存档不动。",
   "game.garlic_import_title": "兼容导入 Garlic 存档",
@@ -503,5 +504,5 @@
   "about.desc": "支持作者、本分支信息、参考致谢与更新日志。",
   "about.donate_title": "支持作者",
   "about.changelog_title": "更新日志",
-  "about.changelog_desc": "本 Fork 的版本更新历史，新的在上。"
+  "about.changelog_desc": "第一版：当前已有的功能。更细的逐版历史见仓库 CHANGELOG.md。"
 }

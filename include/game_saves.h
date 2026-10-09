@@ -235,4 +235,12 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
                              const unsigned char *body, size_t len,
                              long long *out_files, char *msg, size_t msgsz);
 
+/* [CN-FORK] v0.5.2.156 从 garlic 导出的文件名里认游戏（`<TID>_<存档目录名>` 那一段）。
+ * 返回 1 = 认出来了（*out 写 9 位**大写** TID，缓冲至少 10 字节）；0 = 认不出来。
+ *
+ * 服务于「存档导入要有游戏判定，不是当前游戏的不让导入」：**认出来且不等于当前 tid
+ * 才拒绝，认不出来一律放行** —— 用户可能把文件改过名，把「说不清」当「不匹配」
+ * 会让正常导入整个失效。导出给宿主测试穷举边界（`test/game_saves_test.c` ⑬）。 */
+int game_saves_tid_from_name(const char *s, char *out, size_t osz);
+
 #endif

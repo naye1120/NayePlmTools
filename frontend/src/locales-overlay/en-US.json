@@ -380,6 +380,7 @@
   "game.garlic_importing": "Importing…",
   "game.garlic_imported": "Imported {{n}} file(s)",
   "game.garlic_import_fail": "Import failed",
+  "game.garlic_wrong_game": "This save belongs to {{other}}, not the current game ({{tid}}) — import it from that game instead.",
   "game.garlic_target": "Import into which user",
   "game.garlic_hint": "Imports an encrypted save exported by garlic-savemgr: on PS5 a single sdimg_ image file (no extension), on PS4 a zip. Only same-named images are overwritten; the console's own backups and system save are left alone.",
   "game.garlic_import_title": "Import Garlic save",
@@ -501,5 +502,5 @@
   "about.desc": "Support the project, fork details, credits and changelog.",
   "about.donate_title": "Support the Project",
   "about.changelog_title": "Changelog",
-  "about.changelog_desc": "Version history of this fork, newest first."
+  "about.changelog_desc": "First release: what this tool can do today. Detailed per-version history lives in CHANGELOG.md."
 }

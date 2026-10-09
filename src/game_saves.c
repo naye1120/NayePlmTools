@@ -50,6 +50,60 @@ static int gs_tid_ok(const char *tid) {
     return 1;
 }
 
+/* [CN-FORK] v0.5.2.156 从 garlic 导出的文件名里认游戏。
+ *
+ * 用户口径：「存档导入的时候要有游戏判定，不是当前游戏的不让导入」。
+ *
+ * garlic（earthonion/garlic-savemgr）给存档目录起的名字是 `<TID>_<存档目录名>`
+ * —— 见它 main.c 里的 `snprintf(s->dir_name, ..., "%s_%s", title_id, ent->d_name)`，
+ * 导出的镜像名也带着这一段。所以**文件名里就有 TID**，而这是唯一能用的判据：
+ * 存档镜像是加密的，内容里一个字节都读不出游戏身份。
+ *
+ * TID 形态：4 个大写字母 + 5 位数字（`PPSA27836` / `CUSA12345` / 自制载荷 `NAYE00001`）。
+ * 返回 1 并写出大写 TID；找不到返回 0。
+ * ⚠ **找不到 ≠ 不是这个游戏** —— 用户可能把文件改过名，调用方遇到 0 必须放行，
+ * 否则正常使用会被挡住（garlic 的导出名本来也不保证带 TID）。
+ *
+ * **故意不 static**（与 `ga_freeze_verdict` 同一理由）：它是这条判定的全部逻辑，
+ * 留在 static 里宿主就零覆盖 —— 而「认错游戏」和「认不出来」的后果正好相反，
+ * 只有穷举过边界才敢说这条判定是对的。 */
+int game_saves_tid_from_name(const char *s, char *out, size_t osz) {
+    if (!s || !out || osz < 10) return 0;
+    for (const char *p = s; p[0]; p++) {
+        /* 左边不能贴着字母数字，否则会在长串中间截出「伪 TID」 */
+        if (p != s) {
+            char prev = p[-1];
+            if ((prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z') ||
+                (prev >= '0' && prev <= '9'))
+                continue;
+        }
+        int i = 0;
+        for (; i < 4; i++) {
+            char c = p[i];
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) break;
+        }
+        if (i < 4) continue;
+        int j = 4;
+        for (; j < 9; j++) {
+            char c = p[j];
+            if (!(c >= '0' && c <= '9')) break;
+        }
+        if (j < 9) continue;
+        /* 右边同理不能贴着字母数字 */
+        char nxt = p[9];
+        if ((nxt >= 'A' && nxt <= 'Z') || (nxt >= 'a' && nxt <= 'z') ||
+            (nxt >= '0' && nxt <= '9'))
+            continue;
+        for (int k = 0; k < 9; k++) {
+            char c = p[k];
+            out[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+        out[9] = 0;
+        return 1;
+    }
+    return 0;
+}
+
 /* 目录名规则：非空、不以 '.' 开头。允许点开头等于能匹配到我们自己写在同一个
  * 父目录里的 .upl_* / .old_* 半成品。**只在「检查归档自带的顶层目录名」时用**
  * —— 那是别人给的字节，规则可以宽一点。 */
@@ -2534,6 +2588,37 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
         if (msg) snprintf(msg, msgsz, "%s", err[0] ? err : "这个文件里没有可导入的存档镜像");
         return -1;
     }
+
+    /* [CN-FORK] v0.5.2.156 游戏判定（用户口径：「不是当前游戏的不让导入」）。
+     * garlic 的镜像名里带着 `<TID>_` 前缀，认出来且不是当前游戏 → 整包拒绝。
+     * 此刻文件还在暂存目录里，`gs_rmtree` 就是「一个字节都没碰过用户的存档目录」。
+     * ⚠ **认不出来（用户改过名）一律放行** —— 那只是「说不清」，不是「不匹配」，
+     * 按不匹配处理会让正常导入整个失效。 */
+    {
+        DIR *sd = opendir(stage);
+        char got[16];
+        int mism = 0;
+        if (sd) {
+            struct dirent *se;
+            while ((se = readdir(sd)) != NULL) {
+                if (!strcmp(se->d_name, ".") || !strcmp(se->d_name, "..")) continue;
+                if (game_saves_tid_from_name(se->d_name, got, sizeof(got)) && strcmp(got, tid) != 0) {
+                    mism = 1;
+                    break;
+                }
+            }
+            closedir(sd);
+        }
+        if (mism) {
+            gs_rmtree(stage);
+            if (msg)
+                snprintf(msg, msgsz,
+                         "这个存档是 %s 的，不是当前游戏（%s）—— 请到对应游戏里导入", got, tid);
+            pldmgr_log("[PLDMGR] saves: garlic 导入 拒绝 · 存档属于 %s、当前游戏 %s\n", got, tid);
+            return -1;
+        }
+    }
+
     if (gs_gx_merge(stage, r.path) != 0) {
         gs_rmtree(stage);
         if (msg) snprintf(msg, msgsz, "写入存档目录失败（磁盘满？）");

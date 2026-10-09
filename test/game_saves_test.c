@@ -900,9 +900,12 @@ int main(void) {
         zip_ent_t ents[2];
         memset(ents, 0, sizeof(ents));
         snprintf(ents[0].abs, sizeof(ents[0].abs), "%s", z1);
-        snprintf(ents[0].zname, sizeof(ents[0].zname), "sdimg_CUSA12345");
+        /* ⚠ 名字要跟 TID_PS5 对得上：`.155` 起导入会按文件名里的 TID 判游戏，
+         * 用别的 TID（比如原来的 CUSA12345）会被判成「别的游戏」整包拒收 ——
+         * 那是新功能的**正确行为**，不是这条用例要测的东西。 */
+        snprintf(ents[0].zname, sizeof(ents[0].zname), "sdimg_PPSA012345");
         snprintf(ents[1].abs, sizeof(ents[1].abs), "%s", z2);
-        snprintf(ents[1].zname, sizeof(ents[1].zname), "CUSA12345.bin");
+        snprintf(ents[1].zname, sizeof(ents[1].zname), "PPSA012345.bin");
         const char *zerr = NULL;
         CHECK(zip_write(gz, ents, 2, NULL, &zerr) == 0, "造 garlic zip 失败: %s",
               zerr ? zerr : "?");
@@ -912,9 +915,9 @@ int main(void) {
                                        &nf, msg, sizeof(msg)) == 0,
               "zip 形态导入失败: %s", msg);
         CHECK(nf == 2, "zip 该导入 2 个文件（镜像 + 密封密钥），实得 %lld", nf);
-        snprintf(p, sizeof(p), "%s/sdimg_CUSA12345", sdir);
+        snprintf(p, sizeof(p), "%s/sdimg_PPSA012345", sdir);
         CHECK(exists_reg(p), "zip 里的镜像没落盘: %s", p);
-        snprintf(p, sizeof(p), "%s/CUSA12345.bin", sdir);
+        snprintf(p, sizeof(p), "%s/PPSA012345.bin", sdir);
         CHECK(exists_reg(p), "zip 里的 .bin 密封密钥没落盘: %s", p);
         CHECK(exists_reg(keep), "zip 导入把无关文件弄没了");
 
@@ -985,6 +988,75 @@ int main(void) {
         CHECK(game_saves_local_mtime(TID_NONE, U2, &mt) == 0, "没存过的游戏该回 0");
         CHECK(game_saves_local_mtime("../etc", U2, &mt) == 0, "坏 tid 该回 0");
         CHECK(game_saves_local_mtime(TID_PS5, "a/b", &mt) == 0, "坏 uid 该回 0");
+    }
+
+    /* ── ⑬ garlic 导入的「游戏判定」（`.156`）──────────────────────────────
+     *
+     * 用户口径：「存档导入的时候要有游戏判定，不是当前游戏的不让导入」。
+     * 判据只有文件名里那段 `<TID>_` —— 镜像是加密的，内容里读不出任何身份。
+     *
+     * 这条测试的重心是**边界**：「认错」与「认不出」的后果正好相反 ——
+     *   认错   → 把别的游戏的存档放进来（覆盖掉本游戏的存档，用户丢进度）
+     *   认不出 → 放行（正确：说不清 ≠ 不匹配）
+     * 所以宁可少认，不可认错；两边都要钉住。 */
+    {
+        char out[16];
+
+        /* 正例：garlic 的真实命名是 `<TID>_<存档目录名>` 再加它自己的后缀 */
+        CHECK(game_saves_tid_from_name("PPSA27836_savedata01_enc", out, sizeof(out)) == 1 &&
+              strcmp(out, "PPSA27836") == 0, "认出 `PPSA27836_savedata01_enc`，实得 '%s'", out);
+        CHECK(game_saves_tid_from_name("CUSA12345.zip", out, sizeof(out)) == 1 &&
+              strcmp(out, "CUSA12345") == 0, "认出 `CUSA12345.zip`");
+        CHECK(game_saves_tid_from_name("sdimg_PPSA08666", out, sizeof(out)) == 1 &&
+              strcmp(out, "PPSA08666") == 0, "认出 `sdimg_PPSA08666`");
+        CHECK(game_saves_tid_from_name("ppsa27836_enc", out, sizeof(out)) == 1 &&
+              strcmp(out, "PPSA27836") == 0, "小写也认，并归一成大写");
+        CHECK(game_saves_tid_from_name("dir/PPSA27836_x", out, sizeof(out)) == 1,
+              "带路径前缀也认");
+
+        /* 反例：认不出来 → 0（调用方放行） */
+        CHECK(game_saves_tid_from_name("mysave_enc", out, sizeof(out)) == 0,
+              "没有 TID 的名字该认不出");
+        CHECK(game_saves_tid_from_name("PPSA2783_enc", out, sizeof(out)) == 0,
+              "数字只有 4 位不该认（TID 是 4 字母 + 5 数字）");
+        CHECK(game_saves_tid_from_name("PPSA27836x_enc", out, sizeof(out)) == 0,
+              "TID 后面还贴着字母，那是长串的一部分，不该认");
+        CHECK(game_saves_tid_from_name("xPPSA27836_enc", out, sizeof(out)) == 0,
+              "TID 前面贴着字母，不该认");
+        CHECK(game_saves_tid_from_name("PPSAA2783_enc", out, sizeof(out)) == 0,
+              "5 位里混了字母，不该认");
+        CHECK(game_saves_tid_from_name("", out, sizeof(out)) == 0, "空串该认不出");
+        CHECK(game_saves_tid_from_name(NULL, out, sizeof(out)) == 0, "NULL 不该崩");
+
+        /* 端到端：拿夹具里已有的 TID_PS5，造一个「别的游戏」的裸镜像，导入必须被拒。
+         * 假数据没问题 —— gs_gx_cb 不校验镜像内容（它只是把字节搬进暂存目录）。 */
+        static const unsigned char fake_img[64] = { 0x50, 0x46, 0x53, 0x00 };
+        char gmsg[256];
+        long long nf = 0;
+        int grc = game_saves_import_garlic(TID_PS5, U2, "CUSA99999_enc",
+                                           fake_img, sizeof(fake_img), &nf, gmsg, sizeof(gmsg));
+        CHECK(grc != 0, "别的游戏的存档该被拒（实得 rc=%d）", grc);
+        CHECK(strstr(gmsg, "CUSA99999") != NULL,
+              "拒的时候要说清是哪个 TID，实得：%s", gmsg);
+        CHECK(nf == 0, "被拒时不该报告写入了文件");
+
+        /* 正向：文件名里的 TID **正好等于**当前游戏 → 放行。
+         * 两条约束决定了这里只能用夹具自带的 PS4 位 `CUSA12345`（HOME/00000004/
+         * savedata/ 下，属 U4）：
+         *  ① 必须是真 9 位 TID —— TID_PS5 是 10 位（`PPSA012345`），
+         *     gs_tid_from_name 认不出它，走的是下面那条「说不清」的路，测不到正向；
+         *  ② 游戏目录必须**已经存在** —— gs_root_or_create() 只 ensure 到
+         *     `savedata_prospero` 父目录、不建游戏那一级（真机上那是游戏自己建的），
+         *     随便编一个没存过的 TID 会栽在「写入存档目录失败（磁盘满？）」。 */
+        grc = game_saves_import_garlic(TID_PS4, U4, "CUSA12345_savedata01_enc",
+                                       fake_img, sizeof(fake_img), &nf, gmsg, sizeof(gmsg));
+        CHECK(grc == 0, "文件名 TID == 当前游戏 → 放行（rc=%d, %s）", grc, gmsg);
+        CHECK(nf == 1, "该写进 1 个文件，实得 %lld", nf);
+
+        /* 认不出来（用户改过名）→ 也放行 */
+        grc = game_saves_import_garlic(TID_PS5, U2, "myrenamed_enc",
+                                       fake_img, sizeof(fake_img), &nf, gmsg, sizeof(gmsg));
+        CHECK(grc == 0, "认不出 TID 时该放行（rc=%d, %s）", grc, gmsg);
     }
 
     /* ⑩ 小栈。放在最后：它会动 U2 的源、也会给 U5 补一份快照（上面刚删掉），
