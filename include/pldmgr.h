@@ -110,14 +110,25 @@
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
 
-#define MENU_VERSION "0.5.2.154" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.154，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.155" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.155，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+/* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
+ * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
+ * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，
+ * 宿主测不了 —— 两轮都只能靠真机复现。加了保护之后 test/config_autoload_test.c
+ * 能把它们指到 /tmp 下去穷举。**默认值一个字没变。** */
+#ifndef AUTOLOAD_CONFIG_PATH
 #define AUTOLOAD_CONFIG_PATH "/data/nayeplmtools/autoload.txt"
+#endif
+#ifndef PLDMGR_CONFIG_PATH
 #define PLDMGR_CONFIG_PATH "/data/nayeplmtools/nayeplmtools_config.txt"
+#endif
 /* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）单独一份 JSON 文件。
  * 不塞进 nayeplmtools_config.txt：那是 key=value 行式文件，config_upsert_value 的行缓冲
  * 只有 256 字节，而这个 JSON 六百多字节，写进去会被截断成半个 JSON（静默失效）。
  * 单独成文件还省掉了「JSON 里的引号怎么塞进行式文件」这一层转义。 */
+#ifndef ARCHIVE_GLOBAL_PATH
 #define ARCHIVE_GLOBAL_PATH "/data/nayeplmtools/archive_global.json"
+#endif
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"
 /* [CN-FORK] 安全模式哨兵文件：存在（内容无所谓）即在下次启动跳过全部引导期高危动作。
  * v0.5.1.64 起硬件探测已整体删除，本哨兵只负责跳过装机/杀光盘/开浏览器/自启序列。 */
@@ -139,7 +150,9 @@ int pldmgr_server_is_active();
 #include "utils.h"
 
 /* Paths */
+#ifndef BASE_DATA_DIR
 #define BASE_DATA_DIR "/data/nayeplmtools"
+#endif
 #define SOURCES_CONFIG_PATH "/data/nayeplmtools/sources.json"
 #define MAX_SOURCES 50
 

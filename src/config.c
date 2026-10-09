@@ -299,48 +299,42 @@ int config_handle_set_json(const char *json_data) {
                  * 现在先读旧文件建「文件名 -> 延时行」映射，写回时每条都带延时行，
                  * 查不到历史的用 !1000 兜底。 */
                 char old_names[100][256];
-                char old_delays[100][16];
                 int  old_cnt = 0;
                 FILE *old = fopen(AUTOLOAD_CONFIG_PATH, "r");
                 if (old) {
                     char ln[256];
-                    char delay[16] = "";
                     while (old_cnt < 100 && fgets(ln, sizeof(ln), old)) {
                         pldmgr_utils_strip_config_line(ln);
-                        if (!ln[0]) continue;
-                        if (ln[0] == '!') {
-                            strncpy(delay, ln, sizeof(delay) - 1);
-                            delay[sizeof(delay) - 1] = '\0';
-                            continue;
-                        }
+                        if (!ln[0] || ln[0] == '!') continue;
                         strncpy(old_names[old_cnt], ln, sizeof(old_names[0]) - 1);
                         old_names[old_cnt][sizeof(old_names[0]) - 1] = '\0';
-                        strncpy(old_delays[old_cnt], delay[0] ? delay : "!1000", sizeof(old_delays[0]) - 1);
-                        old_delays[old_cnt][sizeof(old_delays[0]) - 1] = '\0';
                         old_cnt++;
-                        delay[0] = '\0'; /* 一条延时只服务它紧下面那一条 */
                     }
                     fclose(old);
                 }
 
                 FILE *f = fopen(AUTOLOAD_CONFIG_PATH, "w");
                 if (f) {
-                    /* [CN-FORK] v0.5.2.154 「逗号列表 ↔ txt 行」必须**幂等**。
+                    /* [CN-FORK] v0.5.2.154 / v0.5.2.155 「逗号列表 ↔ txt 行」必须**幂等**。
                      *
-                     * 病灶（用户口径：「自动加载页面，自己多次增加 1 秒延时」）：
-                     * `/get_config` 是把 autoload.txt 的**每一行**（含 `!1000` 这种延时行）
-                     * 用逗号拼起来回传的，所以前端拿到的列表里本来就**带着延时项**；
-                     * 而这里旧实现给**每个** token 都补一行默认延时 —— 于是 token `!1000`
-                     * 自己也被补成两行 `!1000`。一次保存行数就翻一倍，再保存再翻：
-                     * `!1000,name` → `!1000,!1000,!1000,name` → …
+                     * 病灶（用户口径：「自动加载页面，自己多次增加 1 秒延时」），两半：
                      *
-                     * 修法：记住「上一条写出去的已经是延时行」，那样当前这个载荷名就不必
-                     * 再补默认延时。载荷名后面**紧跟着**一条延时行时同理（延时行自己会写）。
-                     * 于是列表与文件一一对应，来回存多少次都不变。
+                     * ① `.154` 修掉的：`/get_config` 是把 autoload.txt 的**每一行**（含
+                     *    `!1000` 这种延时行）用逗号拼起来回传的，所以前端拿到的列表里本来
+                     *    就**带着延时项**；而旧实现给**每个** token 都补一行默认延时 —— 于是
+                     *    token `!1000` 自己也被补成两行。一次保存行数就翻一倍：
+                     *    `!1000,name` → `!1000,!1000,!1000,name` → …
                      *
-                     * 保留的旧行为：连续两个载荷名之间没有任何延时行时，仍按老规矩补一条
-                     * （查得到历史的用历史延时，查不到用 !1000）—— 那是 `.60` 刻意加的，
-                     * 为的是老配置里「每个载荷前都有 !1000」的格式不被悄悄改掉。 */
+                     * ② `.155` 修的（真机实测残留）：上一版只按「上一条是不是延时行」判断，
+                     *    于是**两个载荷名相邻**时（用户把条目挪到一起，或手删掉中间那条
+                     *    延时行）仍会补一条 —— 列表与文件对不上，用户存一次就被塞回一条。
+                     *    真机复现：写 `!1000,kstuff,shadowmountplus` 读回
+                     *    `!1000,kstuff,!1000,shadowmountplus`。
+                     *
+                     * 现在只给**旧文件里从没出现过**的载荷名补延时行 —— 那种名字只可能来自
+                     * 「用户刚从可用列表里加进来」，它前面天然没有延时；已经存在于旧文件的
+                     * 载荷名一律不补，用户删了就是删了、挪了就是挪了。于是列表与文件严格
+                     * 一一对应，来回存多少次都不变。 */
                     int prev_is_delay = 0;
                     char *token = strtok(list_val, ",");
                     while (token) {
@@ -351,11 +345,11 @@ int config_handle_set_json(const char *json_data) {
                                 prev_is_delay = 1;
                             } else {
                                 if (!prev_is_delay) {
-                                    const char *d = "!1000";
+                                    int known = 0;
                                     for (int i = 0; i < old_cnt; i++) {
-                                        if (strcmp(old_names[i], token) == 0) { d = old_delays[i]; break; }
+                                        if (strcmp(old_names[i], token) == 0) { known = 1; break; }
                                     }
-                                    fprintf(f, "%s\n", d);
+                                    if (!known) fprintf(f, "!1000\n");
                                 }
                                 fprintf(f, "%s\n", token);
                                 prev_is_delay = 0;

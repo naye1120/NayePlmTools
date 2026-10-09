@@ -51,6 +51,21 @@ run_one offact_genid   src/psaccounts/offact.c
 rm -rf /tmp/safety_origin_dir
 run_one safety_origin  src/psaccounts/safety.c -DSAFETY_DIR='"/tmp/safety_origin_dir"'
 
+# [CN-FORK] v0.5.2.155 /set_config 的 AUTOLOAD_LIST 写回幂等。
+# 用户口径「自动加载页面，自己多次增加 1 秒延时」：`.154` 修了「`!1000` 自己被补成
+# 两行」，真机实测发现「两个载荷名相邻」时还会补一条（写 `!1000,a,b` 读回
+# `!1000,a,!1000,b`）。两轮都只能靠真机复现 —— 路径原先写死在 pldmgr.h 里。
+# 现在那几个宏有 `#ifndef` 保护，这条把 autoload.txt 指到 /tmp 穷举。
+# 走的是真入口 config_handle_set_json()，不是重写一份逻辑。
+rm -rf /tmp/pldmgr_cfg_test
+run_one config_autoload src/config.c \
+    -Iinclude -Isrc/psaccounts/third_party \
+    -DBASE_DATA_DIR='"/tmp/pldmgr_cfg_test"' \
+    -DAUTOLOAD_CONFIG_PATH='"/tmp/pldmgr_cfg_test/autoload.txt"' \
+    -DPLDMGR_CONFIG_PATH='"/tmp/pldmgr_cfg_test/nayeplmtools_config.txt"' \
+    -DARCHIVE_GLOBAL_PATH='"/tmp/pldmgr_cfg_test/archive_global.json"' \
+    src/utils.c src/json_helpers.c src/psaccounts/third_party/cJSON.c
+
 # [CN-FORK] v0.5.2.115 游戏管理 → 多媒体管理（src/game_media.c）
 # 这条测试比另外三个重：夹具（一个列序照抄真机的 av_content.db + 它引用的真实文件）
 # 要 python3 现造，产出的 zip 也要 python3 复验 —— 缺 python3 就整段跳过，不半跑。
