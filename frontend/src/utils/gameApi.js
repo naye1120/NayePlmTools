@@ -597,10 +597,12 @@ export function uninstallGame(tid, opts) {
  * 挂在游戏模块的接口层而不是单开一个文件：request / 超时 / 错误翻译这一套都在这里，
  * 组件里不出现裸 fetch 是 v0.5.2.112 定下的规矩。
  *
- * [CN-FORK] v0.5.2.160 契约补两个字段（真机取证出来的边界）：
+ * [CN-FORK] v0.5.2.160 契约补两个字段（真机取证出来的边界）；
+ * [CN-FORK] v0.5.2.161 名单按用户真机口径收窄，且**不可控的条目前端整组不显示**：
  *   GET  /system_apps → {apps:[{tid,name,hidden,controllable,reason?}],count,accounts,error}
- *        `controllable:false` = 主屏固定入口 / 系统占位条目，app.db 那一列对它们**不起作用**，
- *        调用方（SystemAppsModal）据此不给开关；`reason` 只在 false 时出现，是一句中文人话。
+ *        `controllable:false` = 面板改不动的条目（两个内容保存库 / 编辑入口 / 光碟占位）。
+ *        后端仍然回它们并带一句中文 `reason`（便于日志与以后复用），
+ *        调用方（SystemAppsModal）据此**过滤掉、不列出来** —— 名单别在前端再抄一份。
  *   POST /system_app_visible {tid,hidden} → {ok,tid,hidden,message}
  *        对不可控条目回 **400 {error:"EFIXED",message:…}**，不再回成功（写了也不会变）。 */
 export function getSystemApps(opts) {

@@ -13,6 +13,8 @@
  * ① 面板改不动的固定条目要在列表里带 `controllable:false` + 非空 reason，
  *    且写入一律回 EFIXED、一行都不许动 —— 免得再出现假的「已隐藏」；
  * ② 在册查询失败要说「读不了/正忙」，不能说「主机上没有这个内置软件」。
+ * `.161` 又按用户真机口径把名单收窄了一条钉子：**所有应用程序 / 欢迎 是可控的**，
+ * 夹具里写它们必须真的落库；名单里只剩两个内容保存库 + 编辑 + 光碟占位。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,6 +87,8 @@ static void make_db(void) {
     xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40047','PlayStation Store',0)");
     xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40075','媒体相册',0)");
     xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40074','Remote Play',0)");
+    xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40056','所有应用程序',0)");
+    xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40063','欢迎',0)");
     /* 固定条目（主屏不认 visible 那几个之一）：列表里要带 controllable:false，
      * 写入要在打开库之前就拒掉。名字用真机那一份的「游戏内容保存库」。 */
     xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40071','游戏内容保存库',0)");
@@ -104,6 +108,8 @@ static void make_db(void) {
     /* 账号 111：Plus 藏、Store 显、媒体相册藏、RemotePlay 藏、游戏显 */
     xinsert(db, u1, "NPXS40037", 0);
     xinsert(db, u1, "NPXS40047", 1);
+    xinsert(db, u1, "NPXS40056", 1);
+    xinsert(db, u1, "NPXS40063", 0);
     xinsert(db, u1, "NPXS40075", 0);
     xinsert(db, u1, "NPXS40074", 0);
     xinsert(db, u1, "NPXS40071", 1);
@@ -111,6 +117,8 @@ static void make_db(void) {
     /* 账号 222：只有媒体相册与 111 不一致（那边藏这边显）→ 累积判据走「与」 */
     xinsert(db, u2, "NPXS40037", 0);
     xinsert(db, u2, "NPXS40047", 1);
+    xinsert(db, u2, "NPXS40056", 1);
+    xinsert(db, u2, "NPXS40063", 0);
     xinsert(db, u2, "NPXS40075", 1);
     xinsert(db, u2, "NPXS40074", 0);
     xinsert(db, u2, "NPXS40071", 1);
@@ -166,7 +174,7 @@ int main(void) {
     CHECK(strstr(j, "\"NPXS40037\"") != NULL, "列表里应有 NPXS40037");
     CHECK(strstr(j, "\"PPSA00001\"") == NULL, "列表里不该有游戏 PPSA00001");
     CHECK(strstr(j, "\"accounts\":2") != NULL, "应认出 2 张账号表");
-    CHECK(strstr(j, "\"count\":5") != NULL, "应回 5 个内置软件");
+    CHECK(strstr(j, "\"count\":7") != NULL, "应回 7 个内置软件");
     CHECK(strstr(j, "\"error\":\"\"") != NULL, "正常路径 error 应为空串");
     /* 40037 两账号都 0 -> hidden true；40075 一个 0 一个 1 -> hidden false */
     const char *p37 = strstr(j, "\"NPXS40037\"");
@@ -184,6 +192,14 @@ int main(void) {
     CHECK(p71 && strstr(p71, "\"reason\":\"") != NULL &&
           strstr(p71, "\"reason\":\"\"") == NULL, "固定条目必须带一句非空 reason");
     CHECK(p75 && strstr(p75, "\"controllable\":true") != NULL, "普通内置软件应标 controllable:true");
+
+    /* `.161`：用户真机口径「所有应用程序、欢迎 是可以编辑显示和隐藏的」。
+     * `.160` 把这两条错关进固定名单 —— 这里钉死它们**必须是可控的**，
+     * 免得下次又有人拿出厂值反推规则。欢迎出厂 visible=0，所以它是 hidden:true 但照样可控。 */
+    CHECK(strstr(j, "\"NPXS40056\",\"name\":\"所有应用程序\",\"hidden\":false,\"controllable\":true") != NULL,
+          "所有应用程序应回 controllable:true");
+    CHECK(strstr(j, "\"NPXS40063\",\"name\":\"欢迎\",\"hidden\":true,\"controllable\":true") != NULL,
+          "欢迎出厂就是 0：hidden:true 但**不是**不可控");
     free(j);
 
     printf("=== 写入：一次把所有账号表写平 ===\n");
@@ -197,6 +213,16 @@ int main(void) {
     CHECK(rc == 0, "显示 NPXS40075 应成功（rc=%d msg=%s）", rc, msg);
     CHECK(read_visible("tbl_iconinfo_111", "NPXS40075") == 1, "账号 111 应写成 visible=1");
     CHECK(read_visible("tbl_iconinfo_222", "NPXS40075") == 1, "账号 222 应写成 visible=1");
+
+    /* `.161` 撤出固定名单的那两条必须真的写得动 —— 否则又是面板在替用户决定改不了。 */
+    rc = app_vis_set("NPXS40056", 1, msg, sizeof(msg));
+    CHECK(rc == 0, "隐藏「所有应用程序」应成功（rc=%d msg=%s）", rc, msg);
+    CHECK(read_visible("tbl_iconinfo_111", "NPXS40056") == 0, "NPXS40056 账号 111 应写成 visible=0");
+    CHECK(read_visible("tbl_iconinfo_222", "NPXS40056") == 0, "NPXS40056 账号 222 应写成 visible=0");
+    rc = app_vis_set("NPXS40063", 0, msg, sizeof(msg));
+    CHECK(rc == 0, "显示「欢迎」应成功（rc=%d msg=%s）", rc, msg);
+    CHECK(read_visible("tbl_iconinfo_111", "NPXS40063") == 1, "NPXS40063 账号 111 应写成 visible=1");
+    CHECK(read_visible("tbl_iconinfo_222", "NPXS40063") == 1, "NPXS40063 账号 222 应写成 visible=1");
 
     j = list_json();
     CHECK(strstr(j, "\"NPXS40047\"") != NULL && strstr(strstr(j, "\"NPXS40047\""), "\"hidden\":true") != NULL,
@@ -244,7 +270,7 @@ int main(void) {
         if (sqlite3_step(st) == SQLITE_ROW) alive = sqlite3_column_int(st, 0);
         sqlite3_finalize(st);
         sqlite3_close(db);
-        CHECK(alive == 6, "注入之后 tbl_contentinfo 还在（%d 行）", alive);
+        CHECK(alive == 8, "注入之后 tbl_contentinfo 还在（%d 行）", alive);
     }
 
     printf("=== 固定条目：列表里说明得清楚，写入一律拒且一行不写 ===\n");
