@@ -1237,6 +1237,9 @@ POST 路由 `ROUTE_SYSTEM_APP_VISIBLE` **已登记进 `gr_post_limit`**（漏登
 宿主测试 `test/app_visibility_test.c`（27 条，用 sqlite3 C API 造双账号库，不依赖 python）
 钉住了上面每一条边界；全量 `bash test/run_host_tests.sh` **PASS**。
 
+出包版 `NayePlmTools_0.5.2.158-me.elf` / `-ga.elf`（标题烙的是功能提交 `d45e2ac`；
+**`.158` 尚未真机验收** —— 「主屏何时重绘」那条还是推断）。
+
 **`.155`（2026-10-09）`.154` 的收尾 —— 自动加载延时只修了一半。**
 
 真机实测（写 `AUTOLOAD_LIST` 再读回）发现 `.154` 的修法漏了一种形态：token `!1000`
