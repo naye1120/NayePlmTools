@@ -153,6 +153,20 @@
  *   POST /game_mount             {tid, mode:"ro"|"rw"} → {ok}
  *   POST /game_unmount           {tid} → {ok}
  *   POST /game_uninstall         {tid} → {ok, scan_queued}
+ *
+ * 个性化软件（v0.5.2.158，设置页「启动与界面」里的一个入口）
+ *   GET  /system_apps
+ *        → { apps:[{tid,name,hidden}], count, accounts, error }
+ *        tid      内置软件的 titleId（恒 NPXS 前缀，后端只回这一类）
+ *        name     主机自己那份标题，来自主机的应用数据库，**不做本地化**
+ *        hidden   主屏上此刻画不画这张磁贴
+ *        accounts 主机上有几个用户（每个用户一套可见性，写入时一次全写平）
+ *        error    读不到库时的人话；正常时是空串。apps 为空 + error 为空 = 真的没有
+ *   POST /system_app_visible     {tid, hidden:true|false} → {ok, tid, hidden, message}
+ *        语义照控件名「隐藏开关」：**true = 隐藏，false = 显示**。
+ *        状态只存在主机应用数据库的**那一列**里，本面板不再抄一份 ——
+ *        所以关掉弹窗再打开看到的是主机的真实状态，包括别人（FTP、SMP）改的。
+ *        ⚠ 写完主屏**不会实时重绘**，与改名/换图标一样要等重启或待机唤醒（见设置页说明）。
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * 错误约定：后端失败时回 `{error:"<机器码>", message:"<中文人话>"}`。
@@ -561,4 +575,16 @@ export function unmountGame(tid, opts) {
 /* ── 卸载（走系统 AppInstUtil，对应 ShadowMountPlus 的 games/uninstall）─── */
 export function uninstallGame(tid, opts) {
   return request('/game_uninstall', { ...opts, method: 'POST', body: { tid } })
+}
+
+/* ── [CN-FORK] v0.5.2.158 个性化软件：主机内置软件的显示 / 隐藏 ───────────────
+ * 挂在游戏模块的接口层而不是单开一个文件：request / 超时 / 错误翻译这一套都在这里，
+ * 组件里不出现裸 fetch 是 v0.5.2.112 定下的规矩。 */
+export function getSystemApps(opts) {
+  return request(`/system_apps${q()}`, opts)
+}
+
+/* hidden = true 隐藏、false 显示（与后端 app_vis_set 同一条方向，别在这里取反）。 */
+export function setSystemAppHidden(tid, hidden, opts) {
+  return request('/system_app_visible', { ...opts, method: 'POST', body: { tid, hidden } })
 }

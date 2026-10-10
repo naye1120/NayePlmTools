@@ -44,6 +44,7 @@
 #include "game_auto.h"    /* [CN-FORK] v0.5.2.142 自动存档手动推 / 拉 */
 #include "game_title.h"   /* [CN-FORK] v0.5.2.116 改名 + 磁贴两层图六条 */
 #include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
+#include "app_visibility.h" /* [CN-FORK] v0.5.2.158 「个性化软件」/system_apps* */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF：账号/头像/安全还原/远程游玩
  * 配对接口认领 /api/ 前缀，其余路由仍全部归本文件 */
 #include "psaccounts/api.h"
@@ -303,6 +304,10 @@ static size_t gr_post_limit(const char *url) {
         strcmp(url, ROUTE_GAME_UNMOUNT) == 0 ||
         strcmp(url, ROUTE_GAME_UNINSTALL) == 0)
         return (size_t)1 << 20;
+    /* [CN-FORK] v0.5.2.158 「个性化软件」的开关：body 只有 tid + hidden 两个字段。
+     * ⚠ 新加 POST 路由必须在这里登记，否则请求体压根不收（见上面的文件头注释）。 */
+    if (strcmp(url, ROUTE_SYSTEM_APP_VISIBLE) == 0)
+        return (size_t)1 << 20;
     return 0;
 }
 
@@ -337,6 +342,25 @@ static int gr_json_str(const char *body, size_t len, const char *key,
             snprintf(out, osz, "%s", f->valuestring);
             ok = 1;
         }
+    }
+    cJSON_Delete(root);
+    return ok;
+}
+
+/* [CN-FORK] v0.5.2.158 从 JSON body 里取一个布尔字段。取不到 / 类型不对回 -1，
+ * 成功时 *out = 1/0。和 gr_json_str 一样「拿不到就说拿不到」，不替调用方猜默认值 ——
+ * 隐藏开关猜错方向的后果是把用户想留的磁贴藏了。 */
+static int gr_json_bool(const char *body, size_t len, const char *key, int *out) {
+    cJSON *root;
+    if (out) *out = -1;
+    if (!body || !len || !out) return -1;
+    root = cJSON_ParseWithLength(body, len);
+    if (!root) return -1;
+    cJSON *f = cJSON_GetObjectItem(root, key);
+    int ok = -1;
+    if (cJSON_IsBool(f)) {
+        *out = cJSON_IsTrue(f) ? 1 : 0;
+        ok = 0;
     }
     cJSON_Delete(root);
     return ok;
@@ -545,6 +569,34 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
+    /* [CN-FORK] v0.5.2.158 「个性化软件」：把某个主机内置软件在主屏上隐藏 / 显示。
+     * tid 与 hidden 都在 body 里（与 /game_save_auto 同一口径：query 里根本没有，
+     * 去 query 取必然拿到 NULL —— `.116` 在改名那条上踩过）。
+     * 状态只落在 app.db 那一列，所以这里不回「配置保存成功」而回**这一行的新状态**。 */
+    if (strcmp(url, ROUTE_SYSTEM_APP_VISIBLE) == 0) {
+        char btid[32], msg[192], esc[480];
+        int hidden = -1;
+        msg[0] = 0;
+        if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) || !btid[0])
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (gr_json_bool(body, len, "hidden", &hidden) != 0 || hidden < 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "缺少 hidden（true=隐藏 / false=显示）");
+        int rc = app_vis_set(btid, hidden, msg, sizeof(msg));
+        if (rc != 0)
+            return gr_json_err(out, size, code,
+                               rc == -2 ? MHD_HTTP_INTERNAL_SERVER_ERROR : MHD_HTTP_BAD_REQUEST,
+                               rc == -2 ? "EIO" : "EINVAL",
+                               msg[0] ? msg : "写入失败");
+        pldmgr_json_escape(msg, esc, sizeof(esc));
+        *code = MHD_HTTP_OK;
+        /* btid 能走到这一行说明 app_vis_set 已经按 A-Z0-9 校验过它，原样回显是安全的。 */
+        int n = snprintf(out, size,
+                         "{\"ok\":true,\"tid\":\"%s\",\"hidden\":%s,\"message\":\"%s\"}",
+                         btid, hidden ? "true" : "false", esc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
     return gr_json_err(out, size, code, MHD_HTTP_NOT_FOUND, "ENOENT", "没有这条路由");
 }
 
@@ -630,6 +682,8 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_GAME_TILE_BG) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_TILE_BG_DDS) == 0) return 1;
     if (strcmp(url, ROUTE_FAN_CONTROL) == 0) return 1; /* [CN-FORK] 风扇温控页加载/应用，降噪 */
+    if (strcmp(url, ROUTE_SYSTEM_APPS) == 0) return 1; /* [CN-FORK] v0.5.2.158 个性化软件弹窗，降噪 */
+    if (strcmp(url, ROUTE_SYSTEM_APP_VISIBLE) == 0) return 1; /* 同上，每次拨开关一次 */
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
     /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
@@ -2180,6 +2234,19 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                                    MHD_RESPMEM_MUST_FREE);
             MHD_add_response_header(resp, "Content-Type", "application/json");
         }
+    } else if (strcmp(url, ROUTE_SYSTEM_APPS) == 0) {
+        /* [CN-FORK] v0.5.2.158 「个性化软件」：主机内置软件 + 每个账号累积出来的显隐状态。
+         * 一次弹窗拉一遍，不轮询；库打不开时 error 非空、apps 为空数组，
+         * 前端据此把「没有软件」和「读不到」分开显示。 */
+        char *resp_buf;
+        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+        if (oom_resp)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        int alen = app_vis_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        if (alen < 0) alen = 0;
+        resp = MHD_create_response_from_buffer((size_t)alen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, "/events") == 0) {
         struct LogSSEConnection *sse = malloc(sizeof(struct LogSSEConnection));
         sse->last_log_version = 0;

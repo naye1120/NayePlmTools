@@ -60,6 +60,9 @@ SRCS += src/save_remote.c src/game_auto.c src/curl_init.c
 # [CN-FORK] v0.5.2.118 磁贴写回主机那一步：改名要写 app.db + appinfo.db 的平铺名字列，
 # 换背景要写 app.db 的 pic0Info —— 都得真跑 SQL，见 third_party/sqlite3 那段规则。
 SRCS += src/tile_db.c
+# [CN-FORK] v0.5.2.158 「个性化软件」：读写 app.db 每个账号 tbl_iconinfo_<uid>.visible。
+# 与 tile_db.c 同一套理由 —— 要真跑 SQL，所以只能挂在合并版 sqlite3 上。
+SRCS += src/app_visibility.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf
 VERSION := $(shell grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"')

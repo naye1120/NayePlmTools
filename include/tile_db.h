@@ -27,6 +27,12 @@ extern "C" {
 /* 主屏背景只认这一列（列名写死是参考工程真机消融出来的结论，不是猜的）。 */
 #define TILE_DB_BG_COLUMN "pic0Info"
 
+/* [CN-FORK] v0.5.2.158 首次动手前给两个库各留一份**不可覆盖**的原始底片
+ * （已有就绝不重写，见 tile_db.c 的 td_backup_once）。
+ * 原来只有本文件的两条写链调它；app_visibility.c 写 visible 之前同样要先备一份，
+ * 就把它提成了公开入口 —— 备份目录与判据都沿用同一份，不另起一套。 */
+void tile_db_backup_dbs(void);
+
 /* 改名：把 app.db 的 titleName / conceptName / primaryTitleName 与 appinfo.db 的
  * TITLE / TITLE_01 / concept_name / concept_name_01 一起改成 new_name，
  * 一个库一个事务，只按 titleId（或读回来的 localConceptId）定位，绝不动别人的行。

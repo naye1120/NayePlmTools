@@ -313,6 +313,35 @@ else
     echo "=== game_mgr SKIPPED: 需要 python3 做夹具 ==="
 fi
 
+# [CN-FORK] v0.5.2.158 「个性化软件」：读写 app.db 每个账号的 tbl_iconinfo_<uid>.visible。
+# 「主屏到底画不画这张磁贴」只有插上电视才看得见，而这一列是从真机 app.db 原件
+# **推**出来的判据 —— 所以在上真机之前，先把「读得到 / 写对行 / 不越界 / 挡得住注入」
+# 钉死在一份合成的 app.db 上。夹具用 sqlite3 现造（不依赖 python3，少一个 SKIP 口子）。
+# 要把 third_party/sqlite3 按**宿主**工具链单独编一份 .o：Makefile 里那份是 PS5 交叉产物，
+# 在 x86 上链不上。编译参数照抄 Makefile 的 SQLITE_CFLAGS（少一项都可能行为不一致）。
+echo "=== app_visibility ==="
+rm -rf /tmp/pldmgr_appvis_test
+if [ ! -f /tmp/sqlite3_host.o ]; then
+    if ! clang -Os -ffunction-sections -fdata-sections -Ithird_party/sqlite3 \
+        -DSQLITE_OS_UNIX=1 -DSQLITE_THREADSAFE=1 -DSQLITE_TEMP_STORE=2 \
+        -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_OMIT_DEPRECATED=1 \
+        -DSQLITE_OMIT_JSON=1 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DQS=0 \
+        -DSQLITE_UNTESTABLE=1 -DSQLITE_OMIT_TCL_VARIABLE=1 \
+        -DSQLITE_OMIT_PROGRESS_CALLBACK=1 -DSQLITE_OMIT_TRACE -w \
+        -c third_party/sqlite3/sqlite3.c -o /tmp/sqlite3_host.o; then
+        echo "  SQLITE HOST BUILD FAILED"; fail=1
+    fi
+fi
+if [ -f /tmp/sqlite3_host.o ]; then
+    run_one app_visibility src/app_visibility.c \
+        -Iinclude -Ithird_party/sqlite3 \
+        -DAPP_VIS_APPDB_PATH='"/tmp/pldmgr_appvis_test/app.db"' \
+        -DTILE_DB_APPDB_PATH='"/tmp/pldmgr_appvis_test/app.db"' \
+        -DTILE_DB_APPINFO_PATH='"/tmp/pldmgr_appvis_test/appinfo.db"' \
+        -DTILE_DB_BAK_DIR='"/tmp/pldmgr_appvis_test/dbbak"' \
+        src/tile_db.c src/json_helpers.c src/utils.c /tmp/sqlite3_host.o -ldl
+fi
+
 # [CN-FORK] v0.5.2.132 改名要写游戏源 sce_sys/param.json（src/game_title.c）
 # 这段是全仓库唯一会**写进用户游戏包**的逻辑，改坏 param.json 不可逆，所以单独测。
 # 夹具是真机 FTP 拉下来的真实 param.json（CRLF + 2 空格美化格式，1/3/10 个语言键），

@@ -1,3 +1,44 @@
+## v0.5.2.158 (CN-FORK)
+
+> 用户原话：「在截图这个模块（设置 → 启动与界面）中加入一个设置项，叫个性化软件，
+> 点开后将所有 ps5 内置软件列出来，并加上隐藏开关。」
+> 那句「开关关的时候隐藏」和「关掉进行显示」是反的，澄清后按 **开=隐藏、关=显示** 做；
+> 范围 **只列索尼内置应用**，不含游戏与自制软件。
+
+### 显隐写的是 `app.db` 的 `tbl_iconinfo_<uid>.visible`
+
+拿真机 `app.db` 逐条对照过主屏：`visible=1` 的正好是主屏看得到的（媒体库 / 商店 /
+所有应用程序 / 两个内容保存库），`=0` 的正好是看不到的（Plus、探索、Music Home、
+Remote Play、分享游玩、Game Streaming、光盘类、欢迎 / 编辑）。
+**这根列是唯一事实来源** —— 所以没有新增配置项，弹窗每次打开都重新读库，不存在两份状态。
+
+- 新模块 `src/app_visibility.c` + `include/app_visibility.h`；
+  `GET /system_apps` 列内置应用，`POST /system_app_visible` 改单条显隐
+  （**已登记进 `gr_post_limit`**，漏登记的话请求体收不到、客户端只看到连接被关）。
+- 多账号：`LIKE 'tbl_iconinfo%'` 发现全部账号表（不硬编码 uid 后缀）；
+  **写时拉平所有账号表**，**读时取 AND**（任一账号还显示就算显示）。
+- 写前复用 `tile_db_backup_dbs()` 留一份原始备份（原 `static td_backup_dbs()` 提升为公开，
+  与磁贴写入走同一条备份链）。
+- ⚠ **只认 `NPXS` 前缀**（`av_tid_ok()` 硬门）。面板自己的磁贴是 `NAYE00001`，
+  能藏掉它就等于删掉唯一的恢复入口 —— 白名单是护栏，不是偷懒。
+  未在 `tbl_contentinfo` 注册的 tid **直接拒绝**，不允许「改了 0 行还算成功」。
+- ⚠ **主屏不一定立刻重绘**：`visible` 改动要等重启 / 待机唤醒才见效，弹窗文案与 toast 都写明。
+
+### 前端
+
+设置 → 启动与界面 末尾加一条 `NavRow`「个性化软件」→ `SystemAppsModal.jsx`（`layout="panel"`），
+每行一个 `TimingRow`（名称 + TID + 开关）；乐观更新、失败回滚、写入期间整表禁用。
+文案 10 个 key 进 `locales-overlay`（`appsys.*`），未动 `locales` 子模块。
+`mock-server.js` 用真机那 19 条 NPXS 做了两条端点，可在 `dev:mock` 下点着验。
+
+### 验证
+
+`test/app_visibility_test.c`（27 条断言，已接进 `run_host_tests.sh`）用 sqlite3 C API 造了一个
+双账号 `app.db`：钉住了「只出 NPXS」「跨账号 AND」「写后全表拉平」「`tbl_concepticoninfo_*` /
+`tbl_group_*` / 无 `visible` 列的表一律不碰」「游戏与自制软件被拒」「注入型 tid 被拒且库完好」
+「库缺失时读为空 + 有错误信息、写失败」。PS5 工具链 `-fsyntax-only` 三份改动文件全清，
+`check_stack_frames.sh` 与 `check_post_routes.sh` 均绿。
+
 ## v0.5.2.157 (CN-FORK)
 
 > 用户真机反馈（`.156` 推上去之后看的）：

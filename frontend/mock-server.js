@@ -1952,6 +1952,54 @@ app.post('/set_config', (req, res) => {
   res.send('OK');
 });
 
+/* [CN-FORK] v0.5.2.158 「个性化软件」mock。
+ * 数据照真机 _ftp_probe/app.db 里那 19 行 NPXS 内置软件抄，hidden 的初值也照它抄
+ * （PlayStation Plus / 探索 / Music Home / Remote Play / 分享游玩 / Game Streaming /
+ *   Disc Player / 欢迎 / 编辑 / 光碟类在真机上 visible=0，也就是系统自己就没摆上主屏）。
+ * 这样 mock 里看到的状态与真机第一次打开看到的一致，不会让人以为「怎么一半是关的」。
+ * 真机上这份状态在 app.db 的 tbl_iconinfo_<uid>.visible 里，不在 mockConfig，
+ * 所以这里也单独一份数组、不塞进 /set_config 那条链。 */
+const mockSystemApps = [
+  { tid: 'NPXS40037', name: 'PlayStation Plus', hidden: true },
+  { tid: 'NPXS40047', name: 'PlayStation Store', hidden: false },
+  { tid: 'NPXS40053', name: '探索', hidden: true },
+  { tid: 'NPXS40054', name: 'Music Home', hidden: true },
+  { tid: 'NPXS40056', name: '所有应用程序', hidden: false },
+  { tid: 'NPXS40063', name: '欢迎', hidden: true },
+  { tid: 'NPXS40071', name: '游戏内容保存库', hidden: false },
+  { tid: 'NPXS40074', name: 'Remote Play', hidden: true },
+  { tid: 'NPXS40075', name: '媒体相册', hidden: false },
+  { tid: 'NPXS40099', name: '分享游玩', hidden: true },
+  { tid: 'NPXS40106', name: 'Game Streaming', hidden: true },
+  { tid: 'NPXS40139', name: '应用程序内容保存库', hidden: false },
+  { tid: 'NPXS40140', name: 'Disc Player', hidden: true },
+  { tid: 'NPXS40144', name: '不兼容的光碟', hidden: true },
+  { tid: 'NPXS40145', name: '编辑', hidden: true },
+  { tid: 'NPXS40148', name: '不可读的光碟', hidden: true },
+  { tid: 'NPXS40149', name: 'PS5光碟', hidden: true },
+  { tid: 'NPXS40150', name: 'PS4光碟', hidden: true },
+  { tid: 'NPXS40205', name: '编辑', hidden: true },
+];
+
+app.get('/system_apps', (req, res) => {
+  res.json({
+    apps: mockSystemApps.map((a) => ({ ...a })),
+    count: mockSystemApps.length,
+    accounts: 1,
+    error: '',
+  });
+});
+
+app.post('/system_app_visible', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  const hidden = req.body && req.body.hidden === true;
+  const app = mockSystemApps.find((x) => x.tid === tid);
+  if (!app) return res.status(400).json({ error: 'EINVAL', message: '主机上没有这个内置软件（可能已被卸载）' });
+  app.hidden = hidden;
+  logs.push(`[PLDMGR] app_vis: ${tid} -> visible=${hidden ? 0 : 1}（1 张账号表）`);
+  res.json({ ok: true, tid, hidden, message: '' });
+});
+
 app.get(/^\/loadpayload:(.*)/, (req, res) => {
   const path = req.params[0];
   logs.push(`[PLDMGR] Executing payload: ${path}`);

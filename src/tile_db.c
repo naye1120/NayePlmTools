@@ -97,7 +97,7 @@ static void td_backup_once(const char *src, const char *leaf) {
     pldmgr_log("[PLDMGR] tile_db: 已留存原始备份 %s\n", bak);
 }
 
-static void td_backup_dbs(void) {
+void tile_db_backup_dbs(void) {
     td_backup_once(TILE_DB_APPDB_PATH, "app.db");
     td_backup_once(TILE_DB_APPINFO_PATH, "appinfo.db");
 }
@@ -452,7 +452,7 @@ int tile_db_set_name(const char *tid, const char *new_name,
         if (msg && msgsz) snprintf(msg, msgsz, "参数不合法");
         return -1;
     }
-    td_backup_dbs();
+    tile_db_backup_dbs();
 
     /* cid 只能读不能推，先单独开一次库读出来，两个库共用。 */
     char local_cid[160];
@@ -496,7 +496,7 @@ int tile_db_set_bg(const char *tid, const char *dds_path,
         if (msg && msgsz) snprintf(msg, msgsz, "参数不合法");
         return -1;
     }
-    td_backup_dbs();
+    tile_db_backup_dbs();
 
     /* ts 必须是**这个文件**的 mtime：先写文件再注册，两边才对得上。 */
     struct stat sb;

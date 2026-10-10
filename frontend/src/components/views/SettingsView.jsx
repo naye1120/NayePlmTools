@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Terminal, ChevronRight, Globe, Languages, Palette, CloudDownload, Power, Save } from 'lucide-react'
+import { Terminal, ChevronRight, Globe, Languages, Palette, CloudDownload, Power, Save, AppWindow } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../utils/helpers'
 // [CN-FORK] 外观（深/浅色）切换控件
@@ -10,6 +10,8 @@ import Switch from '../ui/Switch'
 import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥档位统一 */
 // [CN-FORK] v0.5.2.143 设置页「存档配置」弹窗
 import ArchiveConfigModal from './ArchiveConfigModal'
+// [CN-FORK] v0.5.2.158 设置页「个性化软件」弹窗（主机内置软件的显示 / 隐藏）
+import SystemAppsModal from './SystemAppsModal'
 // [CN-FORK] v0.5.2.154 「更新日志」与「支持作者」两块整体搬到「关于」页（AboutView）。
 // 随之删掉的：CHANGELOG 数组、changelog 的 <Modal>、donate 的 <Section>，
 // 以及只给它们用的 ScrollText / Heart / Modal 三个 import。
@@ -69,6 +71,8 @@ const NavRow = ({ icon: Icon, title, description, onClick, danger }) => (
 const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate }) => {
   const { t, i18n } = useTranslation()
   const [showArchiveConfig, setShowArchiveConfig] = useState(false)
+  /* [CN-FORK] v0.5.2.158 「个性化软件」弹窗 */
+  const [showSystemApps, setShowSystemApps] = useState(false)
   const autoOpen = config.AUTO_BROWSER_OPEN !== false
   const autoInstall = config.AUTO_INSTALL_APP !== false
   const autoloadDelay = config.AUTOLOAD_DELAY || 5
@@ -200,6 +204,16 @@ const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate 
             <span className="text-ps-blue font-bold text-lg tabular-nums ml-4">{autoloadDelay}s</span>
           </div>
         </SettingRow>
+
+        {/* [CN-FORK] v0.5.2.158 「个性化软件」：整行点开一个弹窗，里面逐款给开关。
+            放这一节是因为它改的就是「主屏长什么样」，与语言/外观同一类；
+            状态不在本面板的 config 里 —— 真值在主机应用数据库那一列，所以走独立端点。 */}
+        <NavRow
+          icon={AppWindow}
+          title={t("appsys.title", "个性化软件")}
+          description={t("appsys.row_desc", "隐藏或显示主机自带的内置软件。")}
+          onClick={() => setShowSystemApps(true)}
+        />
       </Section>
 
       {/* Multi-Source */}
@@ -275,6 +289,13 @@ const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate 
         onClose={() => setShowArchiveConfig(false)}
         config={config}
         onSaveConfig={onSaveConfig}
+        addToast={addToast}
+      />
+
+      {/* [CN-FORK] v0.5.2.158 个性化软件弹窗 */}
+      <SystemAppsModal
+        show={showSystemApps}
+        onClose={() => setShowSystemApps(false)}
         addToast={addToast}
       />
     </div>

@@ -109,8 +109,13 @@
 #define ROUTE_GAME_UNINSTALL "/game_uninstall"
 /* [CN-FORK] 风扇温控（模型 A）：读状态 / 下发目标温度到 /dev/icc_fan */
 #define ROUTE_FAN_CONTROL "/fan_control"
+/* [CN-FORK] v0.5.2.158 「个性化软件」：列出主机内置软件（含每个账号的显隐状态）/
+ * 把某个内置软件在主屏上隐藏或显示。状态存在 app.db 的 tbl_iconinfo_<uid>.visible，
+ * 不在 nayeplmtools_config.txt 里另抄一份（两边不一致时听谁的没法答）。 */
+#define ROUTE_SYSTEM_APPS "/system_apps"
+#define ROUTE_SYSTEM_APP_VISIBLE "/system_app_visible"
 
-#define MENU_VERSION "0.5.2.157" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.157，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.158" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.158，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，
