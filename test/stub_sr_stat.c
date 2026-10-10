@@ -52,3 +52,32 @@ int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
     }
     return -1;
 }
+
+/* [CN-FORK] v0.5.2.159 同上：`game_saves_remote_delete()` 调 `sr_delete()`，
+ * 这一关的编译行没有 src/save_remote.c，不补替身就链接不过。
+ * 口径与 sr_stat 一致：**绝不回 0、绝不回 SR_ENOTFOUND**（那两条在调用方都算
+ * 「删掉了」，替身返回它们等于帮测试造假）。 */
+int sr_delete(const sr_cfg_t *c, const char *tid, const char *uid,
+              char *err, size_t errsz) {
+    (void)c;
+    (void)tid;
+    (void)uid;
+
+    static int warned = 0;
+    if (!warned) {
+        warned = 1;
+        fprintf(stderr,
+                "[stub_sr_stat] sr_delete() 被调用了 —— 本关卡的替身不删除任何东西。\n"
+                "               若你刚给 game_saves 关卡加了远程删除用例，请把真正的\n"
+                "               src/save_remote.c src/curl_init.c + -lcurl 加进它的编译行。\n");
+    }
+
+    if (err && errsz) {
+        const char *m = "宿主测试替身：game_saves 关卡不实现远程删除";
+        size_t n = strlen(m);
+        if (n > errsz - 1) n = errsz - 1;
+        memcpy(err, m, n);
+        err[n] = 0;
+    }
+    return -1;
+}

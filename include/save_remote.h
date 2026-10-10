@@ -107,4 +107,20 @@ int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
             long long *out_size, time_t *out_mtime, long long *out_files,
             char *err, size_t errsz);
 
+/* [CN-FORK] v0.5.2.159 删掉**远端**那一份存档（`<base>/<TID>/<uid>.zip`，连带
+ * 推送时写的 `<uid>.meta.json`）。主机上的本地存档一个字节都不碰 —— 本地快照
+ * （`.140`）也还在，所以「删了远程又后悔」这条路是留着的。
+ *
+ * ⚠ **只有 SMB 实现了。** FTP 要删得靠 curl 的 `QUOTE DELE`，而那条路在
+ *   `CURLOPT_QUOTE` 之后 curl 仍会对 URL 做一次目录列举 —— 桩服务能配合，
+ *   真机对面是什么服务器却不知道，**最怕的是「命令发歪了却回成功」**：
+ *   删除这种东西静默失败一次，用户就再也不敢信这个按钮。HTTP 更没有删除语义
+ *   （对面是自建服务，未必收 DELETE）。两者一律回 -1 + 一句写明协议的人话，
+ *   前端据此把按钮禁掉，不做出「按了没反应」的样子。
+ *
+ * 返回 0 = 删掉了；SR_ENOTFOUND = 远端本来就没有这一份（**不当失败**，
+ * 与 sr_stat 同一口径，前端刷新后显示「远端暂无此用户存档」）；-1 = 失败（err 人话）。 */
+int sr_delete(const sr_cfg_t *c, const char *tid, const char *uid,
+              char *err, size_t errsz);
+
 #endif

@@ -1083,6 +1083,11 @@ app.get('/game_saves', (req, res) => {
   });
 });
 
+/* [CN-FORK] v0.5.2.159 被「删除远程存档」删掉的份：<tid>/<uid>。
+ * mock 的远程信息本来是无状态硬编码（永远 exists:true），加了这个集合才删得动 ——
+ * 不记状态的话前端按了按钮、回读一次又变回「有」，看不出这条链通不通。 */
+const remoteGone = new Set();
+
 /* [CN-FORK] v0.5.2.145 远程存档只读元数据：前端「远程游戏」区块展示用。
  * mock 让每个本地用户都有一份远程存档，大小/文件数与本地同形、mtime 更早，
  * 表示「远端确实存着」（真实后端由 SMB 的 smb2_stat + <uid>.meta.json 提供）。 */
@@ -1096,6 +1101,10 @@ app.get('/game_save_remote_info', (req, res) => {
   if (!save) return res.status(400).json({ error: 'EBAD', message: '缺少 save' });
   const local = (savesFor(tid) || []).find((s) => s.id === save);
   if (!local) return res.status(404).json({ error: 'ENOENT', message: '找不到这个用户的存档' });
+  if (remoteGone.has(`${tid}/${save}`)) {
+    /* 与真机同一形态：SR_ENOTFOUND 那条分支回的就是 configured+exists+mode 三个键 */
+    return res.json({ configured: true, exists: false, mode: 'smb' });
+  }
   res.json({
     configured: true,
     exists: true,
@@ -1104,6 +1113,21 @@ app.get('/game_save_remote_info', (req, res) => {
     files: local.files,
     mtime: '2026-09-28 09:15',
   });
+});
+
+/* [CN-FORK] v0.5.2.159 删掉远端那一份。tid / save 从 **body** 取（与真机一致，
+ * 不摊在 query 上），只记远程没了 —— 主机上的本地存档与本地快照都不动，
+ * 所以这里刻意不去碰 savesFor() / snapsFor()。 */
+app.post('/game_save_remote_delete', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  const save = String((req.body && req.body.save) || '');
+  if (!tid || !save) {
+    return res.status(400).json({ error: 'EINVAL', message: '缺少 tid 或 save' });
+  }
+  const local = (savesFor(tid) || []).find((s) => s.id === save);
+  if (!local) return res.status(404).json({ error: 'ENOENT', message: '找不到这个用户的存档' });
+  remoteGone.add(`${tid}/${save}`);
+  res.json({ ok: true });
 });
 
 app.post('/game_save_auto', (req, res) => {

@@ -2392,6 +2392,42 @@ int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t 
     return (n > 0 && (size_t)n < size) ? n : -1;
 }
 
+/* [CN-FORK] v0.5.2.159 删掉远端那一份存档（前端「远程存档」那一行的删除按钮）。
+ *
+ * 配置解析**必须**与上面的 game_saves_remote_info 逐字同一口径（全局优先 → 本游戏
+ * 回落）：推 / 拉 / 查 / 删四条路要是各解析各的，就会出现「界面上看到的远程
+ * 在 A 共享，删的时候删的是 B 共享」—— 这种错法比删不掉危险得多。
+ *
+ * 「远端本来就没有」（SR_ENOTFOUND）在这里算成功：用户要的结果就是「远程不再有
+ * 这一份」，已经达成却回一句失败，等于逼他再点一次去看错误。
+ * 但**没配远程位置**要单独说清楚，别和「连不上」混成一句。 */
+int game_saves_remote_delete(const char *tid, const char *save, char *msg, size_t msgsz) {
+    if (msg && msgsz) msg[0] = 0;
+    if (!gs_tid_ok(tid) || !gs_uid_ok(save)) {
+        if (msg) snprintf(msg, msgsz, "参数不合法");
+        return -1;
+    }
+
+    char jbuf[4096];
+    int got = 0;
+    if (config_read_archive_global(jbuf, sizeof(jbuf)) > 0) got = 1;
+    else if (game_saves_auto_json(tid, jbuf, sizeof(jbuf)) > 0) got = 1;
+    if (!got) {
+        if (msg) snprintf(msg, msgsz, "还没有配置远程位置");
+        return -1;
+    }
+
+    sr_cfg_t rc;
+    gs_fill_remote_cfg(jbuf, &rc);
+
+    char err[256];
+    err[0] = 0;
+    int st = sr_delete(&rc, tid, save, err, sizeof(err));
+    if (st == 0 || st == SR_ENOTFOUND) return 0;
+    if (msg) snprintf(msg, msgsz, "%s", err[0] ? err : "删除远程存档失败");
+    return -1;
+}
+
 /* ══ [CN-FORK] v0.5.2.154 存档目录的「最近被写过的时刻」 ══════════════════════
  *
  * 给「拉取前先比一比新旧」用（game_auto.c 的 ga_do_inner）：本地这份比远程新时

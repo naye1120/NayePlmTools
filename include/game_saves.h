@@ -145,6 +145,13 @@ int game_saves_pack(const char *tid, const char *save, const char *out_path,
  * 配置解析全局优先 → per-game 回落。输出 JSON 见 game_saves.c 注释。 */
 int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t size);
 
+/* [CN-FORK] v0.5.2.159 POST /game_save_remote_delete：删掉**远端**那一份存档。
+ * 配置解析与 game_saves_remote_info 同一条口径（全局优先 → per-game 回落），
+ * 传输层在 sr_delete（**只有 SMB 真删**，FTP/HTTP 回一句写明协议的人话）。
+ * 主机上的本地存档与本地快照一个字节都不碰。
+ * 0 成功（含「远端本来就没有」）；-1 失败，msg 里是人话。 */
+int game_saves_remote_delete(const char *tid, const char *save, char *msg, size_t msgsz);
+
 /* POST /game_save_upload：body 是用户挑的那个文件原样字节，save = uid
  * （空 = 落在第一个用户下）。**整份替换**：旧的先改名留一手，换成功才删。
  * 成功 0，*out_files = 写入的文件数，*out_size = 写入的总字节。 */

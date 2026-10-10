@@ -1072,3 +1072,60 @@ int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
         return 0;
     }
 }
+
+/* ── 删掉远端那一份（v0.5.2.159）──────────────────────────────────────────── */
+/* [CN-FORK] v0.5.2.159 只删 `<TID>/<uid>.zip` 与它的 `.meta.json`，
+ * **不碰主机上的本地存档、也不碰本地快照** —— 语义与前端确认框里那句话一致。
+ * 为什么连 meta 一起删：留着它，`sr_stat` 在 FTP/HTTP 那条读法下会指着一条
+ * 已经不存在的存档报出大小与时间（`.145` 的展示就会说谎）；SMB 这边虽然读的是
+ * zip 本身，但一个没有主人的 meta 留在共享里就是垃圾。
+ * ⚠ meta 删不掉**不算失败** —— `.145` 之前的老存档根本没写过 meta。 */
+int sr_delete(const sr_cfg_t *c, const char *tid, const char *uid,
+              char *err, size_t errsz) {
+    if (err && errsz) err[0] = 0;
+    if (!c) {
+        if (err) snprintf(err, errsz, "没有配置远程位置");
+        return -1;
+    }
+    if (!sr_seg_ok(tid) || !sr_seg_ok(uid)) {
+        if (err) snprintf(err, errsz, "标题 ID 或用户标识不合法");
+        return -1;
+    }
+
+    if (!strcmp(c->mode, "smb")) {
+        smb_sess_t ss;
+        if (smb_sess_open(c, tid, &ss, err, errsz) != 0) return -1;
+        char nm[200], rp[SR_SMB_PATH_MAX];
+        snprintf(nm, sizeof(nm), "%s.zip", uid);
+        smb_join(rp, sizeof(rp), ss.dir, nm);
+        int r = smb2_unlink(ss.s, rp);
+        if (r < 0) {
+            if (r == -ENOENT) {
+                /* 远端已经没有这一份了 —— 当作目标状态达成，不是失败。 */
+                smb_sess_close(&ss);
+                return SR_ENOTFOUND;
+            }
+            if (err) snprintf(err, errsz, "删不掉远程存档：%s", smb_human(ss.s, r));
+            smb_sess_close(&ss);
+            return -1;
+        }
+        char mnm[240], metap[SR_SMB_PATH_MAX];
+        snprintf(mnm, sizeof(mnm), "%s.meta.json", uid);
+        smb_join(metap, sizeof(metap), ss.dir, mnm);
+        smb2_unlink(ss.s, metap);   /* 见上面那条 ⚠：失败也继续 */
+        smb_sess_close(&ss);
+        return 0;
+    }
+
+    /* FTP / HTTP：见 save_remote.h 里那段「为什么只有 SMB」。
+     * 这句里带上协议名，用户才知道要去换 SMB 还是等这个协议被支持。
+     * ⚠ 未知 / 空 mode 要单独回，不能顺着 else 落到「HTTP」上 ——
+     *   那等于对着一个没填协议的配置谎报「HTTP 不支持」，排查的人会往 HTTP 找。 */
+    if (!strcmp(c->mode, "ftp") || !strcmp(c->mode, "http")) {
+        if (err) snprintf(err, errsz, "%s 远程位置还不支持在这里删除（目前只有 SMB）",
+                          !strcmp(c->mode, "ftp") ? "FTP" : "HTTP");
+        return -1;
+    }
+    if (err) snprintf(err, errsz, "不支持的传输方式（%s）", c->mode);
+    return -1;
+}

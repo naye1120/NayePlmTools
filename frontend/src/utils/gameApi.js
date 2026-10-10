@@ -92,6 +92,12 @@
  *        包里自带名字，用不到它，传了也无害。save 可空 = 第一个用户（与上传同口径）。
  *   GET  /game_save_remote_info?tid=&save= → {configured,exists,mode?,size?,files?,mtime?,error?}
  *        [CN-FORK] v0.5.2.145 远程存档只读元数据（大小/文件数/修改时间），供「远程游戏」区块展示。
+ *   POST /game_save_remote_delete  {tid, save} → {ok}
+ *        [CN-FORK] v0.5.2.159 删掉**远端**那一份（`<base>/<TID>/<uid>.zip` 与它的 .meta.json）。
+ *        两个参数在 **body** 里（这条没有文件体，与 upload/garlic 摊在 query 上不同）。
+ *        主机上的本地存档与本地快照都不动；「远端本来就没有」也回 {ok}（要的结果已达成）。
+ *        ⚠ **只有 SMB 真删**：FTP / HTTP 回 400 + 一句带协议名的说明（理由见 save_remote.h），
+ *        所以按钮只在 mode==='smb' 且远端确实有这一份时才亮。
  *   POST /game_save_snap         {tid, action:"run"}                  → {ok, made}
  *                                {tid, action:"restore", uid, ts}     → {ok}
  *                                {tid, action:"delete",  uid, ts}     → {ok}
@@ -395,6 +401,16 @@ export function getSaves(tid, opts) {
  *   { configured, exists, mode?, size?, files?, mtime?, error? } */
 export function getRemoteSaveInfo(tid, saveId, opts) {
   return request(`/game_save_remote_info${q({ tid, save: saveId })}`, opts)
+}
+
+/* [CN-FORK] v0.5.2.159 删掉**远端**那一份存档。tid / save 走 body（这条没有文件体）。
+ * 只删远程的 `<TID>/<uid>.zip`（与 .meta.json）—— 主机上的本地存档与本地快照都不动。
+ * ⚠ 后端目前只有 SMB 会真删，FTP / HTTP 回 400 + 一句带协议名的说明；
+ * 调用方（SaveManagerModal 的远程行）据 mode 把按钮藏掉，别让人点了才知道不支持。 */
+export function deleteRemoteSave(tid, saveId, opts) {
+  return request('/game_save_remote_delete', {
+    ...opts, method: 'POST', body: { tid, save: saveId },
+  })
 }
 
 export function saveAutoConfig(tid, cfg, opts) {

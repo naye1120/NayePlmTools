@@ -302,7 +302,8 @@ static size_t gr_post_limit(const char *url) {
         strcmp(url, ROUTE_GAME_SYNC) == 0 ||
         strcmp(url, ROUTE_GAME_MOUNT) == 0 ||
         strcmp(url, ROUTE_GAME_UNMOUNT) == 0 ||
-        strcmp(url, ROUTE_GAME_UNINSTALL) == 0)
+        strcmp(url, ROUTE_GAME_UNINSTALL) == 0 ||
+        strcmp(url, ROUTE_GAME_SAVE_REMOTE_DELETE) == 0 /* [CN-FORK] v0.5.2.159 body 只有 tid + save */)
         return (size_t)1 << 20;
     /* [CN-FORK] v0.5.2.158 「个性化软件」的开关：body 只有 tid + hidden 两个字段。
      * ⚠ 新加 POST 路由必须在这里登记，否则请求体压根不收（见上面的文件头注释）。 */
@@ -437,6 +438,28 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
                                msg[0] ? msg : "同步失败");
         *code = MHD_HTTP_OK;
         return (int)strlen(out);
+    }
+
+    /* [CN-FORK] v0.5.2.159 删掉远端那一份存档。tid / save 都从 **body** 取
+     * （不像 upload 那样摊在 query 上）：这一条没有文件体，两个参数就是一整个请求，
+     * 拼成一个 JSON 最省事，也不会出现「query 有 tid、body 里又写一个」的两种真相。
+     * ⚠ 同步执行 —— 与 sync / upload 同一取舍，用户手点就是要一个明确结果。
+     * 失败一律 400 + 人话：这条路上「删不掉」的原因（连不上 / 没权限 / 协议不支持）
+     * 全是用户能自己修的配置问题，回 500 只会让人以为面板坏了。 */
+    if (strcmp(url, ROUTE_GAME_SAVE_REMOTE_DELETE) == 0) {
+        char rtid[64], rsave[64], msg[240];
+        msg[0] = 0;
+        /* gr_json_str 是「1 = 取到了」，与其它 helper 的 0=成功 相反，别看错。 */
+        if (gr_json_str(body, len, "tid", rtid, sizeof(rtid)) != 1 ||
+            gr_json_str(body, len, "save", rsave, sizeof(rsave)) != 1)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "缺少 tid 或 save");
+        if (game_saves_remote_delete(rtid, rsave, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EREMOTE",
+                               msg[0] ? msg : "删除远程存档失败");
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true}");
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
     if (strcmp(url, ROUTE_GAME_SAVE_UPLOAD) == 0) {

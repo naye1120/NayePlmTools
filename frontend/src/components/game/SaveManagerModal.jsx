@@ -10,7 +10,7 @@ import { Block, Chip, Note, MiniEmpty, ProgressBar, GridRow } from './parts'
 import { formatSizeAlways, formatStamp } from './format'
 import {
   getSaves, saveDownloadUrl, uploadSave, deleteSave, snapAction,
-  syncSaves, getRemoteSaveInfo, importGarlic,
+  syncSaves, getRemoteSaveInfo, deleteRemoteSave, importGarlic,
 } from '../../utils/gameApi'
 import {
   resolveAutoForGame, resolveRemoteForGame, remoteSummary,
@@ -87,6 +87,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   const [busySnap, setBusySnap] = useState('')       // `${uid}/${ts}`，该行正在还原/删除
   const [syncing, setSyncing] = useState('')         // '' | 'push' | 'pull'：立即同步进行中
   const [remoteInfos, setRemoteInfos] = useState({}) // { [uid]: 远程只读元数据（大小/文件数/时间）}
+  const [busyRemote, setBusyRemote] = useState('')   // 正在删远程存档的那个 uid
   const [importing, setImporting] = useState(false)  // garlic 兼容导入进行中
   const [gxUid, setGxUid] = useState('')             // garlic 导入的目标用户（多用户时才让人选）
   const fileRef = useRef(null)
@@ -143,7 +144,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     setBusyId(''); setUploading(null)
     setSnapping(false); setBusySnap(''); setSyncing('')
     setImporting(false); setGxUid('')
-    setRemoteInfos({})
+    setRemoteInfos({}); setBusyRemote('')
   }
 
   useEffect(() => {
@@ -283,6 +284,40 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
           addToast?.(e.message || t('game.save_delete_fail', '删除失败'), 'error')
         }
         if (aliveRef.current) setBusyId('')
+      },
+      true,
+    )
+  }
+
+  /* ── 远程存档的删除（v0.5.2.159）──────────────────────────────────────────
+   * 与上面的 onDelete 是**两个不同的东西**：onDelete 删主机上的存档目录，
+   * 这个只删远端那一份 zip（主机本地与本地快照都不动）。确认框里必须把这句
+   * 说清楚 —— 同一屏两个垃圾桶，用户按错一个的代价不对称。
+   *
+   * 删完只刷新这一行的远程信息，不调 load()：load() 会重扫主机存档目录，
+   * 而这条动作压根没碰主机目录，重扫出来的还是同一份数据，白等一次 IO。 */
+  const onRemoteDelete = (sv) => {
+    if (!showConfirm) return
+    showConfirm(
+      t('game.remote_delete_title', '删除远程存档'),
+      t('game.remote_delete_confirm',
+        '删除远程位置上的「用户 {{uid}}」这一份？只删远端那份备份，主机上的存档和本地快照都不动。此操作无法撤销。',
+        { uid: sv.name || sv.id }),
+      async () => {
+        setBusyRemote(sv.id)
+        try {
+          await deleteRemoteSave(tid, sv.id)
+          addToast?.(t('game.remote_deleted', '远程存档已删除'))
+          try {
+            const info = await getRemoteSaveInfo(tid, sv.id)
+            if (aliveRef.current) setRemoteInfos((m) => ({ ...m, [sv.id]: info }))
+          } catch {
+            /* 回读失败不影响「已删除」这个结论，下一行留着上一次的数字就是 */
+          }
+        } catch (e) {
+          addToast?.(e.message || t('game.remote_delete_fail', '删除远程存档失败'), 'error')
+        }
+        if (aliveRef.current) setBusyRemote('')
       },
       true,
     )
@@ -522,22 +557,40 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                       <div className="space-y-1.5">
                         {saves.map((sv) => {
                           const ri = remoteInfos[sv.id]
+                          /* 按钮只在这行「确实有远程存档」时出现；协议上也只有 SMB
+                           * 会真删（FTP/HTTP 后端回 400，见 save_remote.h），所以
+                           * 非 SMB 干脆不给按钮 —— 点了才知道不支持是最差的一种提示。 */
+                          const canDel = !!ri && ri.exists && !ri.error && ri.mode === 'smb'
                           return (
-                            <div key={sv.id} className="rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-sm">
-                              <span className="text-white font-medium">{t('game.user', '用户')} {sv.id}</span>
-                              <span className="text-zinc-500"> · PS5 · </span>
-                              {ri === undefined ? (
-                                <span className="text-zinc-500">{t('game.remote_loading', '加载中…')}</span>
-                              ) : !ri.configured ? (
-                                <span className="text-zinc-500">{t('game.remote_unset_short', '未配置远程位置')}</span>
-                              ) : !ri.exists ? (
-                                <span className="text-zinc-500">{t('game.remote_no_save', '远端暂无此用户存档')}</span>
-                              ) : ri.error ? (
-                                <span className="text-amber-400/90">{ri.error}</span>
-                              ) : (
-                                <span className="text-zinc-400">
-                                  {formatSizeAlways(ri.size)} · {ri.files >= 0 ? `${ri.files} ${t('game.files_unit', '个文件')}` : '—'} · {ri.mtime || '—'}
-                                </span>
+                            <div key={sv.id} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-sm">
+                              <div className="min-w-0 flex-1">
+                                <span className="text-white font-medium">{t('game.user', '用户')} {sv.id}</span>
+                                <span className="text-zinc-500"> · PS5 · </span>
+                                {ri === undefined ? (
+                                  <span className="text-zinc-500">{t('game.remote_loading', '加载中…')}</span>
+                                ) : !ri.configured ? (
+                                  <span className="text-zinc-500">{t('game.remote_unset_short', '未配置远程位置')}</span>
+                                ) : !ri.exists ? (
+                                  <span className="text-zinc-500">{t('game.remote_no_save', '远端暂无此用户存档')}</span>
+                                ) : ri.error ? (
+                                  <span className="text-amber-400/90">{ri.error}</span>
+                                ) : (
+                                  <span className="text-zinc-400">
+                                    {formatSizeAlways(ri.size)} · {ri.files >= 0 ? `${ri.files} ${t('game.files_unit', '个文件')}` : '—'} · {ri.mtime || '—'}
+                                  </span>
+                                )}
+                              </div>
+                              {canDel && (
+                                <button
+                                  type="button"
+                                  className="icon-btn is-danger shrink-0"
+                                  disabled={busyRemote === sv.id}
+                                  title={t('game.remote_delete', '删除远程存档')}
+                                  aria-label={t('game.remote_delete', '删除远程存档')}
+                                  onClick={() => onRemoteDelete(sv)}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
                               )}
                             </div>
                           )

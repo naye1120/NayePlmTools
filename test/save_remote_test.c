@@ -395,9 +395,92 @@ static void t_bad_cfg(void) {
     CHECK(err[0] != 0, "没有存档时要给人话");
 }
 
+/* [CN-FORK] v0.5.2.159 删除远程存档。
+ *
+ * SMB 真删那一条在这里测不了（主机上没有 SMB 服务可桩，libsmb2 也起不了 server），
+ * 所以这里钉的是**剩下那一面** —— 三件事：
+ *   ① 参数 / 配置不合法时在碰网络之前就拒；
+ *   ② FTP / HTTP **绝不静默成功**：必须回 -1、报错里必须带着协议名
+ *      （不带协议名就会被当成「网络坏了」去瞎排查）、**远端那份必须原样还在**；
+ *   ③ 空 / 未知 mode 不许被翻成「HTTP 不支持」—— 那是对着一个没填协议的配置撒谎。
+ *
+ * ② 是这批里最值钱的一条：删除这种东西只要静默「成功」过一次（回 0 却什么都没删），
+ * 这个按钮就再也信不过了，而且用户完全看不出。 */
+static void t_delete(const char *ftp_root, const char *http_root) {
+    printf("-- 删除远程存档（只有 SMB 真删）\n");
+    char err[256], rp[1200];
+    sr_cfg_t c;
+    long long bytes = 0;
+
+    err[0] = 0;
+    CHECK(sr_delete(NULL, TID, UID, err, sizeof(err)) == -1, "没配置远程位置时必须失败");
+    CHECK(strstr(err, "没有配置远程位置") != NULL, "要说清是没配置：%s", err);
+
+    /* ① 非法 tid：路径穿越一律在本地拒掉，不许发到对面去 */
+    memset(&c, 0, sizeof(c));
+    snprintf(c.mode, sizeof(c.mode), "smb");
+    snprintf(c.host, sizeof(c.host), "127.0.0.1");
+    snprintf(c.share, sizeof(c.share), "ps5save");
+    err[0] = 0;
+    CHECK(sr_delete(&c, "PPSA/../etc", UID, err, sizeof(err)) == -1, "非法 tid 必须拒");
+    CHECK(strstr(err, "不合法") != NULL, "非法 tid 的报错要说清：%s", err);
+
+    /* ② FTP：先真推一份上去，再点删除 —— 删不掉是预期，**文件还在**才是要钉的 */
+    fixture_reset();
+    rm_rf(ftp_root);
+    mkdir_p(ftp_root);
+    memset(&c, 0, sizeof(c));
+    snprintf(c.mode, sizeof(c.mode), "ftp");
+    snprintf(c.host, sizeof(c.host), "127.0.0.1");
+    c.port = stub_ftp_port();
+    snprintf(c.path, sizeof(c.path), "/ps5save");
+    err[0] = 0;
+    CHECK(sr_push(TID, UID, &c, &bytes, err, sizeof(err)) == 0, "FTP 前置推送失败：%s", err);
+    remote_path(rp, sizeof(rp), ftp_root);
+    CHECK(exists(rp), "FTP 远端该有刚推上去的那份：%s", rp);
+    err[0] = 0;
+    CHECK(sr_delete(&c, TID, UID, err, sizeof(err)) == -1, "FTP 这一档不许回成功");
+    CHECK(strstr(err, "FTP") != NULL, "报错要带协议名，别让人以为网络坏了：%s", err);
+    CHECK(exists(rp), "说不支持，却把远端那份删了（或谎称删了）");
+
+    /* HTTP 同上 */
+    rm_rf(http_root);
+    mkdir_p(http_root);
+    memset(&c, 0, sizeof(c));
+    snprintf(c.mode, sizeof(c.mode), "http");
+    snprintf(c.host, sizeof(c.host), "127.0.0.1");
+    c.port = stub_http_port();
+    snprintf(c.url, sizeof(c.url), "http://127.0.0.1:%d/ps5save", stub_http_port());
+    err[0] = 0;
+    CHECK(sr_push(TID, UID, &c, &bytes, err, sizeof(err)) == 0, "HTTP 前置推送失败：%s", err);
+    remote_path(rp, sizeof(rp), http_root);
+    CHECK(exists(rp), "HTTP 远端该有刚推上去的那份：%s", rp);
+    err[0] = 0;
+    CHECK(sr_delete(&c, TID, UID, err, sizeof(err)) == -1, "HTTP 这一档不许回成功");
+    CHECK(strstr(err, "HTTP") != NULL, "报错要带协议名：%s", err);
+    CHECK(exists(rp), "说不支持，却把远端那份删了（或谎称删了）");
+
+    /* ③ mode 没填 / 填了不认识的：不许顺着 else 落到「HTTP 不支持」上 */
+    memset(&c, 0, sizeof(c));
+    snprintf(c.host, sizeof(c.host), "127.0.0.1");
+    err[0] = 0;
+    CHECK(sr_delete(&c, TID, UID, err, sizeof(err)) == -1, "mode 为空必须失败");
+    CHECK(strstr(err, "HTTP") == NULL, "没填协议不许谎报成 HTTP 不支持：%s", err);
+    CHECK(strstr(err, "不支持的传输方式") != NULL, "没填协议要说清是协议不认识：%s", err);
+
+    /* SMB 连不上：必须 -1，绝不许回 0（端口 1 上没人听，立刻被拒，不会挂住） */
+    memset(&c, 0, sizeof(c));
+    snprintf(c.mode, sizeof(c.mode), "smb");
+    snprintf(c.host, sizeof(c.host), "127.0.0.1");
+    c.port = 1;
+    snprintf(c.share, sizeof(c.share), "nosuchshare");
+    err[0] = 0;
+    CHECK(sr_delete(&c, TID, UID, err, sizeof(err)) == -1, "SMB 连不上时必须失败，不许谎报成功");
+    CHECK(err[0] != 0, "SMB 连不上时要给人话");
+}
+
 int main(void) {
-    /* 桩服务必须在 fixture 之前起：两个端口是随机分配的，配置里要用。 */
-    char http_root[600], ftp_root[600];
+    /* 桩服务必须在 fixture 之前起：两个端口是随机分配的，配置里要用。 */    char http_root[600], ftp_root[600];
     snprintf(http_root, sizeof(http_root), ROOT "/http");
     snprintf(ftp_root, sizeof(ftp_root), ROOT "/ftp");
     if (stub_http_start(http_root) != 0) {
@@ -416,6 +499,7 @@ int main(void) {
      * <path>/<TID>/ 必然还不存在，靠 curl 的 create-missing-dirs 建出来。 */
     t_roundtrip("FTP", 1, ftp_root);
     t_bad_cfg();
+    t_delete(ftp_root, http_root);
 
     stub_http_stop();
     stub_ftp_stop();

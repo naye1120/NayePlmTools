@@ -90,6 +90,10 @@
 /* [CN-FORK] v0.5.2.145 只读地取某用户远程存档的元数据（大小 / 文件数 / 修改时间），
  * 供前端「远程游戏」标签展示。GET，tid / save 走 query。 */
 #define ROUTE_GAME_SAVE_REMOTE_INFO "/game_save_remote_info"
+/* [CN-FORK] v0.5.2.159 删掉**远端**那一份存档。POST + body {tid, save} ——
+ * 与旁边的 /game_save_delete（GET）刻意不同：这是不可撤销的删除，GET 有被
+ * 预取 / 重放的机会，宁可另开一条 POST（新 POST 路由要在 gr_post_limit 登记）。 */
+#define ROUTE_GAME_SAVE_REMOTE_DELETE "/game_save_remote_delete"
 /* [CN-FORK] v0.5.2.154 garlic 兼容导入：接受 garlic-savemgr（earthonion）导出的
  * **加密**存档镜像（PS5 裸 `sdimg_<名>` / PS4 的 `sdimg_<名>` + `<名>.bin` 的 zip），
  * 逐文件合并进对应存档目录（**不是**上传那种整份替换）。理由见 game_saves.h。 */
@@ -115,7 +119,7 @@
 #define ROUTE_SYSTEM_APPS "/system_apps"
 #define ROUTE_SYSTEM_APP_VISIBLE "/system_app_visible"
 
-#define MENU_VERSION "0.5.2.158" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.158，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.159" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.159，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，
