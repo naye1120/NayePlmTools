@@ -1977,12 +1977,26 @@ app.post('/set_config', (req, res) => {
 });
 
 /* [CN-FORK] v0.5.2.158 「个性化软件」mock。
- * 数据照真机 _ftp_probe/app.db 里那 19 行 NPXS 内置软件抄，hidden 的初值也照它抄
- * （PlayStation Plus / 探索 / Music Home / Remote Play / 分享游玩 / Game Streaming /
- *   Disc Player / 欢迎 / 编辑 / 光碟类在真机上 visible=0，也就是系统自己就没摆上主屏）。
- * 这样 mock 里看到的状态与真机第一次打开看到的一致，不会让人以为「怎么一半是关的」。
- * 真机上这份状态在 app.db 的 tbl_iconinfo_<uid>.visible 里，不在 mockConfig，
- * 所以这里也单独一份数组、不塞进 /set_config 那条链。 */
+ * 数据照真机 _ftp_probe/app.db 里那 19 行 NPXS 内置软件抄，hidden 的初值也照它抄。
+ *
+ * [CN-FORK] v0.5.2.160 加上 `controllable` —— 与 src/app_visibility.c 里 AV_FIXED 同一张表：
+ * 「所有应用程序 / 两个内容保存库 / 欢迎」这几条真机实测写 visible=0 主屏照旧画，
+ * 「编辑 / 光碟占位」是系统自己决定什么时候画的条目。mock 必须照抄这份边界，
+ * 否则前端在这套预览里会给它们画开关、上真机又变成另一回事。 */
+const MOCK_FIXED_APPS = {
+  NPXS40056: '主屏固定入口：实测把它写成隐藏，主屏照旧画出来',
+  NPXS40071: '主屏固定入口：实测把它写成隐藏，主屏照旧画出来',
+  NPXS40139: '主屏固定入口：实测把它写成隐藏，主屏照旧画出来',
+  NPXS40063: '主屏固定入口：它出厂就是隐藏值，主屏却一直在画',
+  NPXS40145: '主屏自己的编辑入口，不是一张可隐藏的软件磁贴',
+  NPXS40205: '主屏自己的编辑入口，不是一张可隐藏的软件磁贴',
+  NPXS40140: '光碟占位条目：插不插碟由系统决定，面板改不动',
+  NPXS40144: '光碟占位条目：插不插碟由系统决定，面板改不动',
+  NPXS40148: '光碟占位条目：插不插碟由系统决定，面板改不动',
+  NPXS40149: '光碟占位条目：插不插碟由系统决定，面板改不动',
+  NPXS40150: '光碟占位条目：插不插碟由系统决定，面板改不动',
+};
+
 const mockSystemApps = [
   { tid: 'NPXS40037', name: 'PlayStation Plus', hidden: true },
   { tid: 'NPXS40047', name: 'PlayStation Store', hidden: false },
@@ -2007,7 +2021,11 @@ const mockSystemApps = [
 
 app.get('/system_apps', (req, res) => {
   res.json({
-    apps: mockSystemApps.map((a) => ({ ...a })),
+    /* 与真机同一形状：不可控的那几条带 controllable:false + reason（一句人话），
+     * 前端据此不给开关。 */
+    apps: mockSystemApps.map((a) => (MOCK_FIXED_APPS[a.tid]
+      ? { ...a, controllable: false, reason: MOCK_FIXED_APPS[a.tid] }
+      : { ...a, controllable: true })),
     count: mockSystemApps.length,
     accounts: 1,
     error: '',
@@ -2019,6 +2037,11 @@ app.post('/system_app_visible', (req, res) => {
   const hidden = req.body && req.body.hidden === true;
   const app = mockSystemApps.find((x) => x.tid === tid);
   if (!app) return res.status(400).json({ error: 'EINVAL', message: '主机上没有这个内置软件（可能已被卸载）' });
+  /* [CN-FORK] v0.5.2.160 与后端同一取舍：固定条目**不回成功**（回成功就是谎报），
+   * 也不改这份内存状态 —— 改了 mock 就会显示「已隐藏」，正是真机上最误导的那一幕。 */
+  if (MOCK_FIXED_APPS[tid]) {
+    return res.status(400).json({ error: 'EFIXED', message: MOCK_FIXED_APPS[tid] });
+  }
   app.hidden = hidden;
   logs.push(`[PLDMGR] app_vis: ${tid} -> visible=${hidden ? 0 : 1}（1 张账号表）`);
   res.json({ ok: true, tid, hidden, message: '' });

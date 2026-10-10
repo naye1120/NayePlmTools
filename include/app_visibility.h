@@ -1,16 +1,24 @@
 #pragma once
 /* [CN-FORK] v0.5.2.158 「个性化软件」—— PS5 内置软件的显示 / 隐藏。
  *
- * 真机 app.db 取证（_ftp_probe/app.db 那份原件）：主屏每张磁贴在**每个账号自己的**
- * tbl_iconinfo_<uid> 里有一行，其中 `visible` 列就是「这张磁贴画不画出来」——
- *   游戏（PPSA 前缀）与自制软件（NAYE、WKAL 前缀）恒 1；
- *   索尼内置应用里 媒体相册 / PlayStation Store / 所有应用程序 / 两个内容保存库 = 1，
- *   而 PlayStation Plus / 探索 / Music Home / Remote Play / 分享游玩 / Game Streaming /
- *   Disc Player / 欢迎 / 编辑 / 光碟类 = 0（系统自己就没把它们摆上主屏）。
- * 所以本模块只做一件事：按 titleId 把这一列写成 0 或 1。
+ * 状态就在 app.db 的 `tbl_iconinfo_<uid>.visible` 这一列里，本模块只做按 titleId
+ * 把它写成 0 / 1 的事。刻意**不**新增配置键：再抄一份到 nayeplmtools_config.txt
+ * 只会多出「两边不一致时听谁的」这个问题。
  *
- * 刻意**不**新增配置键：状态就是 app.db 里那一列，再抄一份到
- * nayeplmtools_config.txt 只会多出「两边不一致时听谁的」这个问题。
+ * ⚠ **`.158` 当初的判据只对了一多半，v0.5.2.160 用真机快照纠正如下**
+ * （192.168.1.214，2026-10-10，取证脚本 _ftp_probe/probe_vis159*.py）：
+ *   - 这一列**对普通内置软件有效**：PlayStation Store / 媒体相册 写成 0 之后，
+ *     用户实看是「没了」。
+ *   - 但 `所有应用程序` / `游戏内容保存库` / `应用程序内容保存库` / `欢迎` 这四条
+ *     库里同样已经是 0，主屏**照旧画**；同一次快照里上面那两条已经消失，
+ *     所以不是「主屏没重绘」，是这几条不听这一列。
+ *   - `欢迎`、`编辑` **出厂就是 0** 却仍在主屏上 —— 所以「=0 就看不到」这条
+ *     判据从一开始就不能反过来用（`.158` 就是拿 10-01 那份原件的 0/1 分布
+ *     当「看得到的正好=1」的证据，错在这里）。
+ *   - 找不出能区分两组的列：entHidden 全 0，dispLocation / pinnedStatus /
+ *     categoryType / AppInfoJson 都没有一致差异。
+ * 因此下面那张固定名单把「面板改不动」的条目**显式承认**下来：读的时候标出来，
+ * 写的时候直接拒 —— 以前那种「写了 0、UI 报已隐藏、主屏照旧」是最坏的一种结果。
  *
  * 范围只认 NPXS 前缀（索尼内置应用）。自制软件与游戏一律拒写 —— 否则一个构造
  * 出来的请求能把 NayePlmTools 自己的磁贴藏掉，而恢复入口就在那块磁贴上。 */
@@ -30,17 +38,33 @@
 #define APP_VIS_PREFIX "NPXS"
 
 /* GET /system_apps 的响应体：
- *   {"apps":[{"tid":"NPXS40037","name":"PlayStation Plus","hidden":true}, ...],
+ *   {"apps":[{"tid":"NPXS40037","name":"PlayStation Plus","hidden":true,
+ *             "controllable":true},
+ *            {"tid":"NPXS40071","name":"游戏内容保存库","hidden":true,
+ *             "controllable":false,"reason":"主屏固定入口：…"}, ...],
  *    "count":19,"accounts":1,"error":""}
  * 按 name 的拼音/字典序排不好做（中文标题），所以按 titleId 升序 —— 稳定且免排序。
+ * `controllable` 是 `.160` 加的：假的那几条**面板改不动**，前端据此不给开关，
+ * 免得再出现「UI 说已隐藏、主屏照旧画」。`reason` 只在 false 时出现，是一句人话。
  * 库打不开时回 {"apps":[],"count":0,"error":"…"}（不是空数组冒充成功）。
  * 返回写入 out 的字节数（不含 '\0'），缓冲不够回 -1。 */
 int app_vis_list_json(char *out, size_t size);
 
+/* 这一条是不是「面板改不动」的固定条目（主屏固定入口 / 系统占位）。
+ * 是 → 返回 1，并把一句人话写进 *why（指向静态字符串，别 free）；不是 → 返回 0。
+ * 名单的依据见文件头那段真机快照；tid 不合法也返回 0（由调用方的校验去管）。 */
+int app_vis_fixed_reason(const char *tid, const char **why);
+
+/* app_vis_set 对固定条目的返回码。单独一个码是因为 HTTP 层要能给出
+ * 「这条不该由面板动」而不是笼统的 EINVAL，宿主测试也要钉住它**没动过库**。 */
+#define APP_VIS_EFIXED (-3)
+
 /* 写一行的 visible。hidden=1 隐藏、0 显示。
  * 返回 0 = 至少改了一张账号表（或本来就一致）；
  *      -1 = 参数不合法 / tid 不是内置软件 / 库打不开 / 一行都没匹配到；
- *      -2 = 尝试写了但 SQL 失败。
+ *      -2 = 尝试写了但 SQL 失败，**或主机正忙读不到应用清单**（忙 ≠ 「没有这个软件」，
+ *           `.160` 之前这两种混成一句，害得排查的人去找「为什么没装」）；
+ *      APP_VIS_EFIXED(-3) = 固定条目，**一个字节都没写、备份也没留**。
  * msg 给人话（成功也可能留空）。首次写入前会走 tile_db 那份「原始备份只留一次」。 */
 int app_vis_set(const char *tid, int hidden, char *msg, size_t msgsz);
 

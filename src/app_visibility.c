@@ -50,9 +50,47 @@ static int av_tid_ok(const char *tid) {
     return 1;
 }
 
+/* ── 面板改不动的那几条（v0.5.2.160）────────────────────────────────────────
+ * 依据是真机快照，不是猜的（取证脚本 _ftp_probe/probe_vis159*.py，2026-10-10）：
+ * 同一次拉回来的 app.db 里，PlayStation Store / 媒体相册 的 visible=0 确实让磁贴
+ * 消失了，而下面前四条同样是 0 却照样画 —— 所以它们不听这一列。
+ * 后一组（编辑 / 光碟占位）**没有**「写 0 仍显示」的实测证据（它们出厂就是 0，
+ * 用户也没报它们在主屏上），归进来的理由是「主屏什么时候画它们由系统自己定」，
+ * 面板给它们一个开关只会再造出一条对不上账的「已隐藏」。
+ * ⚠ 这两类的措辞刻意不同，别把它们混成同一句话。 */
+typedef struct {
+    const char *tid;
+    const char *reason;
+} AvFixed;
+
+static const AvFixed AV_FIXED[] = {
+    { "NPXS40056", "主屏固定入口：实测把它写成隐藏，主屏照旧画出来" },
+    { "NPXS40071", "主屏固定入口：实测把它写成隐藏，主屏照旧画出来" },
+    { "NPXS40139", "主屏固定入口：实测把它写成隐藏，主屏照旧画出来" },
+    { "NPXS40063", "主屏固定入口：它出厂就是隐藏值，主屏却一直在画" },
+    { "NPXS40145", "主屏自己的编辑入口，不是一张可隐藏的软件磁贴" },
+    { "NPXS40205", "主屏自己的编辑入口，不是一张可隐藏的软件磁贴" },
+    { "NPXS40140", "光碟占位条目：插不插碟由系统决定，面板改不动" },
+    { "NPXS40144", "光碟占位条目：插不插碟由系统决定，面板改不动" },
+    { "NPXS40148", "光碟占位条目：插不插碟由系统决定，面板改不动" },
+    { "NPXS40149", "光碟占位条目：插不插碟由系统决定，面板改不动" },
+    { "NPXS40150", "光碟占位条目：插不插碟由系统决定，面板改不动" },
+};
+
+int app_vis_fixed_reason(const char *tid, const char **why) {
+    if (!tid) return 0;
+    for (size_t i = 0; i < sizeof(AV_FIXED) / sizeof(AV_FIXED[0]); i++) {
+        if (strcmp(AV_FIXED[i].tid, tid) != 0) continue;
+        if (why) *why = AV_FIXED[i].reason;
+        return 1;
+    }
+    return 0;
+}
+
 static sqlite3 *av_open(void) {
     sqlite3 *db = NULL;
-    /* READWRITE 而不是 READONLY：app.db 可能是 WAL，只读打开要不了 -shm 就直接失败。
+    /* READWRITE 而不是 READONLY：只读打开碰到 WAL 库会因拿不到 -shm 直接失败
+     * （10-10 这台实测是 journal 模式，但没有 -wal 不等于别的主机也没有）。
      * 读路径上我们一条 UPDATE 都不发，多要这个权限没有副作用。 */
     if (sqlite3_open_v2(APP_VIS_APPDB_PATH, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
         pldmgr_log("[PLDMGR] app_vis: 打不开 %s（%s）\n", APP_VIS_APPDB_PATH,
@@ -175,6 +213,7 @@ int app_vis_list_json(char *out, size_t size) {
 
     /* 每个账号一条 JOIN：名字以 tbl_contentinfo 为准（改名链写的是它），
      * 显隐以该账号自己的 iconinfo 行为准。 */
+    int q_failed = 0;
     for (int i = 0; i < ntables; i++) {
         char sql[512];
         snprintf(sql, sizeof(sql),
@@ -184,11 +223,13 @@ int app_vis_list_json(char *out, size_t size) {
                  tables[i]);
         sqlite3_stmt *st = NULL;
         if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
+            q_failed = 1;
             pldmgr_log("[PLDMGR] app_vis: 查 %s 失败（%s）\n", tables[i],
                        sqlite3_errmsg(db));
             continue;
         }
-        while (sqlite3_step(st) == SQLITE_ROW) {
+        int sr = SQLITE_OK;
+        while ((sr = sqlite3_step(st)) == SQLITE_ROW) {
             const char *tid = (const char *)sqlite3_column_text(st, 0);
             const char *nm = (const char *)sqlite3_column_text(st, 1);
             int vis = sqlite3_column_int(st, 2);
@@ -197,16 +238,28 @@ int app_vis_list_json(char *out, size_t size) {
             if (!nm || !*nm) nm = tid;
             av_merge(apps, &count, tid, nm, vis);
         }
+        /* 读到一半出错（库被 Shell 占着 / 表被换掉）和「一条内置软件都没有」是两回事：
+         * 前者要是悄悄吞掉，界面就回一张空列表冒充「主机上没有可管理的软件」——
+         * 与 `.160` 修掉的「忙说成没装」同一类谎。步数返回码只能在循环里接住，
+         * sqlite3_reset 已经拿不到它了。 */
+        if (sr != SQLITE_DONE) {
+            q_failed = 1;
+            snprintf(err, sizeof(err), "读主机内置软件清单失败（%s）", sqlite3_errmsg(db));
+        }
         sqlite3_finalize(st);
     }
     if (count) qsort(apps, (size_t)count, sizeof(AvApp), av_cmp);
+    if (!count && q_failed && !err[0]) {
+        snprintf(err, sizeof(err), "读主机内置软件清单失败，请稍后再试一次");
+    }
 
 emit:
     if (db) sqlite3_close(db);
 
     /* 拼 JSON 走堆：64 条 × 平均一百多字节，栈上放不下（连接线程只有 64KB，
-     * 见 tools/check_stack_frames.sh）。 */
-    size_t cap = 4096 + (size_t)count * (AV_NAME_MAX * 2 + 96);
+     * 见 tools/check_stack_frames.sh）。`"controllable":false` 那几条还多带一句
+     * reason，所以每条的余量按名字 + 理由一起算。 */
+    size_t cap = 4096 + (size_t)count * (AV_NAME_MAX * 2 + 352);
     if (cap > size) cap = size;
     buf = malloc(cap);
     if (!buf) { if (apps) free(apps); return -1; }
@@ -217,7 +270,21 @@ emit:
         char name_e[AV_NAME_MAX * 4 + 8];
         pldmgr_json_escape(apps[i].name, name_e, sizeof(name_e));
         int hidden = apps[i].hidden == 1;
-        if (json_append(&jb, "%s{\"tid\":\"%s\",\"name\":\"%s\",\"hidden\":%s}",
+        const char *why = NULL;
+        if (app_vis_fixed_reason(apps[i].tid, &why)) {
+            char why_e[512];
+            pldmgr_json_escape(why, why_e, sizeof(why_e));
+            if (json_append(&jb,
+                            "%s{\"tid\":\"%s\",\"name\":\"%s\",\"hidden\":%s,"
+                            "\"controllable\":false,\"reason\":\"%s\"}",
+                            i ? "," : "", apps[i].tid, name_e,
+                            hidden ? "true" : "false", why_e) != 0)
+                break;
+            continue;
+        }
+        if (json_append(&jb,
+                        "%s{\"tid\":\"%s\",\"name\":\"%s\",\"hidden\":%s,"
+                        "\"controllable\":true}",
                         i ? "," : "", apps[i].tid, name_e,
                         hidden ? "true" : "false") != 0)
             break;
@@ -254,6 +321,17 @@ int app_vis_set(const char *tid, int hidden, char *msg, size_t msgsz) {
         pldmgr_log("[PLDMGR] app_vis: 拒绝写非内置软件 %s\n", tid);
         return -1;
     }
+    /* 固定条目**在这一步就挡掉**：库不打开、备份不留、一行不写。
+     * `.158` 的毛病正是「照写不误 + 回一句成功」，用户看到「已隐藏」而主屏照旧，
+     * 之后每一次排查都要从「到底写没写进去」重新开始。 */
+    {
+        const char *why = NULL;
+        if (app_vis_fixed_reason(tid, &why)) {
+            av_err(msg, msgsz, why);
+            pldmgr_log("[PLDMGR] app_vis: 拒绝写固定条目 %s（面板改不动它）\n", tid);
+            return APP_VIS_EFIXED;
+        }
+    }
 
     sqlite3 *db = av_open();
     if (!db) {
@@ -270,16 +348,32 @@ int app_vis_set(const char *tid, int hidden, char *msg, size_t msgsz) {
     }
 
     /* 先确认这个 tid 真的注册在主机上：写一个不存在的行是静默 no-op，
-     * 用户点了开关、界面回一句成功、磁贴一个字没动 —— 那是最难查的一类问题。 */
-    int exists = 0;
+     * 用户点了开关、界面回一句成功、磁贴一个字没动 —— 那是最难查的一类问题。
+     * ⚠ `.160` 起把「读的时候出错」和「真的没有这一行」分开：Shell 常开着 app.db 的
+     * 句柄，prepare/step 回 BUSY 时以前一律报「主机上没有这个内置软件（可能已被卸载）」，
+     * 真机日志里 NPXS40099 在 20:45:45 被这样拒掉、20:47:37 同样的写又通过 ——
+     * 明明只是**那两分钟正忙**。忙要说忙，别让人去查「为什么没装」。 */
+    int exists = 0, step_rc = SQLITE_DONE;
     {
         sqlite3_stmt *st = NULL;
-        if (sqlite3_prepare_v2(db, "SELECT 1 FROM tbl_contentinfo WHERE titleId=?",
-                               -1, &st, NULL) == SQLITE_OK) {
+        step_rc = sqlite3_prepare_v2(db, "SELECT 1 FROM tbl_contentinfo WHERE titleId=?",
+                                     -1, &st, NULL);
+        if (step_rc == SQLITE_OK) {
             sqlite3_bind_text(st, 1, tid, -1, SQLITE_STATIC);
-            exists = sqlite3_step(st) == SQLITE_ROW;
+            step_rc = sqlite3_step(st);
+            exists = (step_rc == SQLITE_ROW);
         }
         if (st) sqlite3_finalize(st);
+    }
+    if (!exists && step_rc != SQLITE_DONE) {
+        char em[192];
+        snprintf(em, sizeof(em), "主机正忙或应用数据库读不了（%s），稍后再试一次",
+                 sqlite3_errmsg(db));
+        /* 日志要在 close 之前落：sqlite3_errmsg(db) 句柄关掉之后就是野指针。 */
+        pldmgr_log("[PLDMGR] app_vis: 查 %s 是否在册失败（%s）\n", tid, sqlite3_errmsg(db));
+        sqlite3_close(db);
+        av_err(msg, msgsz, em);
+        return -2;
     }
     if (!exists) {
         sqlite3_close(db);

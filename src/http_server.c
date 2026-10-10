@@ -606,6 +606,12 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
                                "缺少 hidden（true=隐藏 / false=显示）");
         int rc = app_vis_set(btid, hidden, msg, sizeof(msg));
+        /* [CN-FORK] v0.5.2.160 固定条目（所有应用程序 / 两个内容保存库 / 欢迎 / 编辑 /
+         * 光碟占位）单独一个码：库里那一列对它们不起作用，写成功也不会有任何变化，
+         * 所以既不能回 200（那是谎报），也不能混进 EIO 让人以为主机出故障了。 */
+        if (rc == APP_VIS_EFIXED)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EFIXED",
+                               msg[0] ? msg : "这条是主屏固定条目，面板改不动它");
         if (rc != 0)
             return gr_json_err(out, size, code,
                                rc == -2 ? MHD_HTTP_INTERNAL_SERVER_ERROR : MHD_HTTP_BAD_REQUEST,

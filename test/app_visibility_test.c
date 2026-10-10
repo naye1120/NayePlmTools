@@ -8,6 +8,11 @@
  *
  * 夹具用 sqlite3 现造，不用 python —— 少一个「缺 python3 就 SKIP」的口子，
  * 数据形状照 _ftp_probe/app.db 那份真机原件的列裁剪。
+ *
+ * `.160` 在这一关里补的两条钉子（都是真机上看不见、只能在这里钉死的）：
+ * ① 面板改不动的固定条目要在列表里带 `controllable:false` + 非空 reason，
+ *    且写入一律回 EFIXED、一行都不许动 —— 免得再出现假的「已隐藏」；
+ * ② 在册查询失败要说「读不了/正忙」，不能说「主机上没有这个内置软件」。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,6 +85,9 @@ static void make_db(void) {
     xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40047','PlayStation Store',0)");
     xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40075','媒体相册',0)");
     xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40074','Remote Play',0)");
+    /* 固定条目（主屏不认 visible 那几个之一）：列表里要带 controllable:false，
+     * 写入要在打开库之前就拒掉。名字用真机那一份的「游戏内容保存库」。 */
+    xexec(db, "INSERT INTO tbl_contentinfo VALUES ('NPXS40071','游戏内容保存库',0)");
     xexec(db, "INSERT INTO tbl_contentinfo VALUES ('PPSA00001','测试游戏',0)");
     /* NPXS9 开头但**没注册**在 contentinfo 里的行：只有 iconinfo 有它。
      * 写它必须被拒（列表也读不到它）—— 这是「静默 no-op」那条判据。 */
@@ -98,12 +106,14 @@ static void make_db(void) {
     xinsert(db, u1, "NPXS40047", 1);
     xinsert(db, u1, "NPXS40075", 0);
     xinsert(db, u1, "NPXS40074", 0);
+    xinsert(db, u1, "NPXS40071", 1);
     xinsert(db, u1, "PPSA00001", 1);
     /* 账号 222：只有媒体相册与 111 不一致（那边藏这边显）→ 累积判据走「与」 */
     xinsert(db, u2, "NPXS40037", 0);
     xinsert(db, u2, "NPXS40047", 1);
     xinsert(db, u2, "NPXS40075", 1);
     xinsert(db, u2, "NPXS40074", 0);
+    xinsert(db, u2, "NPXS40071", 1);
     xinsert(db, u2, "PPSA00001", 1);
 
     /* 两张**不该被碰**的表：
@@ -156,7 +166,7 @@ int main(void) {
     CHECK(strstr(j, "\"NPXS40037\"") != NULL, "列表里应有 NPXS40037");
     CHECK(strstr(j, "\"PPSA00001\"") == NULL, "列表里不该有游戏 PPSA00001");
     CHECK(strstr(j, "\"accounts\":2") != NULL, "应认出 2 张账号表");
-    CHECK(strstr(j, "\"count\":4") != NULL, "应回 4 个内置软件");
+    CHECK(strstr(j, "\"count\":5") != NULL, "应回 5 个内置软件");
     CHECK(strstr(j, "\"error\":\"\"") != NULL, "正常路径 error 应为空串");
     /* 40037 两账号都 0 -> hidden true；40075 一个 0 一个 1 -> hidden false */
     const char *p37 = strstr(j, "\"NPXS40037\"");
@@ -165,6 +175,15 @@ int main(void) {
     CHECK(p75 && p75 < j + strlen(j) && strstr(p75, "\"hidden\":false") != NULL,
           "只要一个账号还显示 -> hidden:false");
     CHECK(strstr(j, "媒体相册") != NULL, "中文标题应原样出来（UTF-8 不该被转义坏）");
+
+    /* `.160` 的核心判据：面板改不动的那几条要**在列表里就说清楚**，
+     * 否则前端只能靠一份硬编码名单猜，猜漏了就又是假的「已隐藏」。 */
+    const char *p71 = strstr(j, "\"NPXS40071\"");
+    CHECK(p71 != NULL, "固定条目 NPXS40071 也要出现在列表里（说明用，不是开关用）");
+    CHECK(p71 && strstr(p71, "\"controllable\":false") != NULL, "NPXS40071 应标 controllable:false");
+    CHECK(p71 && strstr(p71, "\"reason\":\"") != NULL &&
+          strstr(p71, "\"reason\":\"\"") == NULL, "固定条目必须带一句非空 reason");
+    CHECK(p75 && strstr(p75, "\"controllable\":true") != NULL, "普通内置软件应标 controllable:true");
     free(j);
 
     printf("=== 写入：一次把所有账号表写平 ===\n");
@@ -225,7 +244,34 @@ int main(void) {
         if (sqlite3_step(st) == SQLITE_ROW) alive = sqlite3_column_int(st, 0);
         sqlite3_finalize(st);
         sqlite3_close(db);
-        CHECK(alive == 5, "注入之后 tbl_contentinfo 还在（%d 行）", alive);
+        CHECK(alive == 6, "注入之后 tbl_contentinfo 还在（%d 行）", alive);
+    }
+
+    printf("=== 固定条目：列表里说明得清楚，写入一律拒且一行不写 ===\n");
+    rc = app_vis_set("NPXS40071", 1, msg, sizeof(msg));
+    CHECK(rc == APP_VIS_EFIXED, "固定条目应回 EFIXED（-3）而不是成功（rc=%d msg=%s）", rc, msg);
+    CHECK(msg[0] != 0, "拒写要带一句原因：%s", msg);
+    CHECK(read_visible("tbl_iconinfo_111", "NPXS40071") == 1, "账号 111 的固定条目不该被写");
+    CHECK(read_visible("tbl_iconinfo_222", "NPXS40071") == 1, "账号 222 的固定条目不该被写");
+
+    printf("=== 分清「读不了」与「没装」：在册查询失败要说忙，不能说没装 ===\n");
+    {
+        sqlite3 *db = NULL;
+        if (sqlite3_open_v2(DB, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+            CHECK(0, "夹具打不开库做 DROP");
+        } else {
+            xexec(db, "DROP TABLE tbl_contentinfo");
+            sqlite3_close(db);
+        }
+        rc = app_vis_set("NPXS40047", 1, msg, sizeof(msg));
+        CHECK(rc == -2, "contentinfo 读不了应回忙/占用（-2），不是「没装」（-1）（rc=%d msg=%s）", rc, msg);
+        CHECK(strstr(msg, "读不了") != NULL || strstr(msg, "正忙") != NULL,
+              "要说什么读不了/正忙，别让人去查为什么没装：%s", msg);
+        CHECK(strstr(msg, "没有这个内置软件") == NULL, "同样的失败不该报成「主机上没有这个内置软件」：%s", msg);
+        j = list_json();
+        CHECK(strstr(j, "\"apps\":[]") != NULL, "清单读不动时列表应是空数组");
+        CHECK(strstr(j, "\"error\":\"\"") == NULL, "清单读不动时 error 必须非空，别冒充「主机上没有可管理的软件」：%s", j);
+        free(j);
     }
 
     printf("=== 读不到库：error 要说话，不能拿空数组冒充成功 ===\n");
