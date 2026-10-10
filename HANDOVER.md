@@ -1268,8 +1268,9 @@ POST 路由 `ROUTE_SYSTEM_APP_VISIBLE` **已登记进 `gr_post_limit`**（漏登
 的编译行刻意不带 `src/save_remote.c`），替身一律回 -1，**绝不回 0 或 `SR_ENOTFOUND`**。
 `save_remote` 关 113 checks / 0 failures，全量 `bash test/run_host_tests.sh` **PASS**。
 
-出包版 `NayePlmTools_0.5.2.159-me.elf` / `-ga.elf`（**`.159` 尚未真机验收** —— SMB 真机
-上删一次、再从「远程游戏」看是否回到「没有存档」，这一条还没跑过）。
+出包版 `NayePlmTools_0.5.2.159-me.elf` / `-ga.elf`（各 11,031,960 B，标题烙的是功能提交
+`910d4b8`；**`.159` 尚未真机验收** —— SMB 真机删一次、再看那一行是否回到「远端暂无此用户存档」，
+这一条还没跑过）。
 
 **`.155`（2026-10-09）`.154` 的收尾 —— 自动加载延时只修了一半。**
 
