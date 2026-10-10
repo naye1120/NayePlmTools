@@ -522,6 +522,7 @@ static int smb_mkdirs(struct smb2_context *s, const char *dir,
 
 static int sr_smb_push(const sr_cfg_t *c, const char *tid, const char *uid,
                        const char *local, long long *out_bytes, long long pack_files,
+                       long long src_mtime,
                        char *err, size_t errsz) {
     smb_sess_t ss;
     struct smb2fh *fh = NULL;
@@ -608,14 +609,23 @@ static int sr_smb_push(const sr_cfg_t *c, const char *tid, const char *uid,
     /* [CN-FORK] v0.5.2.145 推送成功后**顺便**写一份 <uid>.meta.json，记录这个包
      * 的真实文件数 / 字节数 / 打包时间（time_t）。前端「远程游戏」标签要展示和本地
      * 存档列表同款的信息，文件数没法从裸 <uid>.zip 直接拿到，只能我们写一份。
+     *
+     * [CN-FORK] v0.5.2.162 再多一个 `src_mtime`：这份包是**从主机上哪个时刻的存档**
+     * 打出来的。为什么不能拿 `mtime` 当它 —— `mtime` 是这个文件在对面落盘的时刻
+     * （SMB 取的是 zip 的文件 mtime，FTP/HTTP 直接写 time(NULL)），永远比存档本身晚。
+     * 于是「刚推上去的这份」在拉取判定里永远算「远程更新」，自动拉取会把它原样
+     * 拉回来，用户看到的就是「推完又拉、拉完又推」。src_mtime 才是可比的量：
+     * 它和本地那次 game_saves_local_mtime() 取的是同一类东西（存档目录的最大 mtime），
+     * 而且拉回来的文件落盘时包里的时间会被 utimes 还原，所以拉完之后再比仍然相等。
+     *
      * meta 与 zip 同目录、同名换后缀；libsmb2 没有 O_TRUNC，先 unlink 旧的再写新的。
      * 写 meta 失败**不**算推送失败（zip 本体已经到位），只打日志，前端降级显示。 */
     snprintf(mnm, sizeof(mnm), "%s.meta.json", uid);
     smb_join(metap, sizeof(metap), ss.dir, mnm);
-    char metab[160];
+    char metab[256];
     int mlen = snprintf(metab, sizeof(metab),
-                        "{\"files\":%lld,\"size\":%lld,\"mtime\":%lld}",
-                        pack_files, total, (long long)time(NULL));
+                        "{\"files\":%lld,\"size\":%lld,\"mtime\":%lld,\"src_mtime\":%lld}",
+                        pack_files, total, (long long)time(NULL), src_mtime);
     smb2_unlink(ss.s, metap);
     struct smb2fh *mfh = smb2_open(ss.s, metap, O_CREAT | O_WRONLY);
     if (mfh) {
@@ -735,6 +745,12 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
     char pmsg[SR_ERR_MAX];
     pmsg[0] = 0;
     long long pack_files = 0;
+    /* [CN-FORK] v0.5.2.162 先记下「这份存档此刻的最晚写入时刻」，再打包。
+     * 顺序是有意的：打包之后本地可能又被游戏写了一笔，那会儿的 mtime 已经不在
+     * 这个包里 —— 把它写成 src_mtime 会让远端看起来比实际新，下次拉取就用一个
+     * **更旧**的包盖掉了本地更新的一份。宁可少报（顶多多拉一次），不可多报。 */
+    long long src_mtime = 0;
+    if (game_saves_local_mtime(tid, uid, &src_mtime) != 1) src_mtime = 0;
     if (game_saves_pack(tid, uid, tmp, &pack_files, pmsg, sizeof(pmsg)) != 0) {
         if (err) snprintf(err, errsz, "%s", pmsg[0] ? pmsg : "打包失败");
         unlink(tmp);
@@ -745,7 +761,7 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
      * 打包这一步是共用的，分岔只发生在「怎么把包送出去」。 */
     if (!strcmp(c->mode, "smb")) {
         long long b = 0;
-        int rc = sr_smb_push(c, tid, uid, tmp, &b, pack_files, err, errsz);
+        int rc = sr_smb_push(c, tid, uid, tmp, &b, pack_files, src_mtime, err, errsz);
         unlink(tmp);
         if (rc == 0 && out_bytes) *out_bytes = b;
         return rc;
@@ -819,11 +835,13 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
         return -1;
     }
     /* [CN-FORK] v0.5.2.145 推送成功后写一份 .meta.json（与 SMB 分支同款）。
-     * meta 与 zip 同目录、同名换后缀；失败不影响推送结果，前端降级显示。 */
-    char metab[160];
+     * meta 与 zip 同目录、同名换后缀；失败不影响推送结果，前端降级显示。
+     * [CN-FORK] v0.5.2.162 src_mtime 的理由见 SMB 分支那段（FTP/HTTP 这条路上
+     * 它是唯一的时间戳来源 —— 这两个协议的 sr_stat 本来就只读 meta.json）。 */
+    char metab[256];
     int mlen = snprintf(metab, sizeof(metab),
-                        "{\"files\":%lld,\"size\":%lld,\"mtime\":%lld}",
-                        pack_files, sz, (long long)time(NULL));
+                        "{\"files\":%lld,\"size\":%lld,\"mtime\":%lld,\"src_mtime\":%lld}",
+                        pack_files, sz, (long long)time(NULL), src_mtime);
     char meta_url[SR_URL_MAX];
     size_t ul = strlen(url);
     if (ul > 4 && strcmp(url + ul - 4, ".zip") == 0)
@@ -960,6 +978,9 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
  *   out_size  ← <uid>.zip 的字节数（smb2_stat 直接拿，真实）
  *   out_mtime ← <uid>.zip 的 mtime（真实打包时间）
  *   out_files ← 推送时一并写的 <uid>.meta.json 里的 files；老存档没有 meta 时回 -1
+ * [CN-FORK] v0.5.2.162 out_src_mtime ← meta.json 里的 src_mtime（这份包是从主机上
+ *   哪个时刻的存档打出来的）。**没有 meta 或没有这个字段一律回 0**，调用方据此
+ *   退回「说不清 → 照旧拉」，绝不因为缺字段把拉取关掉。理由见 sr_stat 的声明。
  * 0 成功；SR_ENOTFOUND = 远端还没有这份（语义同 sr_pull，前端当「没得显示」）；
  * -1 = 配置 / 连接错误（err 人话）。
  * [CN-FORK] v0.5.2.154 起 FTP / HTTP 也实现了（读 <uid>.meta.json，见下方分支）。
@@ -967,10 +988,11 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
  *   的长注释（「meta.json 不在」分不清是「没存档」还是「老存档没写 meta」）。 */
 int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
             long long *out_size, time_t *out_mtime, long long *out_files,
-            char *err, size_t errsz) {
+            long long *out_src_mtime, char *err, size_t errsz) {
     if (out_size) *out_size = 0;
     if (out_mtime) *out_mtime = 0;
     if (out_files) *out_files = -1;
+    if (out_src_mtime) *out_src_mtime = 0;
     if (err && errsz) err[0] = 0;
     if (!c) {
         if (err) snprintf(err, errsz, "没有配置远程位置");
@@ -1002,8 +1024,9 @@ int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
         }
         if (out_size) *out_size = (long long)st.smb2_size;
         if (out_mtime) *out_mtime = (time_t)st.smb2_mtime;
-        /* 读 <uid>.meta.json 拿 files；没有 meta（老存档）时保持 -1，前端降级显示。
-         * 256 字节足够装下我们写的那条 {"files":N,"size":N,"mtime":N}。 */
+        /* 读 <uid>.meta.json 拿 files 与 src_mtime；没有 meta（老存档）时保持
+         * files=-1 / src_mtime=0，前端降级显示、拉取判定退回 `.154` 口径。
+         * 256 字节足够装下我们写的那条 {"files":N,"size":N,"mtime":N,"src_mtime":N}。 */
         snprintf(mnm, sizeof(mnm), "%s.meta.json", uid);
         smb_join(metap, sizeof(metap), ss.dir, mnm);
         struct smb2fh *mfh = smb2_open(ss.s, metap, O_RDONLY);
@@ -1018,6 +1041,11 @@ int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
                         cJSON *fj = cJSON_GetObjectItem(root, "files");
                         if (cJSON_IsNumber(fj) && out_files)
                             *out_files = (long long)fj->valuedouble;
+                        /* [CN-FORK] v0.5.2.162 `.162` 之前推上去的包没有这个字段，
+                         * 读不到就留在 0 —— 判定侧把 0 当「说不清」，不是当「一样」。 */
+                        cJSON *xj = cJSON_GetObjectItem(root, "src_mtime");
+                        if (cJSON_IsNumber(xj) && out_src_mtime)
+                            *out_src_mtime = (long long)xj->valuedouble;
                         cJSON_Delete(root);
                     }
                 }
@@ -1068,6 +1096,10 @@ int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
         if (cJSON_IsNumber(sj) && out_size) *out_size = (long long)sj->valuedouble;
         cJSON *fj = cJSON_GetObjectItem(root, "files");
         if (cJSON_IsNumber(fj) && out_files) *out_files = (long long)fj->valuedouble;
+        /* [CN-FORK] v0.5.2.162 拉取判定真正用的那一个。缺字段（`.162` 之前推的包）
+         * 就留在 0：调用方把 0 当「说不清 → 照旧拉」，与 SMB 分支同一口径。 */
+        cJSON *xj = cJSON_GetObjectItem(root, "src_mtime");
+        if (cJSON_IsNumber(xj) && out_src_mtime) *out_src_mtime = (long long)xj->valuedouble;
         cJSON_Delete(root);
         return 0;
     }

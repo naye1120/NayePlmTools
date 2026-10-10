@@ -19,6 +19,9 @@
  *      真机上挂起后 `GetAppIdOfRunningBigApp()` 返回 0xffffffff，再解析必然失败，
  *      于是 ResumeApp 发不出去、游戏一直冻着（`.150` 真机首轮的坑）。
  *      这一节靠 `game_auto_tick()`（`.150` 为此从 static 导出）+ 两个桩驱动。
+ *   ⑧ 拉取前的新旧判定（`.154`；`.162` 扩到「本地和远程一模一样就不拉」）——
+ *      纯函数穷举 + 端到端「刚推上去的这份不该被原样拉回来」+「老包没有 src_mtime
+ *      时不许当成一模一样」。
  *   ⑨ 冻结验证的**判定策略**（`.153`）—— `ga_freeze_verdict()` 的 16 种输入组合
  *      全部穷举。`.152` 真机栽的是**策略**错（读不到进程状态时错误地放弃了
  *      SIGSTOP → 回落 LncUtil → 游戏跳后台切不回来），而真机那段在 `#ifdef`
@@ -309,25 +312,43 @@ static void t_plan(void) {
 /* ══ 拉取前的新旧判定（穷举）═══════════════════════════════════════════
  * [CN-FORK] v0.5.2.154 用户口径：「如果本地存档比远程存档要更新，则不拉取；
  * 本地存档比远程存档旧，可以直接拉取覆盖」。
- * 这个判定的**每一条边界**都在这里钉死 —— 它是唯一能阻止「用旧存档盖掉新进度」
- * 的地方，错一格就是丢数据。 */
+ * [CN-FORK] v0.5.2.162 再加一句：「如果本地存档和远程存档一模一样，则不进行拉取，
+ * 也就是说，只有远程的存档比本地的新的时候才进行拉取」。
+ * 这个判定的**每一条边界**都在这里钉死 —— 它一边要挡住「用旧存档盖掉新进度」（丢数据），
+ * 一边要挡住「推完又原样拉回来」（白跑网络 + 看起来像没生效），错一格都是真事故。
+ *
+ * 参数顺序：(local_mtime, local_have, remote_mtime, remote_src_mtime, remote_have)。
+ * remote_mtime = 远端那个文件**落盘**的时刻（对拉取毫无意义，只是老包的兜底）；
+ * remote_src_mtime = 这份包**是从哪个时刻的存档打出来的**（`.162` 起才有）。 */
 static void t_pull_gate(void) {
     printf("-- ga_pull_needed（拉取前先比新旧）\n");
     /* 远端没有 → 没得拉 */
-    CHECK(ga_pull_needed(100, 1, 0, 0) == 0, "远端没有 → 不该拉");
-    CHECK(ga_pull_needed(0, 0, 0, 0) == 0, "两边都没有 → 不该拉");
-    /* 本地没有 → 必须拉（换机 / 误删 / 重装，正是拉取要救的场景） */
-    CHECK(ga_pull_needed(0, 0, 100, 1) == 1, "本地没有 → 必须拉");
-    CHECK(ga_pull_needed(999999, 0, 100, 1) == 1,
-          "本地没有（哪怕传了个怪时间戳）→ 必须拉");
-    /* 本地更新 → 不拿旧的盖新的 */
-    CHECK(ga_pull_needed(200, 1, 100, 1) == 0, "本地更新 → 不该拉");
-    CHECK(ga_pull_needed(101, 1, 100, 1) == 0, "本地只新 1 秒 → 也不该拉");
-    /* 远程更新 / 一样新 → 拉（一样新时拉了无害，跳过反而可能因为时钟偏差漏掉） */
-    CHECK(ga_pull_needed(100, 1, 200, 1) == 1, "远程更新 → 该拉");
-    CHECK(ga_pull_needed(100, 1, 100, 1) == 1, "一样新 → 该拉（拉了无害）");
+    CHECK(ga_pull_needed(100, 1, 0, 0, 0) == 0, "远端没有 → 不该拉");
+    CHECK(ga_pull_needed(0, 0, 0, 0, 0) == 0, "两边都没有 → 不该拉");
+    /* 本地没有 → 必须拉（换机 / 误删 / 重装，正是拉取要救的场景）。
+     * 这条**排在来源判定之前**：本地都空了，哪怕远端那份的 src_mtime 看着比本地
+     * 传的怪时间戳还旧，也照样得拉 —— 不然「删了存档想拉回来」会被算成不用拉。 */
+    CHECK(ga_pull_needed(0, 0, 100, 0, 1) == 1, "本地没有 → 必须拉");
+    CHECK(ga_pull_needed(999999, 0, 100, 50, 1) == 1,
+          "本地没有（哪怕传了个怪时间戳、哪怕远程来源更旧）→ 必须拉");
+    /* ── `.162` 新口径：认得出「远端就是本地这份推上去的」 ──
+     * remote_mtime=200 是推送那一刻落盘的时间，看着比本地新 —— 这正是 `.154`
+     * 会白拉一次的原因；src_mtime=100 与本地相等 → 一模一样 → 不许再拉。 */
+    CHECK(ga_pull_needed(100, 1, 200, 100, 1) == 0,
+          "远程那份就是本地这份推上去的（一模一样）→ 不该拉");
+    CHECK(ga_pull_needed(100, 1, 900, 90, 1) == 0, "远程那份的来源比本地旧 → 不该拉");
+    CHECK(ga_pull_needed(100, 1, 900, 101, 1) == 1, "远程来源只新 1 秒 → 该拉");
+    CHECK(ga_pull_needed(100, 1, 500, 300, 1) == 1,
+          "别的机器推了更新的一份（远程来源比本地新）→ 该拉");
+    /* ── `.162` 之前推上去的老包没有 src_mtime：退回 `.154` 口径 ──
+     * 这里**不许**把「说不清」当「一模一样」—— 老包用户的自动拉取要照常工作。 */
+    CHECK(ga_pull_needed(200, 1, 100, 0, 1) == 0, "老包：本地更新 → 不该拉");
+    CHECK(ga_pull_needed(101, 1, 100, 0, 1) == 0, "老包：本地只新 1 秒 → 也不该拉");
+    CHECK(ga_pull_needed(100, 1, 200, 0, 1) == 1, "老包：远程更新 → 该拉");
+    CHECK(ga_pull_needed(100, 1, 100, 0, 1) == 1,
+          "老包：认不出来源 → 相等也照拉（宁可多拉一次，不能关掉拉取）");
     /* 时间戳读不到（都是 0）但两边都有 → 该拉：**说不清不能变成不拉** */
-    CHECK(ga_pull_needed(0, 1, 0, 1) == 1, "时间戳都读不到 → 该拉");
+    CHECK(ga_pull_needed(0, 1, 0, 0, 1) == 1, "时间戳都读不到 → 该拉");
 }
 
 /* ══ 拉取前的新旧判定：端到端（真协议 · HTTP 桩）═══════════════════════════
@@ -375,21 +396,40 @@ static void t_pull_gate_e2e(void) {
     long long now = (long long)time(NULL);
     snprintf(body, sizeof(body), "{\"tid\":\"%s\",\"action\":\"pull\"}", TID);
 
-    /* ② 本地比远程新 → 跳过，且**绝不许动本地** */
+    /* ② [CN-FORK] v0.5.2.162 刚推上去的那一份，紧接着拉取**该原样跳过**。
+     *    这就是用户这一轮要的：「如果本地存档和远程存档一模一样，则不进行拉取，
+     *    也就是说，只有远程的存档比本地的新的时候才进行拉取」。
+     *
+     *    `.154` 那版这一格是**必红**的：远端那个文件的落盘时刻（meta 里的 mtime）
+     *    永远比存档本身的写入时刻晚，判定看到「远程更新」就真去拉了一遍 ——
+     *    几百 MB 走网络，落回一模一样的字节，用户在面板上看到的却是「已拉取 1 份」。
+     *    现在靠包里带的 src_mtime（打包时本地存档的最大 mtime）认得出「就是这份」。
+     *
+     *    这里**不碰任何 mtime**：本地保持推送那一刻的状态，与远端那份的来源相等。 */
+    out[0] = msg[0] = 0;
+    CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+          "端到端：刚推上去的这份紧接着拉取不该算失败：%s", msg);
+    CHECK(strstr(out, "已跳过拉取") != NULL,
+          "端到端：一模一样该报「已跳过拉取」，实得：%s", out);
+    char got[8192];
+    long gn = rd(SAVE_FILE, got, sizeof(got));
+    CHECK(gn == wn && !memcmp(got, want, (size_t)wn),
+          "端到端：刚推上去的不该被原样拉回来（实得 %ld / 期望 %ld 字节）", gn, wn);
+
+    /* ③ 本地比远程新 → 跳过，且**绝不许动本地** */
     put(SAVE_FILE, 100, 'Z'); /* 内容换成一眼认得出来的 */
     set_mtime(SAVE_FILE, now + 3600);
     set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now + 3600);
     out[0] = msg[0] = 0;
     CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
           "端到端：本地更新时拉取不该算失败：%s", msg);
-    CHECK(strstr(out, "本地存档比远程新") != NULL,
-          "端到端：该说清是「本地比远程新，已跳过拉取」：%s", out);
-    char got[8192];
-    long gn = rd(SAVE_FILE, got, sizeof(got));
+    CHECK(strstr(out, "已跳过拉取") != NULL,
+          "端到端：该说清是「远程没有比本地更新的一份，已跳过拉取」：%s", out);
+    gn = rd(SAVE_FILE, got, sizeof(got));
     CHECK(gn == 100 && got[0] == 'Z',
           "端到端：本地更新时**绝不能**被远程覆盖（实得 %ld 字节）", gn);
 
-    /* ③ 本地比远程旧 → 真的拉下来覆盖 */
+    /* ④ 本地比远程旧 → 真的拉下来覆盖 */
     set_mtime(SAVE_FILE, now - 3600);
     set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now - 3600);
     out[0] = msg[0] = 0;
@@ -399,9 +439,11 @@ static void t_pull_gate_e2e(void) {
     CHECK(gn == wn && !memcmp(got, want, (size_t)wn),
           "端到端：本地较旧时该被远程覆盖（实得 %ld / 期望 %ld 字节）", gn, wn);
 
-    /* ④ 远端时间戳读不到（meta.json 被删 = `.145` 之前推的老存档）→ **照旧拉**。
+    /* ⑤ 远端元数据读不到（meta.json 被删 = `.145` 之前推的老存档）→ **照旧拉**。
      *    说不清不能变成不拉：老存档用户要是被跳过，等于自动拉取整个失效，
-     *    而他们恰恰是最需要拉取的人（换了机 / 重装了游戏）。 */
+     *    而他们恰恰是最需要拉取的人（换了机 / 重装了游戏）。
+     *    ⚠ 这条与 ③ 的区别只在 meta.json 在不在：本地一样新（now+3600），
+     *    有元数据时判定是「跳过」，元数据没了就退回「照拉」。 */
     unlink(mp);
     put(SAVE_FILE, 100, 'Z');
     set_mtime(SAVE_FILE, now + 3600);
@@ -412,6 +454,30 @@ static void t_pull_gate_e2e(void) {
     gn = rd(SAVE_FILE, got, sizeof(got));
     CHECK(gn == wn && !memcmp(got, want, (size_t)wn),
           "端到端：没有 meta.json 时必须照旧拉（实得 %ld 字节）", gn);
+
+    /* ⑥ [CN-FORK] v0.5.2.162 老包没有 src_mtime（`.162` 之前推上去的）：meta 在、
+     *    但里面只有 files/size/mtime → 判定**不许**把「认不出来源」当成「一模一样」，
+     *    得退回 `.154` 那条只防「用旧盖新」的口径。这里把 meta 手写成旧格式，
+     *    并把本地拨成「比远端落盘时刻旧」—— 远程看着更新 → 该拉。 */
+    {
+        FILE *mf = fopen(mp, "wb");
+        if (mf) {
+            fprintf(mf, "{\"files\":2,\"size\":%ld,\"mtime\":%lld}", wn, now + 7200);
+            fclose(mf);
+        }
+        CHECK(exists(mp), "端到端：旧格式 meta.json 没写进去");
+        put(SAVE_FILE, 100, 'Z');
+        set_mtime(SAVE_FILE, now - 7200);
+        set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now - 7200);
+        out[0] = msg[0] = 0;
+        CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
+              "端到端：旧格式 meta 的拉取失败：%s", msg);
+        gn = rd(SAVE_FILE, got, sizeof(got));
+        CHECK(strstr(out, "已拉取") != NULL,
+              "端到端：老包（没有 src_mtime）认不出来源时该照拉，实得：%s", out);
+        CHECK(gn == wn && !memcmp(got, want, (size_t)wn),
+              "端到端：老包该照常拉回来（实得 %ld / 期望 %ld 字节）", gn, wn);
+    }
 }
 
 /* ══ 探针（宿主上没有 sceLncUtil）══════════════════════════════════════ */

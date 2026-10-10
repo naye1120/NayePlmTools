@@ -302,10 +302,10 @@ static void t_roundtrip(const char *what, int use_ftp, const char *root) {
      * 三个协议上的取数方式不同（SMB 直接 stat、FTP/HTTP 读推送时写的 meta.json），
      * 但对外语义必须一致，所以这三条断言两个协议各跑一遍。 */
     {
-        long long sz = -1, mfiles = -1;
+        long long sz = -1, mfiles = -1, rsrc = -1, lmt = -1;
         time_t mt = 0;
         err[0] = 0;
-        CHECK(sr_stat(&c, TID, UID, &sz, &mt, &mfiles, err, sizeof(err)) == 0,
+        CHECK(sr_stat(&c, TID, UID, &sz, &mt, &mfiles, &rsrc, err, sizeof(err)) == 0,
               "%s sr_stat 该能读到刚推上去的元数据：%s", what, err);
         CHECK(sz > 0, "%s sr_stat 的字节数不对：%lld", what, sz);
         CHECK(mt > 0, "%s sr_stat 的 mtime 没读到（%lld）", what, (long long)mt);
@@ -314,6 +314,21 @@ static void t_roundtrip(const char *what, int use_ftp, const char *root) {
          * 或时区错一位，判定就会得出「本地更新」而**永远不拉**，真机上极难看出来。 */
         long long d = (long long)time(NULL) - (long long)mt;
         CHECK(d >= -300 && d <= 300, "%s sr_stat 的 mtime 偏离当前时间 %lld 秒", what, d);
+
+        /* ── [CN-FORK] v0.5.2.162 src_mtime：拉取判定的真正输入 ────────────────
+         * 上面那个 `mt` 是**传输落盘的时刻**，拿它比新旧必然说谎：存档是游戏早先
+         * 写的，包是刚才推的，于是「刚推上去的这份」永远算「远程更新」，自动拉取
+         * 会原样把它拉回来（用户看到的「推完又拉」）。src_mtime 记的是打包那一刻
+         * 本地存档的最大 mtime —— 与 game_saves_local_mtime() 同一种量，可直接比。
+         * 这里断言的是**两者相等**，比「落在 now 附近」严得多：它证明这个字段真的
+         * 来自本地存档，而不是顺手又写了一遍 time(NULL)。 */
+        CHECK(game_saves_local_mtime(TID, UID, &lmt) == 1, "%s 本地存档时刻读不到", what);
+        CHECK(lmt > 0, "%s 本地存档 mtime 是 0（夹具没造出来？）", what);
+        CHECK(rsrc == lmt, "%s src_mtime 该等于本地存档的最大 mtime：远端 %lld / 本地 %lld",
+              what, rsrc, lmt);
+        /* 单位同一个「秒」：差出几个数量级就是打包时写错了量（毫秒 / 目录 mtime）。 */
+        CHECK(rsrc >= lmt - 2 && rsrc <= lmt + 2,
+              "%s src_mtime 与本地不同量（%lld vs %lld）", what, rsrc, lmt);
 
         /* 远端还没有这份 → **回 -1（说不清），不是 SR_ENOTFOUND**。
          *
@@ -328,7 +343,7 @@ static void t_roundtrip(const char *what, int use_ftp, const char *root) {
          * 代价是 FTP / HTTP 下「远端没有」不会在「远程游戏」标签上显示成「没得显示」，
          * 而是显示成读取失败 —— 两害相权，取这个。 */
         err[0] = 0;
-        CHECK(sr_stat(&c, "PPSA99999", UID, &sz, &mt, &mfiles, err, sizeof(err)) == -1,
+        CHECK(sr_stat(&c, "PPSA99999", UID, &sz, &mt, &mfiles, &rsrc, err, sizeof(err)) == -1,
               "%s 远端没有时 sr_stat 该回 -1（说不清），实得 err=%s", what, err);
         CHECK(err[0] != 0, "%s 读不到时要给人话：%s", what, err);
 
@@ -340,8 +355,24 @@ static void t_roundtrip(const char *what, int use_ftp, const char *root) {
         CHECK(exists(mp), "%s 推送该在远端一并写下 meta.json：%s", what, mp);
         unlink(mp);
         err[0] = 0;
-        int st2 = sr_stat(&c, TID, UID, &sz, &mt, &mfiles, err, sizeof(err));
+        int st2 = sr_stat(&c, TID, UID, &sz, &mt, &mfiles, &rsrc, err, sizeof(err));
         CHECK(st2 == -1, "%s 没有 meta.json 时必须回 -1（说不清），实得 %d", what, st2);
+
+        /* [CN-FORK] v0.5.2.162 老包（meta 里**没有** src_mtime）→ sr_stat 回 0，
+         * 但把 src_mtime 留在 0。判定侧据此退回 `.154` 口径；这里要是把它读成
+         * 「和某个真实时刻相等」，老存档就会被判成「一模一样」而再也不拉。 */
+        {
+            FILE *mf = fopen(mp, "wb");
+            if (mf) {
+                fprintf(mf, "{\"files\":2,\"size\":%lld,\"mtime\":%lld}", sz, (long long)mt);
+                fclose(mf);
+            }
+            long long rsrc2 = -1;
+            err[0] = 0;
+            int st3 = sr_stat(&c, TID, UID, &sz, &mt, &mfiles, &rsrc2, err, sizeof(err));
+            CHECK(st3 == 0, "%s 老格式 meta（没有 src_mtime）该照常读到：%s", what, err);
+            CHECK(rsrc2 == 0, "%s 缺 src_mtime 字段该回 0（说不清），实得 %lld", what, rsrc2);
+        }
     }
 
     /* 删掉本地整份，再拉回来 —— 这才是「推拉真的搬了字节」的证明 */

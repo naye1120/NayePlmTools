@@ -26,13 +26,15 @@
 
 int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
             long long *out_size, time_t *out_mtime, long long *out_files,
-            char *err, size_t errsz) {
+            long long *out_src_mtime, char *err, size_t errsz) {
     (void)c;
     (void)tid;
     (void)uid;
     if (out_size) *out_size = 0;
     if (out_mtime) *out_mtime = 0;
     if (out_files) *out_files = -1;
+    /* [CN-FORK] v0.5.2.162 「说不清」的那个值就留在 0，与真身缺字段时同一口径。 */
+    if (out_src_mtime) *out_src_mtime = 0;
 
     static int warned = 0;
     if (!warned) {

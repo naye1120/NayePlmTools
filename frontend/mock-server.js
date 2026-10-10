@@ -1249,14 +1249,21 @@ app.post('/game_save_sync', (req, res) => {
       return res.status(400).json({ error: 'EBAD', message: '主机上还没有这个游戏的存档' });
     }
     let bytes = 0;
-    src.forEach((s) => { gameState.remoteFiles.add(`${tid}/${s.id}`); bytes += s.size; });
+    src.forEach((s) => {
+      gameState.remoteFiles.add(`${tid}/${s.id}`);
+      /* [CN-FORK] v0.5.2.162 后端推的是「这份存档此刻的写入时刻」（meta.json 的
+       * src_mtime），拉取前拿它和本地比 —— mock 记下同一个量，才复刻得出
+       * 「刚推上去的不会再原样拉回来」。只记 mtime，不记推送时刻。 */
+      (gameState.pushedFrom || (gameState.pushedFrom = {}))[`${tid}/${s.id}`] = s.mtime;
+      bytes += s.size;
+    });
     return done(`已推送 ${src.length} 份（${bytes} 字节）`, { uids: src.length, size: bytes });
   }
 
   /* 拉取：本地没有这个游戏的存档时，后端会退化成「主机上全部用户目录」逐个去远端试
    * （那是「救回丢失的存档」唯一可行的做法）。mock 用 MOCK_UIDS 代表那些用户目录。 */
   const cands = onlyUid ? [onlyUid] : (list.length ? list.map((s) => s.id) : MOCK_UIDS);
-  let n = 0, files = 0, bytes = 0, skipped = 0;
+  let n = 0, files = 0, bytes = 0, skipped = 0, unchanged = 0;
   cands.forEach((uid) => {
     if (!gameState.remoteFiles.has(`${tid}/${uid}`)) { skipped++; return; }
     let rec = list.find((s) => s.id === uid);
@@ -1270,9 +1277,17 @@ app.post('/game_save_sync', (req, res) => {
       };
       list.push(rec);
     }
+    /* [CN-FORK] v0.5.2.162 本地这份和推上去的那一份是同一个来源 → 后端不拉。
+     * 拉取是整份覆盖，白跑一遍网络之外没有任何区别，所以后端回的是「已跳过」
+     * 而不是「已拉取」—— mock 也得这么说，否则在这套预览里看到的文案和真机不一样。 */
+    const from = gameState.pushedFrom && gameState.pushedFrom[`${tid}/${uid}`];
+    if (from && from === rec.mtime) { unchanged++; return; }
     n++; files += rec.files; bytes += rec.size;
   });
   if (n === 0) {
+    /* newer 那条排在 skipped 之前，与后端 note 组装的顺序一致。 */
+    if (unchanged > 0)
+      return done(`远程没有比本地更新的一份，已跳过拉取（${unchanged} 份未覆盖）`, { uids: 0 });
     return done(skipped > 0 ? '远程还没有这个游戏的存档' : '主机上没有可用的用户目录', { uids: 0 });
   }
   return done(`已拉取 ${n} 份（${files} 个文件 / ${bytes} 字节）`, { uids: n, files, size: bytes });

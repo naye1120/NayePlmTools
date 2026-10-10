@@ -7,7 +7,7 @@
 #       bash test/mutation_check_freeze.sh handle     （只跑「凭据没交出去」那个）
 #       bash test/mutation_check_freeze.sh kind       （只跑「机制代号没交出去」那个）
 #       bash test/mutation_check_freeze.sh verdict    （只跑「验证不可用就回落」那个）
-#       bash test/mutation_check_freeze.sh gate       （只跑「本地更新还去拉」那个）
+#       bash test/mutation_check_freeze.sh gate       （只跑「远程不比本地新还去拉」那个）
 #       bash test/mutation_check_freeze.sh snap       （只跑「退出时不快照」那个）
 #       bash test/mutation_check_freeze.sh runblock   （只跑「运行中也让推拉」那个）
 # 不接进 run_host_tests.sh：它要重编七遍（与 mutation_check_media.sh 同一理由）。
@@ -40,12 +40,15 @@
 # 所以这个变异必须被抓住 —— 它等价于「把 `.152` 的 bug 原样放回去」。
 # 期望：恰好 3 条红（判定表那条 + 两条「不许回落」的策略断言）。
 #
-# ── 变异 ⑤「gate」：拉取前不再比新旧（= 用旧存档盖掉新进度）───────────────
+# ── 变异 ⑤「gate」：拉取前不再比新旧（= 用旧存档盖掉新进度 + 刚推上去的又拉回来）──
 # `.154` 用户口径：「如果本地存档比远程存档要更新，则不拉取」。这条判定的全部价值
 # 就是**跳过那一次拉取**，而「跳过」在真机上是个看不出来的结果 —— 面板上就是一次
 # 没动静的拉取，没报错。所以必须用「本地那份的字节一个都没变」来证，而不是看返回码。
-# 变异把 `local_mtime > remote_mtime` 那条出口掐掉 → 本地更新时照样拉。
-# 期望：纯函数 2 条 + 端到端 2 条（提示文案 + 本地被覆盖）= 恰好 4 条红。
+# `.162` 用户又加一句「本地和远程一模一样就别拉」，判定由此变成**两条出口**
+# （有 src_mtime 走严格更新；没有则退回 `.154` 那条兜底）。
+# ⚠ 变异必须**两条一起掐**：只掐一条时，另一条仍然会跳过 —— 于是被改坏的那条路径
+#   一个字节都没被测到（端到端全绿），而这恰恰是「测试看着有效、其实盖不住」的形状。
+# 期望：纯函数 4 条 + 端到端 3 条 = 7 条红，其中判据命中 6 条。
 #
 # ── 变异 ⑥「snap」：退出时不生成快照步骤（= 功能静默消失）──────────────────
 # `.154` 用户口径：「每次游戏结束后，在本地快照存一份存档；定时的功能不要了」——
@@ -183,19 +186,26 @@ fi
 
 if [ "$WANT" = "both" ] || [ "$WANT" = "gate" ]; then
     W=$(mktemp -d)
-    # 掐掉「本地更新 → 不拉」那条出口 = 每次拉取都会把本地覆盖掉。
+    # 掐掉拉取前的**两条**「不拉」出口 = 每次拉取都照跑：既会用旧盖新，
+    # 也会把刚推上去的那份原样拉回来。
+    # [CN-FORK] v0.5.2.162 判定从一条出口变成两条（src_mtime 那条 + 老包的兜底那条）。
+    # 只掐其中一条的另一条仍然会跳过，红数会少、抓不住变异 —— 所以两条一起掐。
     python3 - "$W/game_auto.c" <<'PY'
 import sys, pathlib
 src = pathlib.Path('src/game_auto.c').read_text(encoding='utf-8')
-OLD = '    if (local_mtime > remote_mtime) return 0;  /* 本地更新 → 不拿旧的盖新的 */'
-NEW = '    if (0 && local_mtime > remote_mtime) return 0;'
-assert src.count(OLD) == 1, '变异锚点（ga_pull_needed 的本地更新出口）没找到或不止一处'
+OLD = ('    if (remote_src_mtime > 0) return remote_src_mtime > local_mtime;\n'
+       '    /* 说不清远程那份的来源（老包没有 src_mtime）→ 只能拿落盘时刻比，\n'
+       '     * 那条只用来防「用旧盖新」，不足以断定「一模一样」。 */\n'
+       '    if (local_mtime > remote_mtime) return 0;  /* 本地更新 → 不拿旧的盖新的 */\n')
+NEW = ('    if (0) return remote_src_mtime > local_mtime;\n'
+       '    if (0 && local_mtime > remote_mtime) return 0;\n')
+assert src.count(OLD) == 1, '变异锚点（ga_pull_needed 的两条「不拉」出口）没找到或不止一处'
 out = src.replace(OLD, NEW, 1)
 assert out != src and NEW in out, 'mutation failed'
 pathlib.Path(sys.argv[1]).write_text(out, encoding='utf-8')
-print('  变异已注入：拉取前不再比新旧（= 本地更新时也照拉，用旧的盖新的）')
+print('  变异已注入：拉取前不再比新旧（= 旧盖新 + 刚推上去的又原样拉回来）')
 PY
-    run_case gate "$W/game_auto.c" 4 4 '本地更新\|本地只新\|本地比远程新' || bad=1
+    run_case gate "$W/game_auto.c" 6 7 '不该拉\|不该再\|已跳过拉取\|不该被原样' || bad=1
     rm -rf "$W"
 fi
 

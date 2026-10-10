@@ -168,17 +168,36 @@ int ga_freeze_verdict(int have_ctl, int ctl_adv, int post_ok, int post_adv);
  * 为什么必须判：拉取是**整份覆盖**。用户昨晚玩到很晚但没推上去，今天开机自动拉取
  * 就把昨晚的进度用远程那份（更旧）盖掉了 —— 这是数据丢失，比「拉不动」严重得多。
  *
+ * [CN-FORK] v0.5.2.162 追加的口径（用户原话）：「如果本地存档和远程存档一模一样，
+ * 则不进行拉取，也就是说，只有远程的存档比本地的新的时候才进行拉取」。
+ *
+ * ⚠ `.154` 那一版**做不到**这句话，根因不在判定而在**比的是哪个时间**：
+ *   `remote_mtime` 是远端那个文件**落盘的时刻**（SMB 取 zip 的文件 mtime，
+ *   FTP/HTTP 直接写 time(NULL)），而 `local_mtime` 是存档**被游戏写下的时刻**。
+ *   后者永远更早 —— 于是「刚推上去的这份」在对面看起来永远比本地新，
+ *   自动拉取会原样把它拉回来。把判据从「>」改成「>=」也治不了，两者根本不相等。
+ *   修法是让远端那份带上 `src_mtime`（打包时本地存档的最大 mtime，见 sr_stat），
+ *   这样比的才是同一种量；拉回来的文件落盘时包里时间会被 utimes 还原，
+ *   所以「推上去 → 拉回来」之后本地仍是 src_mtime，下一轮就判成一模一样、不再动。
+ *
  * 参数（`*_have` = 那一侧到底有没有这份存档）：
- *   local_have  = game_saves_local_mtime() 的返回值
- *   remote_have = 远端 <uid>.zip 是否存在（sr_stat 拿到了元数据）
- * 返回 1 = 该拉（本地没有，或远程不比本地旧）· 0 = 跳过（本地更新，或远端根本没有）。
+ *   local_have      = game_saves_local_mtime() 的返回值
+ *   remote_have     = 远端 <uid>.zip 是否存在（sr_stat 拿到了元数据）
+ *   remote_src_mtime= 远端那份包的来源时刻；**0 = 说不清**（`.162` 之前推的老包）
+ * 返回 1 = 该拉 · 0 = 跳过。
+ *
+ * 两条出口各自的条件：
+ *   有 src_mtime（>0）→ **严格更新才拉**：src_mtime > local_mtime 才拉，
+ *     相等（就是本地这份推上去的）和更小（远程那份更旧）都不拉。
+ *   没有 src_mtime（==0）→ 退回 `.154` 口径：只有能确定「本地比远程新」才跳过。
  *
  * **「说不清」一律按「该拉」处理**：时间戳是拿来做优化判断的，不是安全边界。
- * 读不到时间戳（FTP/HTTP 的 sr_stat 暂未实现）时不能因此不拉 —— 那会让拉取
- * 功能在这两种协议上直接失效，而用户真正想要的是「别用旧盖新」，不是「宁可不拉」。
+ * 老包没有 src_mtime、meta.json 读不到时不能因此不拉 —— 那会让拉取功能在这些
+ * 存档上直接失效，而用户真正想要的是「别用旧盖新 / 别做重复下载」，不是「宁可不拉」。
  * 这条与 `.153` 冻结验证那条同一个道理：**验证不可用 ≠ 该放弃**。 */
 int ga_pull_needed(long long local_mtime, int local_have,
-                   long long remote_mtime, int remote_have);
+                   long long remote_mtime, long long remote_src_mtime,
+                   int remote_have);
 
 /* 跑一轮扫描。守护线程每秒调一次（`GA_TICK`）。
  *

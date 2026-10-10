@@ -86,7 +86,10 @@ int sr_build_url(const sr_cfg_t *c, const char *tid, const char *uid,
 
 /* 推送：把主机上这个用户的存档打包后传到远端。0 成功，-1 失败（err 人话）。
  * 自己打包（game_saves_pack）与清理临时文件，调用方只给 tid/uid。
- * *out_bytes 回实际传出去的字节数（可为 NULL）。 */
+ * *out_bytes 回实际传出去的字节数（可为 NULL）。
+ * [CN-FORK] v0.5.2.162 随包写的 <uid>.meta.json 里多一个 `src_mtime`：打这份包时
+ * 主机上那份存档的最大 mtime。拉取前靠它认出「远端这份就是本地这份推上去的」，
+ * 见 sr_stat。取不到（本地目录已经没了等）就写 0，判定侧按「说不清」处理。 */
 int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
             long long *out_bytes, char *err, size_t errsz);
 
@@ -101,11 +104,17 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
  *   out_size  ← <uid>.zip 的字节数（smb2_stat / 协议 stat 直接拿，真实）
  *   out_mtime ← <uid>.zip 的 mtime（真实打包时间，smb2_stat 拿）
  *   out_files ← 推送时一并写的 <uid>.meta.json 里的 files；老存档没有 meta 时回 -1
+ * [CN-FORK] v0.5.2.162 out_src_mtime ← meta.json 里的 src_mtime：**这份包是从主机上
+ *   「哪个时刻的存档」打出来的**（推送那一刻本地存档目录的最大 mtime）。
+ *   拉取前的新旧判定要靠它 —— 光看 out_mtime 不行：那是**传输落盘的时刻**，
+ *   永远比存档本身晚，于是「刚推上去的这份」在对面看起来永远是最新的，
+ *   自动拉取会把它原样拉回来。老存档没有这个字段 → 回 0（= 说不清），
+ *   调用方据此退回 `.154` 那条保守判定，绝不因为缺字段就不拉。
  * 0 成功；SR_ENOTFOUND = 远端还没有这份（语义同 sr_pull，前端当「没得显示」）；
  * -1 = 配置 / 连接错误（err 人话）。FTP / HTTP 暂未实现，统一回 -1 + 说明。 */
 int sr_stat(const sr_cfg_t *c, const char *tid, const char *uid,
             long long *out_size, time_t *out_mtime, long long *out_files,
-            char *err, size_t errsz);
+            long long *out_src_mtime, char *err, size_t errsz);
 
 /* [CN-FORK] v0.5.2.159 删掉**远端**那一份存档（`<base>/<TID>/<uid>.zip`，连带
  * 推送时写的 `<uid>.meta.json`）。主机上的本地存档一个字节都不碰 —— 本地快照

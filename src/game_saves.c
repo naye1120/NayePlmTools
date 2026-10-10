@@ -2364,7 +2364,9 @@ int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t 
     long long files = -1;
     char err[256];
     err[0] = 0;
-    int st = sr_stat(&rc, tid, save, &sz, &mt, &files, err, sizeof(err));
+    /* [CN-FORK] v0.5.2.162 src_mtime 这一路不展示（前端「远程游戏」看的是传输落盘
+     * 的时间），传 NULL。 */
+    int st = sr_stat(&rc, tid, save, &sz, &mt, &files, NULL, err, sizeof(err));
     if (st == SR_ENOTFOUND) {
         int n = snprintf(buf, size,
                          "{\"configured\":true,\"exists\":false,\"mode\":\"%s\"}",

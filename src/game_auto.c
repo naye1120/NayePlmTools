@@ -477,15 +477,25 @@ int game_auto_plan(const char *prev, const char *cur,
 
 /* [CN-FORK] v0.5.2.154 拉取前的「谁更新」判定。纯函数，理由与全部边界见 game_auto.h。
  *
- * 一句话：**只有能确定「本地不比远程旧」时才跳过**，其余一律拉。
+ * 一句话：**只有能确定「远程那一份确实比本地新」时才拉**，说不清的一律照拉。
  * 特别注意 `local_have == 0`（本地那份已经没了：换机 / 误删 / 重装）—— 那正是
- * 拉取要救的场景，永远该拉，哪怕时间戳看起来「本地更新」（本地都没有，哪来的新）。 */
+ * 拉取要救的场景，永远该拉，哪怕时间戳看起来「本地更新」（本地都没有，哪来的新）。
+ *
+ * [CN-FORK] v0.5.2.162 用户追加的口径：「本地和远程一模一样就别拉，只有远程比本地
+ * 新才拉」。`.154` 那版做不到 —— remote_mtime 是**远端文件落盘的时刻**，比存档本身
+ * 的写入时刻晚，所以「刚推上去的这份」永远算「远程更新」，会被原样拉回来。
+ * 这一轮把比的量换成包自己的来源时刻 src_mtime（推送时写进 meta.json），
+ * 相等就是「同一份」→ 不拉；src_mtime 缺失（`.162` 之前推的老包）才退回旧口径。 */
 int ga_pull_needed(long long local_mtime, int local_have,
-                   long long remote_mtime, int remote_have) {
+                   long long remote_mtime, long long remote_src_mtime,
+                   int remote_have) {
     if (!remote_have) return 0;        /* 远端没有 → 没得拉 */
     if (!local_have) return 1;         /* 本地没有 → 必须拉（换机/误删） */
+    if (remote_src_mtime > 0) return remote_src_mtime > local_mtime;
+    /* 说不清远程那份的来源（老包没有 src_mtime）→ 只能拿落盘时刻比，
+     * 那条只用来防「用旧盖新」，不足以断定「一模一样」。 */
     if (local_mtime > remote_mtime) return 0;  /* 本地更新 → 不拿旧的盖新的 */
-    return 1;                          /* 相等也拉：远端至少不更旧，拉了无害 */
+    return 1;
 }
 
 /* ── 配置 ───────────────────────────────────────────────────────────────── */
@@ -669,9 +679,11 @@ typedef struct {
     int ok;       /* 成功份数 */
     int skipped;  /* 远端还没有（不算失败） */
     int failed;
-    /* [CN-FORK] v0.5.2.154 本地比远程新 → 主动跳过（用户口径：本地更新就不拉）。
+    /* [CN-FORK] v0.5.2.154 本地不比远程新 → 主动跳过（用户口径：本地更新就不拉）。
      * 与 skipped 分开计数：一个是「没得拉」，一个是「不该拉」，日志里混在一起
-     * 就分不清「对面没开」和「我这边更新」—— 而这两件事该做的动作完全不同。 */
+     * 就分不清「对面没开」和「我这边更新」—— 而这两件事该做的动作完全不同。
+     * [CN-FORK] v0.5.2.162 这一格还多盖一种：远程那份**就是**本地这份推上去的
+     * （src_mtime 与本地此刻相等），拉回来只是白跑一遍网络。 */
     int newer;
     long long files;
     long long bytes;
@@ -744,22 +756,28 @@ static void ga_do_inner(const char *tid, int act, const char *only_uid,
 
         /* [CN-FORK] v0.5.2.154 拉取前先比一比新旧（用户口径：「如果本地存档比远程
          * 存档要更新，则不拉取；本地存档比远程存档旧，可以直接拉取覆盖」）。
+         * [CN-FORK] v0.5.2.162 又加一句：「本地和远程一模一样就别拉，只有远程比本地
+         * 新的时候才拉」—— 判据由此换成远端包自己的来源时刻 src_mtime。
          *
          * 拉取是**整份覆盖**，所以「远程那份其实是旧的」是真正会丢数据的场景：
          * 昨晚玩到很晚没推上去，今天开机自动拉取就把昨晚的进度盖掉了。
+         * 而反过来，「远程就是本地这份推上去的」是**纯浪费**：几百 MB 走一遍网络，
+         * 盘上落回一模一样的东西 —— 用户看到的「推完又自动拉回来」就是这一格。
          *
-         * 三条出口：
+         * 四条出口：
          *   SR_ENOTFOUND → 远端还没有这份，算跳过（与原来一致）；
-         *   sr_stat == 0 → 拿到了远程时间戳，交给纯函数 ga_pull_needed 判；
-         *   sr_stat < 0  → 这条协议取不到时间戳（FTP/HTTP 的 sr_stat 暂未实现）
-         *                  → **说不清就照旧拉**，不能因为读不到时间戳让功能失效。
+         *   sr_stat == 0 → 拿到了远程元数据，交给纯函数 ga_pull_needed 判；
+         *   sr_stat < 0  → 这条协议取不到元数据 → **说不清就照旧拉**，
+         *                  不能因为读不到时间戳让功能失效；
+         *   src_mtime == 0（`.162` 之前推的老包）→ 判定内部退回 `.154` 口径。
          * 判定纯函数的全部边界见 include/game_auto.h。 */
         if (act == GA_ACT_PULL) {
-            long long rsz = 0, rfiles = 0;
+            long long rsz = 0, rfiles = 0, rsrc = 0;
             time_t rmt = 0;
             char serr[200];
             serr[0] = 0;
-            int st = sr_stat(&cfg->rc, tid, uids[i], &rsz, &rmt, &rfiles, serr, sizeof(serr));
+            int st = sr_stat(&cfg->rc, tid, uids[i], &rsz, &rmt, &rfiles,
+                             &rsrc, serr, sizeof(serr));
             if (st == SR_ENOTFOUND) {
                 res->skipped++;
                 continue;
@@ -767,11 +785,12 @@ static void ga_do_inner(const char *tid, int act, const char *only_uid,
             if (st == 0) {
                 long long lmt = 0;
                 int lhave = game_saves_local_mtime(tid, uids[i], &lmt);
-                if (!ga_pull_needed(lmt, lhave, (long long)rmt, 1)) {
+                if (!ga_pull_needed(lmt, lhave, (long long)rmt, rsrc, 1)) {
                     res->newer++;
-                    pldmgr_log("[PLDMGR] saves: %s/%s 本地存档更新"
-                               "（本地 %lld · 远程 %lld）→ 跳过拉取，不拿旧的盖新的\n",
-                               tid, uids[i], lmt, (long long)rmt);
+                    pldmgr_log("[PLDMGR] saves: %s/%s 远程那份不比本地新"
+                               "（本地 %lld · 远程落盘 %lld · 远程来源 %lld）"
+                               "→ 跳过拉取\n",
+                               tid, uids[i], lmt, (long long)rmt, rsrc);
                     continue;
                 }
             }
@@ -903,11 +922,13 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
     else
         snprintf(qty, sizeof(qty), "%lld 个文件 / %lld 字节", res->files, res->bytes);
 
-    /* 「本地更新」只在真的发生时露出来 —— 常驻一个 0 只会让这行更难扫。 */
+    /* 「未覆盖」只在真的跳过时露出来 —— 常驻一个 0 只会让这行更难扫。
+     * [CN-FORK] v0.5.2.162 措辞从「本地更新」改成「无需拉取」：这一格现在盖两种
+     * 情况（远程更旧 / 远程就是本地这份推上去的），后者说「本地更新」是假话。 */
     char newer[56];
     newer[0] = 0;
     if (res->newer > 0)
-        snprintf(newer, sizeof(newer), " · 本地更新 %d（未覆盖）", res->newer);
+        snprintf(newer, sizeof(newer), " · 无需拉取 %d（未覆盖）", res->newer);
 
     pldmgr_log("[PLDMGR] saves: 远程%s 结束 · %s · 成功 %d / 跳过 %d / 失败 %d%s · "
                "%s · 用时 %.0f ms%s%s\n",
@@ -1006,9 +1027,12 @@ int game_auto_sync_action(const char *body, size_t len,
     char note[240];
     if (res.ok == 0 && res.newer > 0)
         /* 这一条**必须排在 skipped 之前**：本地更新时我们一份都没拉，如果先去判
-         * skipped 就会报成「远程还没有这个游戏的存档」—— 与事实正好相反。 */
+         * skipped 就会报成「远程还没有这个游戏的存档」—— 与事实正好相反。
+         * [CN-FORK] v0.5.2.162 这句话现在盖两种情况：远程那份更旧，**和**远程那份
+         * 就是本地这份推上去的（一模一样）。两种都不该说成「失败」，也不该说成
+         * 「本地更新」—— 后者在刚推完的场景里是假的。 */
         snprintf(note, sizeof(note),
-                 "本地存档比远程新，已跳过拉取（%d 份未覆盖）", res.newer);
+                 "远程没有比本地更新的一份，已跳过拉取（%d 份未覆盖）", res.newer);
     else if (res.ok == 0 && res.skipped > 0)
         snprintf(note, sizeof(note), act == GA_ACT_PUSH ? "没有可推送的存档"
                                                         : "远程还没有这个游戏的存档");
