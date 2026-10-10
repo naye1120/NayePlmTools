@@ -1396,6 +1396,27 @@ POST 路由 `ROUTE_SYSTEM_APP_VISIBLE` **已登记进 `gr_post_limit`**（漏登
 `src_mtime == 本地最大 mtime` 与「缺字段回 0」）。全量 `bash test/run_host_tests.sh` **PASS**。
 变异 `gate` 的锚点改成**两条出口一起掐**（只掐一条另一条仍会跳过 = 红数虚低），
 期望从 4/4 改成判据命中 ≥6、总红 ≤7，实得 6 / 7；七条变异全被抓住。
+栈帧门通过（两处 meta 缓冲 160→256 仍在 32KB 额度内）。
+
+**出包记录**：正式出包版 `NayePlmTools_0.5.2.162-me.elf`（NAYE00001）/ `-ga.elf`（NAYE00004），
+功能提交 `20bcbae`，两包各 11,031,960 字节，md5 `2ac754a9e76996ef5e8086d4dcc912c8` /
+`70706bd8fde20ac5ef6d023fe47ebe91`，`frontend/dist/index.html` 948,126 字节
+（md5 `e013b097d10962e5cfcd416effafb593`）。内嵌标题
+`NayePlmTools v0.5.2.162 by naye (20bcbae, built at 2026-10-10 15:06:56 UTC)`；
+包内 `0.5.2.162` 5 处、`0.5.2.160`/`0.5.2.161` 残留各 0 处，`src_mtime` 2 处，
+`已跳过拉取` / `无需拉取` 各 1 处；`-Wall` 警告 0 条。`.161` 那批包已过期。
+
+⚠ **`.162` 第一次出的两个包是假的，坑在打包流程而不是代码**（下次改版本号必读）：
+`build_tiles.sh` 只看 `frontend/dist/index.html` 在不在，在就直接复用（日志那句
+「reusing existing frontend/dist」），而标题注入是 `sed s|[[TITLE_PLACEHOLDER]]|$TITLE|g` ——
+**占位符被上一次构建消费掉之后就再也不匹配**，于是 Makefile 欢天喜地打印
+「Title set to: NayePlmTools v0.5.2.162 … (20bcbae …)」，实际一个字节都没改：
+那批包烙的标题是 `v0.5.2.161 (3918662, built at 14:30:44)`，烧进前端的 `__APP_VERSION__`
+也还是 `0.5.2.161`。「退出码 0 + 文件存在 + 尺寸和上一版一样」当时全中，
+**抓住它的是自证里 `0.5.2.161` 残留 3 处这一条**。
+所以：**版本号 +1 之后必须 `make frontend-build`（重跑 vite，dist 里才会重新出现占位符、
+并把新的 `__APP_VERSION__` 烧进去），再 `bash tools/build_tiles.sh`**；出包自证必须 grep 旧版本号残留，
+不能只看 `BUILD_RC`。
 
 **`.155`（2026-10-09）`.154` 的收尾 —— 自动加载延时只修了一半。**
 
