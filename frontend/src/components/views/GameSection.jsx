@@ -128,7 +128,6 @@ function moveTid(arr, from, to) {
  * 点「完成」才一次性提交（见 saveOrder）。 */
 function GameCard({
   g, iconFailed, onIconError, onOpen, onAction, pref, onToggleFav,
-  onEnterSort,
   sorting, pos, total, onMove, onDragStart, onDragOver, onDrop, dragging,
 }) {
   const { t } = useTranslation()
@@ -246,7 +245,7 @@ function GameCard({
           </div>
         ) : (
           /* [CN-FORK] v0.5.2.167 「已安装 / 转储」徽标并进这一列（原来它独占右上角）。
-           * 右上角腾出来给 ★ 收藏 / ⇅ 排序 两颗按钮（见下面那一段）——
+           * v0.5.2.169 右上角只剩 ★ 收藏一颗（⇅ 排序 已搬到板块标题栏，见 <Section actions>）——
            * 三枚徽标本来就是同一类信息（这款游戏的固有属性），挤在一列比分在两处更好读。 */
           <div className="absolute top-1.5 left-1.5 flex flex-col items-start space-y-1">
             {platform && (
@@ -274,15 +273,18 @@ function GameCard({
             </span>
           </div>
         )}
-        {/* [CN-FORK] v0.5.2.167 ★ 收藏 / ⇅ 排序 从「卡片最底下单独一行」挪到**封面右上角**
+        {/* [CN-FORK] v0.5.2.167 ★ 收藏 从「卡片最底下单独一行」挪到**封面右上角**
             （用户：「排序和收藏图标是放在磁贴上层，不要单独成一行。找一个好点的位置」）。
             · 原来那一行压在封面下排四颗动作按钮之下，一张磁贴底下要堆 7 颗按钮 ——
               电视端尤其糟：遥控器得穿过一片按钮才够得到游戏名，而磁贴本身反而变小了。
-            · 右上角是整块封面最不被遮挡的一角，拇指（手机）与光标（PC）也都最近；
-              它原本属于「已安装 / 转储」徽标，那一枚已并进左上角的徽标列。
+            · 右上角是整块封面最不被遮挡的一角，拇指（手机）与光标（PC）也都最近。
             · 压在封面之上、在详情热区之外（z-10 + pointer-events-auto，与下排四颗同一套做法）。
             · 开窗态用**实心**琥珀而不是半透明：压在任意封面上都要一眼看出「开还是关」，
-              半透明那版在浅色封面上会消失。 */}
+              半透明那版在浅色封面上会消失。
+            · [CN-FORK] v0.5.2.169 ⇅ 排序 从磁贴**撤走**（用户：「游戏磁贴上边的排序按钮，
+              不要了，放到右上角蓝框位置」）—— 排序按钮改成「游戏列表」板块标题栏右上角**一颗**
+              （与 🏷 同步名字 / ↻ 刷新并排，见下面 <Section actions>），所有磁贴共用一个入口；
+              磁贴右上角现在只剩 ★ 收藏。 */}
         {!sorting && (
           <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 pointer-events-auto">
             <button
@@ -299,18 +301,6 @@ function GameCard({
               )}
             >
               <Star className={cn('w-4 h-4', pref?.fav && 'fill-current')} />
-            </button>
-            <button
-              type="button"
-              onClick={() => onEnterSort(g)}
-              title={t('game.sort_enter_hint', '排序：进入排序模式，拖动磁贴或按上下箭头把它放到想要的位置（完成后档位自动回到「默认」）')}
-              aria-label={t('game.sort', '排序')}
-              className={cn(
-                'inline-flex items-center justify-center w-7 h-7 rounded-lg border transition-colors',
-                'bg-black/55 border-white/20 text-white/80 hover:bg-black/80 hover:text-white',
-              )}
-            >
-              <ArrowUpDown className="w-4 h-4" />
             </button>
           </div>
         )}
@@ -748,6 +738,20 @@ export default function GameSection({ addToast, showConfirm, config }) {
         bodyClass="space-y-4"
         actions={
           <div className="flex items-center gap-2">
+            {/* [CN-FORK] v0.5.2.169 排序按钮：从磁贴搬到板块标题栏右上角（用户：「游戏磁贴上边的
+                排序按钮，不要了，放到右上角蓝框位置」）。点它进入排序模式（拖动磁贴 / 上下箭头
+                排位、左上角是位置号，点「完成」才提交）。放在 🏷 同步名字 / ↻ 刷新左边 ——
+                截图里蓝框圈的就是这个空位；所有磁贴共用一个入口。 */}
+            <button
+              type="button"
+              onClick={enterSort}
+              disabled={sorting || loading}
+              title={t('game.sort_enter_hint', '排序：进入排序模式，拖动磁贴或按上下箭头把它放到想要的位置（完成后档位自动回到「默认」）')}
+              aria-label={t('game.sort', '排序')}
+              className="icon-btn"
+            >
+              <ArrowUpDown className="w-5 h-5" />
+            </button>
             {/* [CN-FORK] v0.5.2.137 名字回填（见 syncNames 的注释）。放在刷新左边：
                 它是「补历史 / 补被冲掉的名字」，与刷新那种「重新读一遍」是两件事。 */}
             <button
@@ -783,7 +787,7 @@ export default function GameSection({ addToast, showConfirm, config }) {
             {!sorting && (
               <p className="text-[11px] text-zinc-500 flex items-center gap-1.5">
                 <Info className="w-3.5 h-3.5 shrink-0" />
-                <span>{t('game.tile_hint', '点磁贴查看游戏详情（详情里只能看信息，挂载 / 卸载 / 删除源请到 ShadowMount 后台）；封面上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能，右上角还有 ★ 收藏与 ⇅ 排序。')}</span>
+                <span>{t('game.tile_hint', '点磁贴查看游戏详情（详情里只能看信息，挂载 / 卸载 / 删除源请到 ShadowMount 后台）；封面上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能；磁贴右上角是 ★ 收藏，排序按钮在板块标题栏右上角。')}</span>
               </p>
             )}
 
@@ -823,7 +827,7 @@ export default function GameSection({ addToast, showConfirm, config }) {
               </div>
             ) : (
               /* [CN-FORK] v0.5.2.164 排序档位（用户：「实行这个磁贴列表显示排序」）。
-                 它只管「按什么规则自动排」，与磁贴上的 ⇅（手工指定位置）是两件事，
+                 它只管「按什么规则自动排」，与标题栏右上角的 ⇅（手工指定位置）是两件事，
                  所以两句说明要分开写清楚，不然用户会以为档位就是那个排序按钮。 */
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[11px] text-zinc-500 font-medium">{t('game.sort_by', '排序')}</span>
@@ -834,7 +838,7 @@ export default function GameSection({ addToast, showConfirm, config }) {
                   options={SORT_MODES.map((m) => ({ value: m, label: t(SORT_LABEL[m].k, SORT_LABEL[m].d) }))}
                 />
                 <span className="text-[11px] text-zinc-500">
-                  {t('game.pref_hint', '磁贴右上角的 ★ 是收藏（收藏的恒定排最前），⇅ 进入排序模式：拖动磁贴或按 ↑ ↓ 把它放到任意位置。手工顺序只在「默认」档生效，选「名称」「体积」时整表按规则自动排。')}
+                  {t('game.pref_hint', '磁贴右上角的 ★ 是收藏（收藏的恒定排最前）；排序入口是板块标题栏右上角的 ⇅（所有磁贴共用一个）。排序模式下拖动磁贴或按 ↑ ↓ 把它放到任意位置。手工顺序只在「默认」档生效，选「名称」「体积」时整表按规则自动排。')}
                 </span>
               </div>
             )}
@@ -853,7 +857,6 @@ export default function GameSection({ addToast, showConfirm, config }) {
                   onAction={openAction}
                   pref={prefs[g.tid]}
                   onToggleFav={toggleFav}
-                  onEnterSort={enterSort}
                   sorting={sorting}
                   pos={i}
                   total={sorting ? draft.length : orderedGames.length}
