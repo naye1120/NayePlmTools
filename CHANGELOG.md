@@ -1,3 +1,48 @@
+## v0.5.2.168 (CN-FORK) — 2026-10-11
+
+> 用户口径（本批三条，原文）：
+> 「这个游戏是实打实安装的」
+> 「红框圈起来的部分缩小」
+> 「@image 将排序标签放在红框」
+
+### ① 背景音乐弹窗误报「找不到 sce_sys」 —— 「这个游戏是实打实安装的」
+**根因**：`.155` 起的 `game_music_set_host()` 在找不到 sce_sys 时统一报「找不到这个游戏的 sce_sys
+（没装进 /user/app，或是个没登记的转储）」。但**镜像游戏**（mount 镜像、已登记到 `/user/app/<TID>`、
+sce_sys 锁在镜像里，游戏没跑时 `/user/app/<TID>/sce_sys` 不存在）`game_mgr_sce_sys_dir()` 同样返回 0，
+于是把「已登记但此刻不可达」与「真·裸 dump」混为一谈，对仁王3（PPSA32736）这类镜像游戏误报。
+- 现在区分两种情形：`/user/app/<TID>` 是目录（已登记）→ 提示「已登记但 sce_sys 此刻不可达
+  （镜像游戏锁在镜像里 / 只读源），音乐只写面板，PS5 主屏不会播」；否则才报「没装进 /user/app 或没登记的转储」。
+- 两种都不算失败，音乐照样在面板层生效（契约不变：返回 2 只表示没写进主机 sce_sys）。
+- 配套：把 `GAME_MGR_APP_BASE` 从 `game_mgr.c` 的 TU-local `#define` 提升到 `include/game_mgr.h`
+  带 `#ifndef` 保护，让 `game_music.c` 也能看到（之前它看不到这个宏会编译不过）。
+
+### ② + ③ 改名弹窗「名称 / 音乐」之间塞排序标签 —— 「红框缩小」+「排序标签放红框」
+用户两批需求本质同一块：改名弹窗里「游戏名称」块与「背景音乐」块之间红框圈出的大片空白。
+- 布局先收紧：去掉「磁贴图标」块的 `xl:row-span-2`（不再纵向跨两行压过音乐块），左列图标块按内容高度收住；
+  右列用 `flex flex-col gap-5 min-w-0` 把「名称块 + 音乐块」包起来。
+- 不单纯缩小，而是往那块空白里塞一个**只读**「当前排序名次」标签（指向箭头 `ArrowUpDown` + 文案
+  「当前排序：第 N 位 / 共 M 款（模式）」），既填了空白又回答「这款游戏在面板列表里排第几」。
+- 数据走 `GameSection` 已算好的 `orderedGames`（显示顺序 = 收藏 → 手工顺序 → 档位 → 原下标），
+  给 `RenameModal` 传 `sortPosition` / `sortTotal` / `sortLabel` 三 prop：
+  `sortPosition` = `orderedGames.findIndex(tid===当前游戏)`，`-1` 时不渲染；
+  `sortTotal` 用 `orderedGames.length` 而非后端 `count`（截断时 count 是被截后的总数，名次会算错）。
+- i18n 双改：`locales-overlay` 中英两包新增 `game.sort_position`（同时改 JSX 内联兜底，规避
+  i18next 内联兜底盖不住的坑）。
+
+### 测试与回归
+- `game112` 382 → **383**：旧几何断言「磁贴图标纵向跨两行（底边压过音乐块）」反向为
+  「图标底边 ≤ 音乐底边 - 2」（新布局图标不再跨行）；新增断言「排序标签塞在名称块与背景音乐块之间
+  （v0.5.2.168）」—— 弹窗里含 `.lucide-arrow-up-down` 的 `<div>` 其 `top ≥ name.bottom - 2` 且
+  `bottom ≤ music.top + 2`。
+- 后端 `prospero-clang -fsyntax-only` 通过（`game_music.c` 新宏可见性 + `game_mgr.h` 头文件改动）。
+
+**出包**：`NayePlmTools_0.5.2.168-me.elf`（NAYE00001 媒体栏）· `-ga.elf`（NAYE00004 游戏栏），
+两包各 **11,261,336 字节**，md5 `38ba90c08afd8689dc7b281e53b92b91` / `3c7a2d650eca63ac9e558595c136c93b`。
+内嵌标题 `NayePlmTools v0.5.2.168 by naye (296d162, built at 2026-10-11 08:39:30 UTC)` ——
+短哈希就是本轮提交号（**非 DEV**）；`frontend/dist/index.html` **1,149,344 字节**，与两颗 ELF
+内嵌网页段（偏移 **+2232032**）**逐字节一致**（`pkg_168_verify.sh` **ALL CHECKS PASSED**）；
+`0.5.2.167` 残留 **0** 处；标题哈希自检 `296d162` 与提交号一致。
+
 ## v0.5.2.167 (CN-FORK) — 2026-10-11
 
 > 用户口径（本批三条，原文）：
