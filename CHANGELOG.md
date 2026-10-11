@@ -41,7 +41,18 @@ tbl_conceptinfo : concept_name, concept_name_00 ... concept_name_30
 - 宿主套件 `overall: PASS`；`prospero-clang` 交叉编译 `tile_db.o` 零警告。
 - 前端未改，不需要重跑回归。
 
-### ⚠ 待真机验收（本轮**未**做写操作）
+### 出包
+`NayePlmTools_0.5.2.170-me.elf`（NAYE00001 媒体栏）· `-ga.elf`（NAYE00004 游戏栏），
+两包各 **11,261,336 字节**，md5 `458712ba1c67bc2c89a0b8c0ea970750` /
+`2f586f7be8208567f4aa290f4a699018`。标题 `NayePlmTools v0.5.2.170 by naye (bedea87, …)`
+（真实 commit 哈希非 DEV；`[TITLE_PLACEHOLDER]` 已消费；`.169` 残留 0；内嵌网页 blob 与
+`frontend/dist/index.html` 逐字节一致）。`pkg_170_verify.sh` **ALL CHECKS PASSED** ——
+继承 `.169` 全部前端指纹（它们仍全绿 ⇒ 这轮纯后端改动没碰坏前端），**新增 `.170` ELF 层
+SQL 字面量指纹**：`key GLOB 'TITLE_[0-9]*'` 在（2 处 = UPDATE + 计数 SELECT）、
+`concept_name_[0-9]*` 在、旧写法 `key IN ('TITLE','TITLE_01')` 残留 **0**、
+GLOB 字符类 `[0-9]` 在（`TITLE_ID` 已排除）。
+
+### ⚠ 待真机验收
 真机 `192.168.1.214` 上改名的**完整链路仍需真机复核**：在面板改一个名字后，确认
 `TITLE_11`（简中）等语言槽与 `app.db` 的 `tbl_contentinfo.titleName` 都变成新名，
 SMP（`:10101/api/v1/games` → `title_name`）与主屏也跟着变。
