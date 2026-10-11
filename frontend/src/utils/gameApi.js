@@ -719,6 +719,12 @@ export function getTileGroup(opts) {
   return request(`/tile_group${q()}`, opts)
 }
 
+/* [CN-FORK] v0.5.2.167 **目前没有人调用它**。
+ * 磁贴上的「📌 置顶」按钮整条下线（用户：「这三个图标，将置顶功能取消」）——
+ * 「把某款排到最前」由排序模式里的「移到最前 / 拖到第 1 位」做掉了，
+ * 两颗按钮干同一件事只会让人不知道该点哪个。
+ * ⚠ 后端路由与这个包装**都保留**：它是唯一能把条目**新增**进主机 MyHome 组的入口
+ * （`/tile_group_order` 只能重排**已经在组里**的），删掉就没有回头路。 */
 export function setTilePin(tid, pinned, opts) {
   return request('/tile_group_pin', { ...opts, method: 'POST', body: { tid, pinned } })
 }
