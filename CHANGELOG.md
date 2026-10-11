@@ -98,8 +98,17 @@
   就**整包白屏**（本轮踩到，「关于」页自带一份官方 GitHub mark 的 SVG 替掉）。
   另加一条全量核查：`frontend/src` 里所有 `from 'lucide-react'` 的具名导入必须真的存在。
 
-**出包**：`NayePlmTools_0.5.2.165-me.elf` · `-ga.elf`，两包各 **11,0xx,xxx 字节**，
-内嵌标题与 md5 见下方「出包核对」小节。
+**出包**：`NayePlmTools_0.5.2.165-me.elf`（NAYE00001 媒体栏）· `-ga.elf`（NAYE00004 游戏栏），
+两包各 **11,064,728 字节**，md5 `b275ef5435d0daebb95d085341ac6abc` / `f08c35fdfc6f2f235f0e37d121174caa`。
+内嵌标题 `NayePlmTools v0.5.2.165 by naye (a1195d6, built at 2026-10-11 02:59:36 UTC)` ——
+短哈希就是本轮提交号；`frontend/dist/index.html` **978,701 字节**，与两颗 ELF 内嵌网页段**逐字节一致**；
+`0.5.2.162` 残留 **0** 处；`-Wall` 警告 0 条；核对脚本 `pkg_165_verify.sh` **295 项全过**
+（第 6b / 7b / 11h 节是本轮新加的：产物里必须含本轮的中文字面量与源码级锚点）。
+⚠ **这一轮第一次出包直接编译失败**：`include/game_music.h` **不自包含**（用了 `size_t` 却没引
+`<stddef.h>`），而报错点全落在调用方 `http_server.c` 上（`call to undeclared function 'game_music_set'`），
+很容易看成「函数没实现」。修完之后第二次又炸在**同一个文件没被 `#include` 进去**（`http_server.c`
+里加了 `game_music.h` 才通）。**新加头文件一律引齐自己用到的类型；新加模块要同时把
+「Makefile 的 SRCS」和「http_server.c 的 include」两处补上。**
 ⚠ 尚未真机验收：①「改名后重启主机 / 待机唤醒，主屏磁贴真的换了名」；
 ②「garlic 导入后进游戏能读到这份存档」；③ 收藏 / 置顶在 PS5 主屏的固定位置表现。
 
