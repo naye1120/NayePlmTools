@@ -1,204 +1,181 @@
 import React from 'react'
-import { Heart, ScrollText, Info, BookMarked } from 'lucide-react'
+import { Info, BookMarked, ScrollText, Heart } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
 import { isPS5 } from '../../utils/helpers'
 import PageHead from '../ui/PageHead'
 import Section from '../ui/Section'
 
-/* [CN-FORK] v0.5.2.154 「关于」页 —— 设置页下面的新菜单。
- *
- * 用户口径：「在设置下边增加一个菜单叫关于，把更新日志和支持作者的内容全部放到关于里面」。
- * 于是原来分散在两处的两块内容搬到这里合并：
- *   · 设置页 → 诊断 → 「更新日志」（`CHANGELOG` 数组 + 一个 Modal）
- *   · 设置页 → 「支持作者」（一个跳去 `view='donate'` 的入口）
- * 并把原来独立的「支持作者」页（`DonateView`）整个吸收进来 —— 那个页面的内容本来就是
- * 三块：捐赠卡片 / 关于本 Fork / 参考与致谢，正好都是「关于」该讲的事。
- *
- * ⚠ 「参考与致谢」必须与「关于本 Fork」**同页**（原 DonateView 里的约定）：用户要求所有
- * 引用的开源作者与地址都标识到与原作者署名相同的页面。搬到本页时两块仍然挨着，别拆开。
- *
- * 页面容器按 v0.5.2.99 的约定：根节点 `space-y-6`、有且只有一个 `<PageHead>`、不限宽不居中。 */
+/* [CN-FORK] v0.5.2.163 lucide-react 1.x **删掉了全部品牌图标**（`Github` / `Twitter` …），
+ * 从它那儿 import `Github` 会在模块求值时直接抛
+ *   `does not provide an export named 'Github'`
+ * ——整个 App 白屏（Vite 预打包的 dep 是静态 ESM，缺一个具名导出就整包失败）。
+ * 所以这里自带一份官方 GitHub mark（viewBox 16×16，currentColor 填充），
+ * 不引第三方品牌图标包。 */
+function GithubMark({ className = '' }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  )
+}
+
+/* [CN-FORK] v0.5.2.163 「关于」页重构：
+ *   - 移除原「支持作者」独立 Section（用户口径：「取消支持作者板块」）。
+ *   - 在「关于本 Fork」**右边**加：原作者捐赠链接 + 本作者捐赠二维码。
+ *     这是把「支持作者」内容合并到 fork 板块的方式 —— 用户在同一处能看到
+ *     上面 fork 信息 + 右边「原作者 itsPLK 捐赠页 / 本 fork naye 捐赠二维码」。
+ *   - 参考与致谢简化为「一行一个作者 + 项目链接」，不写到具体文件（用户口径）。
+ *   - 更新日志顶部追加本轮新增条目（标日期）。
+ */
+
+/* [CN-FORK] v0.5.2.163 参考致谢按用户口径收窄为「一个作者一行 + 项目链接」，
+  不再写「哪个文件」那一截。多位作者合作一个项目时也归并成一行。 */
 const REFERENCES = [
-  {
-    author: 'John Törnblom', authorUrl: 'https://github.com/john-tornblom',
-    project: 'ps5-payload-sdk', projectUrl: 'https://github.com/ps5-payload-dev/sdk',
-    where: 'samples/hwinfo/main.c',
-    whereUrl: 'https://github.com/ps5-payload-dev/sdk/tree/master/samples/hwinfo',
-  },
-  {
-    author: 'John Törnblom', authorUrl: 'https://github.com/john-tornblom',
-    project: 'ps5-payload-sdk', projectUrl: 'https://github.com/ps5-payload-dev/sdk',
-    where: 'samples/test_privileges/main.c',
-    whereUrl: 'https://github.com/ps5-payload-dev/sdk/tree/master/samples/test_privileges',
-  },
-  {
-    author: 'John Törnblom', authorUrl: 'https://github.com/john-tornblom',
-    project: 'ps5-payload-sdk', projectUrl: 'https://github.com/ps5-payload-dev/sdk',
-    where: 'sce_stubs/libkernel_sys.c',
-    whereUrl: 'https://github.com/ps5-payload-dev/sdk/blob/master/sce_stubs/libkernel_sys.c',
-  },
-  {
-    author: 'manos555555', authorUrl: 'https://github.com/manos555555',
-    project: 'PS5-Upload-Suite', projectUrl: 'https://github.com/manos555555/PS5-Upload-Suite',
-    where: 'payload/main.c',
-    whereUrl: 'https://github.com/manos555555/PS5-Upload-Suite/blob/main/payload/main.c',
-  },
-  {
-    author: 'drakmor', authorUrl: 'https://github.com/drakmor',
-    project: 'ps5-hwinfo', projectUrl: 'https://github.com/drakmor/ps5-hwinfo',
-    where: 'main.c',
-    whereUrl: 'https://github.com/drakmor/ps5-hwinfo',
-  },
-  {
-    author: 'Pharaoh2k', authorUrl: 'https://github.com/Pharaoh2k',
-    project: 'ps5debug-NG', projectUrl: 'https://github.com/Pharaoh2k/ps5debug-NG',
-    where: 'PROTOCOL.md · debugger/source/meta.c',
-    whereUrl: 'https://github.com/Pharaoh2k/ps5debug-NG',
-  },
-  /* [CN-FORK] v0.5.2.154 存档同步 / 自动存档引擎这一轮的参考项目。 */
-  {
-    author: 'earthonion', authorUrl: 'https://github.com/earthonion',
-    project: 'garlic-savemgr', projectUrl: 'https://github.com/earthonion/garlic-savemgr',
-    where: 'src/main.c（存档镜像挂载 / 导入导出）',
-    whereUrl: 'https://github.com/earthonion/garlic-savemgr',
-  },
+  { author: 'John Törnblom', authorUrl: 'https://github.com/john-tornblom', project: 'ps5-payload-sdk', projectUrl: 'https://github.com/ps5-payload-dev/sdk' },
+  { author: 'manos555555', authorUrl: 'https://github.com/manos555555', project: 'PS5-Upload-Suite', projectUrl: 'https://github.com/manos555555/PS5-Upload-Suite' },
+  { author: 'drakmor', authorUrl: 'https://github.com/drakmor', project: 'ps5-hwinfo', projectUrl: 'https://github.com/drakmor/ps5-hwinfo' },
+  { author: 'Pharaoh2k', authorUrl: 'https://github.com/Pharaoh2k', project: 'ps5debug-NG', projectUrl: 'https://github.com/Pharaoh2k/ps5debug-NG' },
+  { author: 'earthonion', authorUrl: 'https://github.com/earthonion', project: 'garlic-savemgr', projectUrl: 'https://github.com/earthonion/garlic-savemgr' },
 ]
 
-/* [CN-FORK] v0.5.2.94 更新日志从写死在 JSX 里的 45 段副本改成数据数组 + 共用 <Modal>。
- * v0.5.2.154 跟着「关于」页从设置页搬过来，Modal 换成页内板块（内容长，弹窗里滚不如直接看）。 */
 /* [CN-FORK] v0.5.2.156 用户：「精简所有更新日志，只把现在有的功能简单列出来就可以，
- * 作为第一版更新日志」。原来这里是 46 条「哪个版本改了什么」的历史 —— 对用面板的人
- * 没什么用，他要知道的是「这个工具现在能干什么」。所以整份历史撤掉，换成按板块的功能
- * 清单，版本号只留一条「第一版」。逐版细节去仓库 `CHANGELOG.md`（那份保留不动）。 */
+ * 作为第一版更新日志」。`.163` 在这份「第一版」基础上追加本轮新功能 —— 都是按板块
+ * 描述能力，不是逐版历史。 */
 const CHANGELOG = [
+  { v: "2026-10-11 · 移动端二级菜单", t: "手机端 PKG 安装 / 常用配置 / 游戏管理 / 活动进程 / 设置 / 关于 改为二级下拉菜单，桌面与电视端保持原侧栏。" },
+  { v: "2026-10-11 · 自动存档屏蔽自制应用", t: "自动存档（启动时拉取 / 退出时推送）跳过 homebrew 类游戏，避免误推镜像 / 误拉覆盖。" },
+  { v: "2026-10-11 · 存档转换", t: "把其它用户的存档一键转换到当前用户可用，逐文件合并而非整份替换。" },
+  { v: "2026-10-11 · 存档管理显示游戏编号", t: "存档管理标题里把游戏 TID 直接显示在名称后边。" },
+  { v: "2026-10-11 · 名称与背景重排", t: "磁贴图标占左侧大格（放大），右侧上下两栏：游戏名称 / 背景音乐，二者各占一行。" },
+  { v: "2026-10-11 · 媒体分享二维码", t: "多媒体管理每个下载按钮旁加分享按钮，扫码即可在手机上打开对应资源。" },
+  { v: "2026-10-11 · 关于页重排", t: "取消独立的「支持作者」板块，原作者捐赠链接与本 fork 捐赠二维码并入「关于本 Fork」右侧。参考与致谢精简为一行一项。" },
   { v: "第一版 · 当前功能", t: "按板块列出这个工具现在能做的事。" },
   { v: "Payload 管理", t: "浏览 / 安装 / 更新 / 删除 payload；内置云端仓库与自定义来源；装完自动同步越狱引导器（ps5_autoloader）。" },
   { v: "自动加载", t: "编排开机自动加载序列（延时行 + 载荷名），可上移 / 下移 / 插延时；写回幂等，不会自己多出「1 秒延时」。" },
   { v: "游戏管理", t: "扫描主机与 dump 游戏，磁贴墙 + 详情；改名写回系统 app.db / appinfo.db（电视主屏跟着变）；换背景与图标；多媒体管理。" },
-  { v: "存档管理", t: "远程拉取 / 推送（FTP / HTTP / SMB）；本地快照（每次游戏退出后自动存一份）；garlic 兼容导入；拉取前比新旧；游戏运行中禁推拉。" },
+  { v: "存档管理", t: "远程拉取 / 推送（FTP / HTTP / SMB）；本地快照（每次游戏退出后自动存一份）；garlic 兼容导入；拉取前比新旧；游戏运行中禁推拉；存档转换。" },
   { v: "账号工具", t: "登录 / 登出 / 反激活，头像上传与裁剪。" },
   { v: "PKG 安装", t: "内嵌 PKG Manager，可在面板里上传、启停、更新版本。" },
   { v: "常用入口", t: "手动添加插件 / 局域网服务快捷卡片，逐条 TCP 探活，点卡片新标签打开。" },
   { v: "风扇温控", t: "读风扇状态，向 /dev/icc_fan 下发目标温度。" },
   { v: "其它", t: "远程游玩配对、SMP（ShadowMountPlus）探活与拉起、运行日志查看。" },
-  { v: "界面", t: "深色主题；电视端（遥控器）适配；刷新后停在当前页；存档、多媒体等面板「铺满右侧」。" },
+  { v: "界面", t: "深色主题；电视端（遥控器）适配；移动端二级菜单；刷新后停在当前页；存档、多媒体等面板「铺满右侧」。" },
 ]
 
 const AboutView = ({ version }) => {
   const { t } = useTranslation()
-  const donateUrl = 'https://github.com/itsPLK/ps5-payload-manager/blob/main/DONATE.md';
-  const upstreamRepoUrl = 'https://github.com/itsPLK/ps5-payload-manager';
+  const upstreamRepoUrl = 'https://github.com/itsPLK/ps5-payload-manager'
+  /* [CN-FORK] v0.5.2.163 原作者的捐赠入口（来自其上游仓库 DONATE.md）。
+   * 本 fork 维护者 naye 的捐赠二维码：左侧面板展示，二维码内容是收款码链接
+   * （项目尚未公布占位，发布者填入真实收款码后即可扫码打赏）。 */
+  const originalDonateUrl = 'https://github.com/itsPLK/ps5-payload-manager/blob/main/DONATE.md'
+  const forkDonateUrl = 'https://github.com/naye/ps5-payload-manager'
 
   return (
     <div className="space-y-6">
       <PageHead
         title={t("about.title", "关于")}
-        desc={t("about.desc", "支持作者、本分支信息、参考致谢与更新日志。")}
+        desc={t("about.desc", "本分支信息、参考致谢与更新日志。")}
       />
 
-      {/* ── 支持作者（原「支持作者」页，设置页的入口已撤）────────────────── */}
+      {/* ── 关于本 Fork + 捐赠栏**：左右并排 ──────────────────────────────
+       * 左侧：fork 信息（原作者 / 上游 / 程序名 / 版本 / 维护者 naye）。
+       * 右侧：两块「支持」 —— 上方是原作者 itsPLK 的捐赠链接（按钮指向其 DONATE.md），
+       *        下方是本 fork 维护者 naye 的捐赠二维码（QRCodeSVG 直接画在板上）。
+       * 这就是用户要求的「取消支持作者板块，在关于本fork右边加原作者捐赠连接和本作者捐赠二维码」
+       * 的实现 —— 不再单开一个 Section，并进同一行更紧凑。 */}
       <Section
-        id="donate"
-        icon={Heart}
-        title={t("about.donate_title", "支持作者")}
-        bodyClass="flex flex-col xl:flex-row items-center justify-center gap-10 xl:gap-20 py-6 xl:py-10"
+        id="fork"
+        icon={Info}
+        title={t("donate.fork_title", "关于本 Fork")}
+        bodyClass="grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-8 xl:gap-10 items-start"
       >
-        <div className="flex flex-col items-center text-center space-y-6 md:space-y-8 flex-1 px-4">
-          <div className="p-6 md:p-8 rounded-[2.5rem] md:rounded-[3.5rem] bg-red-600/10 border border-red-600/20 text-red-500 shadow-2xl inline-flex">
-            <Heart className="w-14 h-14 md:w-20 md:h-20 fill-current animate-pulse" />
-          </div>
-          <div className="space-y-4 md:space-y-6">
-            <h3 className="text-2xl md:text-4xl font-black text-white uppercase italic tracking-tighter">
-              {t("donate.title_1", "Support")} <span className="text-red-500">{t("donate.title_2", "Project")}</span>
-            </h3>
-            <p className="text-base md:text-lg text-zinc-400 font-medium leading-relaxed italic">
-              {t("donate.description", "如果你喜欢本项目，可以支持原作者。非常感谢！")}
-            </p>
-          </div>
+        {/* 左侧：fork 文本信息 */}
+        <div className="space-y-3 min-w-0">
+          <p className="text-sm text-zinc-300 leading-relaxed">
+            {t("donate.fork_desc", "本程序是 Payload Manager 的分支，由 {{maintainer}} 维护。", { maintainer: "naye" })}
+          </p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+            <dt className="text-zinc-500">{t("donate.fork_original_author", "原作者")}</dt>
+            <dd className="text-white font-semibold">itsPLK</dd>
+            <dt className="text-zinc-500">{t("donate.fork_app_name", "程序名")}</dt>
+            <dd className="text-white font-semibold">Payload Manager</dd>
+            <dt className="text-zinc-500">{t("donate.fork_upstream", "上游地址")}</dt>
+            <dd>
+              <a href={upstreamRepoUrl} target="_blank" rel="noopener noreferrer" className="text-ps-blue hover:underline break-all">
+                github.com/itsPLK/ps5-payload-manager
+              </a>
+            </dd>
+            <dt className="text-zinc-500">{t("donate.fork_upstream_version", "上游版本")}</dt>
+            <dd className="text-white font-semibold">v0.5.2</dd>
+            <dt className="text-zinc-500">{t("donate.fork_version", "本 Fork 版本")}</dt>
+            {/* [CN-FORK] v0.5.2.113 现读构建时烧入的 __APP_VERSION__（vite.config.js
+                从 include/pldmgr.h 的 MENU_VERSION 取）。dev server 下它是 'dev'。 */}
+            <dd className="text-white font-semibold">v{version || __APP_VERSION__}</dd>
+          </dl>
         </div>
 
-        <div className="flex items-center justify-center flex-1 px-4">
-          {isPS5 ? (
-            <div className="bg-white p-6 md:p-8 rounded-[2rem] md:rounded-[3rem] shadow-[0_0_60px_rgba(220,38,38,0.3)]">
-              <QRCodeSVG value={donateUrl} size={isPS5 ? 280 : 180} level="H" />
+        {/* 右侧：两块捐赠栏（原作者按钮 + 本 fork 二维码） */}
+        <div className="flex flex-col gap-6 items-center xl:items-end min-w-0 w-full xl:w-[18rem]">
+          {/* 上：原作者捐赠入口 —— 按钮而不是二维码：itsPLK 的 DONATE.md 里写的是
+              「查看捐赠方式」而非单一收款码，按钮形态更合适（点开新页去看）。 */}
+          <a
+            href={originalDonateUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full flex items-center gap-3 px-4 py-3 bg-red-600/10 border border-red-600/30 hover:bg-red-600/20 rounded-2xl transition-colors group"
+          >
+            <span className="p-2 rounded-xl bg-red-600/20 text-red-400 group-hover:text-red-300 shrink-0">
+              <GithubMark className="w-5 h-5" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[11px] uppercase tracking-wider text-red-300/80 font-bold">原作者</span>
+              <span className="block text-white font-bold truncate">支持 itsPLK →</span>
+            </span>
+          </a>
+
+          {/* 下：本 fork 维护者捐赠二维码 —— 固定 QR 码形态，与头像/原本那个
+              「查看捐赠方式」按钮属于同一档视觉。SVG 直接画，规避图片外链。 */}
+          <div className="w-full flex flex-col items-center gap-2 px-4 py-4 rounded-2xl border border-ps-blue/30 bg-ps-blue/5">
+            <div className="bg-white p-3 rounded-xl shadow-[0_0_40px_rgba(56,139,253,0.2)]">
+              <QRCodeSVG value={forkDonateUrl} size={isPS5 ? 200 : 140} level="H" />
             </div>
-          ) : (
-            <a
-              href={donateUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-8 md:px-12 py-4 md:py-5 bg-red-600 text-white text-base md:text-xl font-black uppercase rounded-2xl hover:bg-red-500 transition-all transform active:scale-95 shadow-[0_0_50px_rgba(220,38,38,0.4)] text-center block"
-            >
-              {t("donate.view_options_btn", "查看捐赠方式")}
-            </a>
-          )}
+            <span className="flex items-center gap-1.5 text-ps-blue text-xs font-bold uppercase tracking-wider mt-1">
+              <Heart className="w-3.5 h-3.5 fill-current" />
+              本 Fork 维护者 naye
+            </span>
+          </div>
         </div>
       </Section>
 
-      {/* ── 关于本 Fork：原作者、上游地址、程序名、上游/本 fork 版本与维护者 naye 署名 ── */}
-      <Section id="fork" icon={Info} title={t("donate.fork_title", "关于本 Fork")} bodyClass="space-y-3">
-        <p className="text-sm text-zinc-300 leading-relaxed">
-          {t("donate.fork_desc", "本程序是 Payload Manager 的分支，由 {{maintainer}} 维护。", { maintainer: "naye" })}
-        </p>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-          <dt className="text-zinc-500">{t("donate.fork_original_author", "原作者")}</dt>
-          <dd className="text-white font-semibold">itsPLK</dd>
-          <dt className="text-zinc-500">{t("donate.fork_app_name", "程序名")}</dt>
-          <dd className="text-white font-semibold">Payload Manager</dd>
-          <dt className="text-zinc-500">{t("donate.fork_upstream", "上游地址")}</dt>
-          <dd>
-            <a href={upstreamRepoUrl} target="_blank" rel="noopener noreferrer" className="text-ps-blue hover:underline break-all">
-              github.com/itsPLK/ps5-payload-manager
-            </a>
-          </dd>
-          <dt className="text-zinc-500">{t("donate.fork_upstream_version", "上游版本")}</dt>
-          <dd className="text-white font-semibold">v0.5.2</dd>
-          <dt className="text-zinc-500">{t("donate.fork_version", "本 Fork 版本")}</dt>
-          {/* [CN-FORK] v0.5.2.113 兜底值原来写死 `'0.5.2.112'` —— 版本一涨它就是**过期的**，
-              而这个字段正是用来告诉用户「你现在装的是哪一版」。改成读构建时烧入的
-              __APP_VERSION__（vite.config.js 从 include/pldmgr.h 的 MENU_VERSION 取），
-              下一次升版本这里不用再有人记得改。dev server 下它是 'dev'，也不比旧版本号差。 */}
-          <dd className="text-white font-semibold">v{version || __APP_VERSION__}</dd>
-        </dl>
-        <p className="text-xs text-zinc-500 leading-relaxed">
-          {t("donate.fork_donate_note", "上方捐赠按钮支持的是原作者 itsPLK，与本 fork 无关。")}
-        </p>
-      </Section>
-
-      {/* ── 参考与致谢：与上方本 fork 署名**同页**（用户要求），逐条给作者主页与具体出处 ── */}
+      {/* ── 参考与致谢：精简为一行一项（用户口径），去掉「具体文件」那截 ── */}
       <Section
         id="refs"
         icon={BookMarked}
         title={t("donate.ref_title", "参考与致谢")}
         count={REFERENCES.length}
-        bodyClass="space-y-4"
+        bodyClass="space-y-3"
       >
         <p className="text-xs text-zinc-500 leading-relaxed">
-          {t("donate.ref_desc", "本 fork 的改动参考了下列开源项目，逐条标注作者与具体出处。")}
+          {t("donate.ref_desc", "本 fork 的改动参考了下列开源项目，每个作者与项目一行。")}
         </p>
-        <ul className="space-y-3">
+        <ul className="space-y-2">
           {REFERENCES.map((r) => (
-            <li key={`${r.author}-${r.where}`} className="text-sm leading-relaxed">
-              <div className="flex flex-wrap items-baseline">
-                <a href={r.authorUrl} target="_blank" rel="noopener noreferrer" className="mr-2 text-white font-semibold hover:underline">
-                  {r.author}
-                </a>
-                <span className="mx-1.5 text-zinc-600">·</span>
-                <a href={r.projectUrl} target="_blank" rel="noopener noreferrer" className="mr-2 text-ps-blue hover:underline break-all">
-                  {r.project}
-                </a>
-                <span className="mx-1.5 text-zinc-600">—</span>
-                <a href={r.whereUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:underline break-all font-mono text-xs">
-                  {r.where}
-                </a>
-              </div>
+            <li key={`${r.author}-${r.project}`} className="text-sm leading-relaxed flex flex-wrap items-baseline">
+              <a href={r.authorUrl} target="_blank" rel="noopener noreferrer" className="mr-2 text-white font-semibold hover:underline">
+                {r.author}
+              </a>
+              <span className="mx-1.5 text-zinc-600">·</span>
+              <a href={r.projectUrl} target="_blank" rel="noopener noreferrer" className="text-ps-blue hover:underline break-all">
+                {r.project}
+              </a>
             </li>
           ))}
         </ul>
       </Section>
 
-      {/* ── 更新日志（原设置页 → 诊断 → 「更新日志」弹窗里的那份数组）────────── */}
+      {/* ── 更新日志（顶部为本轮新功能，标日期；下面是原「第一版」清单）── */}
       <Section
         id="changelog"
         icon={ScrollText}
@@ -207,11 +184,11 @@ const AboutView = ({ version }) => {
         bodyClass="space-y-4 text-sm leading-relaxed"
       >
         <p className="text-xs text-zinc-500 leading-relaxed">
-          {t("about.changelog_desc", "第一版：当前已有的功能。更细的逐版历史见仓库 CHANGELOG.md。")}
+          {t("about.changelog_desc", "本轮新功能（标日期）+ 第一版按板块列出的能力清单。更细的逐版历史见仓库 CHANGELOG.md。")}
         </p>
         {CHANGELOG.map((c) => (
           <div key={c.v} className="space-y-1">
-            <p className="font-bold text-ps-blue">{c.v}</p>
+            <p className={`font-bold ${/^\d{4}-\d{2}-\d{2}/.test(c.v) ? 'text-amber-400' : 'text-ps-blue'}`}>{c.v}</p>
             <p className={c.strike ? "text-zinc-500 line-through" : "text-zinc-400"}>{c.t}</p>
           </div>
         ))}

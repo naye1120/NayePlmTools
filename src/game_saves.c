@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
@@ -36,6 +37,54 @@
 #endif
 #define GS_MAX_DEPTH 16
 #define GS_MAX_WALK 200000u
+
+/* ── [CN-FORK] v0.5.2.165 当前用户（前台 uid）───────────────────────────────
+ * 「导入/上传落到哪个用户」这件事之前是**猜**出来的：前端拿 saves[0]（= uid 升序的
+ * 第一个用户），**当前用户在这款游戏上还没有存档时它指向的是别人** —— 用户看到的是
+ * 「导入完了、进游戏还是没生效」。真机口径只有一条可信：`sceUserServiceGetForegroundUser`
+ * （本仓库既有封装 `sys_get_foreground_user`，src/psaccounts/sys_lite.c）。
+ *
+ * 下面这个**弱符号**是给宿主测试用的兜底（存档那几个关卡只链 game_saves.c，不链
+ * psaccounts）：同名弱符号 + 强符号在静态链接里是标准做法，链接器恒挑 sys_lite.o 那份。
+ * 用弱符号而不是「注册一个 provider 函数指针」（本文件对 game_auto 的 state provider
+ * 是那种写法）是因为这个值**每次请求都要现取** —— 用户可能在两次请求之间切了用户，
+ * 注册一次就等于把它冻在启动那一刻。 */
+__attribute__((weak)) uint32_t sys_get_foreground_user(char *name_out, size_t name_out_size) {
+    (void)name_out;
+    (void)name_out_size;
+    return 0; /* 0 = 拿不到（宿主测试 / 没有登录用户），调用方按「不知道」处理 */
+}
+
+/* 前台 uid 的**目录名形态**（与 /user/home 下的目录名同形，所以能直接当 save 参数用）。
+ * 返回 0 成功（*out 已填），-1 = 拿不到（*out 是空串）。
+ *
+ * 形态是**十六进制**，不是十进制：真机目录名形如 `1a1d3627`，garlic 也是
+ * `snprintf(uid_hex, "%x", local_uid)` 出来的。前导零那一版也试一下、**以盘上真有的
+ * 为准** —— 猜错形态的后果是「导入报成功、主机上没有这个用户」，而这两种写法
+ * 差一次 stat 的成本，不值得赌。 */
+int game_saves_current_uid(char *out, size_t osz) {
+    if (out && osz) out[0] = 0;
+    if (!out || osz < 2) return -1;
+    uint32_t uid = sys_get_foreground_user(NULL, 0);
+    if (uid == 0) return -1;
+    char plain[16], padded[16];
+    snprintf(plain, sizeof(plain), "%x", (unsigned)uid);
+    snprintf(padded, sizeof(padded), "%08x", (unsigned)uid);
+    for (int i = 0; i < 2; i++) {
+        const char *cand = i ? padded : plain;
+        if (i == 1 && !strcmp(plain, padded)) break;
+        char p[512];
+        struct stat st;
+        if (snprintf(p, sizeof(p), "%s/%s", GS_HOME, cand) < (int)sizeof(p) &&
+            stat(p, &st) == 0 && S_ISDIR(st.st_mode)) {
+            snprintf(out, osz, "%s", cand);
+            return 0;
+        }
+    }
+    /* 盘上两个都没有（换机 / 目录还没建）→ 回无前导零那个，与 garlic 同一口径。 */
+    snprintf(out, osz, "%s", plain);
+    return 0;
+}
 
 /* ── 基本校验 ──────────────────────────────────────────────────────────────
  * tid 与槽名都要过这一关：拿不到 '/' 也拿不到 '.'，路径穿越在函数入口就被挡死。 */
@@ -306,11 +355,24 @@ static int gs_root_by_uid(const char *tid, const char *uid, gs_root_t *out) {
     return rc;
 }
 
-/* 上传要往里写，所以连「这个游戏还没有存档」时也得把根定出来：
- * 指定了 uid 就用它，否则取第一个用户目录，落在 savedata_prospero 下。 */
+/* 上传/导入要往里写，所以连「这个游戏还没有存档」时也得把根定出来：
+ * 指定了 uid 就用它；**没指定就用当前（前台）用户**；当前用户也问不出来
+ * （宿主测试、没有登录用户）才退化成「第一个用户目录」，落在 savedata_prospero 下。
+ *
+ * [CN-FORK] v0.5.2.165 中间那一档是修 bug 加的，不是美化：老逻辑「没指定就取第一个」
+ * 在一台有两个用户、而当前用户还没存过这款游戏的主机上，会把 garlic 导入/上传
+ * 写到**另一个用户**名下 —— 用户的原话是「兼容导入后的存档，没有对当前用户生效」。
+ * 注意判据在**函数第一行**（先按有效 uid 找已有根），不是只在「建目录」那条路上 ——
+ * 否则「当前用户已经有存档、但它不是 uid 最小的那个」照样会取错人。 */
 static int gs_root_or_create(const char *tid, const char *uid,
                              gs_root_t *out, char *err, size_t errsz) {
-    if (gs_root_by_uid(tid, uid, out) == 0) return 0;
+    /* want = 本次真正要落到的 uid。空串 = 连当前用户都问不出来 → 允许退化成「第一个」。 */
+    char want[64];
+    want[0] = 0;
+    if (uid && *uid) snprintf(want, sizeof(want), "%s", uid);
+    else game_saves_current_uid(want, sizeof(want));
+
+    if (gs_root_by_uid(tid, want, out) == 0) return 0;
     if (!gs_tid_ok(tid)) {
         if (err) snprintf(err, errsz, "标题 ID 不合法");
         return -1;
@@ -321,13 +383,13 @@ static int gs_root_or_create(const char *tid, const char *uid,
         if (err) snprintf(err, errsz, "%s 下没有用户目录", GS_HOME);
         return -1;
     }
-    const char *use = (uid && *uid) ? uid : ids[0];
-    if (uid && *uid) {
+    const char *use = want[0] ? want : ids[0];
+    if (want[0]) {
         int found = 0;
         for (int i = 0; i < nu; i++)
-            if (!strcmp(ids[i], uid)) found = 1;
+            if (!strcmp(ids[i], want)) found = 1;
         if (!found) {
-            if (err) snprintf(err, errsz, "主机上没有这个用户（%s）", uid);
+            if (err) snprintf(err, errsz, "主机上没有这个用户（%s）", want);
             return -1;
         }
     }
@@ -1539,11 +1601,39 @@ int game_saves_list_json(const char *tid, char *buf, size_t size) {
     if (!g_state_fn || g_state_fn(tid, statej, sizeof(statej)) < 0)
         snprintf(statej, sizeof(statej), "{}");
 
+    /* [CN-FORK] v0.5.2.165 current_uid / users —— 给「导入到哪个用户」一个可信的默认值。
+     * 之前前端只能拿 saves[0]（uid 升序的第一个）当默认，当前用户没存过这款游戏时
+     * 它指向别人，garlic 导入就落到错误的人名下（用户报的「导入后没对当前用户生效」）。
+     * users 是**主机上全部用户目录**（不只是有存档的），所以当前用户从没玩过这款
+     * 游戏时，它照样能出现在选择列表里、并且是默认项。 */
+    char ecur[80], eusers[640];
+    {
+        char cur[64];
+        if (game_saves_current_uid(cur, sizeof(cur)) != 0) cur[0] = 0;
+        pldmgr_json_escape(cur, ecur, sizeof(ecur));
+        char ids[16][64];
+        int nu = gs_user_ids(ids, 16);
+        size_t upos = 0;
+        eusers[0] = 0;
+        if (gs_app(eusers, sizeof(eusers), &upos, "[") == 0) {
+            for (int i = 0; i < nu; i++) {
+                char eu[80];
+                pldmgr_json_escape(ids[i], eu, sizeof(eu));
+                if (gs_app(eusers, sizeof(eusers), &upos, "%s\"%s\"", i ? "," : "", eu) != 0)
+                    break;
+            }
+            gs_app(eusers, sizeof(eusers), &upos, "]");
+        }
+        if (!eusers[0]) snprintf(eusers, sizeof(eusers), "[]");
+    }
+
     int w = snprintf(buf, size,
                      "{\"tid\":\"%s\",\"local_path\":\"%s\",\"auto\":%s,"
                      "\"auto_state\":%s,\"saves\":%s,"
+                     "\"current_uid\":\"%s\",\"users\":%s,"
                      "\"snap_used\":%llu,\"snapshots\":%s}",
-                     etid, eroot, autoj, statej, saves, snap_used, snaps);
+                     etid, eroot, autoj, statej, saves,
+                     ecur, eusers, snap_used, snaps);
     free(snaps);
     free(saves);
     if (w < 0 || (size_t)w >= size) return -1;
@@ -2480,6 +2570,13 @@ int game_saves_local_mtime(const char *tid, const char *uid, long long *out_mtim
  *
  * 目标目录：这个用户在这个游戏上**已有**的存档根（PS4 的存档就落在 savedata/ 下，
  * 不会被我们挪到 savedata_prospero/）；还没有就按 PS5 建一个（与上传同一口径）。
+ * [CN-FORK] v0.5.2.165 `save` 为空时落到**当前（前台）用户**，不是「uid 最小的那个」
+ * —— 后者在「当前用户还没玩过这款游戏」时会把存档导到别人名下，用户看到的正是
+ * 「导入完了、进游戏还是没有」。详见 gs_root_or_create。
+ *
+ * 名字：写进存档目录的是**剥掉 garlic `<TID>_` 前缀**的那个名字
+ * （`PPSA27836_sdimg_STARBOARD` → `sdimg_STARBOARD`），因为主机只认后者。
+ * 详见 gs_gx_name_for —— 这也是 `.165` 修掉的那条 bug 的一半。
  *
  * ⚠ **先落到暂存目录、整包成功才合并进存档目录**（见下面的 stage 一段）：
  * zip_extract 是**遇到坏条目才整包拒收**的，直接往存档目录里写的话，包里第 N 个
@@ -2489,10 +2586,47 @@ int game_saves_local_mtime(const char *tid, const char *uid, long long *out_mtim
  * gs_sweep_temp() 能收拾掉崩溃留下的残留。 */
 typedef struct {
     const char *dir;
+    const char *tid;       /* 当前游戏 —— 用来判「文件名里的 TID 是不是别人」 */
+    char bad_tid[16];      /* 包里出现的、且**不等于当前游戏**的 TID；空 = 没发现 */
     long long files;
     long long bytes;
     int bad;
 } gs_gx_t;
+
+/* [CN-FORK] v0.5.2.165 上传文件名 → 存档目录里该用的名字。
+ *
+ * 两件事一起做，因为它们看的是同一段字符串：
+ *
+ *   ① **剥掉 garlic 的 `<TID>_` 前缀**。garlic 的 PS5 导出名是
+ *      `s.title_id + '_' + s.save_name`（它 ui.html 的 dlBin 那一行），而 save_name
+ *      就是盘上的目录项名 `sdimg_<dir_name>`（main.c 的 scan_title_dir）。于是用户
+ *      手上那个文件叫 **`PPSA27836_sdimg_STARBOARD`**，而主机要的是
+ *      `<uid>/savedata_prospero/<TID>/sdimg_STARBOARD`。
+ *      老代码把上传名**原样**写进存档目录 —— 盘上多了一个 `PPSA27836_sdimg_…`，
+ *      主机要找的 `sdimg_STARBOARD` 压根不存在。**导入报成功、进游戏没存档**，
+ *      这正是用户报的「兼容导入后的存档没有对当前用户生效」的第二个根因
+ *      （第一个是落到哪个用户，见 gs_root_or_create）。
+ *      只剥**紧贴开头**且**认得出来**的那一段；认不出、或不在开头，一律原样返回
+ *      —— 说不清 ≠ 要改名，与 `.156` 那条判定是同一条原则。
+ *
+ *   ② 顺手把认出来的 TID 与当前游戏对一下，**不是当前游戏的记进 bad_tid**
+ *      （`gs_gx_merge` 之前整包拒收，一个字节都不碰用户的存档目录）。
+ *      这个判定必须看**原始名字**：① 剥完 TID 就没了，所以 `.165` 起不再扫暂存目录
+ *      —— 扫那里等于把 `.156` 那条判定悄悄废掉。 */
+static const char *gs_gx_name_for(gs_gx_t *g, const char *base) {
+    char got[16];
+    if (!base || !game_saves_tid_from_name(base, got, sizeof(got))) return base;
+    if (g && g->tid && strcmp(got, g->tid) != 0 && !g->bad_tid[0])
+        snprintf(g->bad_tid, sizeof(g->bad_tid), "%s", got);
+    size_t n = strlen(got);                 /* TID 恒 9 位（gs_tid_from_name 的形态） */
+    if (strlen(base) <= n || base[n] != '_') return base;
+    for (size_t i = 0; i < n; i++) {        /* 大小写不敏感：got 已归一成大写 */
+        char c = base[i];
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        if (c != got[i]) return base;
+    }
+    return base + n + 1;                    /* base[n]=='_' ⇒ 余下至少 1 字节，不会是空串 */
+}
 
 /* zip_extract 用的落盘回调：**只取 basename**，不接受任何目录层级。
  * garlic 的 PS4 包是平铺的，压平不会丢东西；而「外部字节拼路径」这件事，
@@ -2509,6 +2643,8 @@ static int gs_gx_cb(void *user, const char *name, const unsigned char *data,
     const char *base = strrchr(name, '/');
     base = base ? base + 1 : name;
     if (!gs_slot_ok(base)) return 0;   /* 跳过而不是中止：包里可能有我们不认识的东西 */
+    base = gs_gx_name_for(g, base);
+    if (!gs_slot_ok(base)) return 0;   /* 剥完仍要合规（防御；上面已保证非空） */
     char dst[1400];
     if (snprintf(dst, sizeof(dst), "%s/%s", g->dir, base) >= (int)sizeof(dst)) {
         g->bad = 2;
@@ -2604,6 +2740,7 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
     gs_gx_t g;
     memset(&g, 0, sizeof(g));
     g.dir = stage;
+    g.tid = tid;
 
     char err[256];
     err[0] = 0;
@@ -2628,33 +2765,22 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
     }
 
     /* [CN-FORK] v0.5.2.156 游戏判定（用户口径：「不是当前游戏的不让导入」）。
-     * garlic 的镜像名里带着 `<TID>_` 前缀，认出来且不是当前游戏 → 整包拒绝。
+     * 判据来自**上传文件名**里那段 `<TID>_` —— 存档镜像是加密的，内容里一个字节都
+     * 读不出游戏身份，而 garlic 的导出名天然带着 `<TID>_`。
      * 此刻文件还在暂存目录里，`gs_rmtree` 就是「一个字节都没碰过用户的存档目录」。
      * ⚠ **认不出来（用户改过名）一律放行** —— 那只是「说不清」，不是「不匹配」，
-     * 按不匹配处理会让正常导入整个失效。 */
-    {
-        DIR *sd = opendir(stage);
-        char got[16];
-        int mism = 0;
-        if (sd) {
-            struct dirent *se;
-            while ((se = readdir(sd)) != NULL) {
-                if (!strcmp(se->d_name, ".") || !strcmp(se->d_name, "..")) continue;
-                if (game_saves_tid_from_name(se->d_name, got, sizeof(got)) && strcmp(got, tid) != 0) {
-                    mism = 1;
-                    break;
-                }
-            }
-            closedir(sd);
-        }
-        if (mism) {
-            gs_rmtree(stage);
-            if (msg)
-                snprintf(msg, msgsz,
-                         "这个存档是 %s 的，不是当前游戏（%s）—— 请到对应游戏里导入", got, tid);
-            pldmgr_log("[PLDMGR] saves: garlic 导入 拒绝 · 存档属于 %s、当前游戏 %s\n", got, tid);
-            return -1;
-        }
+     * 按不匹配处理会让正常导入整个失效。
+     * ⚠ `.165` 起这个结论由 `gs_gx_cb` 在**落盘那一刻**顺手记下（`bad_tid`），
+     * 不再回头扫暂存目录 —— 因为 `.165` 会把开头的 `<TID>_` 剥掉，剥完就认不出来了。 */
+    if (g.bad_tid[0]) {
+        gs_rmtree(stage);
+        if (msg)
+            snprintf(msg, msgsz,
+                     "这个存档是 %s 的，不是当前游戏（%s）—— 请到对应游戏里导入",
+                     g.bad_tid, tid);
+        pldmgr_log("[PLDMGR] saves: garlic 导入 拒绝 · 存档属于 %s、当前游戏 %s\n",
+                   g.bad_tid, tid);
+        return -1;
     }
 
     if (gs_gx_merge(stage, r.path) != 0) {
@@ -2667,5 +2793,151 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
     pldmgr_log("[PLDMGR] saves: %s garlic 导入 ok -> %s (%lld files, %lld bytes)\n",
                tid, r.path, g.files, g.bytes);
     if (out_files) *out_files = g.files;
+    return 0;
+}
+
+/* ══ [CN-FORK] v0.5.2.163 存档转换（用户 → 用户）════════════════════════════
+ * 用户口径：「可以将其他用户的存档转换成当前用户可以使用的」。
+ *
+ * 语义与 garlic 兼容导入同源 —— **逐文件覆盖合并**，不是整份替换：目标用户的存档
+ * 目录里还有主机给**这个用户**建的记账（sdimg_sce_bu_* / sdimg_sce_sdmemory），
+ * 换掉它们会让主机认不出这份存档。
+ *
+ * 与 import_garlic 唯一的区别是来源：那边是上传上来的字节，这边是主机上**另一个
+ * 用户**已经存在的存档目录。所以不需要解包，直接把源目录整棵树复制到暂存目录、
+ * 整份成功之后再 merge 进目标目录 —— 中途失败（磁盘满 / 源被删）时目标目录
+ * 一个字节都不会被改坏，崩溃留下的 `.tmp_cv_*` 由 gs_sweep_temp() 扫掉。
+ *
+ * 路径缓冲走 malloc（不是栈）：递归的每一层都会用到，栈上放会随深度线性增长
+ * —— 与 gs_copy_tree 同一个理由（真机连接线程只有 64KB 栈）。 */
+static int gs_merge_tree(const char *stage, const char *dst, int depth) {
+    if (depth > GS_SNAP_MAX_DEPTH) return -1;
+    DIR *d = opendir(stage);
+    if (!d) return -1;
+    char *sp = (char *)malloc(1200);
+    char *dp = (char *)malloc(1200);
+    if (!sp || !dp) { free(sp); free(dp); closedir(d); return -1; }
+    struct dirent *e;
+    int rc = 0;
+    while ((e = readdir(d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (snprintf(sp, 1200, "%s/%s", stage, e->d_name) >= 1200 ||
+            snprintf(dp, 1200, "%s/%s", dst, e->d_name) >= 1200) { rc = -1; break; }
+        struct stat st;
+        if (lstat(sp, &st) != 0) continue; /* 半路消失的条目跳过，不算失败 */
+        if (S_ISDIR(st.st_mode)) {
+            if (ensure_dir_recursive(dp) != 0) { rc = -1; break; }
+            if (gs_merge_tree(sp, dp, depth + 1) != 0) { rc = -1; break; }
+        } else if (S_ISREG(st.st_mode)) {
+            /* 同目录内 rename：覆盖同名、原子替换，不会出现半截文件。 */
+            if (rename(sp, dp) != 0) { rc = -1; break; }
+        }
+    }
+    free(sp);
+    free(dp);
+    closedir(d);
+    return rc;
+}
+
+int game_saves_convert(const char *tid, const char *source, const char *target,
+                       long long *out_files, char *msg, size_t msgsz) {
+    if (out_files) *out_files = 0;
+    if (msg && msgsz) msg[0] = 0;
+    if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
+    if (!source || !*source || !gs_uid_ok(source)) {
+        if (msg) snprintf(msg, msgsz, "来源用户标识不合法");
+        return -1;
+    }
+    if (!target || !*target || !gs_uid_ok(target)) {
+        if (msg) snprintf(msg, msgsz, "目标用户标识不合法");
+        return -1;
+    }
+    if (!strcmp(source, target)) {
+        if (msg) snprintf(msg, msgsz, "来源与目标是同一个用户，不需要转换");
+        return -1;
+    }
+
+    /* 来源必须是**真实存在**的那一份：找不到就直接说清楚，别悄悄建一个空目录。 */
+    gs_root_t src;
+    if (gs_root_by_uid(tid, source, &src) != 0) {
+        if (msg) snprintf(msg, msgsz, "来源用户在这款游戏上没有存档");
+        return -1;
+    }
+
+    /* 目标：已有就复用；没有就按**来源那一档**（PS5 savedata_prospero / PS4 savedata）
+     * 建一个同名目录 —— 把 PS4 的存档倒进 PS5 的槽位只会让主机认不出来。 */
+    gs_root_t dst;
+    if (gs_root_by_uid(tid, target, &dst) != 0) {
+        char ids[16][64];
+        int nu = gs_user_ids(ids, 16);
+        int found = 0;
+        for (int i = 0; i < nu; i++)
+            if (!strcmp(ids[i], target)) found = 1;
+        if (!found) {
+            if (msg) snprintf(msg, msgsz, "主机上没有这个用户（%s）", target);
+            return -1;
+        }
+        const char *slot = strcmp(src.kind, "PS4") == 0 ? "savedata" : "savedata_prospero";
+        snprintf(dst.uid, sizeof(dst.uid), "%s", target);
+        snprintf(dst.kind, sizeof(dst.kind), "%s", src.kind);
+        snprintf(dst.path, sizeof(dst.path), "%s/%s/%s/%s", GS_HOME, target, slot, tid);
+        char parent[640];
+        snprintf(parent, sizeof(parent), "%s/%s/%s", GS_HOME, target, slot);
+        if (ensure_dir_recursive(parent) != 0) {
+            if (msg) snprintf(msg, msgsz, "无法创建目标存档目录（%s）", strerror(errno));
+            return -1;
+        }
+    }
+
+    /* 暂存目录放目标根的**父目录**下（同一个文件系统 → 最后一步是 rename）。
+     * 名字带 `.tmp_` 前缀，gs_sweep_temp() 才会把崩溃留下的残骸扫掉。 */
+    char stage[1300];
+    {
+        char parent[1300];
+        snprintf(parent, sizeof(parent), "%s", dst.path);
+        char *sl = strrchr(parent, '/');
+        if (sl) *sl = 0;
+        if (snprintf(stage, sizeof(stage), "%s/.tmp_cv_%d_%u",
+                     parent, (int)getpid(), (unsigned)time(NULL)) >= (int)sizeof(stage)) {
+            if (msg) snprintf(msg, msgsz, "存档目录路径过长");
+            return -1;
+        }
+    }
+    gs_rmtree(stage); /* 万一 pid / 秒级时间戳撞上了上一次的残骸 */
+    if (ensure_dir_recursive(stage) != 0) {
+        if (msg) snprintf(msg, msgsz, "建不了临时目录");
+        return -1;
+    }
+
+    gs_cp_t c;
+    if (gs_cp_open(&c) != 0) {
+        gs_rmtree(stage);
+        if (msg) snprintf(msg, msgsz, "内存不足");
+        return -1;
+    }
+    int rc = gs_copy_tree(src.path, stage, &c, 0);
+    long long nfiles = c.files, nbytes = c.bytes;
+    gs_cp_close(&c);
+    if (rc != 0) {
+        gs_rmtree(stage);
+        if (msg) snprintf(msg, msgsz, "复制来源存档失败（磁盘满？）");
+        return -1;
+    }
+    if (nfiles == 0) {
+        gs_rmtree(stage);
+        if (msg) snprintf(msg, msgsz, "来源用户的存档是空的");
+        return -1;
+    }
+
+    if (gs_merge_tree(stage, dst.path, 0) != 0) {
+        gs_rmtree(stage);
+        if (msg) snprintf(msg, msgsz, "写入目标存档目录失败（磁盘满？）");
+        return -1;
+    }
+    gs_rmtree(stage);
+
+    pldmgr_log("[PLDMGR] saves: %s 存档转换 %s -> %s ok (%lld files, %lld bytes)\n",
+               tid, src.uid, dst.uid, nfiles, nbytes);
+    if (out_files) *out_files = nfiles;
     return 0;
 }

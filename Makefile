@@ -63,6 +63,12 @@ SRCS += src/tile_db.c
 # [CN-FORK] v0.5.2.158 「个性化软件」：读写 app.db 每个账号 tbl_iconinfo_<uid>.visible。
 # 与 tile_db.c 同一套理由 —— 要真跑 SQL，所以只能挂在合并版 sqlite3 上。
 SRCS += src/app_visibility.c
+# [CN-FORK] v0.5.2.164 应用置顶（与 visible 同弹窗的另一个开关，落点 JSON 而非 app.db）
+SRCS += src/app_pin.c
+# [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序，落 game_prefs.json）
+SRCS += src/game_prefs.c
+# [CN-FORK] v0.5.2.163 背景音乐（mp3/ogg/wav 落 /data/nayeplmtools/music/<TID>.<ext>）
+SRCS += src/game_music.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf
 VERSION := $(shell grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"')

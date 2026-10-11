@@ -195,11 +195,30 @@ int main(void) {
 
     /* `.161`：用户真机口径「所有应用程序、欢迎 是可以编辑显示和隐藏的」。
      * `.160` 把这两条错关进固定名单 —— 这里钉死它们**必须是可控的**，
-     * 免得下次又有人拿出厂值反推规则。欢迎出厂 visible=0，所以它是 hidden:true 但照样可控。 */
-    CHECK(strstr(j, "\"NPXS40056\",\"name\":\"所有应用程序\",\"hidden\":false,\"controllable\":true") != NULL,
+     * 免得下次又有人拿出厂值反推规则。欢迎出厂 visible=0，所以它是 hidden:true 但照样可控。
+     * ⚠ v0.5.2.164 起每条 app 多一个 `"pinned"` 字段（面板侧的置顶，落 app_pins.json），
+     * 位置在 hidden 与 controllable 之间 —— 这里的锚点串跟着改，别把新字段当成「格式坏了」。 */
+    CHECK(strstr(j, "\"NPXS40056\",\"name\":\"所有应用程序\",\"hidden\":false,\"pinned\":false,\"controllable\":true") != NULL,
           "所有应用程序应回 controllable:true");
-    CHECK(strstr(j, "\"NPXS40063\",\"name\":\"欢迎\",\"hidden\":true,\"controllable\":true") != NULL,
+    CHECK(strstr(j, "\"NPXS40063\",\"name\":\"欢迎\",\"hidden\":true,\"pinned\":false,\"controllable\":true") != NULL,
           "欢迎出厂就是 0：hidden:true 但**不是**不可控");
+
+    /* [CN-FORK] v0.5.2.164 置顶（app_pin_*）。与 visible 是两件事：visible 写 app.db、
+     * 置顶落本面板的 app_pins.json。这里钉两条：
+     *   ① 写进去之后**同一个列表接口**能把它读回来（前端只认这一份，读不回来就等于没存）；
+     *   ② 置顶**不许碰 app.db 的 visible**（写错了会变成「点置顶顺手把软件藏了」）。 */
+    {
+        char pmsg[192];
+        CHECK(app_pin_set("NPXS40037", 1, pmsg, sizeof(pmsg)) == 0,
+              "置顶 NPXS40037 应成功（%s）", pmsg);
+        char *j2 = malloc(65536);
+        CHECK(j2 && app_vis_list_json(j2, 65536) > 0, "置顶后重新拉列表应成功");
+        const char *q37 = j2 ? strstr(j2, "\"NPXS40037\"") : NULL;
+        CHECK(q37 && strstr(q37, "\"pinned\":true") != NULL, "置顶后该条应回 pinned:true");
+        CHECK(read_visible("tbl_iconinfo_111", "NPXS40037") == 0,
+              "置顶**不动** app.db 的 visible（40037 出厂两账号都是 0）");
+        free(j2);
+    }
     free(j);
 
     printf("=== 写入：一次把所有账号表写平 ===\n");

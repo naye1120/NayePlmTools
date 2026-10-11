@@ -328,9 +328,12 @@ static int tt_rename_in_param(const char *tid, const char *param_path,
  * 的用户越改越怪 —— 这类 bug 在改名功能上是经典款。 */
 int game_title_set_name(const char *tid, const char *name,
                         char *msg, size_t msgsz,
-                        int *persisted, char *pnote, size_t pnotesz) {
+                        int *persisted, char *pnote, size_t pnotesz,
+                        int *host_ok, char *hnote, size_t hnotesz) {
     if (persisted) *persisted = 0;
     if (pnote && pnotesz) pnote[0] = 0;
+    if (host_ok) *host_ok = 0;
+    if (hnote && hnotesz) hnote[0] = 0;
     if (msg && msgsz) msg[0] = 0;
     if (!tt_tid_ok(tid)) {
         if (msg) snprintf(msg, msgsz, "标题 ID 不合法");
@@ -398,11 +401,19 @@ int game_title_set_name(const char *tid, const char *name,
     /* [CN-FORK] v0.5.2.118 上面那份 name.txt 只改得了**面板**：主屏磁贴的名字根本
      * 不是文件，而是 app.db 的平铺名字列 + appinfo.db 的 TITLE。不补这一句，用户看到
      * 的就是「网页改了、PS5 上没改」。best-effort —— 写不进主机库只记日志，面板那层
-     * 照常算成功；为什么只动平铺列、不动 JSON 镜像，见 src/tile_db.c 头注释。 */
+     * 照常算成功；为什么只动平铺列、不动 JSON 镜像，见 src/tile_db.c 头注释。
+     *
+     * [CN-FORK] v0.5.2.165 这一层的成败**也回给前端**（host_ok / hnote）。以前只进日志，
+     * 于是「库里压根没写进去」与「写进去了但 Shell 还没重绘」在界面上分不出来 ——
+     * 用户报的就是「改完名 PS5 上没生效」，而我们连是哪一种都没告诉他。 */
     char hmsg[256];
-    if (tile_db_set_name(tid, s, hmsg, sizeof(hmsg)) != 0)
+    hmsg[0] = 0;
+    int hrc = tile_db_set_name(tid, s, hmsg, sizeof(hmsg));
+    if (hrc != 0)
         pldmgr_log("[PLDMGR] title: %s 主机端改名未生效：%s\n", tid,
                    hmsg[0] ? hmsg : "见上一条日志");
+    if (host_ok) *host_ok = (hrc == 0);
+    if (hnote && hnotesz) snprintf(hnote, hnotesz, "%s", hmsg);
 
     /* [CN-FORK] v0.5.2.132 ③ 名字源。上面 name.txt + app.db/appinfo.db 都是**缓存**，
      * ShadowMount 一重扫就用自己的源重建注册，两层全被冲掉 —— 用户看到「改完名、

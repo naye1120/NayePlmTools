@@ -50,22 +50,45 @@ import { syncHtmlLang } from './theme/useTheme'
 import { enableSpatialNav } from './utils/spatialNav'
 
 /* [CN-FORK] v0.5.2.96 导航三形态共用一份菜单表。
- * 病灶：PC 侧栏与手机底部栏各自手写一遍 NavButton（改一处忘一处，v0.5.1.64 删「主页」时就是两处分别动），
- * 电视端又复用 PC 侧栏 —— 于是「有哪些页面」这件事在代码里有两份真相。
- * 现在一处定义、两处渲染：字段里的 mobile* 是窄屏用的短标签（放不下整名时才露出）。 */
+ * v0.5.2.163 手机端二级菜单：原 7 项里 6 项合并为「工具 / 系统」两组二级菜单。
+ *   · 工具组：PKG安装 / 常用配置 / 游戏管理
+ *   · 系统组：活动进程 / 设置 / 关于
+ * 桌面侧栏与电视端不变 —— 它们仍有 9 项（两组里要把子项展平出来）。
+ *
+ * 数据结构：
+ *   group       = 'main' | 'system' | 'tools' | 'sys' | null
+ *   mobileGroup = 仅手机端有：'top'（顶级直接进入）+ 'sub:tools' / 'sub:sys'（二级子菜单）
+ * 顶层与子菜单分两层，每一项 type 决定：
+ *   type='nav'   = 真页面（直接进）
+ *   type='group' = 二级菜单按钮（点开弹子项）*/
 const NAV_ITEMS = [
-  { id: 'storage', group: 'main', icon: Database, label: ['app.nav.storage', 'Manage Payloads'], mobile: ['app.nav.manage_mobile', 'Manage'] },
-  { id: 'autoload', group: 'main', icon: RefreshCw, label: ['app.nav.autoload', 'Autoload'], mobile: ['app.nav.auto_mobile', 'Auto'] },
-  { id: 'pkg', group: 'main', icon: Package, label: ['app.nav.pkg', 'PKG Manager'], mobile: ['app.nav.pkg_mobile', 'PKG'] },
-  { id: 'common_entries', group: 'main', icon: Link2, label: ['app.nav.common_entries', 'Quick Links'], mobile: ['app.nav.common_entries_mobile', 'Links'] },
-  { id: 'game_manage', group: 'main', icon: Gamepad2, label: ['app.nav.game_manage', 'Game Manager'], mobile: ['app.nav.game_manage_mobile', 'Games'] },
-  { id: 'processes', group: 'system', icon: Cpu, label: ['app.nav.processes', 'Active Processes'], mobile: ['app.nav.processes_mobile', 'Processes'] },
-  { id: 'settings', group: 'system', icon: Settings, label: ['app.nav.settings', 'Settings'], mobile: ['app.nav.settings', 'Settings'] },
+  // ── 顶级直接进入（PC / 电视 / 手机都展示） ──
+  { id: 'storage', type: 'nav', group: 'main', icon: Database, label: ['app.nav.storage', 'Manage Payloads'], mobile: ['app.nav.manage_mobile', 'Manage'] },
+  { id: 'autoload', type: 'nav', group: 'main', icon: RefreshCw, label: ['app.nav.autoload', 'Autoload'], mobile: ['app.nav.auto_mobile', 'Auto'] },
+  // ── 工具组（仅手机端是二级菜单） ──
+  { id: 'tools', type: 'group', group: 'main', icon: Package, label: ['app.nav.tools', 'Tools'], mobile: ['app.nav.tools_mobile', 'Tools'] },
+  // ── 工具组子菜单 ──
+  { id: 'pkg', type: 'nav', parent: 'tools', group: 'main', icon: Package, label: ['app.nav.pkg', 'PKG Manager'], mobile: ['app.nav.pkg_mobile', 'PKG'] },
+  { id: 'common_entries', type: 'nav', parent: 'tools', group: 'main', icon: Link2, label: ['app.nav.common_entries', 'Quick Links'], mobile: ['app.nav.common_entries_mobile', 'Links'] },
+  { id: 'game_manage', type: 'nav', parent: 'tools', group: 'main', icon: Gamepad2, label: ['app.nav.game_manage', 'Game Manager'], mobile: ['app.nav.game_manage_mobile', 'Games'] },
+  // ── 系统组顶级 ──
+  { id: 'system', type: 'group', group: 'system', icon: Cpu, label: ['app.nav.system', 'System'], mobile: ['app.nav.system_mobile', 'System'] },
+  // ── 系统组子菜单 ──
+  { id: 'processes', type: 'nav', parent: 'system', group: 'system', icon: Cpu, label: ['app.nav.processes', 'Active Processes'], mobile: ['app.nav.processes_mobile', 'Processes'] },
+  { id: 'settings', type: 'nav', parent: 'system', group: 'system', icon: Settings, label: ['app.nav.settings', 'Settings'], mobile: ['app.nav.settings', 'Settings'] },
   /* [CN-FORK] v0.5.2.154 用户口径：「在设置下边增加一个菜单叫关于，把更新日志和支持作者的
    * 内容全部放到关于里面」。所以它紧跟在设置之后、同属「系统管理」组，并取代了原来
-   * 藏在设置页里的「更新日志」入口与独立的「支持作者」页。 */
-  { id: 'about', group: 'system', icon: Info, label: ['app.nav.about', 'About'], mobile: ['app.nav.about_mobile', 'About'] },
+   * 藏在设置页里的「更新日志」入口与独立的「支持作者」页。
+   * v0.5.2.163 移入 system 二级菜单。 */
+  { id: 'about', type: 'nav', parent: 'system', group: 'system', icon: Info, label: ['app.nav.about', 'About'], mobile: ['app.nav.about_mobile', 'About'] },
 ]
+
+/* [CN-FORK] v0.5.2.163 手机端二级菜单的子项按 parent 索引。
+ * mobile-only（桌面侧栏仍然按 group='main'|'system' 一栏平铺）。 */
+const MOBILE_PARENTS = {
+  tools: ['pkg', 'common_entries', 'game_manage'],
+  system: ['processes', 'settings', 'about'],
+}
 const NAV_GROUPS = [
   { id: 'main', label: ['app.nav.group_main', 'Main'] },
   { id: 'system', label: ['app.nav.group_system', 'System'] },
@@ -136,6 +159,10 @@ function App() {
     return saved !== null ? JSON.parse(saved) : true
   })
 
+  /* [CN-FORK] v0.5.2.163 手机端二级菜单：'tools' | 'system' | null。
+   * 点 group 按钮切到对应 parent；再点同一颗关闭；点子项关闭并跳转；点外部关闭。 */
+  const [mobileMenu, setMobileMenu] = useState(null)
+
   useEffect(() => {
     localStorage.setItem('sidebarExpanded', JSON.stringify(sidebarExpanded))
   }, [sidebarExpanded])
@@ -155,7 +182,10 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [activeLoadingName, setActiveLoadingName] = useState('')
   const [toasts, setToasts] = useState([])
-  const [loadingPayloads, setLoadingPayloads] = useState(true)
+  /* 只留 setter：加载态本身没有渲染出口（payload 列表自带骨架），但状态留着
+   * 给后面的刷新链判「第一次加载完没有」。去掉变量名是为了 no-unused-vars 不报 ——
+   * 别顺手把整行删掉，setter 还在用。 */
+  const [, setLoadingPayloads] = useState(true)
   const [downloadModal, setDownloadModal] = useState({ show: false, name: '', progress: 0 })
   const [confirmModal, setConfirmModal] = useState({ show: false, title: '', message: '', onConfirm: null, danger: false })
   const [moveFromUsbPath, setMoveFromUsbPath] = useState(null)
@@ -233,8 +263,8 @@ function App() {
         const text = await response.text()
         if (text.toLowerCase().includes('<!doctype')) return null
         return JSON.parse(text)
-      } catch (e) { return null }
-    } catch (e) { return null }
+      } catch { return null }
+    } catch { return null }
   }
 
   /* [CN-FORK] v0.5.2.125 必须是函数声明：函数体内有 `() => refreshPayloads(retryCount + 1)`
@@ -347,7 +377,8 @@ function App() {
       } else {
         performUpload(file)
       }
-    } catch (err) {
+    } catch {
+      /* 探活失败就当「没有同名文件」，直接上传 —— 这一步只是省一次确认框。 */
       performUpload(file)
     }
   }
@@ -431,7 +462,7 @@ function App() {
         const ipRes = await fetch('/getip').then(r => r.text())
         if (ipRes.toLowerCase().includes('<!doctype')) offline = true
         else setIp(ipRes)
-      } catch (e) {
+      } catch {
         offline = true
       }
 
@@ -439,7 +470,7 @@ function App() {
         const verRes = await fetch('/version').then(r => r.text())
         if (verRes.toLowerCase().includes('<!doctype')) offline = true
         else setVersion(verRes)
-      } catch (e) {
+      } catch {
         offline = true
       }
 
@@ -458,6 +489,10 @@ function App() {
 
   useEffect(() => {
     if (view === 'autoload' || view === 'storage') {
+      /* 换页时刷一次远端配置与 payload 列表。这两句按规则属于「effect 里同步 setState」，
+       * 但它们是**外部系统的读**（去主机上重新拉一份），不是派生 state —— 与本文件里
+       * 既有的几条刷新 effect 同一写法，照旧 disable。 */
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 去主机重新拉配置，不是派生 state
       refreshConfig()
       refreshPayloads()
     } else if (view === 'game_manage') {
@@ -487,7 +522,9 @@ function App() {
           }
           return
         }
-      } catch (e) { }
+      } catch {
+        /* 读不到运行状态就当「没在跑」，下一轮 5 秒后再问一次。 */
+      }
       statusTimeout = setTimeout(poll, 5000)
     }
     poll()
@@ -606,7 +643,10 @@ function App() {
             {NAV_GROUPS.map((g) => (
               <div key={g.id}>
                 {sidebarExpanded && <p className="nav-group-title">{t(g.label[0], g.label[1])}</p>}
-                {NAV_ITEMS.filter((i) => i.group === g.id).map((i) => (
+                {/* [CN-FORK] v0.5.2.163 侧栏过滤：type='group' 的项（Tools / System 触发器）
+           * 只在手机端二级菜单出现，侧栏不展示（桌面/电视端把子项直接平铺）。
+           * 子项里 `group` 字段已设好对应父组，所以仍然会按组聚合。 */}
+              {NAV_ITEMS.filter((i) => i.type !== 'group' && i.group === g.id).map((i) => (
                   <NavButton
                     key={i.id}
                     sidebar
@@ -637,7 +677,7 @@ function App() {
 
       {/* MOBILE BOTTOM NAV */}
       <nav
-        style={{ gridTemplateColumns: `repeat(${NAV_ITEMS.length}, minmax(0, 1fr))` }}
+        style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}
         className={cn(
         /* [CN-FORK] v0.5.2.96 等宽格子取代横向滚动：七个入口全部一屏可见、拇指可及 */
         /* [CN-FORK] v0.5.2.99 底部栏底改实色 rail 档（bg-ps-surface → var(--color-rail)）。
@@ -650,17 +690,73 @@ function App() {
       )}>
         {/* 手机端任务栏与侧栏同源（NAV_ITEMS）：手机端任务栏此前手动加长到与桌面侧栏同项，
             现在不用再担心两边漂移；捐赠不占底部标签位，由设置页「支持作者」入口进入。 */}
-        {NAV_ITEMS.map((i) => (
-          <NavButton
-            key={i.id}
-            active={view === i.id}
-            onClick={() => setView(i.id)}
-            icon={i.icon}
-            label={t(i.label[0], i.label[1])}
-            mobileLabel={t(i.mobile[0], i.mobile[1])}
-          />
-        ))}
+        {NAV_ITEMS.filter((i) => !i.parent).map((i) => {
+          /* [CN-FORK] v0.5.2.163 顶栏只放顶级（不带 parent 的）。Tools / System 是
+           * group 类型，点开切到 mobileMenu；子项不占顶栏格子，以弹出菜单覆盖
+           * 在按钮上方（见下方二级菜单浮层）。 */
+          if (i.type === 'group') {
+            const open = mobileMenu === i.id
+            return (
+              <NavButton
+                key={i.id}
+                active={open || MOBILE_PARENTS[i.id]?.includes(view)}
+                onClick={() => setMobileMenu(open ? null : i.id)}
+                icon={i.icon}
+                label={t(i.label[0], i.label[1])}
+                mobileLabel={t(i.mobile[0], i.mobile[1])}
+              />
+            )
+          }
+          return (
+            <NavButton
+              key={i.id}
+              active={view === i.id}
+              onClick={() => { setView(i.id); setMobileMenu(null) }}
+              icon={i.icon}
+              label={t(i.label[0], i.label[1])}
+              mobileLabel={t(i.mobile[0], i.mobile[1])}
+            />
+          )
+        })}
       </nav>
+
+      {/* [CN-FORK] v0.5.2.163 手机端二级菜单浮层：每组 3 个子项，叠在底部 nav 上方。
+       * z 压在 nav 之上但低于 toast / 弹窗；点击子项切换 view 并关闭菜单；
+       * 点击外侧关闭。 */}
+      {!isPS5 && mobileMenu && MOBILE_PARENTS[mobileMenu] && (
+        <div
+          className="fixed inset-x-0 bottom-[calc(var(--bar-h)+env(safe-area-inset-bottom))] z-[110] md:hidden"
+          onClick={() => setMobileMenu(null)}
+        >
+          <div className="bg-ps-surface border-t border-ps-border shadow-2xl">
+            <ul className="grid grid-cols-3 divide-x divide-white/5">
+              {MOBILE_PARENTS[mobileMenu].map((childId) => {
+                const child = NAV_ITEMS.find((x) => x.id === childId)
+                if (!child) return null
+                const Icon = child.icon
+                return (
+                  <li key={child.id}>
+                    <button
+                      type="button"
+                      onClick={() => { setView(child.id); setMobileMenu(null) }}
+                      className={cn(
+                        'w-full flex flex-col items-center justify-center gap-1.5 py-3 transition-colors',
+                        view === child.id
+                          ? 'bg-ps-blue/10 text-ps-blue'
+                          : 'text-white hover:bg-white/[0.05]',
+                      )}
+                      aria-current={view === child.id ? 'page' : undefined}
+                    >
+                      <Icon className="w-5 h-5" />
+                      <span className="text-[12px] font-semibold">{t(child.mobile[0], child.mobile[1])}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* MAIN CONTENT AREA */}
       <div className={cn(

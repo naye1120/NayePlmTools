@@ -230,15 +230,39 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
       <PageHead
         title={<>{t("storage_hub.title_1", "Payload")} <span className="text-ps-blue">{t("storage_hub.title_2", "Management")}</span></>}
         actions={!isPS5 && (
-          <>
-            {/* [CN-FORK] 上传按钮前显示服务器 IP:端口 */}
-            <span className="text-xs font-mono text-zinc-500 tracking-tight">{ip}:8911</span>
-            <label className="btn btn-primary">
-              <Upload className="w-4 h-4" />
-              <span>{t("storage_hub.upload_btn", "Upload ELF Payload")}</span>
-              <input type="file" className="hidden" onChange={onUpload} accept={isIOS ? undefined : ".elf,.bin"} />
-            </label>
-          </>
+          /* [CN-FORK] v0.5.2.164 用户口径：「上传按钮放在 ip 和端口上边；ip 和端口显示
+             再突出一些（不限于颜色，样式/背景都行）；他们两个的右边放二维码，用来手机扫码访问」。
+             于是这一块从「一行两个东西」变成：左列竖排（上传按钮在上、IP:端口在下），右列二维码。
+             二维码的内容就是**本页地址**（`http://<ip>:8911`），扫开即本面板 ——
+             与页脚那个「远程管理」二维码同一份数据源，只是这里给的是就近入口。 */
+          <div className="flex items-center gap-3">
+            <div className="flex flex-col items-stretch gap-2">
+              <label className="btn btn-primary justify-center">
+                <Upload className="w-4 h-4" />
+                <span>{t("storage_hub.upload_btn", "Upload ELF Payload")}</span>
+                <input type="file" className="hidden" onChange={onUpload} accept={isIOS ? undefined : ".elf,.bin"} />
+              </label>
+              {/* IP:端口 做成一块「芯片」：底色 + 描边 + 等宽大字 —— 原来那行 12px 灰字
+                  在页头里基本看不见，而它正是用户要手输进手机地址栏的那串。 */}
+              <div
+                className="flex items-center justify-center gap-2 rounded-lg border border-ps-blue/40 bg-ps-blue/10 px-3 py-1.5"
+                title={t("storage_hub.server_addr_hint", "在电脑或手机浏览器里输入这个地址即可打开本面板")}
+              >
+                <span className="text-[10px] font-bold uppercase tracking-widest text-ps-blue/70">
+                  {t("storage_hub.lan_badge", "LAN")}
+                </span>
+                <span className="font-mono text-sm font-bold text-ps-blue tracking-tight select-all">
+                  {ip}:8911
+                </span>
+              </div>
+            </div>
+            <div
+              className="shrink-0 rounded-lg bg-white p-1.5"
+              title={t("storage_hub.scan_hint", "手机扫码打开本面板")}
+            >
+              <QRCodeSVG value={`http://${ip}:8911`} size={isPS5 ? 96 : 80} level="M" />
+            </div>
+          </div>
         )}
       />
 

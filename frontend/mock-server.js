@@ -621,6 +621,13 @@ const gameState = {
   iconBytes: {},        // tid -> 上传的图标 PNG 原始字节（自定义过之后由 /game_tile_icon 回它）
   bgBytes: {},          // tid -> 上传的背景 PNG 原始字节（/game_tile_bg 回的预览就是它）
   bgDds: {},            // tid -> 上面那张背景转出来的 DXT1 DDS（/game_tile_bg_dds 回它）
+  /* [CN-FORK] v0.5.2.163 背景音乐：tid -> { name, bytes, ext }（落 /data/nayeplmtools/music/<TID>.<ext>） */
+  music: {},
+  /* [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶：tid -> { fav, pin }（对应后端的 game_prefs.json） */
+  prefs: {},
+  /* [CN-FORK] v0.5.2.164 「个性化软件」的置顶开关：tid -> bool（对应后端的 app_pins.json）。
+   * 与 hidden 分开存是刻意的 —— hidden 在真机上写 app.db，置顶只落本面板的 JSON。 */
+  appPins: {},
   saves: {},            // tid -> 存档数组
   media: {},            // tid -> 媒体数组
   auto: {},             // tid -> 自动存档配置
@@ -633,6 +640,10 @@ const gameState = {
    * 回归靠它钉住「前端有没有把 file.name 当 name 传上来」—— 那是纯 query 拼装，
    * mock 不记这笔账就完全测不到（同族：坑 25 的「mock 抹掉了真机的前提」）。 */
   garlicImports: [],
+  /* [CN-FORK] v0.5.2.165 强制「主机磁贴数据库写失败」的 tid 集合（默认空 = 都成功）。
+   * 后端 tile_db_set_name 失败时回 host_ok:false，前端要弹红字；mock 里没有真库，
+   * 所以留一个显式开关让回归能走到那条分支 —— 否则那行代码永远没人验。 */
+  hostRenameFail: new Set(),
   remoteFiles: new Set(), // [CN-FORK] v0.5.2.142 远端已有的 `${tid}/${uid}`（推送往里加，拉取查它）
   jobs: {},             // job_id -> 任务
   nextJob: 1,
@@ -765,6 +776,13 @@ function buildDetail(tid) {
  * 真实存在的用户」这条规则，在 mock 里就靠这个集合来等价表达。 */
 const MOCK_UIDS = ['1a1d3627', '1a1d3629', '1a1d362a', '1a1d362b'];
 
+/* [CN-FORK] v0.5.2.165 当前（前台）用户 —— 对应真机的
+ * sceUserServiceGetForegroundUser（后端 game_saves_current_uid）。
+ * ⚠ **故意不是 MOCK_UIDS[0]**：后端那条 bug（拿 saves[0] 当默认，而 saves[0]
+ * 恒是 uid 升序第一个）只有在「当前用户 ≠ 第一个用户」时才测得出来 ——
+ * 两者相等的话，老代码与新代码表现完全一样，回归就是白写。 */
+const MOCK_CURRENT_UID = '1a1d3629';
+
 /* 存档：按 tid 生成 0~3 条，**每条 = 一个存过这个游戏的用户**，稳定（同 tid
  * 每次一样），便于对照。与真机同形：save/id 就是 uid，kind 由所在目录决定，
  * 一台主机可以有多个用户都存过同一个游戏 → 多行，互不覆盖。 */
@@ -789,9 +807,10 @@ function savesFor(tid) {
 }
 
 /* 与后端 gs_root_or_create 同语义：uid 必须是主机上真有的用户目录，
- * 没有这个用户就拒（不许瞎建）。uid 为空 = 落在第一个用户下。 */
+ * 没有这个用户就拒（不许瞎建）。uid 为空 = 落在**当前用户**下
+ * （[CN-FORK] v0.5.2.165 之前是「第一个用户」，那正是导入落错人的根因）。 */
 function resolveSaveUser(uid) {
-  if (!uid) return MOCK_UIDS[0];
+  if (!uid) return MOCK_CURRENT_UID;
   return MOCK_UIDS.includes(uid) ? uid : null;
 }
 
@@ -1077,6 +1096,11 @@ app.get('/game_saves', (req, res) => {
     /* [CN-FORK] v0.5.2.142 引擎运行期状态（只读，不是配置）。 */
     auto_state: autoStateFor(tid),
     saves,
+    /* [CN-FORK] v0.5.2.165 「导入/上传落到哪个用户」的默认值与候选项，与后端
+     * game_saves_list_json 的两个新字段同形：current_uid = 前台用户，users =
+     * 主机上**全部**用户目录（不只是有存档的）。 */
+    current_uid: MOCK_CURRENT_UID,
+    users: MOCK_UIDS.slice(),
     snap_used: snaps.reduce((a, s) => a + s.size, 0),
     /* 剥掉内部用的 src 指纹字段 —— 真机上快照条目就只有这五个键 */
     snapshots: snaps.map(({ uid, ts, mtime, size, files }) => ({ uid, ts, mtime, size, files })),
@@ -1353,6 +1377,17 @@ app.get('/game_save_delete', (req, res) => {
  * （后端也一样：合并只覆盖同名的镜像，主机自己的记账原样保留）。
  * `name` 走 query 是关键契约（裸镜像没有后缀、也不是 zip，后端只能靠它决定落盘叫什么），
  * 而这条纯粹是前端拼 query —— mock 不把收到的 name 记下来，回归就完全测不到。 */
+/* [CN-FORK] v0.5.2.165 与后端 gs_gx_name_for 同规则：garlic 的 PS5 导出名是
+ * `<TID>_<镜像名>`（它 ui.html 里就是 `s.title_id + '_' + s.save_name`，而 save_name
+ * 是盘上的 `sdimg_<dir_name>`），而主机只认后半截 —— 老代码把上传名原样写进存档目录，
+ * 于是主机要找的 `sdimg_<dir_name>` 压根不存在（用户报的「导入后没生效」）。
+ * 开头那段认得出来就剥掉，认不出（用户改过名）原样保留。 */
+function gxStoredName(name) {
+  const s = String(name || '');
+  const m = /^[A-Za-z]{4}\d{5}_/.exec(s);
+  return m ? s.slice(m[0].length) : s;
+}
+
 app.post('/game_save_import_garlic', express.raw({ type: () => true, limit: '512mb' }), (req, res) => {
   const tid = String(req.query.tid || '');
   const uid = String(req.query.save || '');
@@ -1374,9 +1409,17 @@ app.post('/game_save_import_garlic', express.raw({ type: () => true, limit: '512
   }
   const files = isZip ? 2 : 1;
   gameState.garlicImports.push({
-    tid, uid: user, name: isZip ? (name || '(zip 内自带)') : name, files, size: body.length, isZip,
+    tid,
+    uid: user,
+    /* uid 走的是 query 里那个**原样**值（空串也要看得见）—— 回归要能区分
+     * 「前端没传」与「后端替你选了当前用户」这两种情况。 */
+    uidQuery: uid,
+    name: isZip ? (name || '(zip 内自带)') : name,
+    /* 真正会落盘的名字（zip 里自带的名字原样，裸镜像按 gxStoredName 剥前缀）。 */
+    stored: isZip ? (name || '(zip 内自带)') : gxStoredName(name),
+    files, size: body.length, isZip,
   });
-  res.json({ ok: true, files });
+  res.json({ ok: true, files, uid: user });
 });
 
 /* 多媒体 */
@@ -1486,7 +1529,24 @@ app.post('/game_rename', (req, res) => {
   } else {
     persist_note = '系统内置安装：没有可写的游戏源';
   }
-  res.json({ ok: true, name, persisted, persist_note });
+  /* [CN-FORK] v0.5.2.165 主机磁贴数据库（app.db 平铺列 + appinfo.db）那一层。
+   * 后端 tile_db_set_name 的成败现在也回前端（host_ok / host_note）——
+   * 以前只进主机日志，于是「库里压根没写进去」和「写进去了但 Shell 还没重绘」
+   * 在界面上长得一样，用户看到的就是「改完名 PS5 上没生效」。
+   * 真机默认成功；`POST /_host_rename_fail` 可以强制失败，好让回归走到红字分支。 */
+  const hostOk = !gameState.hostRenameFail.has(tid);
+  const hostNote = hostOk ? '' : '这个游戏还没注册进主机数据库';
+  res.json({ ok: true, name, persisted, persist_note, host_ok: hostOk, host_note: hostNote });
+});
+
+/* [CN-FORK] v0.5.2.165 测试钩子：强制某个 tid 的「主机磁贴库写入」失败/恢复。
+ * 真机没有这条路（失败就是失败），纯粹是为了让前端那条红字提示在本地就能验到。 */
+app.post('/_host_rename_fail', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  if (!tid) return res.status(400).json({ error: 'EINVAL', message: '缺少 tid' });
+  if (req.body && req.body.fail === false) gameState.hostRenameFail.delete(tid);
+  else gameState.hostRenameFail.add(tid);
+  res.json({ ok: true, tid, fail: gameState.hostRenameFail.has(tid) });
 });
 
 /* [CN-FORK] v0.5.2.137 名字回填。对应真机 POST /game_title_sync（后端 game_title_sync_all）。
@@ -1822,6 +1882,126 @@ app.get('/game_tile_bg_dds', (req, res) => {
   res.send(dds);
 });
 
+/* ══════════════════════════════════════════════════════════════════════════════
+ * [CN-FORK] v0.5.2.163 背景音乐（POST 上传 / GET 读取 / GET 恢复默认）
+ *
+ * 与后端 game_music.c 同形：落 <TID>.<ext>，上限 30MB（前端软提示），只认 mp3/ogg/wav。
+ * GET 回的是一段**真能解码**的 8kHz 单声道 WAV（不是随便一段字节）——
+ * 这样 <audio> 预览在本地预览里不会变成「加载失败」，回归也能验到「设过之后能播」。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+const MUSIC_MAX = 30 * 1024 * 1024;
+const MUSIC_EXT = { mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav' };
+
+function tinyWav() {
+  const rate = 8000, n = 800; /* 0.1 秒静音 */
+  const buf = Buffer.alloc(44 + n);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + n, 4); buf.write('WAVE', 8);
+  buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22); buf.writeUInt32LE(rate, 24); buf.writeUInt32LE(rate, 28);
+  buf.writeUInt16LE(1, 32); buf.writeUInt16LE(8, 34);
+  buf.write('data', 36); buf.writeUInt32LE(n, 40);
+  buf.fill(128, 44);
+  return buf;
+}
+
+app.post('/game_music', express.raw({ type: () => true, limit: '64mb' }), (req, res) => {
+  const tid = String(req.query.tid || '');
+  const name = String(req.query.name || '');
+  if (!mockGames.find((x) => x.tid === tid)) {
+    return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+  }
+  const body = req.body || Buffer.alloc(0);
+  if (!body.length) return res.status(400).json({ error: 'EBAD', message: '音频文件是空的' });
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (!MUSIC_EXT[ext]) {
+    return res.status(400).json({ error: 'EBAD', message: '音频不合法（仅支持 MP3 / OGG / WAV）' });
+  }
+  if (body.length > MUSIC_MAX) {
+    return res.status(400).json({ error: 'EBAD', message: '音频文件过大（30MB 上限）' });
+  }
+  gameState.music[tid] = { name, bytes: body.length, ext };
+  console.log(`[Mock] game_music tid=${tid} name=${name} ${body.length}B -> .${ext}`);
+  res.json({ ok: true, bytes: body.length, name });
+});
+
+app.get('/game_music', (req, res) => {
+  const tid = String(req.query.tid || '');
+  const m = gameState.music[tid];
+  if (!m) return res.status(404).type('text/plain').send('not found');
+  res.type(MUSIC_EXT[m.ext] || 'application/octet-stream');
+  res.send(tinyWav());
+});
+
+app.get('/game_music_reset', (req, res) => {
+  const tid = String(req.query.tid || '');
+  delete gameState.music[tid];
+  res.json({ ok: true });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序）
+ *   GET  /game_prefs              → {"prefs":{...}}
+ *   POST /game_prefs_set {tid,fav?,pin?} → {ok,tid,fav,pin}
+ * 与后端 game_prefs.c 同一套三态语义：只拨一颗按钮时另一项**原样保留**。
+ * 响应回的是**改完之后**的最终状态（不是入参）—— 回入参会把「不动」的 -1 说成 false。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+app.get('/game_prefs', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ prefs: gameState.prefs });
+});
+
+app.post('/game_prefs_set', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  if (!/^[A-Z0-9]{6,16}$/.test(tid)) {
+    return res.status(400).json({ error: 'EBAD', message: '游戏编号不合法' });
+  }
+  const hasFav = req.body && typeof req.body.fav === 'boolean';
+  const hasPin = req.body && typeof req.body.pin === 'boolean';
+  if (!hasFav && !hasPin) {
+    return res.status(400).json({ error: 'EINVAL', message: 'fav / pin 至少给一个' });
+  }
+  const cur = gameState.prefs[tid] || { fav: false, pin: false };
+  const next = {
+    fav: hasFav ? req.body.fav === true : !!cur.fav,
+    pin: hasPin ? req.body.pin === true : !!cur.pin,
+  };
+  if (next.fav || next.pin) gameState.prefs[tid] = next;
+  else delete gameState.prefs[tid];
+  logs.push(`[PLDMGR] game_prefs: ${tid} fav=${next.fav ? 1 : 0} pin=${next.pin ? 1 : 0}`);
+  res.json({ ok: true, tid, fav: next.fav, pin: next.pin });
+});
+
+/* [CN-FORK] v0.5.2.163 存档转换：把**另一个用户**在这款游戏上的存档合并到目标用户。
+ * 与后端 game_saves_convert 同形（body: {tid, source, target}）。
+ * 语义是**逐文件合并**（不是整份替换），所以这里只记账、不改 saves 列表 ——
+ * 与 garlic 导入同一个理由（合并只覆盖同名镜像，主机自己的记账原样保留）。 */
+app.post('/game_save_convert', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  const source = String((req.body && req.body.source) || '');
+  const target = String((req.body && req.body.target) || '');
+  if (!tid || !source || !target) {
+    return res.status(400).json({ error: 'EINVAL', message: '缺少 tid / source / target' });
+  }
+  if (source === target) {
+    return res.status(400).json({ error: 'EBAD', message: '来源与目标是同一个用户，不需要转换' });
+  }
+  const list = savesFor(tid);
+  const src = list.find((s) => s.id === source);
+  if (!src) return res.status(400).json({ error: 'EBAD', message: '来源用户在这款游戏上没有存档' });
+  /* 目标用户不在列表里 → 真机上会按来源那一档新建目录，这里跟着补一条。 */
+  let dst = list.find((s) => s.id === target);
+  if (!dst) {
+    dst = { id: target, kind: src.kind, mtime: src.mtime, size: src.size, files: src.files };
+    list.push(dst);
+  } else {
+    dst.size = src.size;
+    dst.files = src.files;
+    dst.mtime = src.mtime;
+  }
+  logs.push(`[PLDMGR] saves: ${tid} 存档转换 ${source} -> ${target} ok (${src.files} files)`);
+  res.json({ ok: true, files: src.files });
+});
+
 // [CN-FORK] 风扇温控 mock（预览用）：开关只置 enabled+清 applied；apply 才置生效。
 const fanCfg = { supported: true, enabled: false, applied: false, target: 72, hw_target: 91, min: 60, max: 85, interval: 7 };
 app.get('/fan_control', (req, res) => {
@@ -2037,10 +2217,14 @@ const mockSystemApps = [
 app.get('/system_apps', (req, res) => {
   res.json({
     /* 与真机同一形状：不可控的那几条带 controllable:false + reason（一句人话），
-     * 前端据此不给开关。 */
-    apps: mockSystemApps.map((a) => (MOCK_FIXED_APPS[a.tid]
-      ? { ...a, controllable: false, reason: MOCK_FIXED_APPS[a.tid] }
-      : { ...a, controllable: true })),
+     * 前端据此不给开关。v0.5.2.164 起每条多一个 pinned（面板侧的置顶开关）。 */
+    apps: mockSystemApps.map((a) => ({
+      ...a,
+      pinned: !!gameState.appPins[a.tid],
+      ...(MOCK_FIXED_APPS[a.tid]
+        ? { controllable: false, reason: MOCK_FIXED_APPS[a.tid] }
+        : { controllable: true }),
+    })),
     count: mockSystemApps.length,
     accounts: 1,
     error: '',
@@ -2060,6 +2244,23 @@ app.post('/system_app_visible', (req, res) => {
   app.hidden = hidden;
   logs.push(`[PLDMGR] app_vis: ${tid} -> visible=${hidden ? 0 : 1}（1 张账号表）`);
   res.json({ ok: true, tid, hidden, message: '' });
+});
+
+/* [CN-FORK] v0.5.2.164 「个性化软件」的置顶开关。与 /system_app_visible 是**两条路**：
+ * 那边写 app.db（这里用 app.hidden 模拟），这边只写本面板的 appPins。
+ * 刻意**不**碰 app.hidden —— 真机上置顶也不动 app.db 那一列（见 include/game_prefs.h）。 */
+app.post('/system_app_pin', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  if (typeof (req.body && req.body.pinned) !== 'boolean') {
+    return res.status(400).json({ error: 'EINVAL', message: '缺少 pinned（true=置顶 / false=取消置顶）' });
+  }
+  const pinned = req.body.pinned;
+  const app = mockSystemApps.find((x) => x.tid === tid);
+  if (!app) return res.status(400).json({ error: 'EBAD', message: '只能置顶主机内置软件' });
+  if (pinned) gameState.appPins[tid] = true;
+  else delete gameState.appPins[tid];
+  logs.push(`[PLDMGR] app_pin: ${tid} -> pinned=${pinned ? 1 : 0}`);
+  res.json({ ok: true, tid, pinned, message: '' });
 });
 
 app.get(/^\/loadpayload:(.*)/, (req, res) => {
@@ -2150,6 +2351,12 @@ app.post('/reset', (req, res) => {
   gameState.iconBytes = {};
   gameState.bgBytes = {};
   gameState.bgDds = {};
+  /* [CN-FORK] v0.5.2.163/164 背景音乐 / 收藏置顶 / 个性化软件置顶也一并清零。
+   * 不清的话：上一节设过的音乐会让下一节「还没设过时显示默认」假红；
+   * 收藏/置顶的残留会让「收藏的排到最前」这条断言在第二次跑时假绿（本来就排前面）。 */
+  gameState.music = {};
+  gameState.prefs = {};
+  gameState.appPins = {};
   gameState.saves = {};
   gameState.media = {};
   gameState.auto = {};
@@ -2166,6 +2373,9 @@ app.post('/reset', (req, res) => {
   /* [CN-FORK] v0.5.2.154 garlic 导入的流水账也清 —— 不清的话下一节读到的还是
    * 上一节导入过的那笔，断言「这次导入传了正确的 name」就变成假绿。 */
   gameState.garlicImports = [];
+  /* [CN-FORK] v0.5.2.165 强制「主机磁贴库写失败」的开关也清 —— 留着会让后面
+   * 任何一次改名都弹红字，那些正向断言（「已写入主机磁贴数据库」）就假红。 */
+  gameState.hostRenameFail.clear();
   /* [CN-FORK] v0.5.2.142 把 /loadpayload: 起过的程序桩（10101）一并关掉。
    * 不关的话，第二遍 game112 的 1a 节「前置：10101 必须真的没人监听」必红 ——
    * 而那条前置正是「先探后开」整条链路的立足点。之前只能靠重启 mock 进程绕开。 */

@@ -117,7 +117,10 @@ int game_saves_root(const char *tid, char *out, size_t osz);
  * saves[] 里每条 = 一个存过这个游戏的用户：{id, name, kind, mtime, size, files}，
  * id 与 name 都是 uid（前端自己加「用户」前缀），kind 是 "PS5"/"PS4"。
  * auto 里多一个 snap 子对象 {enabled, interval, keep}（本地快照配置）。
- * snapshots[] 里每条 = 一份已存在的本地快照：{uid, ts, mtime, size, files}。 */
+ * snapshots[] 里每条 = 一份已存在的本地快照：{uid, ts, mtime, size, files}。
+ * [CN-FORK] v0.5.2.165 另有两个字段：current_uid（当前前台用户的 uid，拿不到是空串）
+ * 与 users[]（主机上**全部**用户目录名，不只是有存档的）—— 前端拿它们当「兼容导入 /
+ * 上传落到哪个用户」的默认值与候选项，别再退回 saves[0]（那是 uid 升序第一个，不是当前用户）。 */
 int game_saves_list_json(const char *tid, char *buf, size_t size);
 
 /* /game_detail 要的存档条数 = 存过这个游戏的用户数（通常是 0 或 1）。
@@ -231,16 +234,34 @@ int game_saves_snap_action(const char *body, size_t len,
 int game_saves_local_mtime(const char *tid, const char *uid, long long *out_mtime);
 
 /* POST /game_save_import_garlic：导入 garlic-savemgr（earthonion）导出的**加密**存档。
- *   query: tid, save(=uid，可空 = 第一个用户), name(=原始文件名，裸镜像时必需)
+ *   query: tid, save(=uid，**可空 = 当前前台用户**), name(=原始文件名，裸镜像时必需)
  *   body : 裸的 `sdimg_<名>` 镜像，或 garlic 的 PS4 包（zip 内 `sdimg_<名>` + `<名>.bin`）
  *
  * 与 game_saves_upload 的语义差别是刻意的：上传是**整份替换**，这里是**逐文件合并**
  * —— 只覆盖同名的镜像，保留主机自己的记账（sdimg_sce_bu_* / sdimg_sce_sdmemory）。
  * 详细理由见 src/game_saves.c 里那段注释。
+ *
+ * [CN-FORK] v0.5.2.165 两处修 bug 的约定，改这个函数前先读：
+ *   · `save` 为空 → 落**当前前台用户**（sceUserServiceGetForegroundUser），
+ *     不再是「uid 升序第一个」—— 后者会把存档导到别人名下（用户报的「没对当前用户生效」）；
+ *   · 文件名开头那段 garlic 的 `<TID>_` **会被剥掉**（`PPSA27836_sdimg_X` → `sdimg_X`），
+ *     因为主机只认后者；同一段 TID 还用来做「不是当前游戏就整包拒收」的判定。
  * 0 成功（*out_files 回写入的文件数），-1 失败（msg 回人话）。 */
 int game_saves_import_garlic(const char *tid, const char *save, const char *name,
                              const unsigned char *body, size_t len,
                              long long *out_files, char *msg, size_t msgsz);
+
+/* [CN-FORK] v0.5.2.163 POST /game_save_convert：把**另一个用户**在这款游戏上的存档
+ * 转换（复制）到目标用户名下，让当前用户也能用上。
+ *
+ *   body: {tid, source, target}   source / target 都是 /user/home 下的 uid
+ *
+ * 与 game_saves_import_garlic 同一套语义：**逐文件覆盖合并**（不是整份替换），
+ * 目标用户自己的记账（sdimg_sce_bu_* / sdimg_sce_sdmemory）原样保留。
+ * 目标用户还没有这款游戏的存档时，按**来源那一档**（PS5/PS4）新建目录。
+ * 0 成功（*out_files = 写入的文件数），-1 失败（msg 回人话）。 */
+int game_saves_convert(const char *tid, const char *source, const char *target,
+                       long long *out_files, char *msg, size_t msgsz);
 
 /* [CN-FORK] v0.5.2.156 从 garlic 导出的文件名里认游戏（`<TID>_<存档目录名>` 那一段）。
  * 返回 1 = 认出来了（*out 写 9 位**大写** TID，缓冲至少 10 字节）；0 = 认不出来。
@@ -249,5 +270,14 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
  * 才拒绝，认不出来一律放行** —— 用户可能把文件改过名，把「说不清」当「不匹配」
  * 会让正常导入整个失效。导出给宿主测试穷举边界（`test/game_saves_test.c` ⑬）。 */
 int game_saves_tid_from_name(const char *s, char *out, size_t osz);
+
+/* [CN-FORK] v0.5.2.165 当前（前台）用户的 uid **目录名形态** —— 与 /user/home 下的目录名
+ * 同形（十六进制、无前导零，形如 `1a1d3627`），可以直接当 save 参数用。
+ * 0 = 拿到了（*out 已填），-1 = 拿不到（*out 是空串：宿主测试、或主机上没有登录用户）。
+ *
+ * 为什么要暴露它：`/game_saves` 的 `current_uid` / `users` 两个字段由它算出来，
+ * 前端拿它当「兼容导入落到哪个用户」的默认值 —— 老逻辑用 saves[0]（uid 升序第一个），
+ * 当前用户还没存过这款游戏时会把存档导到**别人**名下。 */
+int game_saves_current_uid(char *out, size_t osz);
 
 #endif

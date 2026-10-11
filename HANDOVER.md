@@ -5,7 +5,7 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-> - 版本：`MENU_VERSION = 0.5.2.162`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+> - 版本：`MENU_VERSION = 0.5.2.165`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 - 工作树：`.88`–`.91` 是 `.87` 契约内的观感微调，`.92`–`.97` 是**骨架/交互重构六批**（配色令牌一行未动），`.98` 是这批重构的**运行期崩溃清账**（四处整站死 + mock 缺字段 + 一处上游错词条），`.99` 是**账号工具（PS5 Account Tools）源码并入主 ELF + 动作橙转档 + 账号板块 9 处实测修订**（正式出包版 `NayePlmTools_0.5.2.99-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `aca3852`），`.100` 是**整套换参考页配色（灰墨 + 蓝主色）+ 改名补第二层 + 去操作前确认弹窗 + 磁贴自适应**（正式出包版 `NayePlmTools_0.5.2.100-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `f831e98`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 是**磁贴再放大 1/4 + PKG 卡搬到常用配置底部 + 次要按钮档转紫 + 改名逐层取证**（正式出包版 `NayePlmTools_0.5.2.101-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `2dc3088`，两包各 9,858,824 字节、titleId 自检 NAYE00001/NAYE00004 通过）。`.100` 的包、`.99` 的包与更早的现行包 `NayePlmTools_0.5.2.87-me.elf` / `-ga.elf`（哈希 `87e6ad3`）都已过期。`.85`/`.86` 是中间态，从未单独出包。`.102` 是**修掉 `.101` 改名取证代码的堆溢出（整 payload 崩）+ 按钮按功能转实心六色（样张 A + I2）+ 页头去粘顶**（正式出包版 `NayePlmTools_0.5.2.102-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `be7fa8f`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.101` 的包已过期。`.103`–`.105` 是**纯前端/文档改动、从未单独出包**（`.103` 收敛上色 + 深空黑 + 舒展留白；`.104` 账号板块按钮状态分色 + 主色换朱橙 `#F43E06`；`.105` 同步按钮补图标 + PIN 进度条重做），`.106` 把这四轮**一次性出包**（正式出包版 `NayePlmTools_0.5.2.106-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `0e9afb2`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过），`.102` 的包已过期。`.107` 是**头像上传/裁剪四项缺陷修复**（变形 / 卡死 / 拖拽裁剪 / 拖放选图）+ **账号「登出」不再连带反激活**（备份层加来源维度，按钮 `[登出]` = 只登出、`[反激活]` = 登出并反激活，文字不变）—— 详见 §2.1.1 与 §2.2.1。正式出包版 `NayePlmTools_0.5.2.107-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `8065f19`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.106` 的包已过期。`.108` 是**账号按钮语义修正** —— 用户否掉了 `.107` 的文案（「逻辑做错了，登出 就是只登出，反激活 即 登出并反激活，**但是按钮文字不要改**」）：按钮行恒为 `[登出]` + `[反激活]`，已登录时 `[反激活]` 走 `signout-full`（登出 + 反激活一步到位），未登录时走 `deactivate`；后端契约沿用 `.107`，本轮只动前端/语言包/文档。正式出包版 `NayePlmTools_0.5.2.108-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `12e2ba5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.107` 的包已过期。`.109` 是**修掉「头像上传一直显示上传中、不报错也不结束」**（真根因在 MHD 流式状态回收的判据，见 §2.2.2；前端同时把「超时」与「用户取消」区分开）+ **通知条挪到底部居中并缩小**（见 §2.2.3）+ mock 里头像改成真闭环。正式出包版 `NayePlmTools_0.5.2.109-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `b8ea772`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.108` 的包已过期。`.110` 是**修掉电视端「确定」生效在鼠标指针位置、而不是彩色光圈所在的那个控件上**（见 §2.2.4；结论：网页无法移动系统鼠标指针，改为让 OK 的落点脱离指针）+ 新增 `?navdebug=1` 排障面板。正式出包版 `NayePlmTools_0.5.2.110-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `dcfb48b`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.109` 的包已过期。`.111` 是**四件事一起做**：① 遥控器模式下藏掉系统光标（见 §2.2.4 延伸 —— 网页无法移动指针，只能让它消失）；② **改名不再影响账号 ID**（ID 改由 uid 派生，见 §2.1.1）；③ **登入/登出/激活/改名/接口错误全部中文化**，不再报英文诊断串；④ **去掉「反激活」** —— 激活成功后那颗按钮整颗收起（见 §2.2.5）；⑤ 修掉**「第一次登出失败、第二次才成功」**（`fill_status()` 改为 uid 优先解槽位，见 §2.1.1）。正式出包版 `NayePlmTools_0.5.2.111-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `e908ef5`，两包各 9,875,208 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.110` 的包已过期。`.112` 是**游戏管理三个面板改「铺满右侧」+ 磁贴图拆成图标/背景两层 + 电视端焦点那套逻辑整体回退到上游做法**（用户口径两轮：「存档管理页面打开后铺满右边整个区域。多媒体管理也是铺满右边。修改名称也是铺满，但是你只把修改磁贴图标放出来了，还要增加一个修改背景的」/「刚才铺满的几个页面圆角全部取消，修改名称哪里将磁贴图标与游戏名称放在一行，磁贴背景放在下面，磁贴背景预览图是16:9的dds图片。图标是png图片。另外修复一个历史bug。ps5真机上焦点鼠标移动的方式最好改回跟上游一样，现在这样很别扭」）。具体：① `Modal` 新增 `layout="panel"`、四角直角、`--sidebar-w` 令牌 + `html[data-sidebar]`、`.panel-sheet` 的 `margin:0!important`（躲 `.space-y-6` 的 `> * + *`）—— 见 §2.2.6；② 磁贴两层图（**图标 1:1 PNG / 背景 16:9 1920×1080 DXT1 DDS，DDS 由后端转**，`/game_tile_icon` 与 `/game_tile_background` 拆分，`game_list` 新增 `icon` 版本号字段）；③ **电视端「光圈/光标」整层回退**：删掉自己搬焦点、抢确定键、藏光标三层，改成光圈跟着指针走 —— 见 §2.2.7；④ 修掉 `.92` 起就存在的「弹窗里按返回键连带退页」—— 见 §2.2.8；⑤ `Modal` 焦点进出独立 effect —— 见 §2.2.9。**本轮为纯前端/mock/文档改动，未出包**（后端 C 代码一行未动）。`.113` 是**三件事 + 一处版本号清账**（用户口径：「这几个铺满页面的字体太小了，跟其他父级菜单一样大。这里点击也可以上传图片，上传完要有一个应用的动作；这里的缩略图也要调大。太小了，预览都看不清。改把，改完直接打包成elf」）：① 铺满面板里的字号与侧栏菜单拉平 —— 立 `.panel-body` / `.panel-note` / `.panel-tiny` / `.panel-micro` 四条语义档，替掉 60 处硬编码 `text-[13px]` 之类的 px 字号（见 §2.2.6 末尾）；② 改名页两层图改「**点预览也能选图 + 应用才生效**」（预览本身是按钮、选图先暂存并本地预览、点「应用」才提交，另有「取消」）；③ 多媒体缩略图列宽下限由写死的 112px 改成 `--thumb-w` 令牌（移动 140 / 桌面 200 / 电视 320px）；④ 顺手清掉三处**手抄的版本号**（设置页捐赠说明、支持作者页兜底值、mock 的 `/version`）并加回归守卫。正式出包版 `NayePlmTools_0.5.2.113-me.elf` / `-ga.elf`，内嵌标题真实短哈希 `81c42c1`，两包各 9,957,216 字节、titleId 自检 NAYE00001/NAYE00004 通过，`.112` 的包已过期。`.114` 是**磁贴再放大 1/4（`--tile-w` 这根令牌的第三次调档：PC/手机 210px → 262.5px、电视 300px → 375px）+ 改名页「磁贴背景」块从竖排改回左右分栏**（正式出包版 `NayePlmTools_0.5.2.114-me.elf` / `-ga.elf`，短哈希 `91fa4fb`，两包各 9,957,216 字节，`.113` 的包已过期；⚠️ 这一轮**包出了文档漏了**，到 `.115` 才补上 CHANGELOG），`.115` 是**游戏管理 → 多媒体管理（截图/录屏）后端**——新增 `src/game_media.c` + `include/game_media.h`、八条路由（六条 `/game_media*` + `/game_job_status` / `/game_job_cancel`），主机关卡从 3 条增至 4 条（新 `media_scan` 98 项断言），详见 §2.1.0 与 CHANGELOG `.115`。`.116` 是**游戏管理后端一次补完 + 修掉「预览只剩顶部一条 / 打包下载失败」** —— 新增 19 条端点与六个模块（`game_title` / `game_saves` / `game_runtime` / `game_job` / `zip_io` / `inflate`，详见 §2.1.2），并把**文件直出从 `MHD_create_response_from_fd64` 换成自写 32KB 回调 `gr_file_response()`**（fd 直出那条分支在真机上会把 Content-Length 报全、字节发短，导致图片只剩顶部一条、zip 下载判失败；三个调用点一起换），出包版 `NayePlmTools_0.5.2.116-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.115` 的包已过期。`.117` 是**修真机报的「游戏管理的列表变空了」** —— 根因是 `.116` 给 `enum_arg_t` 加了 `want`，而 `build_game_json` 仍逐字段赋值**漏了它**，`want` 成栈上垃圾、`gm_append_item` 第一行 `if (a->want)` 把每个条目都早退、`count` 恒 0（症状「先好后坏」，跑过一次 `/game_detail` 才把非空指针留在栈上）；同轮另修**详情页 5 个字段读错列**（`st_cb_row` 拿 `GM_DB_*` 枚举序号当列号，把 `gm_sql_col_index` 的解析结果整个丢掉）与 **`version` 吐栈上垃圾**。同时**把「三道门为什么拦不住」补上**：`src/game_mgr.c` 第一次能在主机上编译（`test/host_mnt_compat.h` 顶掉 `getmntinfo` 三个 BSD 符号 + `GAME_MGR_APPDB_PATH` 加 `#ifndef` + 合成 app.db 夹具），新增 `game_mgr` 主机关卡 **65 项断言**，核心手法是 `seed_stack()` **主动把栈播种成非空指针**（见 §2.1.3）。出包版 `NayePlmTools_0.5.2.117-me.elf` / `-ga.elf`（`-Os -Wall` 零警告），`.116` 的包已过期。**构建产物不入库**：根目录 `NayePlmTools_*.elf`、`include/assets_*.h`、`frontend/dist/` 均为本地产物，只在本地留存；仓库内唯一二进制是 `third_party/pkg-manager.elf`（唯一 `git add -f` 例外）。。`.128` **改错了地方，已回退**（用户：「退回上一版，你改错了，我要的是将游戏详情里面的按钮全部去掉，改为『去 ShadowMount 管理』」）——它删的是**磁贴下**那四颗动作按钮（存档管理 / 多媒体管理 / 名称与背景 / 待定功能），而那四颗是我们自己的功能，必须留。`.129` 把磁贴恢复到 `.127` 的样貌，把手术做到**游戏详情弹窗**里：`GameDetailModal.jsx` 515 → 250 行，改成**纯只读信息面板 + 一颗「去 ShadowMount 管理」按钮**——只读挂载 / 读写挂载 / 卸载挂载 / 卸载 / 删除源 五颗按钮全部下线，连带整条删除任务链（`busy`/`job` state、`watchJob`/`cancelJob` 轮询、删除进度面板、「取消任务」按钮、`PHASE_LABEL`/`BUSY_REASON`、`deleting`/`stopWatch`）一起删干净，不留半死代码（否则 `no-unused-vars` 与维护陷阱）。动机同 `.128` 那次：ShadowMount 挂的镜像/裸目录游戏调 `sceAppInstUtilAppUnInstall` 会删掉 app.db 注册与 `/user/app/<TID>/`（连带 `mount.lnk`）后返回非零，而 `game_runtime_uninstall()` 只在 rc==0 时清缓存，于是图标先还在、刷新后消失且**无从挂回**——外部源 `/mnt/ext1/PPSA21567-宇宙机器人` 完好、SMP 侧仍列着，但我们没有挂载/重注册能力，所以干脆撤掉挂载类入口，交给 ShadowMount 自己管；**这次详情里那颗「卸载」也一起撤了**，不再有「留着以后决定」的欠账。SMP 按钮的行为沿用 `.128` 那套（回归已验证）：点击走 `.84` 的老套路——手势内 `window.open("about:blank", "_blank")` 占位再 `win.location.replace(url)`，**目标 `http://${location.hostname}:10101/`**（用页面自己的 host，主机上 `127.0.0.1`、PC 上 `192.168.x.x` 零配置都对）。**`window.open` 第三个参数千万别加 `noopener,noreferrer`**——加了返回 `null`，兜底分支再开一个真标签页，用户看到两个标签而 `about:blank` 那个还挂着；`catch` 里要 `win.close()` 再兜底。存档 / 多媒体 两条 `GridRow`（`打开存档管理` / `打开多媒体管理`）**保留在详情里**，同时磁贴上四颗按钮也在，所以两条路都能到；「名称与背景」现在**只能从磁贴进**（`.128` 给详情加的那行 `打开名称与背景` 随回退一起没了），「待定功能」那颗空壳按钮也回来了。`GameSection.jsx` 的 `GameDetailModal` 调用点顺势收掉 `addToast` / `showConfirm` / `onChanged` 三个回调（详情不再发操作，它自己的 SMP 按钮不经过我们）；**`showConfirm` 在存档 / 多媒体两个弹窗里仍在用，别误删**。正式出包版 `NayePlmTools_0.5.2.129-me.elf` / `-ga.elf`（提交 `ead334d`，内嵌标题 `ead334d`），两包各 10,785,872 字节、titleId 自检 NAYE00001/NAYE00004 通过，`frontend/dist/index.html`（910,858 字节）与 ELF 内嵌 blob 在偏移 2007072 **逐字节一致**，`0.5.2.128` / `.127` / `.126` 残留各 0 处、`cancelJob` / `watchJob` 各 0 处；`.128` 的包已过期。回归：`game112` 171/171、`nav112` 20/20。**断言口径翻转了**：磁贴上必须**有**四颗（`length === 4` 且磁贴上没有 SMP 按钮），详情里必须**只有一颗** SMP 按钮，且挂载/卸载/删除源/取消任务**一颗都不剩**（用正则扫弹窗内所有 `<button>` 的 aria-label + text——这条反面断言是刻意加的，防止以后把按钮偷偷加回来还静默通过；`.128` 只有正向断言，就是它的教训）。负向对照：把 `GameDetailModal.jsx` checkout 回 `HEAD~1`，6 条断言立刻全红，恢复后全绿。`.129` 出包版 `NayePlmTools_0.5.2.129-me.elf` / `-ga.elf`（提交 `ead334d`），已推真机 `192.168.1.214` 验收。
 
 `.130` 是**真机验收 `.129` 时抓到的一条死链文案**：`GameSection.jsx:321` 渲染的磁贴提示还写着
@@ -1486,6 +1486,46 @@ POST 路由 `ROUTE_SYSTEM_APP_VISIBLE` **已登记进 `gr_post_limit`**（漏登
 `cropfix` 75、`pack125` 15；宿主 `game_saves` 183 / `save_remote` 94 / `game_auto` 152，
 `mutation_check_freeze.sh` **7 个变异全 OK**。
 
+`.163`–`.165` 是**同一天的四批需求 + 两个 bug 修复**（`CHANGELOG.md` 顶部有逐条口径），
+一次出包。摘要如下，细节见 §2.1.8（改名主机层）、§2.1.9（garlic 落谁名下 + 落什么名字）、§2.2.13（名称与背景三层）。
+
+- **两个 bug（本轮重点）**：
+  ① **改名在 PS5 上「没生效」** —— `tile_db_set_name()`（写系统 `app.db` + `appinfo.db`，**SMP 与电视
+     主屏真正读的那一层**）的成败以前只进主机日志，前端一律报成功。于是「压根没写进去」与
+     「写进去了、Shell 还没重绘」在界面上长得一样 —— 后者是**正常**的：磁贴名字与自定义图标同源，
+     Shell 只在**重启 / 待机唤醒**后重绘。修法 = `game_title_set_name()` 扩 `host_ok` / `hnote` 出参
+     → `POST /game_rename` 回 `host_ok` / `host_note` → `RenameModal` 把提示从一条改成**一列**（源 + 主机库）。
+  ② **garlic 导入没对当前用户生效** —— 两个独立根因：
+     (a) 前端目标用户取 `saves[0]`，而 `saves` 按 uid **升序**，当前用户没存过这款游戏时 `saves[0]`
+         是**别人**；选择器又只在 `saves.length > 1` 时渲染。修法 = 新增 `game_saves_current_uid()`
+         （走 `sys_get_foreground_user`，uid 试 `%x` / `%08x` 两种写法、以主机上真存在的目录为准；
+         宿主用 `weak` 兜底返回 0），`/game_saves` 回 `current_uid` / `users`，前端默认 = 当前用户、
+         选择器**总是显示**；`gs_root_or_create()` 的「按 uid 找根」判据提到**函数第一行**。
+     (b) garlic 的 PS5 导出名是 **`<TID>_sdimg_<名>`**（真机：`PPSA27836_sdimg_STARBOARD`），
+         老代码原样落盘 → 主机要找的 `sdimg_<名>` 不存在。修法 = `gs_gx_name_for()` 剥掉开头 `<TID>_`；
+         **`.156` 那条游戏判定必须跟着搬家**（判定只能看原始名字，剥完前缀就认不出）—— 从「扫暂存目录」
+         改成在 `gs_gx_cb` 里记 `bad_tid`，合并前拒收。
+- **四批需求**：手机端二级菜单（工具 / 系统两组，桌面与电视端仍平铺）；自动存档跳过自制应用
+  （`ga_tid_is_homebrew()` 按物理源 `/data/homebrew/<TID>` / `/data/etaHEN/games/<TID>` 判，只 `stat`，
+  命中则**整条链**不跑并记日志）；存档本地那行拆两列 + 第二列「存档转换」（`POST /game_save_convert`
+  `{tid,source,target}` 逐文件合并）；存档管理游戏名后加 TID；「名称与背景」重排（图标占两行放大 /
+  名称右上 / **背景音乐**右下 / 背景整幅在下）+ 新层 `POST /game_music`（`/data/nayeplmtools/music/<TID>`，
+  30 MB 上限）；多媒体下载按钮旁加分享二维码（内容按当前地址栏拼）；「关于」页重构（删「支持作者」板块，
+  原作者捐赠链接 + 本作者二维码放 fork 板块右边，参考致谢收成一行一项）；磁贴收藏 / 置顶 / 排序三颗按钮
+  （落 `game_prefs.json`，收藏与置顶**恒定优先于档位**）；个性化软件置顶开关（`app_pin.c`，与 `visible`
+  分开存）；Payload 页上传按钮上移 + IP/端口高对比块 + 访问二维码。
+- **`lucide-react` 1.x 删掉了全部品牌图标**：`import { Github } from 'lucide-react'` 会在模块求值时抛
+  `does not provide an export named 'Github'`；Vite 预打包的 dep 是静态 ESM，**缺一个具名导出就整包白屏**
+  （本轮踩到，「关于」页自带一份 GitHub mark 的 SVG 替掉）。**改图标前先跑一遍「所有具名导入是否真的存在」的核查。**
+- 顺手清掉两处挡构建的既有 bug：`MediaManagerModal` 里分享按钮引用作用域外的 `setSharing`
+  （eslint `no-undef`）、`App.jsx` 9 条既有 eslint 错误（会让 `npm run build` 直接失败）。
+- 回归基线：`game112` **305**（原 294）、`nav112` 20、`acct111` 23、`avatar109` 19、`cropfix` 75；
+  宿主 `game_saves` **212**（新增 ⑭ 段 8 条）、`game_prefs` 新增用例，`overall: PASS`。
+  ⚠ 同步修正了两条**被改旧了**的断言：`立即拉取` 的文案已按 `.162` 去重改成「已跳过拉取」
+  （并补「本地全丢了仍能拉回来」的反向对照），「恢复默认」按钮从 2 颗变 3 颗（图标 / 音乐 / 背景）。
+  ⚠ 前端回归脚本里**给 mock 造的状态要能收回去**：本轮新加的「删掉本地存档验救回」最初只删了一个用户，
+  后面几节数存档数时全跟着少一条（4 条红）—— 改成**两份都删再拉回来**才自洽。
+
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
 | --- | --- |
@@ -2122,6 +2162,46 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
 - 回归：`game112` 5f 去 mock 的 `/_garlic_imports` 读**后端收到了什么**（tid / uid / name /
   判成 zip 还是裸镜像），而不是只断言「按钮能点」—— 同族教训见 §7 的坑 25。
 
+#### 2.1.8 改名要写**三层**，主机库那一层的成败必须回给界面（`.165`，动 `game_title.c` / `RenameModal` 前必读）
+
+用户报的「改完名 PS5 上没生效」**不是一条链断了，而是两条链的结果在界面上长得一样**：
+
+1. `/data/nayeplmtools/titles/<TID>/name.txt`（面板事实源，`.137`）
+2. **系统 `app.db` 的名字列 + `appinfo.db` 的 `TITLE`** ← **SMP 与电视主屏读的是这一层**
+3. 游戏源 `sce_sys/param.json` 的 `localizedParameters.titleName`（只有 folder/lz4 可写）
+
+- **第 2 层写成功 ≠ 主屏立刻变名。** 真机取证（`.137`）：磁贴**名字**与**自定义图标**同源，
+  Shell 只在**重启主机 / 待机唤醒**后才重绘；而磁贴**背景**（`pic0Info` 列）是**实时**重绘的。
+  所以「写成功但主屏还是旧名」是**正常现象**，必须写在界面上，否则用户只会再报一次 bug。
+- **第 2 层的成败以前只进主机日志**（`tile_db_set_name()` 的返回值没人看）→ 界面一律报
+  「名称已改为…」。「库里压根没写进去」与「写进去了、Shell 还没重绘」于是长得一模一样。
+  `.165` 起：`game_title_set_name()` 扩出参 `host_ok` / `hnote`，`POST /game_rename` 回
+  `host_ok` / `host_note`，`RenameModal` 把提示做成**一列**（`notes` 数组，按因果由下到上：
+  先源、后主机库；源写不动 warn，主机库写失败 error 红字，主机库写成功则**明确说要去重启 / 待机唤醒**）。
+- ⚠ **`host_ok = 1` 只代表「库里写进去了」**，不代表主屏已经变了 —— 别把它当成用户可见的终局判据。
+
+#### 2.1.9 garlic 兼容导入：落**谁**名下、落**什么**名字（`.165`，动 `game_saves_import_garlic` 前必读）
+
+「兼容导入后没对当前用户生效」是**两个独立根因**叠在一起，改一个不够：
+
+- **落谁名下**：前端原来取 `saves[0]`，而 `saves` 是**按 uid 升序**排的 —— 当前用户没在这款游戏上
+  存过档时 `saves[0]` 是**别人**；目标用户选择器又只在 `saves.length > 1` 时渲染，单人主机上连选
+  都选不了，静默落错人。
+  - 后端新增 `game_saves_current_uid()`：走既有的 `sceUserServiceGetForegroundUser` 封装
+    （`sys_get_foreground_user`）。uid 试 `%x` 与 `%08x` 两种写法，**以主机上真存在哪个目录为准**
+    （`/user/home/<uid>` 的目录名是十六进制，garlic 也这么写）。宿主测试用 `__attribute__((weak))`
+    提供兜底（返回 0 = 拿不到），静态链接恒挑强符号。
+  - `/game_saves` 多回 `current_uid` 与 `users`（= 主机上**全部**用户目录，不只是存过档的）。
+  - `gs_root_or_create()` 里「按 uid 找根」的判据提到**函数第一行** —— 否则「当前用户已有存档、
+    但不是 uid 最小的那个」照样取错人（`want` 为空时才退到 `ids[0]`）。
+- **落什么名字**：garlic 导出的 PS5 裸镜像是 **`<TID>_sdimg_<名>`**（真机取证：
+  `PPSA27836_sdimg_STARBOARD`），老代码把整串原样写进存档目录 → 主机要找的 `sdimg_<名>` 不存在。
+  - `gs_gx_name_for()` 剥掉开头那段 `<TID>_`（大小写不敏感；认不出 TID 的名字原样保留）。
+  - ⚠ **`.156` 那条「导入的是不是这款游戏」的判定必须跟着搬家**：判定只能看**原始名字**
+    （剥完前缀就认不出了），所以从「扫暂存目录」改成在 `gs_gx_cb` 里把不符的 TID 记进 `g->bad_tid`，
+    `game_saves_import_garlic()` 在合并**之前**用它整包拒收 —— 拒绝时一个字节都没碰用户目录。
+  - 「认不出 ≠ 不匹配」：只有**认出来且与目标 TID 不符**才拒；认不出一律放行（夹具与老包都靠这条）。
+
 ### 2.2 React 前端（`frontend/src/`）
 - `App.jsx` 布局/路由 + **`NAV_ITEMS`/`NAV_GROUPS`（一份菜单表驱动侧栏与手机底部栏）**；`components/views/*` 各功能页（GameManageView 游戏管理、GameSection 游戏宫格、ThermalSection 温控、**AccountToolsSection 账号工具（`.99`，常用配置板块：登录/激活/改名/PIN/头像/账号 ID 换算）**、StorageHub、Autoload、ActiveProcesses、LogViewer、Settings、**About（`.154`，更新日志 + 支持作者 + 参考致谢）**、ManageSources、CommonEntries、MoveFromUsb、PkgManagerFrame...）。
 - `i18n.js` 加载 locale（子模块）+ **合并 `locales-overlay/<lang>.json`（后者优先）**；完成度 <70% 的语言不注册。
@@ -2457,6 +2537,34 @@ kinfo_proc 编译期 … 字节 · 内核报 … 字节 · 共 … 条
   「删了就是删了」「连存三次逐字节一致」），变异验证退回旧逻辑会红 2 条。
   这条测试能跑起来，靠的是 `AUTOLOAD_CONFIG_PATH` / `PLDMGR_CONFIG_PATH` /
   `ARCHIVE_GLOBAL_PATH` / `BASE_DATA_DIR` 四个宏的 `#ifndef` 保护（默认值一字未改）。
+
+#### 2.2.13 「名称与背景」的三层 + 本轮几处版式（`.163`，动 `RenameModal` / `GameSection` 前必读）
+
+- **三层**：图标（1:1 → 1024×1024 PNG）/ **背景音乐**（mp3·ogg·wav → `/data/nayeplmtools/music/<TID>`，
+  上限 30 MB）/ 磁贴背景（16:9 → 1920×1080，后端转 DXT1 DDS）。三层共用同一套
+  「选文件 → 暂存 → 应用」流程（`staged` 里三个键 + 三个隐藏 file input，
+  `input[name="tile_icon" / "tile_bg" / "tile_music"]`）——**自动化测试靠 `name` 认层，别按 DOM 下标挑**。
+- **版式（用户口径 + 截图）**：左 = 磁贴图标（**占两行**、预览放大到整列宽），右上 = 游戏名称，
+  右下 = 背景音乐，磁贴背景整幅铺在三块下方。`grid-cols-1 xl:grid-cols-[320px_1fr] xl:grid-rows-2`
+  + 图标块 `xl:row-span-2`。⚠ **`game112` 那一节有四条几何断言钉着这个象限关系**
+  （名称在图标右侧 / 音乐在名称下方同列 / 图标底边压过音乐块 / 背景在三块下方）——
+  挪块之前先看它们，别只改 CSS。
+- ⚠ **每层各有一颗「恢复默认」**（图标 / 音乐 / 背景），按 DOM 顺序取下标；
+  按钮文案沿用 `game.bg_reset_btn`（**三层共用一个键**）。`.163` 之前是两颗，回归里的下标会错位。
+- **收藏 / 置顶 / 排序**（`GameSection.jsx`，`.164`）：三颗小按钮压在详情热区之上（`relative z-10`），
+  收藏与置顶是开关（开着用实心色）、排序是循环档位；**收藏与置顶恒定优先于档位**
+  （用户：「收藏的游戏自动排到列表前面」）。落 `/data/nayeplmtools/game_prefs.json`（`src/game_prefs.c`）。
+  磁贴「手动排序」与「收藏 / 置顶」**不是一回事**：前者跟着游戏走、上后端，后者只在本机列表里生效。
+- ⚠ **`lucide-react` 1.x 删掉了全部品牌图标**（`Github` / `Twitter` …）。写
+  `import { Github } from 'lucide-react'` 会在**模块求值**时抛
+  `does not provide an export named 'Github'`；Vite 预打包的 dep 是静态 ESM，
+  **缺一个具名导出就整包白屏**（页面 `#root` 空、`aside button` 数为 0，
+  回归会以「侧栏没出来」的形式红）。「关于」页因此自带一份 GitHub mark 的 SVG。
+  **加/换图标后跑一遍全量核查**：把 `frontend/src` 里所有 `from 'lucide-react'` 的具名导入
+  对着 `require('lucide-react')` 的 key 比一遍。
+- ⚠ **Vite 依赖缓存**：改了 `lucide-react` 这类预打包 dep 的**导入名**后，
+  若页面白屏且控制台报 `does not provide an export named …`，先 `rm -rf frontend/node_modules/.vite`
+  再重启 dev server；仍报就是导入名真的不存在（见上一条）。
 
 ## 3. 构建与部署
 前端产物嵌入 ELF，分步：

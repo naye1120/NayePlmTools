@@ -74,4 +74,12 @@ int app_vis_fixed_reason(const char *tid, const char **why);
  * msg 给人话（成功也可能留空）。首次写入前会走 tile_db 那份「原始备份只留一次」。 */
 int app_vis_set(const char *tid, int hidden, char *msg, size_t msgsz);
 
+/* [CN-FORK] v0.5.2.164 应用置顶：与 visible 是两件事（一个写 app.db、一个写本面板的 JSON）。
+ * pin = true 把这条内置软件钉在主屏固定位置（不动 app.db 那一列）。
+ * 这两个都是「个性化软件」弹窗的开关，但落到不同的存储。 */
+int app_pin_set(const char *tid, int pinned, char *msg, size_t msgsz);
+int app_pin_get(const char *tid);
+/* 写出 {"pins":{"<tid>":true|false, ...}}。空 = {"pins":{}}。 */
+int app_pin_list_json(char *out, size_t size);
+
 #endif /* APP_VISIBILITY_H */

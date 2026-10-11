@@ -108,6 +108,12 @@
 #define ROUTE_GAME_TILE_BACKGROUND_RESET "/game_tile_background_reset"
 #define ROUTE_GAME_TILE_BG "/game_tile_bg"
 #define ROUTE_GAME_TILE_BG_DDS "/game_tile_bg_dds"
+/* [CN-FORK] v0.5.2.163 背景音乐：上传 / 读取 / 恢复默认。
+ * 上限 30MB（与前端一致；前端先裁，但这里留 64MB 防止绕过）。 */
+#define ROUTE_GAME_MUSIC "/game_music"
+#define ROUTE_GAME_MUSIC_RESET "/game_music_reset"
+/* [CN-FORK] v0.5.2.163 存档转换：把其它用户存档逐文件合并到目标用户（不传文件体）。 */
+#define ROUTE_GAME_SAVE_CONVERT "/game_save_convert"
 #define ROUTE_GAME_MOUNT "/game_mount"
 #define ROUTE_GAME_UNMOUNT "/game_unmount"
 #define ROUTE_GAME_UNINSTALL "/game_uninstall"
@@ -118,8 +124,17 @@
  * 不在 nayeplmtools_config.txt 里另抄一份（两边不一致时听谁的没法答）。 */
 #define ROUTE_SYSTEM_APPS "/system_apps"
 #define ROUTE_SYSTEM_APP_VISIBLE "/system_app_visible"
+/* [CN-FORK] v0.5.2.164 「个性化软件」的第二个开关：置顶。
+ * 与 visible 是两件事 —— visible 写 app.db 那一列（系统认），置顶落**本面板**的
+ * /data/nayeplmtools/app_pins.json（面板自己的列表排序），不动 app.db。 */
+#define ROUTE_SYSTEM_APP_PIN "/system_app_pin"
+/* [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序，落 game_prefs.json）。
+ * GET  /game_prefs           → {"prefs":{"<TID>":{"fav":bool,"pin":bool}, ...}}
+ * POST /game_prefs_set       body {tid, fav?, pin?} → {ok, tid, fav, pin} */
+#define ROUTE_GAME_PREFS "/game_prefs"
+#define ROUTE_GAME_PREFS_SET "/game_prefs_set"
 
-#define MENU_VERSION "0.5.2.162" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.162，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.165" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.165，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，

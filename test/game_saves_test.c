@@ -29,6 +29,12 @@
  *      带目录层级的名字压平且绝不写到存档目录外 / 坏包**整包拒收、一个字节不落**
  *   ⑫ 快照只剩「游戏退出时」这一个触发点（`.154`）—— 定时那条链已删，
  *      这里钉住引擎做决定用的两个查询：快照开关、本地存档最晚写入时刻
+ *   ⑬ garlic 导出的文件名 → TID 判定（`.156`）：认出 ≠ 当前游戏就拒，
+ *      **认不出来一律放行**（说不清 ≠ 不匹配），两边都要钉住
+ *   ⑭ **导入落到哪个用户 + 落盘叫什么名字**（`.165`，用户报的「兼容导入后没对
+ *      当前用户生效」）：不带 save 时落到**前台用户**（不是 uid 最小的那个），
+ *      且 garlic 的 `<TID>_` 前缀会被剥掉（主机只认 `sdimg_<dir_name>`）；
+ *      两条都带反向对照，且剥前缀不许把 ⑬ 的游戏判定弄丢
  *
  * 测不了的部分（写在前面，免得有人以为是漏了）：
  *   - HTTP 那一层（tid 到底在 query 还是 body）在 http_server.c，主机上没有
@@ -40,6 +46,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdint.h> /* v0.5.2.165：下面那个强符号要 uint32_t */
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -51,6 +58,17 @@
 #include "game_saves.h"
 #include "cJSON.h"
 #include "zip_io.h" /* ⑪ garlic 导入要现造一个真 zip（与 garlic 的 PS4 包同构） */
+
+/* [CN-FORK] v0.5.2.165 顶掉 game_saves.c 里那个**弱**兜底（宿主不链 psaccounts，
+ * 弱符号在那里返回 0 = 「拿不到前台用户」）。宿主上把「前台用户」钉成 ⑭ 那个
+ * fixture 用户 —— 不顶掉的话「默认落到当前用户」这条分支永远走不到，
+ * 而那正是用户报的「兼容导入后没对当前用户生效」的一半。
+ * 弱符号 + 强符号同名是静态链接的标准做法：链接器恒挑这一份。 */
+uint32_t sys_get_foreground_user(char *name_out, size_t name_out_size) {
+    (void)name_out;
+    (void)name_out_size;
+    return 0x1a1d3627u;   /* 与 ⑭ 段那个 `1a1d3627` 目录同名（真机 uid 是 %x 出来的） */
+}
 
 /* log_server.c 的头要 microhttpd.h，主机上没有 —— 这里给个等价实现。
  * 默认静音，要看就 export SAVES_TEST_VERBOSE=1。 */
@@ -1057,6 +1075,83 @@ int main(void) {
         grc = game_saves_import_garlic(TID_PS5, U2, "myrenamed_enc",
                                        fake_img, sizeof(fake_img), &nf, gmsg, sizeof(gmsg));
         CHECK(grc == 0, "认不出 TID 时该放行（rc=%d, %s）", grc, gmsg);
+    }
+
+    /* ── ⑭ [CN-FORK] v0.5.2.165 「导入落到哪个用户」+「落盘叫什么名字」────────
+     *
+     * 用户原话：「兼容导入后的存档，没有对当前用户生效」。真根因有**两个**，
+     * 这条用例把两个都钉住，而且两条**都必须有反向对照** ——
+     * 没有反向对照的话，「恒落到第一个用户」也能让正向断言全过：
+     *
+     *   ① **目标用户**：老代码用 `saves[0]`（= uid 升序第一个）当默认值。当前用户
+     *      没在这款游戏上存过档时它指向**别人**，于是存档导到别人名下
+     *      → 现在默认走「当前（前台）用户」（后端 gs_root_or_create）。
+     *   ② **落盘名字**：garlic 的 PS5 导出名是 `<TID>_<镜像名>`
+     *      （它 ui.html 的 dlBin：`s.title_id + '_' + s.save_name`，而 save_name
+     *       就是盘上的 `sdimg_<dir_name>`），主机只认后半截。老代码把上传名**原样**
+     *      写进存档目录 → 盘上多一个 `CUSA12345_sdimg_FG`，主机要找的 `sdimg_FG`
+     *      压根不存在 → 导入报成功、进游戏没存档（后端 gs_gx_name_for）。
+     *
+     * 本文件顶部那个**强符号**把「前台用户」钉成 fixture 用户 `1a1d3627` ——
+     * 不顶掉 game_saves.c 里那个弱兜底的话，「默认落到当前用户」这条分支零覆盖。 */
+    {
+        /* 真机 uid 目录名是 `%x` 出来的十六进制（形如 1a1d3627），所以这里直接照抄。
+         * 游戏目录必须**先存在**（gs_root_or_create 只 ensure 到 savedata/ 那一级）。 */
+        const char *fg = "1a1d3627";
+        char p[900];
+        char cmd[900];
+        char gmsg[256];
+        long long nf = 0;
+        static const unsigned char fake2[48] = { 0x50, 0x46, 0x53, 0x00, 0x11, 0x22 };
+        /* 命令串用 snprintf 拼（C 的字符串字面量拼接只对字面量成立，夹变量会编不过）。
+         * fg / TID_PS4 都是本文件里的字面量，不是外部输入，这里没有注入面。 */
+        snprintf(cmd, sizeof(cmd), "mkdir -p " HOME "/%s/savedata/%s", fg, TID_PS4);
+        system(cmd);
+
+        char cur[64];
+        CHECK(game_saves_current_uid(cur, sizeof(cur)) == 0 && strcmp(cur, fg) == 0,
+              "前台 uid 该是 %s，实得 '%s'", fg, cur);
+
+        /* ① 不带 save → 落到**前台用户**下，并且文件名剥掉了 TID 前缀 */
+        int grc = game_saves_import_garlic(TID_PS4, "", "CUSA12345_sdimg_FG",
+                                           fake2, sizeof(fake2), &nf, gmsg, sizeof(gmsg));
+        CHECK(grc == 0, "不带 save 的导入该成功（rc=%d, %s）", grc, gmsg);
+        CHECK(nf == 1, "该写进 1 个文件，实得 %lld", nf);
+        snprintf(p, sizeof(p), "%s/%s/savedata/%s/sdimg_FG", HOME, fg, TID_PS4);
+        CHECK(exists_reg(p), "① 该落到前台用户 %s 下、且剥掉 TID 前缀: %s", fg, p);
+
+        /* ① 的反向对照：**绝不能**落到 uid 最小的那个有存档的用户（U4）下 ——
+         *    老代码正是 `gs_root_by_uid(tid, "")` 取第一个根，落点就在那里。 */
+        snprintf(p, sizeof(p), "%s/%s/savedata/%s/sdimg_FG", HOME, U4, TID_PS4);
+        CHECK(access(p, F_OK) != 0,
+              "导入落到了 uid 最小的用户（%s）下 —— 那正是老 bug：saves[0] 不是当前用户", U4);
+
+        /* ② 的反向对照：**带 TID 前缀的原名不许存在** —— 主机不认这个名字。 */
+        snprintf(p, sizeof(p), "%s/%s/savedata/%s/CUSA12345_sdimg_FG", HOME, fg, TID_PS4);
+        CHECK(access(p, F_OK) != 0,
+              "TID 前缀没被剥掉，主机找不到这个镜像: %s", p);
+
+        /* ③ 认不出来的名字（用户自己改过名）→ 原样保留，不许自作聪明 */
+        grc = game_saves_import_garlic(TID_PS4, "", "myown_save",
+                                       fake2, sizeof(fake2), &nf, gmsg, sizeof(gmsg));
+        CHECK(grc == 0, "认不出 TID 的名字该放行（rc=%d, %s）", grc, gmsg);
+        snprintf(p, sizeof(p), "%s/%s/savedata/%s/myown_save", HOME, fg, TID_PS4);
+        CHECK(exists_reg(p), "认不出时该原样保留文件名: %s", p);
+
+        /* ④ **剥前缀不能把 `.156` 的游戏判定弄丢**：改名发生在 gs_gx_cb 里，
+         *    而判定必须看**原始名字**（剥完 TID 就没了）。这条是最容易回归的一点。 */
+        grc = game_saves_import_garlic(TID_PS4, "", "CUSA99999_sdimg_X",
+                                       fake2, sizeof(fake2), &nf, gmsg, sizeof(gmsg));
+        CHECK(grc != 0, "别的游戏的存档该被拒（rc=%d）", grc);
+        CHECK(strstr(gmsg, "CUSA99999") != NULL,
+              "拒的时候仍要说清是哪个 TID，实得：%s", gmsg);
+        snprintf(p, sizeof(p), "%s/%s/savedata/%s/sdimg_X", HOME, fg, TID_PS4);
+        CHECK(access(p, F_OK) != 0, "被拒的包不该落任何文件: %s", p);
+
+        /* 这个 fixture 用户是这条用例现造的，收干净 —— 后面的 ⑩ 会数用户与快照，
+         * 留一个多出来的用户目录会让那些计数断言无端变化。 */
+        snprintf(cmd, sizeof(cmd), "rm -rf " HOME "/%s", fg);
+        system(cmd);
     }
 
     /* ⑩ 小栈。放在最后：它会动 U2 的源、也会给 U5 补一份快照（上面刚删掉），

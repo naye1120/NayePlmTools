@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next'
 import {
   Image as ImageIcon, RefreshCw, Download, CheckSquare, Square, X,
   Play, Film, AlertTriangle, PackageOpen, Trash2, ChevronLeft, ChevronRight,
+  Share2,
 } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
 import Modal from '../ui/Modal'
 import Segmented from '../ui/Segmented'
 import { Block, Chip, Note, MiniEmpty, ProgressBar, Stat } from './parts'
@@ -91,6 +93,11 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
   const [busyId, setBusyId] = useState('')
   /* [CN-FORK] v0.5.2.125 取帧失败的视频 id（退回后端占位图），见网格里那段注释。 */
   const [coverBad, setCoverBad] = useState(() => new Set())
+  /* [CN-FORK] v0.5.2.163 分享二维码：{url, title} | null。
+   * url 用 window.location.href（与地址栏一致），title 给二维码卡片一个标题。
+   * 挂在 state 里而不是单独一个 Modal：Modal 自身堆栈 + 多媒体这个 Modal 已经占了 1000，
+   * 这里用 inline 浮层更省事（z 1100 与 Lightbox 同档）。 */
+  const [sharing, setSharing] = useState(null)
   /* [CN-FORK] v0.5.2.123 「多久没收到主机的新数据」——**用本机时钟算**。
    *
    * 后端已经在 status 里给了 idle（距上次有进展多少秒），但那把尺子是主机那边的：
@@ -273,6 +280,20 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
               <Download className="w-4 h-4" />
               <span>{t('game.pack_selected', '打包下载选中（{{n}}）', { n: selCount })}</span>
             </button>
+            {/* [CN-FORK] v0.5.2.163 分享：弹二维码，链接走 window.location.href
+                （与地址栏一致：同一面板下、指向同一台主机的同一份资源）。 */}
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={selCount === 0 || packing}
+              onClick={() => setSharing({
+                url: window.location.href,
+                title: t('game.share_selected_title', '分享选中（{{n}}）', { n: selCount }),
+              })}
+            >
+              <Share2 className="w-4 h-4" />
+              <span>{t('game.share_selected', '分享选中')}</span>
+            </button>
             <button
               type="button"
               className="btn btn-outline"
@@ -281,6 +302,19 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
             >
               <PackageOpen className="w-4 h-4" />
               <span>{t('game.pack_all', '全量打包下载')}</span>
+            </button>
+            {/* 全量打包的分享：链接也走 window.location.href（面板同源）。 */}
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={items.length === 0 || packing}
+              onClick={() => setSharing({
+                url: window.location.href,
+                title: t('game.share_all_title', '分享全部 ({{n}})', { n: items.length }),
+              })}
+            >
+              <Share2 className="w-4 h-4" />
+              <span>{t('game.share_all', '分享全部')}</span>
             </button>
           </div>
         }
@@ -542,8 +576,22 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
           onIndex={setPreview}
           onClose={() => setPreview(null)}
           onDelete={onDeleteOne}
+          onShare={setSharing}
           busyId={busyId}
           tid={tid}
+          t={t}
+        />
+      )}
+
+      {/* ── 分享二维码浮层 ──
+          z-[1100] 同 Lightbox 档：用户切到 lightbox 又点「分享」也能浮上来。
+          链接直接来自 window.location.href（用户口径：「根据地址栏的访问内容而确定」），
+          与浏览器当下的 URL 完全一致 —— 即同一台主机、同一份 id、当前正在访问的资源。 */}
+      {sharing && (
+        <ShareQrModal
+          url={sharing.url}
+          title={sharing.title}
+          onClose={() => setSharing(null)}
           t={t}
         />
       )}
@@ -551,9 +599,64 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
   )
 }
 
+/* 分享二维码弹层 —— 不是 Modal 组件是因为它要叠在 Lightbox 之上（同一档 z），
+ * 而通用 Modal 那一层栈对额外嵌一层有点重。inline div + close-on-backdrop 够用。 */
+function ShareQrModal({ url, title, onClose, t }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+  return (
+    <div
+      className="fixed inset-0 z-[1100] bg-black/85 flex items-center justify-center p-4"
+      role="dialog" aria-modal="true"
+      aria-label={t('game.share_title', '分享')}
+      onClick={onClose}
+    >
+      <div
+        className="bg-ps-surface rounded-2xl border border-white/10 p-6 max-w-md w-full space-y-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-wider text-ps-blue font-bold">
+              {t('game.share_title', '分享')}
+            </p>
+            <p className="text-white font-bold truncate text-base mt-0.5" title={title}>{title}</p>
+          </div>
+          <button
+            type="button"
+            className="icon-btn shrink-0"
+            onClick={onClose}
+            title={t('app.buttons.close', '关闭')}
+            aria-label={t('app.buttons.close', '关闭')}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="flex justify-center bg-white p-4 rounded-xl">
+          <QRCodeSVG value={url} size={220} level="H" />
+        </div>
+        <div className="space-y-1.5">
+          <p className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold">
+            {t('game.share_url_label', '链接')}
+          </p>
+          <p className="text-xs text-zinc-400 break-all font-mono leading-relaxed bg-black/30 rounded-lg p-2 select-all">
+            {url}
+          </p>
+        </div>
+        <p className="text-[11px] text-zinc-500 leading-relaxed">
+          {t('game.share_hint', '用手机扫码即可在浏览器里打开本页（同地址栏指向的资源）。')}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 /* 预览层：图片直接铺满，视频用原生 <video controls>（自带播放/进度/全屏）。
  * 左右方向键切换上一张/下一张 —— 遥控器上这是最自然的翻页方式。 */
-function Lightbox({ items, index, onIndex, onClose, onDelete, busyId, tid, t }) {
+function Lightbox({ items, index, onIndex, onClose, onDelete, onShare, busyId, tid, t }) {
   const it = items[index]
   const isVideo = it.kind === 'video'
 
@@ -615,6 +718,16 @@ function Lightbox({ items, index, onIndex, onClose, onDelete, busyId, tid, t }) 
           >
             <Download className="w-4 h-4" />
           </a>
+          {/* [CN-FORK] v0.5.2.163 单文件分享：链接走 window.location.href。 */}
+          <button
+            type="button"
+            className="icon-btn"
+            title={t('game.media_share', '分享')}
+            aria-label={t('game.media_share', '分享')}
+            onClick={() => onShare?.({ url: window.location.href, title: it.name || it.id })}
+          >
+            <Share2 className="w-4 h-4" />
+          </button>
           <button type="button" className="icon-btn" onClick={onClose} title={t('app.buttons.close', '关闭')} aria-label={t('app.buttons.close', '关闭')}>
             <X className="w-4 h-4" />
           </button>

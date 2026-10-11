@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Gamepad2, RefreshCw, Info, Tag } from 'lucide-react'
+import { Gamepad2, RefreshCw, Info, Tag, Star, Pin, ArrowUpDown } from 'lucide-react'
 import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
+import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.164 排序档位 */
 import { cn } from '../../utils/helpers'
 import { formatSize } from '../game/format'
-import { syncTitleNames } from '../../utils/gameApi' /* [CN-FORK] v0.5.2.137 名字回填 */
+import { syncTitleNames, getGamePrefs, setGamePrefs } from '../../utils/gameApi' /* [CN-FORK] v0.5.2.137 名字回填 / v0.5.2.164 收藏·置顶 */
 import { SaveManagerIcon, MediaManagerIcon, RenameTileIcon, PendingSlotIcon } from '../game/GameActionIcons'
 import GameDetailModal from '../game/GameDetailModal'
 import SaveManagerModal from '../game/SaveManagerModal'
@@ -75,9 +76,21 @@ const TILE_ACTIONS = [
   { key: 'pending', Icon: PendingSlotIcon },
 ]
 
+/* [CN-FORK] v0.5.2.164 磁贴列表的排序档位（用户口径：「排序按钮可以看你怎么做都行」）。
+ * 三档全部用**列表里已有的字段**，不新增后端字段：
+ *   default = 后端给的顺序（已安装优先、名字次之），name = 名称，size = 体积（大→小）。
+ * 收藏与置顶**恒定优先于档位**（用户：「收藏的游戏自动排到列表前面」）——
+ * 见 orderedGames。顺序落 localStorage，刷新页面不丢。 */
+const SORT_MODES = ['default', 'name', 'size']
+const SORT_LABEL = {
+  default: { k: 'game.sort_default', d: '默认' },
+  name: { k: 'game.sort_name', d: '名称' },
+  size: { k: 'game.sort_size', d: '体积' },
+}
+
 /* 单个游戏磁贴（宫格）：大图标铺满 1:1 + 名称/TID，来源徽标叠在图标角上，
  * 四颗操作按钮排在图标下排。整块可点开详情（见文件头注释）。 */
-function GameCard({ g, iconFailed, onIconError, onOpen, onAction }) {
+function GameCard({ g, iconFailed, onIconError, onOpen, onAction, pref, onToggleFav, onTogglePin, onCycleSort, sortLabel }) {
   const { t } = useTranslation()
   const installed = g.src === 'installed'
   const platform = gamePlatform(g.tid)
@@ -233,6 +246,53 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction }) {
           )}
         </div>
       </div>
+
+      {/* [CN-FORK] v0.5.2.164 收藏 / 置顶 / 排序 三颗小按钮（用户：「每个磁贴增加
+          收藏和排序和置顶按钮」）。它们压在详情热区之上（relative z-10）——
+          不加这一层的话点按钮会顺带打开详情（热区是铺满整卡的透明按钮）。
+          收藏与置顶是**开/关**（开着用实心色），排序是**循环切换**（当前档位写在
+          title 里，切换时另给一条 toast —— 电视端没有 hover，光靠 title 看不见）。 */}
+      <div className="relative z-10 grid grid-cols-3 gap-1.5">
+        <button
+          type="button"
+          onClick={() => onToggleFav(g)}
+          title={`${t('game.fav', '收藏')}${pref?.fav ? t('game.fav_on', '（已收藏，再点取消）') : ''}`}
+          aria-label={t('game.fav', '收藏')}
+          aria-pressed={!!pref?.fav}
+          className={cn(
+            'flex items-center justify-center py-1 rounded-md border transition-colors',
+            pref?.fav
+              ? 'bg-amber-400/15 border-amber-400/40 text-amber-300'
+              : 'bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30',
+          )}
+        >
+          <Star className={cn('w-3.5 h-3.5', pref?.fav && 'fill-current')} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onTogglePin(g)}
+          title={`${t('game.pin', '置顶')}${pref?.pin ? t('game.pin_on', '（已置顶，再点取消）') : ''}`}
+          aria-label={t('game.pin', '置顶')}
+          aria-pressed={!!pref?.pin}
+          className={cn(
+            'flex items-center justify-center py-1 rounded-md border transition-colors',
+            pref?.pin
+              ? 'bg-ps-blue/20 border-ps-blue/50 text-ps-blue'
+              : 'bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30',
+          )}
+        >
+          <Pin className={cn('w-3.5 h-3.5', pref?.pin && 'fill-current')} />
+        </button>
+        <button
+          type="button"
+          onClick={onCycleSort}
+          title={t('game.sort_current', '排序：{{mode}}（点一下换下一档）', { mode: sortLabel })}
+          aria-label={t('game.sort', '排序')}
+          className="flex items-center justify-center py-1 rounded-md border bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30 transition-colors"
+        >
+          <ArrowUpDown className="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
   )
 }
@@ -256,6 +316,17 @@ export default function GameSection({ addToast, showConfirm, config }) {
    * 用对象而不是五个布尔，是因为「从详情里点『存档 3 个』跳到存档弹窗」需要在同一个游戏上
    * 换 kind —— 五个布尔得同时改两个，很容易出现两个弹窗叠在一起。 */
   const [modal, setModal] = useState(null)
+
+  /* [CN-FORK] v0.5.2.164 收藏 / 置顶（面板侧的列表排序偏好，后端 game_prefs.json）。
+   * 与 /game_list 分开拉：拨一颗按钮只回这一份小数据，不必重读整张列表
+   * （重读要付一次 app.db 全库读 + 目录扫描，.133 那条教训）。 */
+  const [prefs, setPrefs] = useState({})
+  /* 排序档位落 localStorage：这是「这台设备怎么看这张列表」的偏好，
+   * 与收藏/置顶（跟着游戏走）不是一回事，所以不上后端。 */
+  const [sortMode, setSortMode] = useState(() => {
+    const s = localStorage.getItem('gameSortMode')
+    return SORT_MODES.includes(s) ? s : 'default'
+  })
 
   /* force=true 时带 force=1：让后端跳过 60s 快照直接重建（.133）。
    * 进页面那次不带 —— 吃缓存，秒开；用户手点「刷新」才付一次全库读的成本。
@@ -284,6 +355,50 @@ export default function GameSection({ addToast, showConfirm, config }) {
     setLoading(false)
   }, [t])
 
+  /* [CN-FORK] v0.5.2.164 收藏 / 置顶的读写。读失败一律按「都没收藏、都没置顶」处理：
+   * 偏好丢了最多是顺序不理想，为此把整张游戏列表打断（显示一个红条）得不偿失。 */
+  const loadPrefs = useCallback(() => {
+    return getGamePrefs()
+      .then((d) => setPrefs((d && d.prefs) || {}))
+      .catch(() => setPrefs({}))
+  }, [])
+
+  /* 拨一颗按钮。key ∈ fav|pin。乐观更新（立刻重排列表）→ 成功后用**后端回的最终状态**
+   * 覆盖（只拨一颗时另一项是「不动」，不回读就不知道它现在是什么）→ 失败整条退回。 */
+  const togglePref = useCallback(async (g, key) => {
+    const cur = prefs[g.tid] || {}
+    const next = !cur[key]
+    setPrefs((m) => ({ ...m, [g.tid]: { ...cur, [key]: next } }))
+    try {
+      const r = await setGamePrefs(g.tid, { [key]: next })
+      setPrefs((m) => ({ ...m, [g.tid]: { fav: !!r?.fav, pin: !!r?.pin } }))
+      if (key === 'fav') {
+        addToast?.(next ? t('game.fav_added', '已收藏，已排到列表前面')
+                        : t('game.fav_removed', '已取消收藏'))
+      } else {
+        addToast?.(next ? t('game.pin_added', '已置顶，已固定在列表最前')
+                        : t('game.pin_removed', '已取消置顶'))
+      }
+    } catch (e) {
+      setPrefs((m) => ({ ...m, [g.tid]: cur }))
+      addToast?.(e?.message || t('game.pref_fail', '保存失败'), 'error')
+    }
+  }, [prefs, addToast, t])
+
+  const chooseSort = useCallback((mode) => {
+    setSortMode(mode)
+    localStorage.setItem('gameSortMode', mode)
+  }, [])
+
+  /* 磁贴上的排序按钮：循环换档（default → name → size → default）。
+   * 每次换档给一条 toast —— 电视端没有 hover，光靠 title 看不见当前是哪一档。 */
+  const cycleSort = useCallback(() => {
+    const i = SORT_MODES.indexOf(sortMode)
+    const nx = SORT_MODES[(i + 1) % SORT_MODES.length]
+    chooseSort(nx)
+    addToast?.(t('game.sort_toast', '排序：{{mode}}', { mode: t(SORT_LABEL[nx].k, SORT_LABEL[nx].d) }))
+  }, [sortMode, chooseSort, addToast, t])
+
   /* 进页面拉一次 + 手动刷新，不轮询（原因见文件头）。
    * react-hooks/set-state-in-effect 对「effect 里同步调用一个内含 setState 的函数」一律报错，
    * 而它不区分 setState 到底在 await 之前还是之后（实测：把 load 包成 async 才会被放行）。
@@ -291,7 +406,8 @@ export default function GameSection({ addToast, showConfirm, config }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 进页面/刷新时拉一次列表
     load()
-  }, [load])
+    loadPrefs()
+  }, [load, loadPrefs])
 
   /* 预热期间自动重拉（v0.5.2.136）。**不是轮询** —— 文件头那条「不轮询」的原则仍然成立：
    * 只在 warming=true 时临时重试，预热一结束就停，且有次数上限（15 × 4s ≈ 1 分钟），
@@ -308,6 +424,30 @@ export default function GameSection({ addToast, showConfirm, config }) {
   }, [warming, warmTry, load])
 
   const list = games || []
+
+  /* [CN-FORK] v0.5.2.164 列表排序：置顶 → 收藏 → 档位 → 原顺序。
+   * 前两级**恒定优先于档位**（用户：「收藏的游戏自动排到列表前面」）——
+   * 切档只影响其余那些既没收藏也没置顶的游戏。
+   * 末级用「后端给的原始下标」兜底：老 WebKit 上 sort 的稳定性不保证，
+   * 不兜底的话同名/同体积的两款会在每次重排时互相换位（看起来像随机跳动）。 */
+  const orderedGames = useMemo(() => {
+    const arr = games || []
+    const idx = new Map(arr.map((g, i) => [g.tid, i]))
+    return [...arr].sort((a, b) => {
+      const pa = prefs[a.tid] || {}
+      const pb = prefs[b.tid] || {}
+      if (!!pb.pin !== !!pa.pin) return pb.pin ? 1 : -1
+      if (!!pb.fav !== !!pa.fav) return pb.fav ? 1 : -1
+      if (sortMode === 'name') {
+        const c = (a.name || '').localeCompare(b.name || '', 'zh')
+        if (c !== 0) return c
+      } else if (sortMode === 'size') {
+        const d = (b.size || 0) - (a.size || 0)
+        if (d !== 0) return d
+      }
+      return (idx.get(a.tid) ?? 0) - (idx.get(b.tid) ?? 0)
+    })
+  }, [games, prefs, sortMode])
 
   /* 动作分发：四颗按钮各自开自己的弹窗。用一张表而不是 switch，
    * 以后加第五颗（第四个位置定下来时）只改这里一行。 */
@@ -396,12 +536,26 @@ export default function GameSection({ addToast, showConfirm, config }) {
               <Info className="w-3.5 h-3.5 shrink-0" />
               <span>{t('game.tile_hint', '点磁贴查看游戏详情（详情里只能看信息，挂载 / 卸载 / 删除源请到 ShadowMount 后台）；磁贴上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能。')}</span>
             </p>
+            {/* [CN-FORK] v0.5.2.164 排序档位（用户：「实行这个磁贴列表显示排序」）。
+                与磁贴右下那颗 ⇅ 按钮是同一个状态 —— 这里给可发现性，那里给就近操作。 */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-zinc-500 font-medium">{t('game.sort_by', '排序')}</span>
+              <Segmented
+                label={t('game.sort', '排序')}
+                value={sortMode}
+                onChange={chooseSort}
+                options={SORT_MODES.map((m) => ({ value: m, label: t(SORT_LABEL[m].k, SORT_LABEL[m].d) }))}
+              />
+              <span className="text-[11px] text-zinc-500">
+                {t('game.pref_hint', '磁贴下排三颗按钮：★ 收藏、📌 置顶、⇅ 排序。收藏与置顶的会排在列表最前。')}
+              </span>
+            </div>
             {/* [CN-FORK] v0.5.2.100 用户指令「磁贴再小三分之一，变成自适应，屏幕宽就多放几个、
                窄就少放几个，不要固定四个」：原来是 grid-cols-2 / sm:3 / lg:4，宽屏永远卡在 4 列，
                一块磁贴 ≈355px。现在列宽下限交给 --tile-w（PC 262.5 / 电视 375，v0.5.2.114 又 ×1.25），
                列数由容器自己算。 */}
             <div className="tile-grid">
-              {list.map((g) => (
+              {orderedGames.map((g) => (
                 <GameCard
                   key={g.tid}
                   g={g}
@@ -409,6 +563,11 @@ export default function GameSection({ addToast, showConfirm, config }) {
                   onIconError={() => setFailedIcons((m) => ({ ...m, [g.tid]: true }))}
                   onOpen={(x) => setModal({ kind: 'detail', game: x })}
                   onAction={openAction}
+                  pref={prefs[g.tid]}
+                  onToggleFav={(x) => togglePref(x, 'fav')}
+                  onTogglePin={(x) => togglePref(x, 'pin')}
+                  onCycleSort={cycleSort}
+                  sortLabel={t(SORT_LABEL[sortMode].k, SORT_LABEL[sortMode].d)}
                 />
               ))}
             </div>

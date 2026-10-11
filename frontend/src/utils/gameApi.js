@@ -579,6 +579,41 @@ export function tileBackgroundDdsUrl(tid) {
   return `/game_tile_bg_dds${q({ tid })}`
 }
 
+/* ── [CN-FORK] v0.5.2.163 背景音乐 ───────────────────────────────────────
+ * 落点 /data/nayeplmtools/music/<TID>.<ext>，大小上限 30MB；
+ * 仅 mp3/ogg/wav 三种 MIME。
+ *   POST /game_music?tid=            裸 body（音频字节）→ {ok, name, size}
+ *   GET  /game_music?tid=&v=<n>      → 音频字节（浏览器自带解码器即可预览
+ *                                    —— 同一条路，「未设过」返回 404，前端按 onError 退回占位）
+ *   GET  /game_music_reset?tid=      → {ok} */
+export function setGameMusic(tid, blob, name, opts) {
+  return request(`/game_music${q({ tid, name: name || '' })}`, {
+    ...opts, method: 'POST', body: blob, timeoutMs: TIMEOUTS.upload,
+  })
+}
+
+export function resetGameMusic(tid, opts) {
+  return request(`/game_music_reset${q({ tid })}`, opts)
+}
+
+export function gameMusicUrl(tid) {
+  return `/game_music${q({ tid })}`
+}
+
+/* ── [CN-FORK] v0.5.2.163 存档转换 ───────────────────────────────────────
+ * 把「用户 A 的存档」一键转换到「当前用户」可用的格式 —— 走 garlic 兼容导入的同一条
+ * 逐文件合并路径，只是 save 不传（= 后端取本机第一个用户，行为与上传一致）；
+ * 多用户主机上前端可指定目标 uid（save=uid）。
+ *   POST /game_save_convert         {tid, source, target} → {ok, files}
+ *      source = 来源用户 uid（用户 A）
+ *      target = 目标用户 uid（当前用户）
+ * 与 importGarlic 同源，区别在于这个是从**本机**已有存档目录里复制，而不是从 zip / 镜像。 */
+export function convertSave(tid, source, target, opts) {
+  return request('/game_save_convert', {
+    ...opts, method: 'POST', body: { tid, source, target },
+  })
+}
+
 /* ── 挂载 / 卸载（运行时层，对应 ShadowMountPlus 的 games/mount|unmount）─── */
 export function mountGame(tid, mode, opts) {
   return request('/game_mount', { ...opts, method: 'POST', body: { tid, mode } })
@@ -612,4 +647,28 @@ export function getSystemApps(opts) {
 /* hidden = true 隐藏、false 显示（与后端 app_vis_set 同一条方向，别在这里取反）。 */
 export function setSystemAppHidden(tid, hidden, opts) {
   return request('/system_app_visible', { ...opts, method: 'POST', body: { tid, hidden } })
+}
+
+/* ── [CN-FORK] v0.5.2.164 个性化软件「置顶」开关 ────────────────────────────
+ *   POST /system_app_pin {tid,pinned} → {ok,tid,pinned,message}
+ * 与 hidden 是**两件事**：hidden 写 app.db（系统认），pinned 落本面板的
+ * app_pins.json（面板自己的列表排序），不动 app.db。理由见 include/game_prefs.h。 */
+export function setSystemAppPinned(tid, pinned, opts) {
+  return request('/system_app_pin', { ...opts, method: 'POST', body: { tid, pinned } })
+}
+
+/* ── [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序）──────────────
+ *   GET  /game_prefs              → {"prefs":{"<TID>":{"fav":bool,"pin":bool}, ...}}
+ *   POST /game_prefs_set {tid,fav?,pin?} → {ok,tid,fav,pin}
+ * 进游戏页拉一次与 /game_list 合并；fav / pin 都是可选的（只拨一颗按钮时
+ * 另一项原样保留），响应回的是**改完之后**的最终状态。 */
+export function getGamePrefs(opts) {
+  return request(`/game_prefs${q()}`, opts)
+}
+
+export function setGamePrefs(tid, { fav, pin }, opts) {
+  const body = { tid }
+  if (fav !== undefined) body.fav = fav
+  if (pin !== undefined) body.pin = pin
+  return request('/game_prefs_set', { ...opts, method: 'POST', body })
 }

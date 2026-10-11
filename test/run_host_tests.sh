@@ -334,13 +334,28 @@ if [ ! -f /tmp/sqlite3_host.o ]; then
 fi
 if [ -f /tmp/sqlite3_host.o ]; then
     run_one app_visibility src/app_visibility.c \
-        -Iinclude -Ithird_party/sqlite3 \
+        -Iinclude -Ithird_party/sqlite3 -Isrc/psaccounts/third_party \
         -DAPP_VIS_APPDB_PATH='"/tmp/pldmgr_appvis_test/app.db"' \
         -DTILE_DB_APPDB_PATH='"/tmp/pldmgr_appvis_test/app.db"' \
         -DTILE_DB_APPINFO_PATH='"/tmp/pldmgr_appvis_test/appinfo.db"' \
         -DTILE_DB_BAK_DIR='"/tmp/pldmgr_appvis_test/dbbak"' \
+        -DAPP_PIN_PATH='"/tmp/pldmgr_appvis_test/app_pins.json"' \
+        src/app_pin.c src/psaccounts/third_party/cJSON.c \
         src/tile_db.c src/json_helpers.c src/utils.c /tmp/sqlite3_host.o -ldl
 fi
+
+# [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（src/game_prefs.c）。
+# 落点 /data/nayeplmtools/game_prefs.json，纯文件系统 —— 不需要 sqlite。
+# 要钉死的是三态入参：前端一次只拨一颗按钮（fav 或 pin），**没带的那一项必须原样保留**
+# —— 两态入参会在用户点收藏时把「置顶」抹掉，而这种错在界面上表现为「另一个开关自己弹回去」，
+# 真机排查起来极其费劲。顺带钉住 tid 校验与「两项都关掉就把条目删掉」。
+echo "=== game_prefs ==="
+rm -rf /tmp/pldmgr_gprefs_test
+mkdir -p /tmp/pldmgr_gprefs_test
+run_one game_prefs src/game_prefs.c \
+    -Iinclude -Isrc/psaccounts/third_party \
+    -DGAME_PREFS_PATH='"/tmp/pldmgr_gprefs_test/game_prefs.json"' \
+    src/psaccounts/third_party/cJSON.c
 
 # [CN-FORK] v0.5.2.132 改名要写游戏源 sce_sys/param.json（src/game_title.c）
 # 这段是全仓库唯一会**写进用户游戏包**的逻辑，改坏 param.json 不可逆，所以单独测。

@@ -269,23 +269,27 @@ emit:
         char name_e[AV_NAME_MAX * 4 + 8];
         pldmgr_json_escape(apps[i].name, name_e, sizeof(name_e));
         int hidden = apps[i].hidden == 1;
+        int pinned = app_pin_get(apps[i].tid);
         const char *why = NULL;
         if (app_vis_fixed_reason(apps[i].tid, &why)) {
             char why_e[512];
             pldmgr_json_escape(why, why_e, sizeof(why_e));
             if (json_append(&jb,
                             "%s{\"tid\":\"%s\",\"name\":\"%s\",\"hidden\":%s,"
-                            "\"controllable\":false,\"reason\":\"%s\"}",
+                            "\"pinned\":%s,\"controllable\":false,\"reason\":\"%s\"}",
                             i ? "," : "", apps[i].tid, name_e,
-                            hidden ? "true" : "false", why_e) != 0)
+                            hidden ? "true" : "false",
+                            pinned ? "true" : "false",
+                            why_e) != 0)
                 break;
             continue;
         }
         if (json_append(&jb,
                         "%s{\"tid\":\"%s\",\"name\":\"%s\",\"hidden\":%s,"
-                        "\"controllable\":true}",
+                        "\"pinned\":%s,\"controllable\":true}",
                         i ? "," : "", apps[i].tid, name_e,
-                        hidden ? "true" : "false") != 0)
+                        hidden ? "true" : "false",
+                        pinned ? "true" : "false") != 0)
             break;
     }
     char err_e[256];

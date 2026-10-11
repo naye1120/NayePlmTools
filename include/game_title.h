@@ -60,11 +60,21 @@
  * ③ 只对 folder（裸目录）游戏可写；image（.ffpfsc 镜像）与 pkg（系统内置）不可写，
  * 由 persisted / pnote 两个出参如实报告，**不假成功**。
  *
- * 成功返回 0（persisted 已置位），-1 参数非法（msg 里给人话）。
- * persisted 与 pnote 都可为 NULL（调用方不关心源持久化状态）。 */
+ * [CN-FORK] v0.5.2.165 再加一对出参 host_ok / hnote，报的是**第 ② 层（主机磁贴数据库）**：
+ * 这一层的成败以前只进日志、不回前端，于是「app.db 根本没写进去」和「写进去了但 Shell
+ * 还没重绘」在界面上长得一模一样 —— 用户看到的就是「改完名，PS5 上没生效」。
+ *   · host_ok = 1：app.db / appinfo.db 已更新（或本来就一致）；
+ *   · host_ok = 0：**主机端没生效**，hnote 说原因（「这个游戏还没注册进主机数据库」等）。
+ * ⚠ host_ok = 1 **不代表主屏立刻变名**：磁贴名字与自定义图标同源，Shell 只在
+ * **重启 / 待机唤醒**时才重绘（真机取证见 src/tile_db.c 头注释）。这句提示归前端说，
+ * 后端只负责把「写没写进去」这件事说清楚。
+ *
+ * 成功返回 0（persisted / host_ok 已置位），-1 参数非法（msg 里给人话）。
+ * persisted / pnote / host_ok / hnote 都可为 NULL（调用方不关心对应状态）。 */
 int game_title_set_name(const char *tid, const char *name,
                         char *msg, size_t msgsz,
-                        int *persisted, char *pnote, size_t pnotesz);
+                        int *persisted, char *pnote, size_t pnotesz,
+                        int *host_ok, char *hnote, size_t hnotesz);
 
 /* 读自定义名。1 = 有自定义名（out 已填），0 = 没改过（out 置空）。
  * 游戏列表 / 详情都用它盖掉 app.db 里的原名 —— 两边必须走同一个口，

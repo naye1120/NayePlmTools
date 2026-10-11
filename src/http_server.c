@@ -45,6 +45,8 @@
 #include "game_title.h"   /* [CN-FORK] v0.5.2.116 改名 + 磁贴两层图六条 */
 #include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
 #include "app_visibility.h" /* [CN-FORK] v0.5.2.158 「个性化软件」/system_apps* */
+#include "game_prefs.h"     /* [CN-FORK] v0.5.2.164 游戏磁贴收藏 / 置顶 /game_prefs* */
+#include "game_music.h"     /* [CN-FORK] v0.5.2.163 背景音乐 /game_music[_reset] */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF：账号/头像/安全还原/远程游玩
  * 配对接口认领 /api/ 前缀，其余路由仍全部归本文件 */
 #include "psaccounts/api.h"
@@ -293,6 +295,11 @@ static size_t gr_post_limit(const char *url) {
     if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0 ||
         strcmp(url, ROUTE_GAME_TILE_BACKGROUND) == 0)
         return (size_t)64 << 20;
+    /* [CN-FORK] v0.5.2.163 背景音乐：MP3/OGG/WAV，体积上限 30MB（前端的软限制）。
+     * 给到 64MB 是因为前端的 30MB 是软提示（防误传），这里真做了硬限。 */
+    if (strcmp(url, ROUTE_GAME_MUSIC) == 0) return (size_t)64 << 20;
+    /* [CN-FORK] v0.5.2.164 游戏收藏 / 置顶：body 只有 tid + fav/pin 两个布尔。 */
+    if (strcmp(url, ROUTE_GAME_PREFS_SET) == 0) return (size_t)1 << 20;
     if (strcmp(url, ROUTE_GAME_DELETE) == 0 ||
         strcmp(url, ROUTE_GAME_SAVE_AUTO) == 0 ||
         strcmp(url, ROUTE_GAME_SAVE_TEST) == 0 ||
@@ -303,11 +310,14 @@ static size_t gr_post_limit(const char *url) {
         strcmp(url, ROUTE_GAME_MOUNT) == 0 ||
         strcmp(url, ROUTE_GAME_UNMOUNT) == 0 ||
         strcmp(url, ROUTE_GAME_UNINSTALL) == 0 ||
-        strcmp(url, ROUTE_GAME_SAVE_REMOTE_DELETE) == 0 /* [CN-FORK] v0.5.2.159 body 只有 tid + save */)
+        strcmp(url, ROUTE_GAME_SAVE_REMOTE_DELETE) == 0 || /* [CN-FORK] v0.5.2.159 body 只有 tid + save */
+        strcmp(url, ROUTE_GAME_SAVE_CONVERT) == 0 /* [CN-FORK] v0.5.2.163 body 只有 tid + source + target */)
         return (size_t)1 << 20;
     /* [CN-FORK] v0.5.2.158 「个性化软件」的开关：body 只有 tid + hidden 两个字段。
-     * ⚠ 新加 POST 路由必须在这里登记，否则请求体压根不收（见上面的文件头注释）。 */
-    if (strcmp(url, ROUTE_SYSTEM_APP_VISIBLE) == 0)
+     * ⚠ 新加 POST 路由必须在这里登记，否则请求体压根不收（见上面的文件头注释）。
+     * [CN-FORK] v0.5.2.164 置顶开关同形（tid + pinned）。 */
+    if (strcmp(url, ROUTE_SYSTEM_APP_VISIBLE) == 0 ||
+        strcmp(url, ROUTE_SYSTEM_APP_PIN) == 0)
         return (size_t)1 << 20;
     return 0;
 }
@@ -505,13 +515,15 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
     if (strcmp(url, ROUTE_GAME_RENAME) == 0) {
         char btid[32], bname[512], msg[192], shown[GAME_TITLE_MAX_NAME * 4 + 8];
         char esc[GAME_TITLE_MAX_NAME * 6 + 16], pnote[512], pesc[700];
-        int persisted = 0;
+        char hnote[256], hesc[700];
+        int persisted = 0, host_ok = 0;
         msg[0] = 0;
         if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) ||
             !gr_json_str(body, len, "name", bname, sizeof(bname)))
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid 或 name");
         if (game_title_set_name(btid, bname, msg, sizeof(msg),
-                                &persisted, pnote, sizeof(pnote)) != 0)
+                                &persisted, pnote, sizeof(pnote),
+                                &host_ok, hnote, sizeof(hnote)) != 0)
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
                                msg[0] ? msg : "名称不合法");
         /* 回**存下来的**名字，不是原样回传：set_name 会去控制字符、去首尾空白、
@@ -519,15 +531,24 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         game_title_get_name(btid, shown, sizeof(shown));
         pldmgr_json_escape(shown, esc, sizeof(esc));
         pldmgr_json_escape(pnote, pesc, sizeof(pesc));
+        pldmgr_json_escape(hnote, hesc, sizeof(hesc));
         *code = MHD_HTTP_OK;
         /* [CN-FORK] v0.5.2.132 persisted = 名字源（游戏包里的 sce_sys/param.json）
          * 也改成功了，SMP 重扫不会回退。false 时 persist_note 说清为什么
          * （镜像游戏 / 系统内置 / 源写失败）。前端据此决定要不要提示 ——
-         * 别把 false 当错误：面板层与主机索引层已经生效，改名本身是成功的。 */
+         * 别把 false 当错误：面板层与主机索引层已经生效，改名本身是成功的。
+         *
+         * [CN-FORK] v0.5.2.165 host_ok / host_note = **主机磁贴数据库**（app.db 平铺列 +
+         * appinfo.db）那一步的成败。以前只进日志，前端一律报「已改名」，于是
+         * 「库里没写进去」与「写进去了但 Shell 还没重绘」长得一样 —— 用户报的
+         * 「改完名 PS5 上没生效」就是被这句假成功盖住的。host_ok=false 时
+         * host_note 说原因；host_ok=true 时前端要补一句「主屏要重启 / 待机唤醒才重绘」。 */
         int n = snprintf(out, size,
                          "{\"ok\":true,\"name\":\"%s\","
-                         "\"persisted\":%s,\"persist_note\":\"%s\"}",
-                         esc, persisted ? "true" : "false", pesc);
+                         "\"persisted\":%s,\"persist_note\":\"%s\","
+                         "\"host_ok\":%s,\"host_note\":\"%s\"}",
+                         esc, persisted ? "true" : "false", pesc,
+                         host_ok ? "true" : "false", hesc);
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
@@ -592,6 +613,48 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
+    /* [CN-FORK] v0.5.2.163 背景音乐：POST body 是音频字节，name 在 query 里（前端用 file.name 原样带上）。
+     实现落在 src/game_music.c（这一轮新增），接口与 game_title_set_icon 同一档：返回 -1 = 校验失败 / 1 = IO 失败 / 0 = 成功 + bytes。 */
+    if (strcmp(url, ROUTE_GAME_MUSIC) == 0) {
+        const char *name = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "name");
+        char msg[192];
+        long long bytes = 0;
+        msg[0] = 0;
+        if (!tid || !*tid)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (!body || !len)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "音频文件是空的");
+        int rc = game_music_set(tid, name, (const unsigned char *)body, len, &bytes, msg, sizeof(msg));
+        if (rc == -1)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "音频不合法（仅支持 MP3 / OGG / WAV，体积上限 30MB）");
+        if (rc != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                               msg[0] ? msg : "写入失败");
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true,\"bytes\":%lld,\"name\":\"%s\"}",
+                         bytes, name ? name : "");
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    /* [CN-FORK] v0.5.2.163 存档转换：body 里只有 tid / source / target。实现 = game_saves_convert()。 */
+    if (strcmp(url, ROUTE_GAME_SAVE_CONVERT) == 0) {
+        char rtid[64], rsrc[64], rtgt[64], msg[240];
+        long long files = 0;
+        msg[0] = 0;
+        if (gr_json_str(body, len, "tid", rtid, sizeof(rtid)) != 1 ||
+            gr_json_str(body, len, "source", rsrc, sizeof(rsrc)) != 1 ||
+            gr_json_str(body, len, "target", rtgt, sizeof(rtgt)) != 1)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "缺少 tid / source / target");
+        if (game_saves_convert(rtid, rsrc, rtgt, &files, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "转换失败");
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size, "{\"ok\":true,\"files\":%lld}", files);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
     /* [CN-FORK] v0.5.2.158 「个性化软件」：把某个主机内置软件在主屏上隐藏 / 显示。
      * tid 与 hidden 都在 body 里（与 /game_save_auto 同一口径：query 里根本没有，
      * 去 query 取必然拿到 NULL —— `.116` 在改名那条上踩过）。
@@ -623,6 +686,53 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         int n = snprintf(out, size,
                          "{\"ok\":true,\"tid\":\"%s\",\"hidden\":%s,\"message\":\"%s\"}",
                          btid, hidden ? "true" : "false", esc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    /* [CN-FORK] v0.5.2.164 「个性化软件」的第二个开关：置顶。
+     * 与 visible 分开是因为**落到不同的存储** —— visible 写 app.db（系统认），
+     * 置顶落本面板的 app_pins.json（面板自己的列表排序），不动 app.db。 */
+    if (strcmp(url, ROUTE_SYSTEM_APP_PIN) == 0) {
+        char btid[32], msg[192], esc[480];
+        int pinned = -1;
+        msg[0] = 0;
+        if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) || !btid[0])
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (gr_json_bool(body, len, "pinned", &pinned) != 0 || pinned < 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "缺少 pinned（true=置顶 / false=取消置顶）");
+        if (app_pin_set(btid, pinned, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "写入失败");
+        pldmgr_json_escape(msg, esc, sizeof(esc));
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size,
+                         "{\"ok\":true,\"tid\":\"%s\",\"pinned\":%s,\"message\":\"%s\"}",
+                         btid, pinned ? "true" : "false", esc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    /* [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶。fav / pin 都是可选的（三态）：
+     * 前端只拨一颗按钮，没带的那一项必须原样保留 —— 两态入参会把另一项抹掉。 */
+    if (strcmp(url, ROUTE_GAME_PREFS_SET) == 0) {
+        char btid[32], msg[192];
+        int fav = -1, pin = -1, efav = 0, epin = 0;
+        msg[0] = 0;
+        if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) || !btid[0])
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        gr_json_bool(body, len, "fav", &fav);
+        gr_json_bool(body, len, "pin", &pin);
+        if (fav < 0 && pin < 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "fav / pin 至少给一个");
+        if (game_prefs_set(btid, fav, pin, &efav, &epin, msg, sizeof(msg)) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "写入失败");
+        *code = MHD_HTTP_OK;
+        /* 回**改完之后**的状态（不是入参）：只拨 fav 时 pin 那一项是「不动」，
+         * 把入参原样回出去会把 -1 说成 false，前端下一次渲染就跟着错。 */
+        int n = snprintf(out, size, "{\"ok\":true,\"tid\":\"%s\",\"fav\":%s,\"pin\":%s}",
+                         btid, efav ? "true" : "false", epin ? "true" : "false");
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
@@ -710,9 +820,16 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_TILE_BG) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_TILE_BG_DDS) == 0) return 1;
+    /* [CN-FORK] v0.5.2.163 背景音乐读取（GET）。同一个 URL 一路径两方法：
+     * POST 走 gr_dispatch_post（已登记），GET 这里返回 1 让它继续走到主处理函数。 */
+    if (strcmp(url, ROUTE_GAME_MUSIC) == 0) return 1;
+    if (strcmp(url, ROUTE_GAME_MUSIC_RESET) == 0) return 1;
     if (strcmp(url, ROUTE_FAN_CONTROL) == 0) return 1; /* [CN-FORK] 风扇温控页加载/应用，降噪 */
     if (strcmp(url, ROUTE_SYSTEM_APPS) == 0) return 1; /* [CN-FORK] v0.5.2.158 个性化软件弹窗，降噪 */
     if (strcmp(url, ROUTE_SYSTEM_APP_VISIBLE) == 0) return 1; /* 同上，每次拨开关一次 */
+    if (strcmp(url, ROUTE_SYSTEM_APP_PIN) == 0) return 1; /* [CN-FORK] v0.5.2.164 置顶开关，同上 */
+    if (strcmp(url, ROUTE_GAME_PREFS) == 0) return 1; /* [CN-FORK] v0.5.2.164 收藏/置顶列表，进页一次 */
+    if (strcmp(url, ROUTE_GAME_PREFS_SET) == 0) return 1; /* 同上，每次拨按钮一次 */
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
     /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
@@ -2205,6 +2322,22 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
         game_title_reset_bg(xt);
         return queue_json(conn, MHD_HTTP_OK, "{\"ok\":true}", 11);
+    /* [CN-FORK] v0.5.2.163 背景音乐读取 + 恢复默认（GET 分支）。
+     * 与 game_title_*_path 同一档：tid 在 query，没设过就 404 + ENOENT。
+     * mime 走 game_music_path 报上来的（按落盘扩展名给 audio/mpeg 等）。 */
+    } else if (strcmp(url, ROUTE_GAME_MUSIC) == 0) {
+        const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        char tp[768], mime[64];
+        tp[0] = 0; mime[0] = 0;
+        if (!xt || game_music_path(xt, tp, sizeof(tp), mime, sizeof(mime)) != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "没有设过自定义音乐");
+        return reply_file(conn, tp, mime, NULL, 0);
+    } else if (strcmp(url, ROUTE_GAME_MUSIC_RESET) == 0) {
+        const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        if (!xt)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
+        game_music_reset(xt);
+        return queue_json(conn, MHD_HTTP_OK, "{\"ok\":true}", 11);
     } else if (strcmp(url, ROUTE_GET_CONFIG) == 0) {
         PldmgrConfig cfg;
         config_read(&cfg);
@@ -2274,6 +2407,19 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         int alen = app_vis_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
         if (alen < 0) alen = 0;
         resp = MHD_create_response_from_buffer((size_t)alen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_GAME_PREFS) == 0) {
+        /* [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序）。
+         * 前端进游戏页时拉一次，与 /game_list 合并后排序；no-store 是因为它会被
+         * /game_prefs_set 立刻改掉，缓存一份只会让「点了收藏但列表没动」变成幽灵问题。 */
+        char *resp_buf;
+        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+        if (oom_resp)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        int plen = game_prefs_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        if (plen < 0) plen = 0;
+        resp = MHD_create_response_from_buffer((size_t)plen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, "/events") == 0) {

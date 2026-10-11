@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h> /* [CN-FORK] v0.5.2.163 ga_tid_is_homebrew 用 stat(2) */
 #include <time.h>
 #include <unistd.h>
 
@@ -42,6 +43,25 @@
 extern int sceLncUtilGetAppIdOfRunningBigApp(void);
 extern int sceLncUtilGetAppTitleId(unsigned int app_id, char *title_id);
 #endif
+
+/* [CN-FORK] v0.5.2.163 自制应用屏蔽：自动推 / 拉 + 本地快照 都跳过 homebrew。
+ *
+ * 判据：游戏物理源落在 `/data/homebrew/` 或 `/data/etaHEN/games/` 下 —— 这是
+ * game_mgr.c 里那两条 scan path（已用来枚举游戏）。如果是夹在这些目录里，
+ * 即使 TID 是合法 9 位（PS5 homebrew 可以是 PPSA 前缀的伪造 TID），也按 homebrew 跳过。
+ *
+ * `ga_tid_is_homebrew` 只查 `stat(2)` —— 不读文件，不开 fd，**所以**路径
+ * 缓冲直接放在栈上（256B 远低于 32KB 栈帧红线）。探测失败 = 当作不是 homebrew。 */
+static int ga_tid_is_homebrew(const char *tid) {
+    if (!tid || !tid[0]) return 0;
+    char p1[256], p2[256];
+    snprintf(p1, sizeof(p1), "/data/homebrew/%s", tid);
+    snprintf(p2, sizeof(p2), "/data/etaHEN/games/%s", tid);
+    struct stat st;
+    if (stat(p1, &st) == 0) return 1;
+    if (stat(p2, &st) == 0) return 1;
+    return 0;
+}
 
 static int ga_probe_default(char *out, size_t osz) {
     if (out && osz) out[0] = 0;
@@ -1080,14 +1100,31 @@ void game_auto_tick(void) {
 
     if (!strcmp(prev, cur)) return; /* 绝大多数轮次走这里 */
 
+    /* [CN-FORK] v0.5.2.163 自制应用屏蔽：自动存档的 prev（已退出）/ cur（已启动）
+     * 如果是 homebrew，**整条动作链都不跑** —— 包括退出推送、启动拉取、本地快照。
+     *
+     * 为什么整条都不跑而不是只跳推 / 拉：homebrew 的存档目录可能在 /data/homebrew 下
+     * 而不是 /user/home/<uid>/savedata_prospero/，自动推拉的文件路径都不对，
+     * 跑也白跑；本地快照也会指向一个空目录，徒增一次 IO。
+     *
+     * 「跳过」也记日志 —— 同一条不让动作发生时没有任何痕迹这条规矩（见下方
+     * 「本该动作、却被开关挡住」那条）。 */
+    int prev_hb = prev[0] && ga_tid_is_homebrew(prev);
+    int cur_hb = cur[0] && ga_tid_is_homebrew(cur);
+    if (prev_hb && prev[0])
+        pldmgr_log("[PLDMGR] saves: %s 已退出 · 跳过自动存档：检测到自制应用\n", prev);
+    if (cur_hb && cur[0])
+        pldmgr_log("[PLDMGR] saves: %s 已启动 · 跳过自动存档：检测到自制应用\n", cur);
+
     ga_cfg_t pc, cc;
     int pe = 0, px = 0, ce = 0, cl = 0;
-    if (prev[0] && ga_load_cfg(prev, &pc) == 0) { pe = pc.enabled; px = pc.on_exit; }
-    if (cur[0] && ga_load_cfg(cur, &cc) == 0) { ce = cc.enabled; cl = cc.on_launch; }
+    if (!prev_hb && prev[0] && ga_load_cfg(prev, &pc) == 0) { pe = pc.enabled; px = pc.on_exit; }
+    if (!cur_hb && cur[0] && ga_load_cfg(cur, &cc) == 0) { ce = cc.enabled; cl = cc.on_launch; }
     /* [CN-FORK] v0.5.2.154 本地快照的开关**单独问**（不走 ga_load_cfg）：它跟远程那套
      * 不是一个总开关，本地备份不该被「自动存档关着」连坐。口径与设置页「存档配置」
-     * 里的「启用本地快照」一致（全局优先 → per-game 回落，见 gs_snap_cfg）。 */
-    int psnap = prev[0] ? game_saves_snap_enabled(prev) : 0;
+     * 里的「启用本地快照」一致（全局优先 → per-game 回落，见 gs_snap_cfg）。
+     * [CN-FORK] v0.5.2.163 同样跳过 homebrew。 */
+    int psnap = (!prev_hb && prev[0]) ? game_saves_snap_enabled(prev) : 0;
 
     ga_step_t steps[3];
     int ns = game_auto_plan(prev, cur, pe, px, psnap, ce, cl, steps);
