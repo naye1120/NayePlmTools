@@ -550,6 +550,7 @@
   "game.sort_mode_hint": "拖动磁贴到想要的位置，或用磁贴下排的 ↑ ↓ 按钮（遥控器用这个）；左上角是位置号。",
   "game.sort_mode_note": "顺序会一次落两处：面板列表的顺序 + 主机 app.db 里「主屏固定列表」（MyHome 组）的位置。主机那份只有已经在主屏固定列表里的游戏会被重排，其余不动。★ 收藏的磁贴始终排在最前，不参与这里的先后。完成后档位会拨回「默认」—— 手工顺序只在「默认」档套用。",
   "game.sort_host_unavailable": "主机固定列表读不到（{{why}}），这次只会保存面板顺序。",
+  "game.sort_position": "当前排序：第 {{pos}} 位 / 共 {{total}} 款（{{mode}}）",
   "game.sort_done": "完成",
   "game.move_up": "上移",
   "game.move_down": "下移",

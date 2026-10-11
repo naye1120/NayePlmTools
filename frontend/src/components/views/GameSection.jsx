@@ -895,12 +895,22 @@ export default function GameSection({ addToast, showConfirm, config }) {
         addToast={addToast}
         showConfirm={showConfirm}
       />
+      {/* [CN-FORK] v0.5.2.168 排序标签：把这款游戏在面板列表里的当前名次 / 总数 / 排序档位
+          一并送进改名弹窗，弹窗里用这三项拼一个只读的「排序标签」塞进名称块与音乐块之间
+          那个原本留空的区域（用户截图里红框圈出的那一块）。计算走 orderedGames 而不是
+          games —— 列表的实际显示顺序是收藏 → 手工顺序 → 档位 → 原顺序合出来的，弹窗里
+          给的是「用户在列表里看到的第几」，跟原数组下标差着收藏 / 档位两层。
+          total 用 orderedGames.length 而不是后端的 count：截断时 count 是被截后的总数，
+          标签里说「共 20 款」结果列表其实是 200 款里的前 20 款，会让人误判名次。 */}
       <RenameModal
         show={modal?.kind === 'rename'}
         game={modal?.game}
         onClose={closeModal}
         addToast={addToast}
         onChanged={load}
+        sortPosition={modal?.kind === 'rename' ? orderedGames.findIndex((x) => x.tid === modal?.game?.tid) : -1}
+        sortTotal={orderedGames.length}
+        sortLabel={t(SORT_LABEL[sortMode].k, SORT_LABEL[sortMode].d)}
       />
       <ComingSoonModal
         show={modal?.kind === 'pending'}

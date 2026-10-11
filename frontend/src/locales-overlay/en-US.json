@@ -548,6 +548,7 @@
   "game.sort_mode_hint": "Drag tiles to the position you want, or use the ↑ ↓ buttons under each tile (use those with the controller). The number at the top-left is the position.",
   "game.sort_mode_note": "The order is written to two places at once: the panel list order, and the position in the console's \"home screen pinned list\" (MyHome group in app.db). On the console side only games already in that pinned list get rearranged; nothing else is touched. Favorited tiles always stay at the front and are not affected by this order. When you finish, the mode switches back to Default - manual order only applies there.",
   "game.sort_host_unavailable": "The console pinned list could not be read ({{why}}); only the panel order will be saved.",
+  "game.sort_position": "Sort: #{{pos}} of {{total}} ({{mode}})",
   "game.sort_done": "Done",
   "game.move_up": "Move up",
   "game.move_down": "Move down",

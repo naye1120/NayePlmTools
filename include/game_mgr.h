@@ -4,6 +4,14 @@
 #include <stddef.h>
 #include <time.h>
 
+/* [CN-FORK] 已登记游戏的宿主根目录（game_mgr.c 与 game_music.c 共用同一处定义）。
+ * 镜像游戏的 sce_sys 锁在镜像里、游戏没跑时读不到，但 /user/app/<TID> 目录本身存在 ——
+ * game_music.c 据此区分「已登记但不可达」与「真·裸 dump」。放头文件让两个 TU 共享同一字面量，
+ * game_mgr.c 里那段 `#ifndef GAME_MGR_APP_BASE` 因此不会再重定义（不会冲突）。 */
+#ifndef GAME_MGR_APP_BASE
+#define GAME_MGR_APP_BASE "/user/app"
+#endif
+
 /* [CN-FORK] 游戏管理模块。参考 ShadowMountPlus 的「游戏识别」思路，并移植 v0.5.1.63
  * stats.c 里那套成熟的 app.db(SQLite) 只读解析器与 param.sfo 解析，实现：
  *   ① 已安装   —— 枚举 /system_data/priv/mms/app.db 的 tbl_contentinfo（PPSA/CUSA/… 游戏本体）

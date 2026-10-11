@@ -348,9 +348,22 @@ int game_music_set_host(const char *tid, const unsigned char *at9, size_t len,
 
     char sce_sys[768];
     if (!game_mgr_sce_sys_dir(tid, sce_sys, sizeof(sce_sys))) {
+        /* 区分「游戏已登记 /user/app 但 sce_sys 此刻不可达」与「游戏根本没登记」：
+         *   · 已登记（/user/app/<TID>/ 是个目录，无论里面是 PKG 本体、mount.lnk 还是
+         *     mount_img.lnk 镜像）—— 镜像游戏的 sce_sys 锁在镜像里，面板在游戏没跑时读不到，
+         *     但用户眼里「这游戏明明装了」，旧文案说「没装进 /user/app」纯属冤枉它；
+         *   · 没登记（/user/app 下没有这个 TID）—— 才是真·裸 dump。
+         * 两种都只写面板、主机端不落，msg 把原因说准，界面才不会把「已安装的游戏」报成「没登记的转储」。 */
+        char appdir[300];
+        snprintf(appdir, sizeof(appdir), "%s/%s", GAME_MGR_APP_BASE, tid);
+        struct stat st_app;
+        int registered = (stat(appdir, &st_app) == 0 && S_ISDIR(st_app.st_mode));
         if (msg) snprintf(msg, msgsz,
-                          "找不到这个游戏的 sce_sys（没装进 /user/app，或是个没登记的转储），"
-                          "音乐只存在面板里");
+                          registered
+                            ? "游戏已登记到 /user/app，但 sce_sys 此刻不可达（镜像游戏锁在镜像里 / 只读源），"
+                              "音乐只写面板，PS5 主屏不会播"
+                            : "找不到这个游戏的 sce_sys（没装进 /user/app，或是个没登记的转储），"
+                              "音乐只存在面板里");
         return 2;
     }
 

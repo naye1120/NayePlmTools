@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Type, ImagePlus, RotateCcw, Upload, AlertTriangle, Check, Gamepad2, X, Music, Info,
-  Play, Pause, Volume2, VolumeX,
+  Play, Pause, Volume2, VolumeX, ArrowUpDown,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
 import { Block, Chip, Note } from './parts'
@@ -175,7 +175,13 @@ function dropStagedUrl(entry) {
   try { URL.revokeObjectURL(entry.url) } catch { /* 忽略 */ }
 }
 
-export default function RenameModal({ show, game, onClose, addToast, onChanged }) {
+/* [CN-FORK] v0.5.2.168 排序标签：GameSection 把这款游戏在面板列表里的当前名次 / 总数 /
+ * 排序档位送进来（sortPosition / sortTotal / sortLabel），弹窗在「游戏名称」与「背景音乐」
+ * 之间那个原本留空的区域（用户截图里红框圈出的那一块）放一个只读的 chip，把「排序」信息
+ * 显式写出来 —— 那个区域从「空白」变成「排序标签」，既保留了说明价值，又把大片空白消掉。
+ * sortPosition = -1 或 undefined = 列表里没这款（理论上不应发生），不渲染标签。 */
+export default function RenameModal({ show, game, onClose, addToast, onChanged,
+                                       sortPosition, sortTotal, sortLabel }) {
   const { t } = useTranslation()
   const tid = game && game.tid
   const [name, setName] = useState('')
@@ -705,11 +711,13 @@ export default function RenameModal({ show, game, onClose, addToast, onChanged }
                 （.163 是「大预览在上、说明居中、按钮横排」，占满整列，与截图不符）
               · 名称块的「保存名称」按钮从标题栏挪进内容区，**与输入框同一行**；
               · 音乐块 = 说明 +（进度条与上传/恢复同一行）+ 上限说明 + 一行自绘播放器。
-            左列仍跨两行（row-span-2），右列上下各一行。 */}
-        <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] xl:grid-rows-2 gap-5">
+            [CN-FORK] v0.5.2.168 改为：左列图标块只占自身内容高度，不再 row-span 跨两行；
+              右列「名称 + 音乐」两块用 flex-col 包起来自然堆叠，消除名称块下方的大片空白
+              （之前 xl:grid-rows-2 强制两行等高，短的名称块下方留空，即用户截图里红框圈出的区域）。 */}
+        <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-5 items-start">
           {/* ── 左列：磁贴图标 ── */}
           <Block
-            className="min-w-0 xl:row-span-2"
+            className="min-w-0"
             title={t('game.icon_block', '磁贴图标')}
             icon={Gamepad2}
             actions={<span className="panel-tiny text-zinc-500">{iconCustom ? t('game.icon_custom', '自定义图标') : t('game.icon_default', '默认图标')}</span>}
@@ -795,7 +803,11 @@ export default function RenameModal({ show, game, onClose, addToast, onChanged }
             </div>
           </Block>
 
-          {/* ── 右列上：游戏名称（占一行）──
+          {/* ── 右列：名称 + 音乐 用 flex-col 自然堆叠（v0.5.2.168 起）──
+              左列图标块不再 row-span 跨行后，这两块若各自作为 grid item 会被自动重排到
+              不同列，所以统一包进一个 flex 容器，保证「名称在上、音乐在下」的纵向顺序。 */}
+          <div className="flex flex-col gap-5 min-w-0">
+          {/* ── 右列上：游戏名称 ──
               [CN-FORK] v0.5.2.166 「保存名称」按钮从标题栏挪到**输入框同一行**（截图版式）。
               放在右边而不是左边：名字这一行是「输入 → 确认」的单向流程，
               按钮在输入框的收尾处，视线不用来回跳。 */}
@@ -840,6 +852,19 @@ export default function RenameModal({ show, game, onClose, addToast, onChanged }
               </Note>
             ))}
           </Block>
+
+          {/* [CN-FORK] v0.5.2.168 排序标签：把 GameSection 送进来的「当前名次 / 总数 / 档位」
+              拼成一个只读 chip 塞进名称块与音乐块之间 —— 原本是大片空白（用户截图里红框
+              圈出的那一块），现在变成有内容的标签区，空白随之消掉。
+              sortPosition 为 -1 / undefined 时不渲染（理论上不应发生，但万一别处复用且没传）。 */}
+          {typeof sortPosition === 'number' && sortPosition >= 0 && sortTotal > 0 && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-[12px] text-zinc-400">
+              <ArrowUpDown className="w-3.5 h-3.5 text-ps-blue shrink-0" aria-hidden="true" />
+              <span>{t('game.sort_position', '当前排序：第 {{pos}} 位 / 共 {{total}} 款（{{mode}}）', {
+                pos: sortPosition + 1, total: sortTotal, mode: sortLabel,
+              })}</span>
+            </div>
+          )}
 
           {/* ── 右列下：背景音乐（占一行）──
               [CN-FORK] v0.5.2.166 版式按截图：说明 →（进度条与上传/恢复**同一行**）
@@ -961,6 +986,7 @@ export default function RenameModal({ show, game, onClose, addToast, onChanged }
               />
             </div>
           </Block>
+          </div>
         </div>
 
         {/* ── ③ 磁贴背景：整图下方整幅（与原版一致，沿用 v.114 的左右分栏 + 上限）──
