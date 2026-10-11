@@ -1612,6 +1612,15 @@ POST 路由 `ROUTE_SYSTEM_APP_VISIBLE` **已登记进 `gr_post_limit`**（漏登
 
 ### `.167` —— 「排序已经失效」+ 磁贴按钮重排
 
+- **出包**：`NayePlmTools_0.5.2.167-me.elf`（NAYE00001 媒体栏）/ `-ga.elf`（NAYE00004 游戏栏），
+  两包各 **11,244,952 字节**，md5 `88ccfeb28b526aad6015d50b5fc6700c` / `81e42da2839c0b2a293de0bbdb112026`。
+  内嵌标题 `NayePlmTools v0.5.2.167 by naye (1806ba3, built at 2026-10-11 07:20:08 UTC)`，`PLDMGR_VER:0.5.2.167`；
+  `frontend/dist/index.html` **1,148,479 字节**，与两颗 ELF 内嵌网页段（偏移 **+2231888**）**逐字节一致**；
+  `0.5.2.166` 残留 **0** 处；核对脚本 `pkg_167_verify.sh` **ALL CHECKS PASSED**。
+  ⚠ **核对脚本「编码器进包」那条这轮改了写法**：terser 会重命名承载 `?worker&inline` 的变量
+  （`.166` 是 `var Ki=`，`.167` 又换了名），写死变量名会 False-Fail。改成认字面量
+  `not a RIFF/WAVE file` + `superframe` + `createObjectURL/new Blob`，不卡长度。
+
 **① 排序档位失效**（用户：「这个排序已经失效」）。`.166` 把手工顺序**无条件**排在档位之前，
 而 `saveOrder` 是把**全部** tid 写进 `order` 的 ⇒ 只要拖过一次，每款在 order 里都有互不相同的位次，
 `oa !== ob` 恒成立，**档位那一支永远走不到**（名称 / 体积点了不动）。
