@@ -112,6 +112,10 @@
  * 上限 30MB（与前端一致；前端先裁，但这里留 64MB 防止绕过）。 */
 #define ROUTE_GAME_MUSIC "/game_music"
 #define ROUTE_GAME_MUSIC_RESET "/game_music_reset"
+/* [CN-FORK] v0.5.2.166 把编码好的 ATRAC9 写进主机的 <sce_sys>/snd0.at9。
+ * `.163` 那条 /game_music 只落我们自己的目录，主机不读 —— 这才是「背景音乐
+ * 改动没有生效」的根因。编码在浏览器里做（见 include/game_music.h 的长注释）。 */
+#define ROUTE_GAME_MUSIC_AT9 "/game_music_at9"
 /* [CN-FORK] v0.5.2.163 存档转换：把其它用户存档逐文件合并到目标用户（不传文件体）。 */
 #define ROUTE_GAME_SAVE_CONVERT "/game_save_convert"
 #define ROUTE_GAME_MOUNT "/game_mount"
@@ -133,8 +137,14 @@
  * POST /game_prefs_set       body {tid, fav?, pin?} → {ok, tid, fav, pin} */
 #define ROUTE_GAME_PREFS "/game_prefs"
 #define ROUTE_GAME_PREFS_SET "/game_prefs_set"
+/* [CN-FORK] v0.5.2.166 主屏固定列表（主机 app.db 的 tbl_group_<uid>）。
+ * `.164` 的置顶只写我们自己的 JSON，主机不知道 —— 用户看到的就是「置顶在 PS5 里没生效」。
+ * 这一组路由操作的是**主机的库**，见 include/tile_group.h 的真机取证。 */
+#define ROUTE_TILE_GROUP "/tile_group"             /* GET：读主屏固定列表 */
+#define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
+#define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.5.2.165" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.165，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.166" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.166，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，

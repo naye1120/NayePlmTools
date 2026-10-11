@@ -65,6 +65,8 @@ SRCS += src/tile_db.c
 SRCS += src/app_visibility.c
 # [CN-FORK] v0.5.2.164 应用置顶（与 visible 同弹窗的另一个开关，落点 JSON 而非 app.db）
 SRCS += src/app_pin.c
+# [CN-FORK] v0.5.2.166 主屏固定列表：读写主机 app.db 的 tbl_group_<uid>（置顶 / 排序的真身）
+SRCS += src/tile_group.c
 # [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序，落 game_prefs.json）
 SRCS += src/game_prefs.c
 # [CN-FORK] v0.5.2.163 背景音乐（mp3/ogg/wav 落 /data/nayeplmtools/music/<TID>.<ext>）

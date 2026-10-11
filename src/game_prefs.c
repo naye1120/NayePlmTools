@@ -69,20 +69,49 @@ static int gp_save(cJSON *root) {
 int game_prefs_list_json(char *out, size_t size) {
     if (!out || size < 32) return -1;
     cJSON *root = gp_load();
-    if (!root) { snprintf(out, size, "{\"prefs\":{}}"); return (int)strlen(out); }
+    if (!root) { snprintf(out, size, "{\"prefs\":{},\"order\":[]}"); return (int)strlen(out); }
     cJSON *wrap = cJSON_CreateObject();
     if (!wrap) { cJSON_Delete(root); return -1; }
-    /* AddItemToObject 接管所有权：wrap 删掉时 root 一并释放。 */
+    /* [CN-FORK] v0.5.2.166 `order` 是顶层键，不是某个 tid 的偏好 —— 先摘出来再挂，
+     * 否则它会跟着 root 一起被塞进 "prefs" 里面（前端就永远读不到手工顺序）。 */
+    cJSON *order = cJSON_DetachItemFromObject(root, "order");
+    /* AddItemToObject 接管所有权：wrap 删掉时 root / order 一并释放。 */
     cJSON_AddItemToObject(wrap, "prefs", root);
+    cJSON_AddItemToObject(wrap, "order", order ? order : cJSON_CreateArray());
     char *s = cJSON_PrintUnformatted(wrap);
     cJSON_Delete(wrap);
-    if (!s) { snprintf(out, size, "{\"prefs\":{}}"); return (int)strlen(out); }
+    if (!s) { snprintf(out, size, "{\"prefs\":{},\"order\":[]}"); return (int)strlen(out); }
     size_t n = strlen(s);
     int ok = n < size;
     if (ok) memcpy(out, s, n + 1);
     free(s);
     if (!ok) { out[0] = 0; return -1; }
     return (int)n;
+}
+
+int game_prefs_set_order(const char *const *tids, int n) {
+    if (n < 0) return -1;
+    for (int i = 0; i < n; i++) {
+        if (!gp_tid_ok(tids[i])) return -1; /* 一条不合法整份拒收，理由见头注释 */
+    }
+    cJSON *root = gp_load();
+    if (!root) return -1;
+    cJSON_DeleteItemFromObject(root, "order");
+    if (n > 0) {
+        cJSON *arr = cJSON_CreateArray();
+        if (!arr) { cJSON_Delete(root); return -1; }
+        for (int i = 0; i < n; i++) {
+            cJSON *s = cJSON_CreateString(tids[i]);
+            if (!s) { cJSON_Delete(arr); cJSON_Delete(root); return -1; }
+            cJSON_AddItemToArray(arr, s);
+        }
+        cJSON_AddItemToObject(root, "order", arr);
+    }
+    int rc = gp_save(root);
+    cJSON_Delete(root);
+    if (rc != 0) return -1;
+    pldmgr_log("[PLDMGR] game_prefs: order 已保存（%d 条）\n", n);
+    return 0;
 }
 
 int game_prefs_set(const char *tid, int fav, int pin,

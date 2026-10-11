@@ -1,13 +1,18 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Gamepad2, RefreshCw, Info, Tag, Star, Pin, ArrowUpDown } from 'lucide-react'
+import {
+  Gamepad2, RefreshCw, Info, Tag, Star, Pin, ArrowUpDown, GripVertical,
+  ChevronUp, ChevronDown, Check, X,
+} from 'lucide-react'
 import Section from '../ui/Section' /* [CN-FORK] v0.5.2.94 板块形状统一 */
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.164 排序档位 */
 import { cn } from '../../utils/helpers'
 import { formatSize } from '../game/format'
-import { syncTitleNames, getGamePrefs, setGamePrefs } from '../../utils/gameApi' /* [CN-FORK] v0.5.2.137 名字回填 / v0.5.2.164 收藏·置顶 */
+import {
+  syncTitleNames, getGamePrefs, setGamePrefs, setTilePin, setTileOrder, getTileGroup,
+} from '../../utils/gameApi' /* [CN-FORK] v0.5.2.137 名字回填 / .164 收藏·置顶 / .166 主机固定列表 */
 import { SaveManagerIcon, MediaManagerIcon, RenameTileIcon, PendingSlotIcon } from '../game/GameActionIcons'
 import GameDetailModal from '../game/GameDetailModal'
 import SaveManagerModal from '../game/SaveManagerModal'
@@ -79,8 +84,13 @@ const TILE_ACTIONS = [
 /* [CN-FORK] v0.5.2.164 磁贴列表的排序档位（用户口径：「排序按钮可以看你怎么做都行」）。
  * 三档全部用**列表里已有的字段**，不新增后端字段：
  *   default = 后端给的顺序（已安装优先、名字次之），name = 名称，size = 体积（大→小）。
- * 收藏与置顶**恒定优先于档位**（用户：「收藏的游戏自动排到列表前面」）——
- * 见 orderedGames。顺序落 localStorage，刷新页面不丢。 */
+ * [CN-FORK] v0.5.2.166 排序**分两层**，各自解决不同的问题：
+ *   · 档位（Segmented，这里）= 「按什么规则自动排」，落在本机 localStorage；
+ *   · 手工顺序（拖拽排序模式）= 「我就要它排在第几位」，落在后端（game_prefs.json 的 order）
+ *     **并同时写主机 app.db 的 MyHome 组**（tbl_group_<uid> 的 idx，就是主屏位置）。
+ * 显示顺序 = 置顶 → 收藏 → 手工顺序 → 档位 → 后端原始下标（见 orderedGames）。
+ * 收藏与置顶**恒定优先于手工顺序**：用户早先明确说过「收藏的游戏自动排到列表前面」，
+ * 这条不能因为加了拖拽就作废；排序模式的横幅里把这件事写出来，不让人猜。 */
 const SORT_MODES = ['default', 'name', 'size']
 const SORT_LABEL = {
   default: { k: 'game.sort_default', d: '默认' },
@@ -88,9 +98,37 @@ const SORT_LABEL = {
   size: { k: 'game.sort_size', d: '体积' },
 }
 
+/* 把 tid 从 from 挪到 to（原地改副本）。越界一律钳住而不是抛错 ——
+ * 拖拽的落点算出来是 -1 或 length 属于正常边界，为它炸掉整张列表不值得。 */
+function moveTid(arr, from, to) {
+  const n = arr.length
+  if (n === 0) return arr
+  let f = Math.max(0, Math.min(n - 1, from))
+  let t = Math.max(0, Math.min(n - 1, to))
+  if (f === t) return arr
+  const out = arr.slice()
+  const [x] = out.splice(f, 1)
+  out.splice(t, 0, x)
+  return out
+}
+
 /* 单个游戏磁贴（宫格）：大图标铺满 1:1 + 名称/TID，来源徽标叠在图标角上，
- * 四颗操作按钮排在图标下排。整块可点开详情（见文件头注释）。 */
-function GameCard({ g, iconFailed, onIconError, onOpen, onAction, pref, onToggleFav, onTogglePin, onCycleSort, sortLabel }) {
+ * 四颗操作按钮排在图标下排。整块可点开详情（见文件头注释）。
+ *
+ * [CN-FORK] v0.5.2.166 加了**排序模式**（用户：「排序按钮没有实现我想让排哪个位置就排哪个位置，
+ * 而且您的位置也不好，最好跟磁贴结合起来」）。排序模式下这张卡换一副面孔：
+ *   · 左上角显示**位置号**（1、2、3…），平台/格式徽标让位（这时位置号才是要紧信息）；
+ *   · 整卡 draggable，可以直接拖到别处（桌面 / 手机浏览器）；
+ *   · 下排的三颗偏好按钮换成**上移 / 下移**，遥控器只有方向键与确定键，拖拽它做不了；
+ *   · 详情热区与四颗动作按钮全部让位 —— 排序时点一下卡片应该是「选中它」而不是「打开详情」，
+ *     否则拖拽的起点永远会被详情弹窗抢走。
+ * 拖拽与上移/下移改的是**同一份 draft**（在 GameSection 里），松手/点完不写主机；
+ * 点「完成」才一次性提交（见 saveOrder）。 */
+function GameCard({
+  g, iconFailed, onIconError, onOpen, onAction, pref, onToggleFav, onTogglePin,
+  onEnterSort, sortLabel,
+  sorting, pos, total, onMove, onDragStart, onDragOver, onDrop, dragging,
+}) {
   const { t } = useTranslation()
   const installed = g.src === 'installed'
   const platform = gamePlatform(g.tid)
@@ -123,7 +161,22 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction, pref, onToggle
   }
 
   return (
-    <div className="relative bg-black/20 border border-white/10 rounded-xl p-1.5 flex flex-col space-y-1.5">
+    <div
+      className={cn(
+        'relative bg-black/20 border rounded-xl p-1.5 flex flex-col space-y-1.5',
+        sorting ? 'border-ps-blue/40' : 'border-white/10',
+        /* 拖动中的那张卡半透明 + 抬起一圈：跟手的视觉反馈。没有它的话，
+         * 拖动过程中用户完全看不出哪一张正在被拖。 */
+        dragging && 'opacity-50 ring-2 ring-ps-blue/60',
+      )}
+      /* [CN-FORK] v0.5.2.166 排序模式下整卡可拖。只在排序模式下挂 draggable：
+       * 平时挂上会让「按住图标拖动」变成拖图而不是滚动页面。 */
+      draggable={!!sorting}
+      onDragStart={sorting ? onDragStart : undefined}
+      onDragOver={sorting ? onDragOver : undefined}
+      onDrop={sorting ? onDrop : undefined}
+      onDragEnd={sorting ? onDrop : undefined}
+    >
       {/* 背景层（整卡底图）。放在详情热区**之前**：两者都是 inset-0，DOM 靠前的先画，
           于是热区仍然稳稳压在它上面 —— 否则点背景那一片就点不开详情了。
           没有自定义背景时整层不存在（不是「给个默认渐变」）：两种状态必须一眼分得出来。
@@ -149,13 +202,17 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction, pref, onToggle
       {/* 详情热区：铺满整张卡片的透明按钮。
        * 用真 <button> 而不是 div+onClick，是为了让它天然进入 tab 序列与空间导航 ——
        * 遥控器上「选中磁贴」这一步必须存在，否则用户没法进详情。
-       * 焦点环画在整张卡片外沿（.is-focus 的 outline-offset），正是想要的效果。 */}
-      <button
-        type="button"
-        onClick={() => onOpen(g)}
-        aria-label={t('game.open_detail', '查看 {{name}} 的详情', { name: g.name || g.tid })}
-        className="absolute inset-0 z-0 rounded-xl"
-      />
+       * 焦点环画在整张卡片外沿（.is-focus 的 outline-offset），正是想要的效果。
+       * [CN-FORK] v0.5.2.166 排序模式下**整颗不渲染**：这时点卡片不该弹详情
+       * （拖拽的起点会被弹窗抢走），而且排序模式下能点的东西越少越好。 */}
+      {!sorting && (
+        <button
+          type="button"
+          onClick={() => onOpen(g)}
+          aria-label={t('game.open_detail', '查看 {{name}} 的详情', { name: g.name || g.tid })}
+          className="absolute inset-0 z-0 rounded-xl"
+        />
+      )}
 
       {/* 内容层：pointer-events-none 让点击穿透到下面的详情热区，
           只有四颗动作按钮显式恢复可点（pointer-events-auto）。 */}
@@ -174,60 +231,78 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction, pref, onToggle
         {/* [CN-FORK] 左上角竖排徒标：上=平台(PS4/PS5)、下=格式。两枚统一尺寸（固定宽高、居中），
          * 用内联 style 上色：既绕开 Tailwind JIT 可能没生成任意色类，也避开浅色主题把
          * .text-white 洗成近黑的问题（这里根本不用 text-white 类）。
-         * v0.5.2.103 起底一律是压暗芯片，色相只由字与线给（见上方 BADGE 注释）。 */}
-        <div className="absolute top-1.5 left-1.5 flex flex-col items-start space-y-1">
-          {platform && (
+         * v0.5.2.103 起底一律是压暗芯片，色相只由字与线给（见上方 BADGE 注释）。
+         * [CN-FORK] v0.5.2.166 排序模式：左上角换成**位置号**（用户：「磁贴左上角显示位置号」），
+         * 平台 / 格式徽标整组让位 —— 位置号才是这一屏唯一要紧的信息，
+         * 两组徽标挤在一起只会互相打架（而且位置号要够大才看得清）。 */}
+        {sorting ? (
+          <div className="absolute top-1.5 left-1.5 flex items-center gap-1.5">
+            <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-ps-blue text-black text-[14px] font-bold tabular-nums shadow-lg">
+              {pos + 1}
+            </span>
+            <GripVertical className="w-4 h-4 text-white/70" />
+          </div>
+        ) : (
+          <div className="absolute top-1.5 left-1.5 flex flex-col items-start space-y-1">
+            {platform && (
+              <span
+                className={BADGE}
+                style={chipStyle(platColor)}
+                title={platform === 'PS4' ? t('game.plat_ps4', 'PS4 游戏') : t('game.plat_ps5', 'PS5 游戏')}
+              >
+                {platform}
+              </span>
+            )}
             <span
               className={BADGE}
-              style={chipStyle(platColor)}
-              title={platform === 'PS4' ? t('game.plat_ps4', 'PS4 游戏') : t('game.plat_ps5', 'PS5 游戏')}
+              style={chipStyle(fmtInfo.c)}
+              title={`${t('game.fmt', '格式')}: ${fmtLabel}`}
             >
-              {platform}
+              {fmtLabel}
             </span>
-          )}
+          </div>
+        )}
+        {!sorting && (
           <span
-            className={BADGE}
-            style={chipStyle(fmtInfo.c)}
-            title={`${t('game.fmt', '格式')}: ${fmtLabel}`}
+            className="absolute top-1.5 right-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border"
+            style={chipStyle(installed ? '#3fb950' : '#e3b341')}
+            title={installed ? t('game.src_installed', '已安装') : t('game.src_dump', '转储/外挂')}
           >
-            {fmtLabel}
+            {installed ? t('game.badge_installed', '已安装') : t('game.badge_dump', '转储')}
           </span>
-        </div>
-        <span
-          className="absolute top-1.5 right-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border"
-          style={chipStyle(installed ? '#3fb950' : '#e3b341')}
-          title={installed ? t('game.src_installed', '已安装') : t('game.src_dump', '转储/外挂')}
-        >
-          {installed ? t('game.badge_installed', '已安装') : t('game.badge_dump', '转储')}
-        </span>
+        )}
         {/* [CN-FORK] v0.5.2.112 四颗动作按钮从禁用占位变成真入口：
          * 图标换成专用四颗（记忆卡 / 叠卡+播放 / 笔+基线 / 方框三点），配色仍走原来的
          * 「半透明深底 + 细线白图标」，只把 cursor 和悬停反馈补上。
-         * 它们**压在详情热区之上**（z-10 + pointer-events-auto），点按钮不会顺带打开详情。 */}
-        <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-4 gap-1.5 z-10 pointer-events-auto">
-          {/* 用 `const Icon = item.Icon` 而不是 `({ key, Icon }) =>`：本仓库的 eslint 配置没装
-              eslint-plugin-react，只在 JSX 里用到的**解构参数**会被 no-unused-vars 误判为未使用
-              （const 变量有 varsIgnorePattern '^[A-Z_]' 兜底）。 */}
-          {TILE_ACTIONS.map((item) => {
-            const Icon = item.Icon
-            return (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => onAction(item.key, g)}
-                title={ACT_LABEL[item.key]}
-                aria-label={ACT_LABEL[item.key]}
-                className={cn(
-                  'flex items-center justify-center py-1.5 rounded-md text-white',
-                  'bg-black/55 border border-white/15 backdrop-blur-sm',
-                  'transition-colors hover:bg-black/80 hover:border-white/35',
-                )}
-              >
-                <Icon className="w-4 h-4" />
-              </button>
-            )
-          })}
-        </div>
+         * 它们**压在详情热区之上**（z-10 + pointer-events-auto），点按钮不会顺带打开详情。
+         * [CN-FORK] v0.5.2.166 排序模式下整组不渲染：这时四颗按钮都点不到才对
+         * （点任何一颗都会打断排序），而且它们正好压在卡片下半部，是拖拽最顺手的落点。 */}
+        {!sorting && (
+          <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-4 gap-1.5 z-10 pointer-events-auto">
+            {/* 用 `const Icon = item.Icon` 而不是 `({ key, Icon }) =>`：本仓库的 eslint 配置没装
+                eslint-plugin-react，只在 JSX 里用到的**解构参数**会被 no-unused-vars 误判为未使用
+                （const 变量有 varsIgnorePattern '^[A-Z_]' 兜底）。 */}
+            {TILE_ACTIONS.map((item) => {
+              const Icon = item.Icon
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => onAction(item.key, g)}
+                  title={ACT_LABEL[item.key]}
+                  aria-label={ACT_LABEL[item.key]}
+                  className={cn(
+                    'flex items-center justify-center py-1.5 rounded-md text-white',
+                    'bg-black/55 border border-white/15 backdrop-blur-sm',
+                    'transition-colors hover:bg-black/80 hover:border-white/35',
+                  )}
+                >
+                  <Icon className="w-4 h-4" />
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* 名称 + TID（行末右侧标游戏体积）+ 详情提示 */}
@@ -247,52 +322,93 @@ function GameCard({ g, iconFailed, onIconError, onOpen, onAction, pref, onToggle
         </div>
       </div>
 
-      {/* [CN-FORK] v0.5.2.164 收藏 / 置顶 / 排序 三颗小按钮（用户：「每个磁贴增加
-          收藏和排序和置顶按钮」）。它们压在详情热区之上（relative z-10）——
-          不加这一层的话点按钮会顺带打开详情（热区是铺满整卡的透明按钮）。
-          收藏与置顶是**开/关**（开着用实心色），排序是**循环切换**（当前档位写在
-          title 里，切换时另给一条 toast —— 电视端没有 hover，光靠 title 看不见）。 */}
-      <div className="relative z-10 grid grid-cols-3 gap-1.5">
-        <button
-          type="button"
-          onClick={() => onToggleFav(g)}
-          title={`${t('game.fav', '收藏')}${pref?.fav ? t('game.fav_on', '（已收藏，再点取消）') : ''}`}
-          aria-label={t('game.fav', '收藏')}
-          aria-pressed={!!pref?.fav}
-          className={cn(
-            'flex items-center justify-center py-1 rounded-md border transition-colors',
-            pref?.fav
-              ? 'bg-amber-400/15 border-amber-400/40 text-amber-300'
-              : 'bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30',
-          )}
-        >
-          <Star className={cn('w-3.5 h-3.5', pref?.fav && 'fill-current')} />
-        </button>
-        <button
-          type="button"
-          onClick={() => onTogglePin(g)}
-          title={`${t('game.pin', '置顶')}${pref?.pin ? t('game.pin_on', '（已置顶，再点取消）') : ''}`}
-          aria-label={t('game.pin', '置顶')}
-          aria-pressed={!!pref?.pin}
-          className={cn(
-            'flex items-center justify-center py-1 rounded-md border transition-colors',
-            pref?.pin
-              ? 'bg-ps-blue/20 border-ps-blue/50 text-ps-blue'
-              : 'bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30',
-          )}
-        >
-          <Pin className={cn('w-3.5 h-3.5', pref?.pin && 'fill-current')} />
-        </button>
-        <button
-          type="button"
-          onClick={onCycleSort}
-          title={t('game.sort_current', '排序：{{mode}}（点一下换下一档）', { mode: sortLabel })}
-          aria-label={t('game.sort', '排序')}
-          className="flex items-center justify-center py-1 rounded-md border bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30 transition-colors"
-        >
-          <ArrowUpDown className="w-3.5 h-3.5" />
-        </button>
-      </div>
+      {/* [CN-FORK] v0.5.2.166 排序模式下排换成「上移 / 下移 / 移到最前」。
+          为什么非要有它：拖拽在**遥控器上根本做不了**（PS5 只有方向键与确定键），
+          而这套 UI 的主战场就是电视端。所以拖拽给手机 / 电脑，上移/下移给遥控器，
+          两条路改的是同一份 draft（在 GameSection 里），点「完成」才提交。 */}
+      {sorting ? (
+        <div className="relative z-10 grid grid-cols-3 gap-1.5">
+          <button
+            type="button"
+            disabled={pos <= 0}
+            onClick={() => onMove(g.tid, -1)}
+            title={t('game.move_up', '上移')}
+            aria-label={t('game.move_up', '上移')}
+            className="flex items-center justify-center py-1.5 rounded-md border bg-black/40 border-white/10 text-zinc-300 hover:text-white hover:border-white/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            disabled={pos >= total - 1}
+            onClick={() => onMove(g.tid, 1)}
+            title={t('game.move_down', '下移')}
+            aria-label={t('game.move_down', '下移')}
+            className="flex items-center justify-center py-1.5 rounded-md border bg-black/40 border-white/10 text-zinc-300 hover:text-white hover:border-white/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            disabled={pos <= 0}
+            onClick={() => onMove(g.tid, 'top')}
+            title={t('game.move_top', '移到最前')}
+            aria-label={t('game.move_top', '移到最前')}
+            className="flex items-center justify-center py-1.5 rounded-md border bg-black/40 border-white/10 text-zinc-300 hover:text-white hover:border-white/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <span className="text-[11px] font-bold">1</span>
+          </button>
+        </div>
+      ) : (
+        /* [CN-FORK] v0.5.2.164 收藏 / 置顶 / 排序 三颗小按钮（用户：「每个磁贴增加
+            收藏和排序和置顶按钮」）。它们压在详情热区之上（relative z-10）——
+            不加这一层的话点按钮会顺带打开详情（热区是铺满整卡的透明按钮）。
+            收藏与置顶是**开/关**（开着用实心色）。
+            [CN-FORK] v0.5.2.166 第三颗从「循环换档」改成「进入排序模式」（用户：
+            「排序按钮没有实现我想让排哪个位置就排哪个位置，最好跟磁贴结合起来」）——
+            换档只是换规则，而用户要的是**指定位置**；档位选择器仍留在列表工具条里。 */
+        <div className="relative z-10 grid grid-cols-3 gap-1.5">
+          <button
+            type="button"
+            onClick={() => onToggleFav(g)}
+            title={`${t('game.fav', '收藏')}${pref?.fav ? t('game.fav_on', '（已收藏，再点取消）') : ''}`}
+            aria-label={t('game.fav', '收藏')}
+            aria-pressed={!!pref?.fav}
+            className={cn(
+              'flex items-center justify-center py-1 rounded-md border transition-colors',
+              pref?.fav
+                ? 'bg-amber-400/15 border-amber-400/40 text-amber-300'
+                : 'bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30',
+            )}
+          >
+            <Star className={cn('w-3.5 h-3.5', pref?.fav && 'fill-current')} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onTogglePin(g)}
+            title={`${t('game.pin', '置顶')}${pref?.pin ? t('game.pin_on', '（已置顶，再点取消）') : ''}`}
+            aria-label={t('game.pin', '置顶')}
+            aria-pressed={!!pref?.pin}
+            className={cn(
+              'flex items-center justify-center py-1 rounded-md border transition-colors',
+              pref?.pin
+                ? 'bg-ps-blue/20 border-ps-blue/50 text-ps-blue'
+                : 'bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30',
+            )}
+          >
+            <Pin className={cn('w-3.5 h-3.5', pref?.pin && 'fill-current')} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onEnterSort(g)}
+            title={t('game.sort_enter_hint', '排序：进入排序模式，拖动磁贴或按上下箭头把它放到想要的位置（当前自动档位：{{mode}}）', { mode: sortLabel })}
+            aria-label={t('game.sort', '排序')}
+            className="flex items-center justify-center py-1 rounded-md border bg-black/40 border-white/10 text-zinc-400 hover:text-white hover:border-white/30 transition-colors"
+          >
+            <ArrowUpDown className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -319,10 +435,26 @@ export default function GameSection({ addToast, showConfirm, config }) {
 
   /* [CN-FORK] v0.5.2.164 收藏 / 置顶（面板侧的列表排序偏好，后端 game_prefs.json）。
    * 与 /game_list 分开拉：拨一颗按钮只回这一份小数据，不必重读整张列表
-   * （重读要付一次 app.db 全库读 + 目录扫描，.133 那条教训）。 */
+   * （重读要付一次 app.db 全库读 + 目录扫描，.133 那条教训）。
+   * [CN-FORK] v0.5.2.166 同一份响应里还有 `order` —— 面板侧的手工顺序（拖拽排序的结果）。 */
   const [prefs, setPrefs] = useState({})
+  const [order, setOrder] = useState([])
+  /* [CN-FORK] v0.5.2.166 拖拽排序模式的开关与草稿。
+   * draft 是 tid 数组（屏幕上从上到下、从左到右的次序），进模式时从当前显示顺序抄一份，
+   * 之后拖拽 / 上移 / 下移改的都是它；点「完成」才提交（saveOrder），「取消」整份丢掉。
+   * 用 tid 而不是下标：列表随时可能因为刷新 / 预热补齐而变长，下标会指到别的游戏上。 */
+  const [sorting, setSorting] = useState(false)
+  const [draft, setDraft] = useState([])
+  const [savingOrder, setSavingOrder] = useState(false)
+  const [dragTid, setDragTid] = useState('')
+  /* 排序模式面板：排序模式开着时把整页滚到列表顶部，否则用户点完「排序」还在别处，
+   * 看不到自己刚进入的模式。ref 指向 Section 外层容器。 */
+  const listTopRef = useRef(null)
+  /* 主机固定列表（app.db 的 tbl_group_<uid>）—— 只用来告诉用户「主机侧到底有没有写进去」，
+   * 不参与排序。读失败不打断任何东西（见 loadHostGroup）。 */
+  const [hostGroup, setHostGroup] = useState(null)
   /* 排序档位落 localStorage：这是「这台设备怎么看这张列表」的偏好，
-   * 与收藏/置顶（跟着游戏走）不是一回事，所以不上后端。 */
+   * 与收藏/置顶/手工顺序（跟着游戏走）不是一回事，所以不上后端。 */
   const [sortMode, setSortMode] = useState(() => {
     const s = localStorage.getItem('gameSortMode')
     return SORT_MODES.includes(s) ? s : 'default'
@@ -355,49 +487,195 @@ export default function GameSection({ addToast, showConfirm, config }) {
     setLoading(false)
   }, [t])
 
-  /* [CN-FORK] v0.5.2.164 收藏 / 置顶的读写。读失败一律按「都没收藏、都没置顶」处理：
-   * 偏好丢了最多是顺序不理想，为此把整张游戏列表打断（显示一个红条）得不偿失。 */
+  /* [CN-FORK] v0.5.2.164 收藏 / 置顶 / 手工顺序的读取。读失败一律按「都没收藏、都没置顶、
+   * 没有手工顺序」处理：偏好丢了最多是顺序不理想，为此把整张游戏列表打断（显示一个红条）
+   * 得不偿失。 */
   const loadPrefs = useCallback(() => {
     return getGamePrefs()
-      .then((d) => setPrefs((d && d.prefs) || {}))
-      .catch(() => setPrefs({}))
+      .then((d) => {
+        setPrefs((d && d.prefs) || {})
+        setOrder(Array.isArray(d && d.order) ? d.order : [])
+      })
+      .catch(() => { setPrefs({}); setOrder([]) })
+  }, [])
+
+  /* [CN-FORK] v0.5.2.166 主机固定列表（只读）。**不参与排序**，只用来把「主机侧到底写没写进去」
+   * 讲清楚 —— 用户这一轮报的「置顶按钮在 PS5 里没有生效」，一半原因是旧版只写了我们自己的
+   * JSON，另一半是写了主机也不知道（Shell 只在重启 / 待机唤醒后重绘）。
+   * 读失败静默：这是个说明性数据，读不到不该在游戏页上挂一条红字。 */
+  const loadHostGroup = useCallback(() => {
+    return getTileGroup()
+      .then((d) => setHostGroup(d || null))
+      .catch(() => setHostGroup(null))
   }, [])
 
   /* 拨一颗按钮。key ∈ fav|pin。乐观更新（立刻重排列表）→ 成功后用**后端回的最终状态**
-   * 覆盖（只拨一颗时另一项是「不动」，不回读就不知道它现在是什么）→ 失败整条退回。 */
+   * 覆盖（只拨一颗时另一项是「不动」，不回读就不知道它现在是什么）→ 失败整条退回。
+   *
+   * [CN-FORK] v0.5.2.166 **置顶改走主机**（用户：「置顶按钮在 PS5 里没有生效」）。
+   * `.164` 的置顶只写我们自己的 game_prefs.json，主机压根不知道 —— 真身是 app.db 的
+   * MyHome 组（tbl_group_<uid> 的 idx，就是主屏位置），见 include/tile_group.h 里的取证。
+   * 收藏仍然只落面板（它本来就是「面板列表的排序偏好」，与主机无关）。
+   *
+   * 置顶**同时**写两处，一处都不能少：
+   *   · 主机 tbl_group  —— 让 PS5 主屏真的把它固定到最前；
+   *   · 面板 prefs.pin  —— 让面板列表也把它排到最前（否则用户点完置顶，列表纹丝不动）。
+   * 主机那份失败时**不回滚面板那份**，而是把原因说出来：面板已经排到最前了，
+   * 用户看到的效果是对的；把面板也退回去只会让人以为「按钮坏了」。
+   *
+   * ⚠ 面板那份必须**真的落盘**（`setGamePrefs`），不能只改内存里的 prefs。
+   * 只改内存的话：点完置顶列表确实排到最前了，一刷新又退回去，而主机那份还钉着 ——
+   * 面板与主机各说各话，用户看到的是「置顶时灵时不灵」。 */
   const togglePref = useCallback(async (g, key) => {
     const cur = prefs[g.tid] || {}
     const next = !cur[key]
     setPrefs((m) => ({ ...m, [g.tid]: { ...cur, [key]: next } }))
     try {
+      if (key === 'pin') {
+        const r = await setTilePin(g.tid, next)
+        /* 面板那份落盘。失败**不**影响主机那份的结果（主机才是「PS5 里生效」的那一份），
+         * 所以这里单独 try：拿不到就沿用内存里已经拨好的状态。 */
+        let pf = null
+        try { pf = await setGamePrefs(g.tid, { pin: next }) } catch { pf = null }
+        setPrefs((m) => ({
+          ...m,
+          [g.tid]: { fav: pf ? !!pf.fav : !!(m[g.tid] || cur).fav, pin: next },
+        }))
+        loadHostGroup()
+        if (next) {
+          addToast?.(t('game.pin_added_host',
+            '已置顶：主机固定列表已写入（{{n}} 个账号 / 第 {{idx}} 位）。PS5 主屏要重启或待机唤醒后才重绘。',
+            { n: r?.accounts ?? 0, idx: r?.idx ?? 1 }))
+        } else {
+          addToast?.(t('game.pin_removed_host', '已取消置顶：主机固定列表已移除该条目'))
+        }
+        return
+      }
       const r = await setGamePrefs(g.tid, { [key]: next })
       setPrefs((m) => ({ ...m, [g.tid]: { fav: !!r?.fav, pin: !!r?.pin } }))
-      if (key === 'fav') {
-        addToast?.(next ? t('game.fav_added', '已收藏，已排到列表前面')
-                        : t('game.fav_removed', '已取消收藏'))
-      } else {
-        addToast?.(next ? t('game.pin_added', '已置顶，已固定在列表最前')
-                        : t('game.pin_removed', '已取消置顶'))
-      }
+      addToast?.(next ? t('game.fav_added', '已收藏，已排到列表前面')
+                      : t('game.fav_removed', '已取消收藏'))
     } catch (e) {
       setPrefs((m) => ({ ...m, [g.tid]: cur }))
       addToast?.(e?.message || t('game.pref_fail', '保存失败'), 'error')
     }
-  }, [prefs, addToast, t])
+  }, [prefs, addToast, t, loadHostGroup])
 
   const chooseSort = useCallback((mode) => {
     setSortMode(mode)
     localStorage.setItem('gameSortMode', mode)
   }, [])
 
-  /* 磁贴上的排序按钮：循环换档（default → name → size → default）。
-   * 每次换档给一条 toast —— 电视端没有 hover，光靠 title 看不见当前是哪一档。 */
-  const cycleSort = useCallback(() => {
-    const i = SORT_MODES.indexOf(sortMode)
-    const nx = SORT_MODES[(i + 1) % SORT_MODES.length]
-    chooseSort(nx)
-    addToast?.(t('game.sort_toast', '排序：{{mode}}', { mode: t(SORT_LABEL[nx].k, SORT_LABEL[nx].d) }))
-  }, [sortMode, chooseSort, addToast, t])
+  /* [CN-FORK] v0.5.2.164 列表排序：置顶 → 收藏 → **手工顺序** → 档位 → 原顺序。
+   * 前两级**恒定优先于**后面所有规则（用户：「收藏的游戏自动排到列表前面」）——
+   * 这条是上一轮定下的，不能因为这一轮加了拖拽就作废；排序模式的横幅里把这件事写出来。
+   * [CN-FORK] v0.5.2.166 手工顺序插在档位之前：拖拽是「我就要它排在第几位」，
+   * 比「按名字 / 按体积自动排」更具体，所以它赢。没被拖过的款（不在 order 里）
+   * 排在所有被拖过的款之后，内部仍按档位排。
+   * 末级用「后端给的原始下标」兜底：老 WebKit 上 sort 的稳定性不保证，
+   * 不兜底的话同名/同体积的两款会在每次重排时互相换位（看起来像随机跳动）。
+   *
+   * 定义位置刻意提到 enterSort 之前：进排序模式时要**照抄当前显示顺序**当草稿，
+   * 拿不到它就会用另一个顺序开局，用户点完「排序」会看到列表自己跳一下。 */
+  const orderedGames = useMemo(() => {
+    const arr = games || []
+    const idx = new Map(arr.map((g, i) => [g.tid, i]))
+    const opos = new Map(order.map((tid, i) => [tid, i]))
+    const noOrder = order.length + 1
+    return [...arr].sort((a, b) => {
+      const pa = prefs[a.tid] || {}
+      const pb = prefs[b.tid] || {}
+      if (!!pb.pin !== !!pa.pin) return pb.pin ? 1 : -1
+      if (!!pb.fav !== !!pa.fav) return pb.fav ? 1 : -1
+      const oa = opos.has(a.tid) ? opos.get(a.tid) : noOrder
+      const ob = opos.has(b.tid) ? opos.get(b.tid) : noOrder
+      if (oa !== ob) return oa - ob
+      if (sortMode === 'name') {
+        const c = (a.name || '').localeCompare(b.name || '', 'zh')
+        if (c !== 0) return c
+      } else if (sortMode === 'size') {
+        const d = (b.size || 0) - (a.size || 0)
+        if (d !== 0) return d
+      }
+      return (idx.get(a.tid) ?? 0) - (idx.get(b.tid) ?? 0)
+    })
+  }, [games, prefs, order, sortMode])
+
+  /* ── [CN-FORK] v0.5.2.166 拖拽排序模式 ────────────────────────────────────
+   * 用户口径：「排序按钮没有实现我想让排哪个位置就排哪个位置，而且您的位置也不好，
+   * 最好跟磁贴结合起来」。所以不是「再给一个档位」，而是**让用户直接指定位置**：
+   * 点磁贴上的 ⇅ → 整张列表进入排序模式 → 拖动磁贴（或按上/下箭头）→ 点「完成」提交。
+   *
+   * 进模式时把当前**显示顺序**抄成 draft：用户看到的第 1 个就是第 1 位，
+   * 不会因为「显示顺序是 pin→fav→档位算出来的」而在进模式那一刻突然重排。 */
+  const enterSort = useCallback(() => {
+    setDraft(orderedGames.map((x) => x.tid))
+    setDragTid('')
+    setSorting(true)
+    loadHostGroup()
+    try { listTopRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }) } catch { /* 老内核可能不支持，忽略 */ }
+  }, [orderedGames, loadHostGroup])
+
+  const exitSort = useCallback(() => {
+    setSorting(false)
+    setDraft([])
+    setDragTid('')
+  }, [])
+
+  /* 上移 / 下移 / 移到最前。delta 是数字（±1）或字符串 'top'。 */
+  const moveDraft = useCallback((tid, delta) => {
+    setDraft((d) => {
+      const from = d.indexOf(tid)
+      if (from < 0) return d
+      if (delta === 'top') return moveTid(d, from, 0)
+      return moveTid(d, from, from + delta)
+    })
+  }, [])
+
+  /* 拖拽落点。HTML5 DnD 的 dragover 必须 preventDefault，否则不会触发 drop ——
+   * 这是「拖了没反应」最常见的原因。 */
+  const onCardDragOver = useCallback((ev) => {
+    if (ev && typeof ev.preventDefault === 'function') ev.preventDefault()
+  }, [])
+  const onCardDrop = useCallback((targetTid) => {
+    setDraft((d) => {
+      if (!dragTid || dragTid === targetTid) return d
+      const from = d.indexOf(dragTid)
+      const to = d.indexOf(targetTid)
+      if (from < 0 || to < 0) return d
+      return moveTid(d, from, to)
+    })
+    setDragTid('')
+  }, [dragTid])
+
+  /* 提交。**一次落两处**（后端 /tile_group_order 自己会分两半做）：
+   *   ① 主机 app.db 的 MyHome 组 —— 主屏位置；② 面板 game_prefs.json 的 order。
+   * 后端对主机那份是刻意保守的：只有「在 order 里**且**当前就在 MyHome 组里」的条目会动，
+   * 它们占的那几个槽位不变，只是按 order 给的先后重新分配；没被提到的条目一个字节都不动
+   * （理由见 include/tile_group.h —— 整体重写 idx 等于把没列到的游戏也一起固定进主屏）。
+   * 所以这里把**全部** tid 都发过去是安全的：不在组里的会被安静忽略。
+   *
+   * 响应里的 host_ok=false **不是失败**：面板顺序已经存下了，只是主机那半没写成
+   * （比如库里根本没有 tbl_group 表）。那种情况必须说出来，不能又报一句「已保存」。 */
+  const saveOrder = useCallback(async () => {
+    setSavingOrder(true)
+    try {
+      const r = await setTileOrder(draft)
+      setOrder(draft)
+      loadHostGroup()
+      if (r && r.host_ok === false) {
+        addToast?.(t('game.order_saved_host_fail',
+          '面板顺序已保存，但主机固定列表没写进去：{{why}}',
+          { why: (r && r.message) || t('game.rename_host_fail_unknown', '原因见主机日志') }), 'error')
+      } else {
+        addToast?.(t('game.order_saved', '顺序已保存（主机固定列表更新 {{n}} 项）', { n: (r && r.moved) || 0 }))
+      }
+      exitSort()
+    } catch (e) {
+      addToast?.(e?.message || t('game.order_save_fail', '保存顺序失败'), 'error')
+    }
+    setSavingOrder(false)
+  }, [draft, addToast, t, exitSort, loadHostGroup])
 
   /* 进页面拉一次 + 手动刷新，不轮询（原因见文件头）。
    * react-hooks/set-state-in-effect 对「effect 里同步调用一个内含 setState 的函数」一律报错，
@@ -425,29 +703,10 @@ export default function GameSection({ addToast, showConfirm, config }) {
 
   const list = games || []
 
-  /* [CN-FORK] v0.5.2.164 列表排序：置顶 → 收藏 → 档位 → 原顺序。
-   * 前两级**恒定优先于档位**（用户：「收藏的游戏自动排到列表前面」）——
-   * 切档只影响其余那些既没收藏也没置顶的游戏。
-   * 末级用「后端给的原始下标」兜底：老 WebKit 上 sort 的稳定性不保证，
-   * 不兜底的话同名/同体积的两款会在每次重排时互相换位（看起来像随机跳动）。 */
-  const orderedGames = useMemo(() => {
-    const arr = games || []
-    const idx = new Map(arr.map((g, i) => [g.tid, i]))
-    return [...arr].sort((a, b) => {
-      const pa = prefs[a.tid] || {}
-      const pb = prefs[b.tid] || {}
-      if (!!pb.pin !== !!pa.pin) return pb.pin ? 1 : -1
-      if (!!pb.fav !== !!pa.fav) return pb.fav ? 1 : -1
-      if (sortMode === 'name') {
-        const c = (a.name || '').localeCompare(b.name || '', 'zh')
-        if (c !== 0) return c
-      } else if (sortMode === 'size') {
-        const d = (b.size || 0) - (a.size || 0)
-        if (d !== 0) return d
-      }
-      return (idx.get(a.tid) ?? 0) - (idx.get(b.tid) ?? 0)
-    })
-  }, [games, prefs, sortMode])
+  /* tid → 游戏。排序模式按 draft（**tid 数组**）取卡片，靠的就是这张表。
+   * draft 存 tid 而不是下标，是因为列表随时可能因为刷新 / 体积预热补齐而变长，
+   * 下标会指到别的游戏上（拖完一次顺序全乱）。 */
+  const gamesByTid = useMemo(() => new Map((games || []).map((g) => [g.tid, g])), [games])
 
   /* 动作分发：四颗按钮各自开自己的弹窗。用一张表而不是 switch，
    * 以后加第五颗（第四个位置定下来时）只改这里一行。 */
@@ -532,30 +791,70 @@ export default function GameSection({ addToast, showConfirm, config }) {
           <>
             {/* 磁贴可点开详情这件事没有任何视觉暗示的话，用户不会去点。
                 一行说明比在每个磁贴上盖一个「详情」角标省地方得多。 */}
-            <p className="text-[11px] text-zinc-500 flex items-center gap-1.5">
-              <Info className="w-3.5 h-3.5 shrink-0" />
-              <span>{t('game.tile_hint', '点磁贴查看游戏详情（详情里只能看信息，挂载 / 卸载 / 删除源请到 ShadowMount 后台）；磁贴上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能。')}</span>
-            </p>
-            {/* [CN-FORK] v0.5.2.164 排序档位（用户：「实行这个磁贴列表显示排序」）。
-                与磁贴右下那颗 ⇅ 按钮是同一个状态 —— 这里给可发现性，那里给就近操作。 */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] text-zinc-500 font-medium">{t('game.sort_by', '排序')}</span>
-              <Segmented
-                label={t('game.sort', '排序')}
-                value={sortMode}
-                onChange={chooseSort}
-                options={SORT_MODES.map((m) => ({ value: m, label: t(SORT_LABEL[m].k, SORT_LABEL[m].d) }))}
-              />
-              <span className="text-[11px] text-zinc-500">
-                {t('game.pref_hint', '磁贴下排三颗按钮：★ 收藏、📌 置顶、⇅ 排序。收藏与置顶的会排在列表最前。')}
-              </span>
-            </div>
+            {!sorting && (
+              <p className="text-[11px] text-zinc-500 flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5 shrink-0" />
+                <span>{t('game.tile_hint', '点磁贴查看游戏详情（详情里只能看信息，挂载 / 卸载 / 删除源请到 ShadowMount 后台）；磁贴上的四颗按钮分别是存档管理、多媒体管理、名称与背景、待定功能。')}</span>
+              </p>
+            )}
+
+            {/* [CN-FORK] v0.5.2.166 排序模式的操作条。做成一条**常驻横幅**而不是一个小开关，
+                是因为进入这个模式之后整页的交互都变了（磁贴不能点开详情、下排变成上下箭头），
+                没有一个显眼的地方说明「现在在排序模式」的话，用户会以为面板坏了。
+                「完成」是唯一提交入口（见 saveOrder），「取消」整份丢掉草稿。 */}
+            {sorting ? (
+              <div className="rounded-xl border border-ps-blue/40 bg-ps-blue/10 p-3 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[13px] font-bold text-ps-blue">
+                    {t('game.sort_mode', '排序模式')}
+                  </span>
+                  <span className="text-[11px] text-zinc-400">
+                    {t('game.sort_mode_hint', '拖动磁贴到想要的位置，或用磁贴下排的 ↑ ↓ 按钮（遥控器用这个）；左上角是位置号。')}
+                  </span>
+                  <div className="ml-auto flex items-center gap-2">
+                    <button type="button" className="btn btn-primary" disabled={savingOrder} onClick={saveOrder}>
+                      <Check className="w-4 h-4" />
+                      <span>{savingOrder ? t('game.saving', '保存中…') : t('game.sort_done', '完成')}</span>
+                    </button>
+                    <button type="button" className="btn btn-ghost" disabled={savingOrder} onClick={exitSort}>
+                      <X className="w-4 h-4" />
+                      <span>{t('game.tile_cancel', '取消')}</span>
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-zinc-500 leading-relaxed">
+                  {t('game.sort_mode_note', '顺序会一次落两处：面板列表的顺序 + 主机 app.db 里「主屏固定列表」（MyHome 组）的位置。主机那份只有**已经在主屏固定列表里**的游戏会被重排，其余不动。★ 收藏、📌 置顶的磁贴始终排在最前，不参与这里的先后。')}
+                </p>
+                {hostGroup && hostGroup.ok === false && (
+                  <p className="text-[11px] text-amber-400 leading-relaxed">
+                    {t('game.sort_host_unavailable', '主机固定列表读不到（{{why}}），这次只会保存面板顺序。',
+                      { why: hostGroup.note || t('game.rename_host_fail_unknown', '原因见主机日志') })}
+                  </p>
+                )}
+              </div>
+            ) : (
+              /* [CN-FORK] v0.5.2.164 排序档位（用户：「实行这个磁贴列表显示排序」）。
+                 它只管「按什么规则自动排」，与磁贴上的 ⇅（手工指定位置）是两件事，
+                 所以两句说明要分开写清楚，不然用户会以为档位就是那个排序按钮。 */
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-zinc-500 font-medium">{t('game.sort_by', '排序')}</span>
+                <Segmented
+                  label={t('game.sort', '排序')}
+                  value={sortMode}
+                  onChange={chooseSort}
+                  options={SORT_MODES.map((m) => ({ value: m, label: t(SORT_LABEL[m].k, SORT_LABEL[m].d) }))}
+                />
+                <span className="text-[11px] text-zinc-500">
+                  {t('game.pref_hint', '磁贴下排三颗按钮：★ 收藏、📌 置顶、⇅ 排序（手工指定位置）。收藏与置顶的会排在列表最前。')}
+                </span>
+              </div>
+            )}
             {/* [CN-FORK] v0.5.2.100 用户指令「磁贴再小三分之一，变成自适应，屏幕宽就多放几个、
                窄就少放几个，不要固定四个」：原来是 grid-cols-2 / sm:3 / lg:4，宽屏永远卡在 4 列，
                一块磁贴 ≈355px。现在列宽下限交给 --tile-w（PC 262.5 / 电视 375，v0.5.2.114 又 ×1.25），
                列数由容器自己算。 */}
-            <div className="tile-grid">
-              {orderedGames.map((g) => (
+            <div className="tile-grid" ref={listTopRef}>
+              {(sorting ? draft.map((tid) => gamesByTid.get(tid)).filter(Boolean) : orderedGames).map((g, i) => (
                 <GameCard
                   key={g.tid}
                   g={g}
@@ -566,8 +865,16 @@ export default function GameSection({ addToast, showConfirm, config }) {
                   pref={prefs[g.tid]}
                   onToggleFav={(x) => togglePref(x, 'fav')}
                   onTogglePin={(x) => togglePref(x, 'pin')}
-                  onCycleSort={cycleSort}
+                  onEnterSort={enterSort}
                   sortLabel={t(SORT_LABEL[sortMode].k, SORT_LABEL[sortMode].d)}
+                  sorting={sorting}
+                  pos={i}
+                  total={sorting ? draft.length : orderedGames.length}
+                  onMove={moveDraft}
+                  dragging={sorting && dragTid === g.tid}
+                  onDragStart={() => setDragTid(g.tid)}
+                  onDragOver={onCardDragOver}
+                  onDrop={() => onCardDrop(g.tid)}
                 />
               ))}
             </div>

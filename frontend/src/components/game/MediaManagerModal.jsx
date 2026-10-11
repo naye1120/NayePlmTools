@@ -80,6 +80,24 @@ const triggerPackDownload = (jobId, name) => {
   document.body.removeChild(a)
 }
 
+/* [CN-FORK] v0.5.2.166 分享二维码要装的是**绝对地址**。
+ *
+ * 旧版把 window.location.href（也就是面板首页）塞进二维码 —— 用户扫出来是「打开面板」，
+ * 而他要的是「扫完直接下载这一份」。改成本面板的下载端点之后，端点本身是相对路径
+ * （gameApi.js 的约定：所有路径都是相对当前源），**相对路径不能进二维码**：
+ * 手机扫出来会当成「手机自己这台机器的 /game_media_file…」，必然打不开。
+ * 所以统一在这里补上 origin，与地址栏同源（同一台主机、同一个端口）。
+ *
+ * 用字符串拼而不是 `new URL(path, base)`：PS5 的 WebKit 虽然支持 URL 构造器，
+ * 但这几行是给二维码用的，越少依赖越好（老内核上 URL 解析的边界行为不值得赌）。 */
+const absUrl = (path) => {
+  if (!path) return ''
+  if (/^https?:\/\//i.test(path)) return path
+  const origin = (typeof window !== 'undefined' && window.location && window.location.origin) || ''
+  if (!origin) return path
+  return path.charAt(0) === '/' ? origin + path : `${origin}/${path}`
+}
+
 export default function MediaManagerModal({ show, game, onClose, addToast, showConfirm }) {
   const { t } = useTranslation()
   const tid = game && game.tid
@@ -93,8 +111,9 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
   const [busyId, setBusyId] = useState('')
   /* [CN-FORK] v0.5.2.125 取帧失败的视频 id（退回后端占位图），见网格里那段注释。 */
   const [coverBad, setCoverBad] = useState(() => new Set())
-  /* [CN-FORK] v0.5.2.163 分享二维码：{url, title} | null。
-   * url 用 window.location.href（与地址栏一致），title 给二维码卡片一个标题。
+  /* [CN-FORK] v0.5.2.163 分享二维码：{url, title, name?, busy?} | null。
+   * [CN-FORK] v0.5.2.166 url 从 window.location.href 换成**下载直链**（见 shareItems）：
+   * 扫完要能直接下载，而不是再打开一个面板。busy=true 是多份分享在等打包的那一段。
    * 挂在 state 里而不是单独一个 Modal：Modal 自身堆栈 + 多媒体这个 Modal 已经占了 1000，
    * 这里用 inline 浮层更省事（z 1100 与 Lightbox 同档）。 */
   const [sharing, setSharing] = useState(null)
@@ -191,13 +210,20 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
     return n
   })
 
-  /* 打包：ids 传 null = 全量。任务完成后 packed 记下 job_id，供 mediaPackUrl 用。 */
-  const startPack = async (ids) => {
+  /* 打包：ids 传 null = 全量。任务完成后 packed 记下 job_id，供 mediaPackUrl 用。
+   *
+   * [CN-FORK] v0.5.2.166 拆出 `runPack` 并返回 Promise，因为「分享」也要走这条打包路：
+   * 多选/全量分享的二维码必须指向**一个已经存在的 zip**（/game_media_pack_get?job=N
+   * 在包没好时回 409），所以分享按钮得先等打包完成、拿到 job_id，再把链接放进二维码。
+   * 两条路的差别只有一处：autoDownload。下载按钮要顺带下载（.131 的行为，保留），
+   * 分享按钮**不该**在面板上也下一份 —— 用户点的是「分享」，主机自己下一份只会让人
+   * 以为点错了。 */
+  const runPack = (ids, { autoDownload = true } = {}) => new Promise((resolve, reject) => {
     setPacked(null)
-    try {
-      const r = await packMedia(tid, ids)
+    packMedia(tid, ids).then((r) => {
       if (!r || !r.job_id) {
         addToast?.(t('game.pack_started', '打包已开始'), 'success')
+        reject(new Error(t('game.pack_no_job', '主机没有返回任务号')))
         return
       }
       setJob({ job_id: r.job_id, phase: 'preparing', percent: 0, active: true, done: false })
@@ -222,14 +248,74 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
             setPacked({ job_id: r.job_id, count, name: st.name || '' })
             /* 一完成就自动下载：不用等用户去找那颗按钮（.131）。全量与选中两条路都走
              * 到这里，所以一处改动两个按钮都生效。 */
-            triggerPackDownload(r.job_id, st.name || '')
-            addToast?.(t('game.pack_auto_downloading', '打包完成，正在下载（{{n}} 项）', { n: count }), 'success')
+            if (autoDownload) {
+              triggerPackDownload(r.job_id, st.name || '')
+              addToast?.(t('game.pack_auto_downloading', '打包完成，正在下载（{{n}} 项）', { n: count }), 'success')
+            }
+            resolve({ job_id: r.job_id, name: st.name || '', count })
+          } else {
+            if (st.error && !st.transient) addToast?.(t('game.pack_fail', '打包失败：{{why}}', { why: st.error }), 'error')
+            reject(new Error(st.error || t('game.pack_fail_generic', '打包失败')))
           }
-          else if (st.error && !st.transient) addToast?.(t('game.pack_fail', '打包失败：{{why}}', { why: st.error }), 'error')
         }
       })
-    } catch (e) {
+    }).catch((e) => {
       addToast?.(e.message || t('game.pack_fail_generic', '打包失败'), 'error')
+      reject(e)
+    })
+  })
+
+  const startPack = (ids) => { runPack(ids).catch(() => { /* runPack 自己已经报过了 */ }) }
+
+  /* [CN-FORK] v0.5.2.166 分享 —— 二维码里装的必须是**下载直链**。
+   *
+   * 用户原话：「分享的二维码内容不对，我需要扫描后直接下载分享的内容。」
+   * 旧版塞的是 window.location.href（面板首页），扫出来只是又打开一个面板。
+   *
+   * 两种分享各自对应一条**已经存在**的下载端点：
+   *   · 一份      → /game_media_file?id=&dl=1&tid=   （后端下发同名 Content-Disposition）
+   *   · 多份/全量 → /game_media_pack_get?job=N       （zip；必须先打包，见 runPack）
+   *
+   * 单份刻意**不走打包**：为一张图去开一个全局单槽的后台任务，既慢又会跟用户
+   * 同时在做的打包撞 409。一份就直接给文件直链。
+   *
+   * 多份要先打包，所以这里是一个 async 流程：先把分享浮层开起来显示「正在打包」，
+   * 拿到 job_id 再把链接填进去 —— 用户点完立刻有反馈，不会对着没反应的按钮发懵。
+   * `ids === null` 表示全量（与打包按钮同口径）。 */
+  const shareItems = async (ids, title) => {
+    const list = ids === null ? items : items.filter((i) => ids.includes(i.id))
+    if (list.length === 0) return
+
+    if (list.length === 1) {
+      const it = list[0]
+      setSharing({
+        title,
+        url: absUrl(mediaFileUrl(it.id, { dl: 1, tid })),
+        name: it.dlname || it.name || '',
+      })
+      return
+    }
+
+    /* 已经有打好的包且就是这一批 → 直接用，不重打（重复打一次要几十秒，还会把
+     * 上一份产物删掉）。packed 只在「刚刚成功打完」时存在，够用了。 */
+    if (packed && packed.count === list.length && packed.job_id) {
+      setSharing({
+        title,
+        url: absUrl(mediaPackUrl(packed.job_id)),
+        name: packed.name || '',
+      })
+      return
+    }
+
+    setSharing({ title, busy: true, url: '', name: '' })
+    try {
+      const r = await runPack(list.map((i) => i.id), { autoDownload: false })
+      if (!aliveRef.current) return
+      setSharing({ title, url: absUrl(mediaPackUrl(r.job_id)), name: r.name || '' })
+    } catch (e) {
+      if (!aliveRef.current) return
+      setSharing(null)
+      addToast?.(e.message || t('game.share_pack_fail', '打包失败，无法分享'), 'error')
     }
   }
 
@@ -280,16 +366,16 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
               <Download className="w-4 h-4" />
               <span>{t('game.pack_selected', '打包下载选中（{{n}}）', { n: selCount })}</span>
             </button>
-            {/* [CN-FORK] v0.5.2.163 分享：弹二维码，链接走 window.location.href
-                （与地址栏一致：同一面板下、指向同一台主机的同一份资源）。 */}
+            {/* [CN-FORK] v0.5.2.166 分享：二维码里是**下载直链**，扫码即下载。
+                一份 = 文件直链；多份 = 先打包再给 zip 直链（shareItems 里分派）。 */}
             <button
               type="button"
               className="btn btn-outline"
               disabled={selCount === 0 || packing}
-              onClick={() => setSharing({
-                url: window.location.href,
-                title: t('game.share_selected_title', '分享选中（{{n}}）', { n: selCount }),
-              })}
+              onClick={() => shareItems(
+                Array.from(sel),
+                t('game.share_selected_title', '分享选中（{{n}}）', { n: selCount }),
+              )}
             >
               <Share2 className="w-4 h-4" />
               <span>{t('game.share_selected', '分享选中')}</span>
@@ -303,15 +389,15 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
               <PackageOpen className="w-4 h-4" />
               <span>{t('game.pack_all', '全量打包下载')}</span>
             </button>
-            {/* 全量打包的分享：链接也走 window.location.href（面板同源）。 */}
+            {/* 全量分享：二维码指向**全量 zip 的下载直链**（先打包再出码）。 */}
             <button
               type="button"
               className="btn btn-outline"
               disabled={items.length === 0 || packing}
-              onClick={() => setSharing({
-                url: window.location.href,
-                title: t('game.share_all_title', '分享全部 ({{n}})', { n: items.length }),
-              })}
+              onClick={() => shareItems(
+                null,
+                t('game.share_all_title', '分享全部 ({{n}})', { n: items.length }),
+              )}
             >
               <Share2 className="w-4 h-4" />
               <span>{t('game.share_all', '分享全部')}</span>
@@ -576,7 +662,7 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
           onIndex={setPreview}
           onClose={() => setPreview(null)}
           onDelete={onDeleteOne}
-          onShare={setSharing}
+          onShare={(it) => shareItems([it.id], it.name || it.id)}
           busyId={busyId}
           tid={tid}
           t={t}
@@ -585,12 +671,15 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
 
       {/* ── 分享二维码浮层 ──
           z-[1100] 同 Lightbox 档：用户切到 lightbox 又点「分享」也能浮上来。
-          链接直接来自 window.location.href（用户口径：「根据地址栏的访问内容而确定」），
-          与浏览器当下的 URL 完全一致 —— 即同一台主机、同一份 id、当前正在访问的资源。 */}
+          [CN-FORK] v0.5.2.166 二维码里装的是**下载直链**（单份 → /game_media_file?id&dl=1，
+          多份/全量 → /game_media_pack_get?job=N），扫完直接下载，不再只是打开面板。
+          多份那条要先打包，所以中间有 busy 那一段（浮层先开、打包完再填码）。 */}
       {sharing && (
         <ShareQrModal
           url={sharing.url}
           title={sharing.title}
+          name={sharing.name}
+          busy={sharing.busy}
           onClose={() => setSharing(null)}
           t={t}
         />
@@ -600,8 +689,14 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
 }
 
 /* 分享二维码弹层 —— 不是 Modal 组件是因为它要叠在 Lightbox 之上（同一档 z），
- * 而通用 Modal 那一层栈对额外嵌一层有点重。inline div + close-on-backdrop 够用。 */
-function ShareQrModal({ url, title, onClose, t }) {
+ * 而通用 Modal 那一层栈对额外嵌一层有点重。inline div + close-on-backdrop 够用。
+ *
+ * [CN-FORK] v0.5.2.166 两种形态：
+ *   busy=true  —— 多份分享正在打包，码还没法生成（要等 job_id）。这一段显示转圈与
+ *                 「正在打包…」；没有它的话用户点完「分享选中（12）」会对着一个
+ *                 没有二维码的空浮层发呆，而打包可能要几十秒。
+ *   正常       —— 二维码 + 直链 + 落盘文件名。 */
+function ShareQrModal({ url, title, name, busy, onClose, t }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
     window.addEventListener('keydown', onKey, true)
@@ -635,20 +730,38 @@ function ShareQrModal({ url, title, onClose, t }) {
             <X className="w-4 h-4" />
           </button>
         </div>
-        <div className="flex justify-center bg-white p-4 rounded-xl">
-          <QRCodeSVG value={url} size={220} level="H" />
-        </div>
-        <div className="space-y-1.5">
-          <p className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold">
-            {t('game.share_url_label', '链接')}
-          </p>
-          <p className="text-xs text-zinc-400 break-all font-mono leading-relaxed bg-black/30 rounded-lg p-2 select-all">
-            {url}
-          </p>
-        </div>
-        <p className="text-[11px] text-zinc-500 leading-relaxed">
-          {t('game.share_hint', '用手机扫码即可在浏览器里打开本页（同地址栏指向的资源）。')}
-        </p>
+
+        {busy ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-12 text-zinc-400">
+            <RefreshCw className="w-6 h-6 animate-spin text-ps-blue" />
+            <span className="panel-note">{t('game.share_preparing', '正在打包，请稍候…')}</span>
+            <span className="panel-tiny text-zinc-500 text-center leading-relaxed">
+              {t('game.share_preparing_note', '多份内容要先打成一个压缩包，打包完成后这里会显示二维码。')}
+            </span>
+          </div>
+        ) : (
+          <>
+            <div className="flex justify-center bg-white p-4 rounded-xl">
+              <QRCodeSVG value={url} size={220} level="H" />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold">
+                {t('game.share_url_label', '下载链接')}
+              </p>
+              <p className="text-xs text-zinc-400 break-all font-mono leading-relaxed bg-black/30 rounded-lg p-2 select-all">
+                {url}
+              </p>
+              {name ? (
+                <p className="panel-tiny text-zinc-500 truncate" title={name}>
+                  {t('game.share_filename', '文件：{{name}}', { name })}
+                </p>
+              ) : null}
+            </div>
+            <p className="text-[11px] text-zinc-500 leading-relaxed">
+              {t('game.share_hint', '手机扫码即可直接下载这份内容（手机需与主机在同一局域网）。')}
+            </p>
+          </>
+        )}
       </div>
     </div>
   )
@@ -718,13 +831,15 @@ function Lightbox({ items, index, onIndex, onClose, onDelete, onShare, busyId, t
           >
             <Download className="w-4 h-4" />
           </a>
-          {/* [CN-FORK] v0.5.2.163 单文件分享：链接走 window.location.href。 */}
+          {/* [CN-FORK] v0.5.2.166 单文件分享：二维码指向**这一份的下载直链**
+              （/game_media_file?id&dl=1&tid），扫完直接下载，不再是面板首页。
+              URL 由父层的 shareItems 统一拼（要补 origin，见 absUrl）。 */}
           <button
             type="button"
             className="icon-btn"
             title={t('game.media_share', '分享')}
             aria-label={t('game.media_share', '分享')}
-            onClick={() => onShare?.({ url: window.location.href, title: it.name || it.id })}
+            onClick={() => onShare?.(it)}
           >
             <Share2 className="w-4 h-4" />
           </button>

@@ -1,3 +1,137 @@
+## v0.5.2.166 (CN-FORK) — 2026-10-11
+
+> 用户口径（本批七条，原文）：
+> 「背景音乐改动没有生效，应该转换成 ac9 格式，置顶按钮在 ps5 里面没有生效，排序按钮没有实现我想让排哪个
+>   位置就排哪个位置，而且啊您的位置也不好，最好跟磁贴结合起来，分享的二维码内容不对，我需要扫描后直接
+>   下载分享的内容。日志同一个日期，只写一个就行，内容再下边排版。修改名称的布局用这样的。」
+> 两处方案由用户当场选定：背景音乐走**「浏览器里转」**；排序走**「拖拽排序模式」**。
+
+**这一批五条里，前三条是同一个病**：`.163` / `.164` 的实现**都做了、都没做在主机认的那个地方**。
+面板上的开关会亮、会提示「已应用」，主机侧一个字节都没变 —— 而 PS5 主屏只读主机那份。所以用户看到的是
+「没生效」，实际是「改的是另一个文件」。第四条（分享二维码）是链接拼错了对象；第五条是排版。
+
+### ① 背景音乐 → ATRAC9，写进游戏包的 `sce_sys/snd0.at9`
+**根因**：PS5 主屏磁贴音乐**只认 ATRAC9**。`.163` 把 mp3 / ogg / wav 原文件落到面板自己的
+`/data/nayeplmtools/music/<TID>` 就报「已应用」—— 那个目录主机从来没读过。
+真载体是游戏包里的 `sce_sys/snd0.at9`：RIFF/WAVE 容器里的 ATRAC9 流，2ch / 48kHz / 192 kb/s，
+**上限 2,097,152 字节**；响度写在 `sce_sys/param.json` 的 `pubtools.loudnessSnd0`。
+
+- **两份落点，语义分开**：面板那份（预览 / 回放用，仍落 `/data/nayeplmtools/music/<TID>`）+
+  主机那份（真载体，`<game>/sce_sys/snd0.at9` + `param.json` 的 `loudnessSnd0`）。`POST /game_music`
+  与新增的 `POST /game_music_at9` 两条路都写主机；`POST /game_music_reset` 把主机那份一起还原
+  （原 `snd0.at9` 先备份成 `snd0.at9.orig` 再动，失败可回退）。
+- **转码器**：ATRAC9 **没有开源 C 编码器**，唯一可用实现是 `blackbearreloaded/ps5-at9-converter`
+  （纯 Python + numpy，GPL-3.0-or-later）。移植成**零依赖 ESM**（`frontend/src/utils/atrac9/`：
+  `tables.js` / `dsp.js` / `encoder.js` / `container.js` / `index.js` / `worker.js`），
+  由 `tools/atrac9_js_check.mjs` 与 Python 参考**逐字节比对**通过（`RESULT: PASS snr=50.79 dB`）。
+- **在浏览器里转**（用户选的方案）：`frontend/src/utils/at9Encode.js` 包一层 Web Worker。
+  ⚠ Worker **必须 `?worker&inline`** —— 产物是**单文件 HTML**，普通 Worker 会被打成独立 chunk，
+  真机上必然 404。实测 0.25 秒音频约 113ms，界面上给「正在编码 ATRAC9」的进度提示。
+- **`.at9` 快路径**：上传的本来就是 `.at9` 时不重编码，只写主机那份（提示「已读取 .at9」）。
+- **失败必须出声**：主机写失败时**不许**报成功 toast，弹窗里出红字并给原因；响度实测值一路显示到提交处。
+
+### ② 置顶 → 写真载体 `app.db` 的 `tbl_group_<uid>`
+**根因**：PS5 主屏「固定列表」的真身是系统 `app.db` 里的 `tbl_group_<uid>`（`groupName='MyHome'`，
+`itemId` = tid，**`idx` 就是主屏位置**；真机取证见 `include/tile_group.h` 文件头）。
+`.164` 的置顶只改了面板自己的 `game_prefs.json`，主机那份纹丝没动 —— PS5 里当然「没生效」。
+
+- 新增 `include/tile_group.h` / `src/tile_group.c`，三条路由：`GET /tile_group`（读主屏固定列表）、
+  `POST /tile_group_pin`（置顶 / 取消）、`POST /tile_group_order`（按给定顺序重排已固定项）。
+- 置顶 = 把该 tid 插到 MyHome 组第 1 位、**其余重新编号 1..N**（不留空洞、不撞号）；取消置顶 = 摘掉
+  它再把后面的往前收。**游戏也能置顶**（原 `.164` 只允许内置软件）。
+- 前端 `loadHostGroup()` 把主机那份读回来做显示依据 —— 面板那份（`game_prefs.json`）只当**本地列表
+  排序**用，两者不再互相冒充。写主机失败时前端出红字、并把面板那份退回原状（不许「面板说改了、
+  主机没改」）。
+
+### ③ 排序 → 拖拽，与磁贴结合
+**根因**：`.164` 的「排序」只是一个**循环档位**（点一下换个名次），用户要的是「排哪个位置就排哪个位置」。
+
+- 点「排序」**进入排序模式**：磁贴左上角显示**位置号 1..N**，直接**拖拽互换**，松手即写主机；
+  电视端遥控器用**上移 / 下移 / 移到最前**兜底（下排三颗）。
+- 排序模式里**详情热区与四颗动作按钮整组不渲染** —— 否则拖磁贴必然误触进详情。
+- 「取消」整份丢掉（一个字节不写）；「完成」才落地：面板 `game_prefs.order` + 主机 `tbl_group` 顺序。
+- **`tile_group_reorder` 的语义刻意保守**（逐行对齐 `tg_order_cb`）：只有「出现在 order 里**且**当前就在
+  MyHome 组里」的条目会动；**槽位池 = 这些条目自己占的 idx**（不是整组的 idx）；少于 2 条命中直接早退
+  （`if (ns < 2) return 0;`）；没被提到的条目一个字节都不动。**抄错这一步的后果不是「结果差一点」，
+  而是 `idx` 撞号** —— 真机上两条磁贴同时拿 `idx=1`，主屏顺序随机。
+
+### ④ 分享二维码 → 扫码**直接下载**
+**根因**：`.165` 的二维码内容是**面板里那个资源页的地址**，扫完是打开页面、还得再点一次下载。
+用户要的是扫完就下。
+- 单份 → `/game_media_file?id=&dl=1&tid=`（响应带 `Content-Disposition: attachment`）。
+- 多份 / 全量 → 先出「正在打包，请稍候」，打包完给 `/game_media_pack_get?job=N`
+  （`content-type: application/zip`）。
+- 链接一律按**当前地址栏**拼（`absUrl`），主机上 `127.0.0.1`、PC 上 `192.168.x.x` 零配置都对。
+
+### ⑤ 更新日志：同一天只写一个日期
+「关于」页的更新日志原是一个扁平数组、每条自己带 `2026-10-11 · xxx` 前缀，**同一天被印了 8 遍**，
+看着像 8 个版本。改成**按日期分组**（`{ date, items[] }`）：日期只出现一次做标题（琥珀色），
+条目排在它下面；没有 `date` 的能力清单组用 `title` 当标题（蓝色）区分。同一天的新内容往同一个
+`items` 里加。
+
+### ⑥ 「修改名称」弹窗改成截图版式
+磁贴图标 = **左侧小方图预览 + 右侧说明与按钮**（原来预览占满整列）；游戏名称与「保存名称」**同一行**；
+背景音乐带**内嵌播放器**（播放 / 时长 / 进度 / 音量）；三层的「应用 / 取消」按钮**竖排全宽**。
+
+### 顺手修掉的四个真 bug（都是「看起来做了、其实没落地」这一类）
+1. **`q()` 无条件追加 `_=Date.now()`，让资源 URL 每次渲染都是新字符串。**
+   `gameApi.js` 的 `q()` 给**所有** query 追加时间戳 —— 对 JSON 接口是对的（绕缓存），但
+   `<img src>` / `<audio src>` 这类**资源** URL 每次渲染都变成新串，后果有两层：① 缓存彻底失效，
+   每次都重新下载；② 更要命的是拿它当「值变了没有」的判据时**永远不相等** ——
+   `RenameModal` 正是拿 `musicSrc !== loadedMusicSrc` 做渲染期比较来重置播放器的，于是**每渲染一次
+   就 setState 一次**，直接撞上 React 的 `Too many re-renders`（同一个 key 还挂在 `<audio key={musicSrc}>`
+   上，在名称框里打字都会重置播放器）。新增 **`qa()`**（同 `q()` 但不加时间戳），把 7 个**资源** URL
+   构造器切过去（`mediaThumbUrl` / `mediaFileUrl` / `mediaPackUrl` / `tileIconUrl` / `tileBackgroundUrl` /
+   `tileBackgroundDdsUrl` / `gameMusicUrl`）。资源破缓存**本来就有**显式 `&v=${ver}`。
+   判据：**内容随 id 定死、靠 `v=` 手动破缓存**的走 `qa()`；内容会随时间变的下载端点（存档下载）继续走 `q()`。
+2. **`musicInfo` 单独存 state，而提交处读的是暂存那份的 `info`。**
+   响度实测值只喂给界面那行「已编码：… 响度 … LUFS」，`applyStaged` 里的 `cur.info` 永远是 `undefined`
+   —— `lufs` 一路是**空串**，主机那份 `param.json` 的 `loudnessSnd0` **一次都没写过**，
+   而界面上响度那行显示得好好的。改成跟着 `staged.music.info` 走（显示与提交**同源**）。
+3. **`togglePref` 的置顶分支只改内存、不落盘。** 点完列表排到最前了，一刷新退回去，而主机那份还钉着。
+   补上 `setGamePrefs`（面板那份必须真的落盘）。写失败**不**影响主机那份的结果（主机才是「PS5 里生效」
+   的那一份），所以单独 try。
+4. **`layerName` 只有两档，音乐层被 `else` 吞成「磁贴背景」。**
+   `.163` 只有 图标 / 背景 两层，写成「是 icon 就图标、否则就是背景」；`.166` 加了音乐层之后，
+   音乐块的「应用 / 取消」与背景块**可访问名一模一样** —— 纯静默 bug，界面上看不出任何异样，
+   读屏与自动化分不出是哪一层。改成三档。
+
+### 测试与回归
+- **宿主测试 `overall: PASS`**。`test/game_prefs_test.c` 有两处**按整串比** `{"prefs":{}}` 的断言 ——
+  `.166` 给 `game_prefs_list_json` 加了 `order` 字段后必红。改成 `is_empty_list()`（`prefs` 与 `order`
+  都空才算空表），并写上「**每加一个字段这里都要跟着改一次**」的理由，免得下次又按整串比。
+- **前端 `game112` 305 → 366 / 366**（新增第 12 节约 40 条 + 第 7 节 3 条版式），
+  `nav112` 20、`acct111` 23、`avatar109` 19、`cropfix` 75 同绿；eslint 零 error 零 warning。
+  新增的四节：**12.1** 分享二维码 = 下载直链（**真发一次请求**验 `Content-Disposition: attachment`；
+  打包那条验 `content-type: application/zip`）；**12.2** 背景音乐两份落点（主机 `lufs` 是负数、
+  主机写失败必出红字、`.at9` 快路径、`按钮[aria-label="应用（背景音乐）"]` 存在且唯一）；
+  **12.3** 置顶写主机（该 tid `idx===1`、其余重编号 1..N **无撞号**、面板那份也落盘、主机坏时报红并退回）；
+  **12.4** 拖拽排序（位置号 `1..N`、排序模式里动作按钮整组不渲染、上移/下移、拖到第 1 位、
+  **拖动期间不写主机**、「取消」整份丢掉、「完成」后主机**槽位池不变**但按新名次重分配、
+  系统条目一条未动、坏时红字）。
+- **mock 夹具原来不像真机，导致一条断言长期空转。** `tileGroup` 里是 5 条**纯系统条目**，
+  而 `/tile_group_order` 的语义是「只重排**出现在 order 里且当前就在 MyHome 组里**的条目」——
+  系统条目压根不在游戏列表里，前端永远传不出它们的 tid，于是主机侧 `moved` **恒为 0**，
+  那条「主机侧真的动了几条」的断言**从来没真正跑过**。夹具里补上两个游戏列表里也有的 tid
+  （`PPSA01234` / `CUSA01111`），并抽成 `tileGroupFixture()`（`/reset` 里原先另抄了一份旧的 5 条，
+  与新夹具不一致 —— 经典「两份夹具各自漂移」）。同时 mock 的 `tile_group_order` 原本把**整组** idx
+  当槽位池，实测让 `CUSA01111` 与 `NPXS40037` 同时拿到 `idx=1`（撞号）；逐行对齐 `tg_order_cb` 后
+  实测 `;order:[CUSA01111,PPSA01234]` → `{moved:2}` 且 `CUSA01111:2 / PPSA01234:5`、系统条目未动。
+- **两条「游戏112 红了」是测试自己的问题**：「拖动真的把 B 挪到了第 1 位」与「完成时报告了主机侧真的动了几条」
+  —— 同一个 `page.evaluate` 里一次派完 `dragstart` / `dragover` / `drop`，`onCardDrop` 闭包读到的
+  `dragTid` 还是空串（`onDragStart` 只是 `setDragTid`，React 还没提交）。改成**两个 tick**
+  （`dragstart` → 等 150ms → `dragover` / `drop`，`DataTransfer` 挂在 `window.__pldDragDt`）。
+  另注意 **HTML5 DnD 的 `dragover` 必须 `preventDefault`**，否则不触发 `drop`。
+- 核对脚本 `pkg_166_verify.sh`（基于 `pkg_165_verify.sh`，**每轮在上一版基础上加断言**）新增
+  **6c**（产物里必须含本轮中文字面量：排序模式 / 拖动磁贴到想要的位置 / 位置号 / 移到最前 / 已置顶 /
+  主机固定列表更新 / 面板顺序已保存 / 主机固定列表读不到 / 已写入主机 sce_sys/snd0.at9 / 正在编码 ATRAC9 /
+  已读取 .at9 / 已编码： / 下载链接 / 手机扫码即可直接下载 / 正在打包，请稍候 + `atrac9` /
+  `AT9_BITRATE_KBPS` / `snd0.at9`）与 **7c**（源码级锚点：`absUrl`、两条分享路径、`autoDownload = false`、
+  `draggable={!!sorting}`、`ev.preventDefault`、`if (ns < 2)`、`slot[i] = sel[i].orig`、
+  `game_music_set_host` / `game_music_reset_host`、`at9Encode.js`、`atrac9/` 文件数、`worker&inline`、
+  `lufs` 链路、`staged.music.info`、`layerName` 三档、`function qa(params)` + 7 个函数用 `qa(`、
+  `is_empty_list`、`game112` 第 12 节的 5 个标记）。
+
 ## v0.5.2.165 (CN-FORK) — 2026-10-11
 
 > 用户口径（本批四条，原文）：

@@ -47,6 +47,7 @@
 #include "app_visibility.h" /* [CN-FORK] v0.5.2.158 「个性化软件」/system_apps* */
 #include "game_prefs.h"     /* [CN-FORK] v0.5.2.164 游戏磁贴收藏 / 置顶 /game_prefs* */
 #include "game_music.h"     /* [CN-FORK] v0.5.2.163 背景音乐 /game_music[_reset] */
+#include "tile_group.h"     /* [CN-FORK] v0.5.2.166 主屏固定列表 /tile_group* */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF：账号/头像/安全还原/远程游玩
  * 配对接口认领 /api/ 前缀，其余路由仍全部归本文件 */
 #include "psaccounts/api.h"
@@ -298,6 +299,9 @@ static size_t gr_post_limit(const char *url) {
     /* [CN-FORK] v0.5.2.163 背景音乐：MP3/OGG/WAV，体积上限 30MB（前端的软限制）。
      * 给到 64MB 是因为前端的 30MB 是软提示（防误传），这里真做了硬限。 */
     if (strcmp(url, ROUTE_GAME_MUSIC) == 0) return (size_t)64 << 20;
+    /* [CN-FORK] v0.5.2.166 已编码好的 .at9：PS5 的硬上限是 2MB，给 8MB 留足余量
+     * （前端会自己卡在 2MB，这里只是防呆）。 */
+    if (strcmp(url, ROUTE_GAME_MUSIC_AT9) == 0) return (size_t)8 << 20;
     /* [CN-FORK] v0.5.2.164 游戏收藏 / 置顶：body 只有 tid + fav/pin 两个布尔。 */
     if (strcmp(url, ROUTE_GAME_PREFS_SET) == 0) return (size_t)1 << 20;
     if (strcmp(url, ROUTE_GAME_DELETE) == 0 ||
@@ -319,6 +323,10 @@ static size_t gr_post_limit(const char *url) {
     if (strcmp(url, ROUTE_SYSTEM_APP_VISIBLE) == 0 ||
         strcmp(url, ROUTE_SYSTEM_APP_PIN) == 0)
         return (size_t)1 << 20;
+    /* [CN-FORK] v0.5.2.166 主屏固定列表。置顶的 body 只有 tid + pinned 两个字段；
+     * 重排的 body 是一个 order 数组（几十个 9 位 tid ≈ 1KB 以内），给 64KB 是留足余量。 */
+    if (strcmp(url, ROUTE_TILE_GROUP_PIN) == 0) return (size_t)1 << 20;
+    if (strcmp(url, ROUTE_TILE_GROUP_ORDER) == 0) return (size_t)64 << 10;
     return 0;
 }
 
@@ -637,6 +645,39 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
+    /* [CN-FORK] v0.5.2.166 把**已编码好的 ATRAC9** 写进主机的 <sce_sys>/snd0.at9。
+     *
+     * 为什么单开一条路由而不是并进上面那条：两者收的东西根本不是一回事 ——
+     * /game_music 收的是用户原始音频（mp3/ogg/wav，只落我们自己的目录给面板试听），
+     * 这一条收的是浏览器里刚编出来的 .at9（只写主机）。分开之后，
+     * 「面板试听成功但主机没写进去」与「主机写了但面板没有试听文件」两种半成品
+     * 在日志与回包里都能分得清，不会再合成一句「背景音乐已应用」。
+     *
+     * 主机端写不进去（只读镜像 / 没装进 /user/app）时**回 400**，不回 200 ——
+     * 用户这一轮的抱怨就是「界面说成功了、PS5 上没生效」，不能再造一个假成功。 */
+    if (strcmp(url, ROUTE_GAME_MUSIC_AT9) == 0) {
+        const char *lufs = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "lufs");
+        char msg[192], esc[480];
+        long long bytes = 0;
+        msg[0] = 0;
+        if (!tid || !*tid)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (!body || !len)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "音频是空的");
+        int rc = game_music_set_host(tid, (const unsigned char *)body, len, lufs,
+                                     &bytes, msg, sizeof(msg));
+        if (rc != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST,
+                               rc == -1 ? "EBAD" : "EHOST",
+                               msg[0] ? msg : "主机端没写上");
+        pldmgr_json_escape(msg, esc, sizeof(esc));
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size,
+                         "{\"ok\":true,\"bytes\":%lld,\"host\":true,\"message\":\"%s\"}",
+                         bytes, esc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
     /* [CN-FORK] v0.5.2.163 存档转换：body 里只有 tid / source / target。实现 = game_saves_convert()。 */
     if (strcmp(url, ROUTE_GAME_SAVE_CONVERT) == 0) {
         char rtid[64], rsrc[64], rtgt[64], msg[240];
@@ -736,6 +777,78 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
+    /* [CN-FORK] v0.5.2.166 置顶 / 取消置顶 —— **写主机的** app.db（tbl_group_<uid>）。
+     * 与上面那条 /game_prefs_set 的 pin 字段不是一回事：那个只改我们自己的 JSON，
+     * 主机压根不知道，所以用户在 PS5 上看不到任何变化（这正是本轮要修的 bug）。
+     * 这里回 accounts（写了几个账号的库）与 idx（置顶后的位置），前端据此说清楚。 */
+    if (strcmp(url, ROUTE_TILE_GROUP_PIN) == 0) {
+        char btid[32], msg[192], esc[480];
+        int pinned = -1, accounts = 0, gidx = 0;
+        msg[0] = 0;
+        if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) || !btid[0])
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (gr_json_bool(body, len, "pinned", &pinned) != 0 || pinned < 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "缺少 pinned（true=置顶 / false=取消置顶）");
+        if (tile_group_set_pin(btid, pinned, msg, sizeof(msg), &accounts, &gidx) != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EHOST",
+                               msg[0] ? msg : "主机固定列表写不进去");
+        pldmgr_json_escape(msg, esc, sizeof(esc));
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size,
+                         "{\"ok\":true,\"tid\":\"%s\",\"pinned\":%s,\"accounts\":%d,"
+                         "\"idx\":%d,\"message\":\"%s\"}",
+                         btid, pinned ? "true" : "false", accounts, gidx, esc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    /* [CN-FORK] v0.5.2.166 拖拽排序落地。body = {"order":["TID1","TID2",...]}。
+     * 一次请求落两处，因为「拖完松手」在用户眼里就是一个动作：
+     *   ① 面板侧顺序（game_prefs.json 的 order 数组）—— 刷新页面后列表还是用户排的样子；
+     *   ② 主机侧顺序（app.db 的 MyHome 组 idx）—— 只重排**已经在组里**的条目，
+     *      槽位集合不变，没被提到的条目一个字节都不动（理由见 include/tile_group.h）。
+     * 两者成败分开报：面板那一半几乎不会失败，主机那一半可能写不进去（只读库），
+     * 而「写不进去」必须说出来 —— 用户这一轮的抱怨就是界面报成功、PS5 没变化。 */
+    if (strcmp(url, ROUTE_TILE_GROUP_ORDER) == 0) {
+        char msg[192], esc2[480];
+        const char *tids[64];
+        int n = 0, moved = 0;
+        msg[0] = 0;
+        cJSON *root = cJSON_ParseWithLength(body, len);
+        if (!root)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "请求体不是合法 JSON");
+        cJSON *arr = cJSON_GetObjectItem(root, "order");
+        if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) == 0) {
+            cJSON_Delete(root);
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "缺少 order 数组");
+        }
+        /* tids[] 借的是 root 里的字符串指针，所以 root 必须活到两次调用之后才删。 */
+        cJSON *it = NULL;
+        cJSON_ArrayForEach(it, arr) {
+            if (n >= (int)(sizeof(tids) / sizeof(tids[0]))) break;
+            if (cJSON_IsString(it) && it->valuestring) tids[n++] = it->valuestring;
+        }
+        int rc = (n > 0) ? tile_group_reorder(tids, n, msg, sizeof(msg), &moved) : -1;
+        int host_ok = (rc == 0);
+        char host_note[192];
+        snprintf(host_note, sizeof(host_note), "%s", msg);
+        /* 主机那一半失败也要把面板顺序存下来（面板顺序本身没有副作用）。 */
+        int panel_ok = (n > 0) ? (game_prefs_set_order(tids, n) == 0) : 0;
+        cJSON_Delete(root);
+        if (!panel_ok)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
+                               "顺序列表不合法或写不进面板");
+        pldmgr_json_escape(host_ok ? "主机固定列表已按新顺序重排" : host_note,
+                           esc2, sizeof(esc2));
+        *code = MHD_HTTP_OK;
+        int rn = snprintf(out, size,
+                          "{\"ok\":true,\"moved\":%d,\"host_ok\":%s,\"message\":\"%s\"}",
+                          moved, host_ok ? "true" : "false", esc2);
+        return (rn < 0 || (size_t)rn >= size) ? -1 : rn;
+    }
+
     return gr_json_err(out, size, code, MHD_HTTP_NOT_FOUND, "ENOENT", "没有这条路由");
 }
 
@@ -824,12 +937,17 @@ static int is_noisy_route(const char *url) {
      * POST 走 gr_dispatch_post（已登记），GET 这里返回 1 让它继续走到主处理函数。 */
     if (strcmp(url, ROUTE_GAME_MUSIC) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_MUSIC_RESET) == 0) return 1;
+    if (strcmp(url, ROUTE_GAME_MUSIC_AT9) == 0) return 1; /* [CN-FORK] v0.5.2.166 写主机 snd0.at9 */
     if (strcmp(url, ROUTE_FAN_CONTROL) == 0) return 1; /* [CN-FORK] 风扇温控页加载/应用，降噪 */
     if (strcmp(url, ROUTE_SYSTEM_APPS) == 0) return 1; /* [CN-FORK] v0.5.2.158 个性化软件弹窗，降噪 */
     if (strcmp(url, ROUTE_SYSTEM_APP_VISIBLE) == 0) return 1; /* 同上，每次拨开关一次 */
     if (strcmp(url, ROUTE_SYSTEM_APP_PIN) == 0) return 1; /* [CN-FORK] v0.5.2.164 置顶开关，同上 */
     if (strcmp(url, ROUTE_GAME_PREFS) == 0) return 1; /* [CN-FORK] v0.5.2.164 收藏/置顶列表，进页一次 */
     if (strcmp(url, ROUTE_GAME_PREFS_SET) == 0) return 1; /* 同上，每次拨按钮一次 */
+    /* [CN-FORK] v0.5.2.166 主屏固定列表：进游戏页拉一次 /tile_group，拨置顶或拖拽排序各一次。 */
+    if (strcmp(url, ROUTE_TILE_GROUP) == 0) return 1;
+    if (strcmp(url, ROUTE_TILE_GROUP_PIN) == 0) return 1;
+    if (strcmp(url, ROUTE_TILE_GROUP_ORDER) == 0) return 1;
     if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) return 1;
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
     /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
@@ -2337,6 +2455,9 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!xt)
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
         game_music_reset(xt);
+        /* [CN-FORK] v0.5.2.166 「恢复默认」要连**主机上那份**一起还原 ——
+         * 只删我们自己的预览副本，PS5 主屏上还在放用户设过的音乐。 */
+        game_music_reset_host(xt);
         return queue_json(conn, MHD_HTTP_OK, "{\"ok\":true}", 11);
     } else if (strcmp(url, ROUTE_GET_CONFIG) == 0) {
         PldmgrConfig cfg;
@@ -2420,6 +2541,20 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         int plen = game_prefs_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
         if (plen < 0) plen = 0;
         resp = MHD_create_response_from_buffer((size_t)plen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Cache-Control", "no-store");
+    } else if (strcmp(url, ROUTE_TILE_GROUP) == 0) {
+        /* [CN-FORK] v0.5.2.166 主屏固定列表（主机 app.db 的 tbl_group_<uid>）。
+         * 前端进游戏页时与 /game_prefs 一起拉：prefs 给「收藏」与面板顺序，
+         * 这一份给「置顶」的**真身**（以前那份 pin 只写在我们的 JSON 里，主机不知道）。
+         * no-store 同上：拨一次置顶它就变了。 */
+        char *resp_buf;
+        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
+        if (oom_resp)
+            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        int tlen = tile_group_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
+        if (tlen < 0) tlen = 0;
+        resp = MHD_create_response_from_buffer((size_t)tlen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, "/events") == 0) {

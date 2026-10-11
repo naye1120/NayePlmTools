@@ -303,6 +303,35 @@ function q(params) {
   return parts.length ? `?${parts.join('&')}` : ''
 }
 
+/* [CN-FORK] v0.5.2.166 **资源** URL 的 query 拼装：与 q() 的区别只有一个 ——
+ * 不加 `_=Date.now()`。
+ *
+ * 为什么必须分开（这一条是被一个死循环逼出来的）：
+ *   · `q()` 的时间戳是为了让 **JSON 接口**绕开缓存，对接口是对的；
+ *   · 但 `<img src>` / `<audio src>` 这类**资源** URL 加了时间戳之后，**每次渲染
+ *     都是一个新字符串**，后果有两层：
+ *       ① 浏览器每次都当成新资源重新下载（图/音频的缓存彻底失效，磁贴网格一重渲染
+ *          就整片重拉 —— 电视端尤其疼）；
+ *       ② 更要命的是拿它当「值变了没有」的判据时永远不相等。RenameModal 就是拿
+ *          `musicSrc` 做渲染期比较来重置播放器的，于是每渲染一次就 setState 一次，
+ *          直接撞上 React 的 "Too many re-renders"（应用一设过背景音乐，打开改名弹窗
+ *          再输入一个字就崩）。同一个 key 还挂在 `<audio key={musicSrc}>` 上 ——
+ *          时间戳一变整颗 <audio> 就被卸载重挂，在名称框里打字都会把播放器重置。
+ *   · 资源要破缓存时**本来就有**显式版本号（`&v=${iconVer}` / `&v=${musicVer}`），
+ *     那是能稳定比较、且只在真的换了图之后才变的东西 —— 时间戳只会把这件事搞坏。
+ *
+ * 判断标准：**内容随 id 定死、且靠 `v=` 手动破缓存**的资源走 qa()；
+ * 内容会随时间变化的下载端点（存档下载）继续走 q()，否则会下到上一份缓存。 */
+function qa(params) {
+  const parts = []
+  Object.keys(params).forEach((k) => {
+    const v = params[k]
+    if (v === undefined || v === null || v === '') return
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+  })
+  return parts.length ? `?${parts.join('&')}` : ''
+}
+
 /* ── 游戏详情 ─────────────────────────────────────────────────────────── */
 export function getGameDetail(tid, opts) {
   return request(`/game_detail${q({ tid })}`, opts)
@@ -476,15 +505,15 @@ export function getMedia(tid, opts) {
 }
 
 export function mediaThumbUrl(id, w = 320) {
-  return `/game_media_thumb${q({ id, w })}`
+  return `/game_media_thumb${qa({ id, w })}`
 }
 
 export function mediaFileUrl(id, opts = {}) {
   /* dl=1 走「下载」语义：后端据此下发 Content-Disposition（游戏名称-截图时间.<ext>）。
    * 预览（<img>/<video>）不传 —— 对预览也挂 attachment，有的浏览器就不渲染了。
    * tid 只在 dl=1 时带：后端要用它取游戏名，取名规则与列表里的 dlname 同源。 */
-  if (opts.dl) return `/game_media_file${q({ id, dl: 1, tid: opts.tid })}`
-  return `/game_media_file${q({ id })}`
+  if (opts.dl) return `/game_media_file${qa({ id, dl: 1, tid: opts.tid })}`
+  return `/game_media_file${qa({ id })}`
 }
 
 /* ids 传 null = 全量打包。两者走同一条后端路径，只是筛选范围不同。 */
@@ -493,7 +522,7 @@ export function packMedia(tid, ids, opts) {
 }
 
 export function mediaPackUrl(jobId) {
-  return `/game_media_pack_get${q({ job: jobId })}`
+  return `/game_media_pack_get${qa({ job: jobId })}`
 }
 
 export function deleteMedia(tid, id, opts) {
@@ -554,7 +583,7 @@ export function resetTileIcon(tid, opts) {
 }
 
 export function tileIconUrl(tid) {
-  return `/game_tile_icon${q({ tid })}`
+  return `/game_tile_icon${qa({ tid })}`
 }
 
 export function setTileBackground(tid, blob, opts) {
@@ -568,7 +597,7 @@ export function resetTileBackground(tid, opts) {
 }
 
 export function tileBackgroundUrl(tid) {
-  return `/game_tile_bg${q({ tid })}`
+  return `/game_tile_bg${qa({ tid })}`
 }
 
 /* 后端转出来的 DDS 原始字节。**当前界面没有消费它**（<img> 显示不了 DDS），留在这里的理由
@@ -576,7 +605,7 @@ export function tileBackgroundUrl(tid) {
  * 不必再回来补一个 URL 拼装。回归脚本验规格时也走这个路径（`/game_tile_bg_dds`），
  * 期望 1920×1080 DXT1 = 128 + 480*270*8 = 1,036,928 字节，与 assets/pic0.dds 同规格。 */
 export function tileBackgroundDdsUrl(tid) {
-  return `/game_tile_bg_dds${q({ tid })}`
+  return `/game_tile_bg_dds${qa({ tid })}`
 }
 
 /* ── [CN-FORK] v0.5.2.163 背景音乐 ───────────────────────────────────────
@@ -597,7 +626,7 @@ export function resetGameMusic(tid, opts) {
 }
 
 export function gameMusicUrl(tid) {
-  return `/game_music${q({ tid })}`
+  return `/game_music${qa({ tid })}`
 }
 
 /* ── [CN-FORK] v0.5.2.163 存档转换 ───────────────────────────────────────
@@ -671,4 +700,49 @@ export function setGamePrefs(tid, { fav, pin }, opts) {
   if (fav !== undefined) body.fav = fav
   if (pin !== undefined) body.pin = pin
   return request('/game_prefs_set', { ...opts, method: 'POST', body })
+}
+
+/* ── [CN-FORK] v0.5.2.166 主屏固定列表（主机 app.db 的 tbl_group_<uid>）───────
+ * `.164` 的「置顶」只写我们自己的 game_prefs.json，主机压根不知道 ——
+ * 用户看到的就是「置顶按钮在 PS5 里没有生效」。真身是 app.db 的 MyHome 组，
+ * 真机取证见 include/tile_group.h（账号 0438122025 上那两个「多出来」的条目
+ * PPSA32786 / WKAL00001 正是用户自己固定在主屏的两个，idx 就是主屏位置）。
+ *
+ *   GET  /tile_group                → {ok,group,accounts,items:[{itemId,idx}],note?}
+ *        ok=false 时 note 说原因（库里没有 tbl_group 表 / 部分账号读失败）——
+ *        前端据此**不要**把置顶按钮画成「已置顶」，也不要把游戏页打断。
+ *   POST /tile_group_pin {tid,pinned} → {ok,tid,pinned,accounts,idx,message}
+ *        写不进去回 400 {error:"EHOST"}，**不是** 200 —— 不再造第二个假成功。
+ *   POST /tile_group_order {order:[...]} → {ok,moved,host_ok,message}
+ *        一次落两处：面板侧顺序（game_prefs.json 的 order）+ 主机侧 idx。 */
+export function getTileGroup(opts) {
+  return request(`/tile_group${q()}`, opts)
+}
+
+export function setTilePin(tid, pinned, opts) {
+  return request('/tile_group_pin', { ...opts, method: 'POST', body: { tid, pinned } })
+}
+
+export function setTileOrder(order, opts) {
+  return request('/tile_group_order', { ...opts, method: 'POST', body: { order } })
+}
+
+/* ── [CN-FORK] v0.5.2.166 把编码好的 ATRAC9 写进主机 ────────────────────────
+ *   POST /game_music_at9?tid=&lufs=   裸 body（.at9 字节）→ {ok,bytes,host,message}
+ *
+ * 与上面的 setGameMusic 是**两件事**，别再合并：
+ *   · setGameMusic      —— 用户原始音频（mp3/ogg/wav），只落面板目录，给 <audio> 试听；
+ *   · setGameMusicAt9   —— 浏览器里刚编出来的 .at9，只写主机 <sce_sys>/snd0.at9。
+ * 分开之后「面板试听成功但主机没写进去」不再被一句「已应用」盖掉。
+ *
+ * 编码在浏览器里做（frontend/src/utils/atrac9/，移植自 ps5-at9-converter），
+ * 因为主机上没有任何 ATRAC9 编码器。`lufs` 是编码器算出来的实际响度，
+ * 后端会写进 sce_sys/param.json 的 pubtools.loudnessSnd0。 */
+export function setGameMusicAt9(tid, at9Bytes, lufs, opts) {
+  return request(`/game_music_at9${q({ tid, lufs: lufs || '' })}`, {
+    ...opts,
+    method: 'POST',
+    body: new Blob([at9Bytes], { type: 'application/octet-stream' }),
+    timeoutMs: TIMEOUTS.upload,
+  })
 }

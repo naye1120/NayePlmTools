@@ -99,6 +99,12 @@ export default defineConfig(({ command }) => ({
        * 而且报的是被 SPA fallback 吞成 HTML 之后的 JSON 解析错误，完全看不出原因），
        * 所以统一用 /game_ 前缀代理 —— 后端这一组接口也全在这个前缀下，不会误伤别的路径。 */
       '/game_': { target: API_TARGET, changeOrigin: true },
+      /* [CN-FORK] v0.5.2.166 主机「主屏固定列表」（app.db 的 tbl_group_<uid>）。
+       * 这一组不在 /game_ 前缀下（后端路由是 /tile_group、/tile_group_pin、
+       * /tile_group_order），漏了会被 SPA fallback 吞成 index.html ——
+       * 表现是置顶按钮点了报「主机返回了无法识别的内容」，排序模式提交也永远失败。
+       * 一条前缀就覆盖三条（http-proxy 按前缀匹配）。 */
+      '/tile_group': { target: API_TARGET, changeOrigin: true },
       '/fan_control': { target: API_TARGET, changeOrigin: true },
       /* [CN-FORK] v0.5.1.64 删 /game_icon 代理：「当前游戏」探测随主页一起下线 */
       '/repository_install': { target: API_TARGET, changeOrigin: true },

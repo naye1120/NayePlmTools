@@ -344,6 +344,24 @@ if [ -f /tmp/sqlite3_host.o ]; then
         src/tile_db.c src/json_helpers.c src/utils.c /tmp/sqlite3_host.o -ldl
 fi
 
+# [CN-FORK] v0.5.2.166 主屏固定列表（src/tile_group.c）：写 app.db 的 tbl_group_<uid>。
+# `.164` 的置顶写的是我们自己的 JSON，主机压根不知道 —— 用户看到的就是「置顶按钮在
+# PS5 里没有生效」。这一轮改成写主机库（groupName='MyHome'，idx = 主屏位置），
+# 而那是**主机的**库、真机又不可达，所以判据必须在这里钉死：
+# 置顶要把其余条目**依次后移重新编号**（只改一个 idx 会让两条撞车）、幂等、
+# 取消置顶后编号连成 1..N、重排**只动被提到的条目且槽位集合不变**（系统条目就在里面）、
+# OtherGroup 与「名字带前缀但列不齐的表」一律不碰。
+# 复用上面那份 /tmp/sqlite3_host.o（宿主工具链单独编的 sqlite）。
+if [ -f /tmp/sqlite3_host.o ]; then
+    run_one tile_group src/tile_group.c \
+        -Iinclude -Ithird_party/sqlite3 -Isrc/psaccounts/third_party \
+        -DTILE_DB_APPDB_PATH='"/tmp/pldmgr_tilegrp_test/app.db"' \
+        -DTILE_DB_APPINFO_PATH='"/tmp/pldmgr_tilegrp_test/appinfo.db"' \
+        -DTILE_DB_BAK_DIR='"/tmp/pldmgr_tilegrp_test/dbbak"' \
+        src/tile_db.c src/json_helpers.c src/utils.c \
+        src/psaccounts/third_party/cJSON.c /tmp/sqlite3_host.o -ldl
+fi
+
 # [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（src/game_prefs.c）。
 # 落点 /data/nayeplmtools/game_prefs.json，纯文件系统 —— 不需要 sqlite。
 # 要钉死的是三态入参：前端一次只拨一颗按钮（fav 或 pin），**没带的那一项必须原样保留**

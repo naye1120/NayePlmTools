@@ -607,6 +607,25 @@ const DELETE_SPECIAL = {
   EMUA90001: { status: 200, body: { source_missing: true, scan_queued: true } },
 };
 
+/* [CN-FORK] v0.5.2.166 主机「主屏固定列表」（app.db 的 tbl_group_<uid>，MyHome 组）的**唯一**夹具源。
+ * 做成函数而不是常量：`/tile_group_order` 会就地改 items 的 idx，`/reset` 要能回到初始状态。
+ * 抽出来的另一个理由是上面那段注释里说的 —— 两处各抄一份必然漂移。 */
+function tileGroupFixture() {
+  return {
+    group: 'MyHome',
+    accounts: 4,
+    items: [
+      { itemId: 'NPXS40037', idx: 1 },
+      { itemId: 'PPSA01234', idx: 2 },   // ← 游戏列表里的（游戏也能被固定进 MyHome）
+      { itemId: 'NPXS40047', idx: 3 },
+      { itemId: 'PPSA32786', idx: 4 },
+      { itemId: 'CUSA01111', idx: 5 },   // ← 同上
+      { itemId: 'WKAL00001', idx: 6 },
+      { itemId: 'NPXS40071', idx: 7 },
+    ],
+  };
+}
+
 const gameState = {
   deleted: new Set(),   // 已删除的 tid，列表里过滤掉
   renamed: {},          // tid -> 新名字（对应真机上我们自己的 name.txt —— 面板的事实源）
@@ -623,8 +642,36 @@ const gameState = {
   bgDds: {},            // tid -> 上面那张背景转出来的 DXT1 DDS（/game_tile_bg_dds 回它）
   /* [CN-FORK] v0.5.2.163 背景音乐：tid -> { name, bytes, ext }（落 /data/nayeplmtools/music/<TID>.<ext>） */
   music: {},
+  /* [CN-FORK] v0.5.2.166 写进主机的 ATRAC9：tid -> { bytes, lufs }（落 <sce_sys>/snd0.at9）。
+   * 与上面那份**分开记**是刻意的：用户这一轮报的「改了没生效」根因就是这两份被混为一谈 ——
+   * 面板那份写成了、主机那份压根没写，界面上却都叫「已应用」。mock 分开存，
+   * 回归才能断言「设一次音乐之后主机那份真的出现了」。 */
+  musicHost: {},
+  /* [CN-FORK] v0.5.2.166 强制「主机 snd0.at9 写失败」的 tid 集合（默认空 = 都成功）。
+   * 用来测前端在主机写失败时到底报不报红 —— 那正是这一轮要修的东西。 */
+  musicHostFail: [],
   /* [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶：tid -> { fav, pin }（对应后端的 game_prefs.json） */
   prefs: {},
+  /* [CN-FORK] v0.5.2.166 面板侧的手工顺序（拖拽排序的结果，对应 game_prefs.json 的 order）。
+   * 一个 tid 数组，前端按它的下标排。 */
+  order: [],
+  /* [CN-FORK] v0.5.2.166 主机 app.db 的「主屏固定列表」（tbl_group_<uid> 的 MyHome 组）。
+   * 形状照真机取证件裁（见 include/tile_group.h）：4 个账号，itemId 是 tid，idx 是主屏位置。
+   * PPSA32786 / WKAL00001 是取证时看到的那两个「用户自己固定上去的」条目。
+   *
+   * ⚠ 里面**必须**混进两个 `mockGames` 里也有的 tid（PPSA01234 / CUSA01111）。
+   * 只有系统条目的话，`/tile_group_order` 那条「主机侧只重排组里已有的条目」永远是
+   * `moved=0` —— 回归里「拖完顺序主机侧真的动了吗」这条断言就变成了空转，
+   * 而它恰恰是这一轮用户报的那个 bug（「排序按钮没有实现我想让排哪个位置就排哪个位置」）
+   * 唯一能测到的落点。这就是「mock 抹掉了真机的前提」那一类坑：夹具不像真机，
+   * 功能在本地就永远是绿的。真机上用户当然可以把自己装的游戏固定进主屏。
+   *
+   * ⚠ 只能由 `tileGroupFixture()` 产出 —— `/reset` 也要用它。上一版这里写一份、
+   * reset 里另抄一份，加夹具时只改了这里，于是「跑第二遍 game112 时夹具退回旧的」，
+   * 那种红会指向完全无关的地方。 */
+  tileGroup: tileGroupFixture(),
+  /* 强制「主机固定列表写不进去」（tbl_group 表不存在 / 全表读失败），供前端降级分支测试。 */
+  tileGroupBroken: false,
   /* [CN-FORK] v0.5.2.164 「个性化软件」的置顶开关：tid -> bool（对应后端的 app_pins.json）。
    * 与 hidden 分开存是刻意的 —— hidden 在真机上写 app.db，置顶只落本面板的 JSON。 */
   appPins: {},
@@ -1603,6 +1650,27 @@ app.get('/_remote_files', (req, res) => res.json({ files: [...gameState.remoteFi
  * 让存档列表多出一条（合并 ≠ 整份替换）。 */
 app.get('/_garlic_imports', (req, res) => res.json({ imports: gameState.garlicImports }));
 
+/* [CN-FORK] v0.5.2.166 背景音乐「两份落点」的只读钩子 + 两个故障注入开关。
+ *
+ *   GET  /_music_state        → { panel:{tid:{name,bytes,ext}}, host:{tid:{bytes,lufs}} }
+ *   POST /_music_host_fail    → {tids:[...]} 让这些 tid 的 /game_music_at9 回 400 EHOST
+ *   POST /_tile_group_broken  → {broken:true|false} 让主机固定列表读/写一律失败
+ *
+ * 为什么非要这两个钩子：用户这一轮报的就是「背景音乐改动没有生效」与「置顶按钮在 PS5 里
+ * 没有生效」——两件事的共同点是**主机侧那一半写没写**在界面上看不出来（旧版一律报「已应用」）。
+ * 回归要能分别断言「面板那份在」「主机那份也在」，以及「主机那份失败时界面确实报红」，
+ * 就得能把两份分开读出来、并且能强制其中一份失败。只断言按钮存在等于没测。 */
+app.get('/_music_state', (req, res) => res.json({ panel: gameState.music, host: gameState.musicHost }));
+app.post('/_music_host_fail', (req, res) => {
+  const tids = (req.body && Array.isArray(req.body.tids)) ? req.body.tids.map(String) : [];
+  gameState.musicHostFail = tids;
+  res.json({ ok: true, tids });
+});
+app.post('/_tile_group_broken', (req, res) => {
+  gameState.tileGroupBroken = !!(req.body && req.body.broken);
+  res.json({ ok: true, broken: gameState.tileGroupBroken });
+});
+
 /* ══════════════════════════════════════════════════════════════════════════════
  * [CN-FORK] v0.5.2.112 磁贴背景的 DDS 转换（PNG 解码 + DXT1 编码），在 mock 里**真做一遍**
  *
@@ -1935,19 +2003,65 @@ app.get('/game_music', (req, res) => {
 app.get('/game_music_reset', (req, res) => {
   const tid = String(req.query.tid || '');
   delete gameState.music[tid];
+  /* [CN-FORK] v0.5.2.166 主机那份（sce_sys/snd0.at9）一起还原 ——
+   * 后端在同一条 /game_music_reset 里就做了这件事（见 include/game_music.h），
+   * mock 不跟上的话「恢复默认」在本地预览里会看起来没清掉主机那份。 */
+  delete gameState.musicHost[tid];
   res.json({ ok: true });
 });
 
 /* ══════════════════════════════════════════════════════════════════════════════
+ * [CN-FORK] v0.5.2.166 把编好的 ATRAC9 写进主机 <sce_sys>/snd0.at9
+ *   POST /game_music_at9?tid=&lufs=   裸 body（.at9 字节）→ {ok,bytes,host,message}
+ *
+ * 与 /game_music 是**两条不同的路**，别再合并：
+ *   /game_music      = 用户原始音频（mp3/ogg/wav），只落面板目录，给 <audio> 试听；
+ *   /game_music_at9  = 浏览器里刚编出来的 .at9，只写主机 sce_sys/snd0.at9。
+ * 校验里有一条真机规格：ATRAC9 是 RIFF/WAVE 容器（'RIFF' + 'WAVE' + fmt 的 0xFFFE），
+ * 而且主机上限 2 MiB。mock 只验头部与大小 —— 那两条正好是前端最可能搞错的地方。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+const AT9_LIMIT = 2 * 1024 * 1024;
+
+function looksLikeAt9(buf) {
+  if (!buf || buf.length < 168) return false;
+  if (buf.toString('ascii', 0, 4) !== 'RIFF') return false;
+  if (buf.toString('ascii', 8, 12) !== 'WAVE') return false;
+  return true;
+}
+
+app.post('/game_music_at9', express.raw({ type: () => true, limit: '16mb' }), (req, res) => {
+  const tid = String(req.query.tid || '');
+  const lufs = String(req.query.lufs || '');
+  if (!mockGames.find((x) => x.tid === tid)) {
+    return res.status(404).json({ error: 'ENOENT', message: '主机上找不到这个游戏' });
+  }
+  const body = req.body || Buffer.alloc(0);
+  if (!body.length) return res.status(400).json({ error: 'EBAD', message: '音频是空的' });
+  if (!looksLikeAt9(body)) {
+    return res.status(400).json({ error: 'EBAD', message: '这不是合法的 ATRAC9（RIFF/WAVE 头对不上）' });
+  }
+  if (body.length > AT9_LIMIT) {
+    return res.status(400).json({ error: 'EBAD', message: '超过主机上限 2 MB' });
+  }
+  if (gameState.musicHostFail.includes(tid)) {
+    return res.status(400).json({ error: 'EHOST', message: '主机端没写上（测试强制）' });
+  }
+  gameState.musicHost[tid] = { bytes: body.length, lufs };
+  console.log(`[Mock] game_music_at9 tid=${tid} ${body.length}B lufs=${lufs || '-'} -> sce_sys/snd0.at9`);
+  res.json({ ok: true, bytes: body.length, host: true, message: '已写入主机 sce_sys/snd0.at9' });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════
  * [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序）
- *   GET  /game_prefs              → {"prefs":{...}}
+ *   GET  /game_prefs              → {"prefs":{...},"order":[...]}
  *   POST /game_prefs_set {tid,fav?,pin?} → {ok,tid,fav,pin}
  * 与后端 game_prefs.c 同一套三态语义：只拨一颗按钮时另一项**原样保留**。
  * 响应回的是**改完之后**的最终状态（不是入参）—— 回入参会把「不动」的 -1 说成 false。
+ * [CN-FORK] v0.5.2.166 响应多一个 `order`（面板侧手工顺序，由 /tile_group_order 写）。
  * ══════════════════════════════════════════════════════════════════════════════ */
 app.get('/game_prefs', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ prefs: gameState.prefs });
+  res.json({ prefs: gameState.prefs, order: gameState.order });
 });
 
 app.post('/game_prefs_set', (req, res) => {
@@ -1969,6 +2083,100 @@ app.post('/game_prefs_set', (req, res) => {
   else delete gameState.prefs[tid];
   logs.push(`[PLDMGR] game_prefs: ${tid} fav=${next.fav ? 1 : 0} pin=${next.pin ? 1 : 0}`);
   res.json({ ok: true, tid, fav: next.fav, pin: next.pin });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * [CN-FORK] v0.5.2.166 主机「主屏固定列表」（app.db 的 tbl_group_<uid>，MyHome 组）
+ *   GET  /tile_group                  → {ok,group,accounts,items:[{itemId,idx}],note?}
+ *   POST /tile_group_pin {tid,pinned}  → {ok,tid,pinned,accounts,idx,message}
+ *   POST /tile_group_order {order:[]}  → {ok,moved,host_ok,message}
+ *
+ * 语义照 include/tile_group.h 的契约（真机取证 + 写哪些账号 + 改完什么时候看得见）：
+ *   · pin   = 把 tid 移到最前、其余依次后移、重新编号 1..N；取消 = 删掉该条 + 重编号；
+ *             幂等（已在最前 / 本来就不在 → accounts=0，一条都不写）。
+ *   · order = **刻意保守**：只有「在 order 里**且**当前就在 MyHome 组里」的条目会动，
+ *             它们**自己占的那几个 idx 槽位**不变，只是按 order 给的先后在它们之间重新分配；
+ *             少于 2 条命中就什么都不做。没被提到的条目一个字节都不动。
+ *             mock 必须照着这条实现，否则回归会「本地全绿、真机把没列到的游戏也固定进主屏」。
+ *   · 面板侧的 order（gameState.order）是**全量**保存的：那份管的是面板列表顺序，
+ *     与主机固定列表是两回事（主机只管它自己组里那几个）。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+app.get('/tile_group', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (gameState.tileGroupBroken) {
+    return res.json({ ok: false, group: 'MyHome', accounts: 0, items: [], note: '主机 app.db 里没有 tbl_group 表（测试强制）' });
+  }
+  res.json({ ok: true, group: gameState.tileGroup.group, accounts: gameState.tileGroup.accounts, items: gameState.tileGroup.items });
+});
+
+app.post('/tile_group_pin', (req, res) => {
+  const tid = String((req.body && req.body.tid) || '');
+  const pinned = !!(req.body && req.body.pinned);
+  if (!/^[A-Z0-9]{6,16}$/.test(tid)) {
+    return res.status(400).json({ error: 'EBAD', message: '游戏编号不合法' });
+  }
+  if (gameState.tileGroupBroken) {
+    return res.status(400).json({ error: 'EHOST', message: '主机 app.db 里没有 tbl_group 表（测试强制）' });
+  }
+  const items = gameState.tileGroup.items;
+  const at = items.findIndex((x) => x.itemId === tid);
+  if (pinned) {
+    /* 已在最前 → 幂等，一条都不写（后端同样返回 accounts=0）。 */
+    if (at === 0) return res.json({ ok: true, tid, pinned: true, accounts: 0, idx: items[0].idx, message: '已经在最前' });
+    if (at > 0) items.splice(at, 1);
+    items.unshift({ itemId: tid, idx: 1 });
+    items.forEach((x, i) => { x.idx = i + 1; });
+    console.log(`[Mock] tile_group_pin ${tid} -> 第 1 位（${items.length} 条）`);
+    return res.json({ ok: true, tid, pinned: true, accounts: gameState.tileGroup.accounts, idx: 1, message: '已写入主机固定列表' });
+  }
+  if (at < 0) return res.json({ ok: true, tid, pinned: false, accounts: 0, idx: 0, message: '本来就不在固定列表里' });
+  items.splice(at, 1);
+  items.forEach((x, i) => { x.idx = i + 1; });
+  console.log(`[Mock] tile_group_pin ${tid} -> 取消置顶（剩 ${items.length} 条）`);
+  res.json({ ok: true, tid, pinned: false, accounts: gameState.tileGroup.accounts, idx: 0, message: '已从主机固定列表移除' });
+});
+
+app.post('/tile_group_order', (req, res) => {
+  const order = (req.body && Array.isArray(req.body.order)) ? req.body.order : null;
+  if (!order) return res.status(400).json({ error: 'EINVAL', message: '缺少 order 数组' });
+  for (const x of order) {
+    if (typeof x !== 'string' || !/^[A-Z0-9]{6,16}$/.test(x)) {
+      return res.status(400).json({ error: 'EBAD', message: '游戏编号不合法' });
+    }
+  }
+  /* 面板侧：全量存下（管面板列表顺序）。 */
+  gameState.order = order.slice();
+
+  if (gameState.tileGroupBroken) {
+    return res.json({ ok: true, moved: 0, host_ok: false, message: '主机 app.db 里没有 tbl_group 表（测试强制）' });
+  }
+
+  /* 主机侧：**只重排槽位，不增不删**（逐行对齐 src/tile_group.c 的 tg_order_cb）。
+   *
+   * ⚠ 槽位池 = **被移动的那几条自己占的 idx**（不是整组的 idx）。
+   * 抄错这一步的后果不是「结果差一点」，而是**idx 撞号**：真机上两条磁贴会同时拿
+   * idx=1，主屏顺序随机。所以这里必须与 C 那份逐字对齐：
+   *   · 选出「在组里 **且** 出现在 order 里」的条目，记下它的名次 rank 与**原来的 idx**；
+   *   · 槽位序列 = 这些 orig 升序（真机是按 idx 升序读出表的，天然升序）；
+   *   · 少于 2 条 → 直接返回，没有「换位」可言（C 里的 `if (ns < 2) return 0;`）；
+   *   · 按 rank 排好后，第 i 名拿第 i 个槽位；只有真的换了位置才计一条 moved。 */
+  const items = gameState.tileGroup.items;
+  const rank = new Map();
+  order.forEach((t, i) => { if (!rank.has(t)) rank.set(t, i); });
+  const members = items.filter((x) => rank.has(x.itemId));
+  if (members.length < 2) {
+    console.log(`[Mock] tile_group_order ${order.length} 项 -> 组里只命中 ${members.length} 条，不动`);
+    return res.json({ ok: true, moved: 0, host_ok: true, message: '顺序没有变化' });
+  }
+  const slots = members.map((x) => x.idx).sort((a, b) => a - b);
+  const moving = members.slice().sort((a, b) => rank.get(a.itemId) - rank.get(b.itemId));
+  let moved = 0;
+  moving.forEach((x, i) => {
+    if (x.idx !== slots[i]) moved += 1;
+    x.idx = slots[i];
+  });
+  console.log(`[Mock] tile_group_order ${order.length} 项 -> 主机重排 ${moved} 条`);
+  res.json({ ok: true, moved, host_ok: true, message: moved > 0 ? `主机固定列表已重排 ${moved} 条` : '顺序没有变化' });
 });
 
 /* [CN-FORK] v0.5.2.163 存档转换：把**另一个用户**在这款游戏上的存档合并到目标用户。
@@ -2357,6 +2565,15 @@ app.post('/reset', (req, res) => {
   gameState.music = {};
   gameState.prefs = {};
   gameState.appPins = {};
+  /* [CN-FORK] v0.5.2.166 主机那份 .at9、面板手工顺序、主机固定列表也一起清 ——
+   * 不清的话：上一节设过的音乐会串到下一节的「主机侧到底写没写」断言（假绿），
+   * 上一节的拖拽顺序会让「第一次进页面按默认顺序」假红。 */
+  gameState.musicHost = {};
+  gameState.musicHostFail = [];
+  gameState.order = [];
+  /* 夹具从 tileGroupFixture() 取，别再抄一份（抄一份就会漂移，见那个函数的注释）。 */
+  gameState.tileGroup = tileGroupFixture();
+  gameState.tileGroupBroken = false;
   gameState.saves = {};
   gameState.media = {};
   gameState.auto = {};

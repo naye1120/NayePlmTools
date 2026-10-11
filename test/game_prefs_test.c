@@ -47,13 +47,22 @@ static const char *list(void) {
     return buf;
 }
 
+/* 「空表」的判据：prefs 与 order 都空。刻意不按整串比 —— 见下面第一处调用的注释。 */
+static int is_empty_list(void) {
+    const char *j = list();
+    return strstr(j, "\"prefs\":{}") != NULL && strstr(j, "\"order\":[]") != NULL;
+}
+
 int main(void) {
     const char *path = GAME_PREFS_PATH;
     printf("夹具 = %s\n", path);
 
     /* 0) 文件不存在 → 空表，不是错误 */
     unlink(path);
-    CHECK(strcmp(list(), "{\"prefs\":{}}") == 0, "没有文件时回空表（实得 %s）", list());
+    /* [CN-FORK] v0.5.2.166 起这份响应多一个 `order`（面板侧的手工顺序，拖拽排序写的那份），
+     * 所以不能再按**整串**比 `{"prefs":{}}` —— 那样每加一个字段这里都要跟着改一次，
+     * 而且失败信息长得像功能坏了。改成分别认两个字段：空表就是「prefs 空 + order 空」。 */
+    CHECK(is_empty_list(), "没有文件时回空表（实得 %s）", list());
 
     /* 1) 拨收藏：pin 应为 false（新条目） */
     char msg[192];
@@ -105,7 +114,7 @@ int main(void) {
     {
         FILE *f = fopen(path, "wb");
         if (f) { fputs("{ 这不是 JSON", f); fclose(f); }
-        CHECK(strcmp(list(), "{\"prefs\":{}}") == 0, "坏文件当空表（实得 %s）", list());
+        CHECK(is_empty_list(), "坏文件当空表（实得 %s）", list());
         CHECK(game_prefs_set("PPSA02222", 1, -1, &of, &op, msg, sizeof(msg)) == 0,
               "坏文件之后仍能写（%s）", msg);
         CHECK(strstr(list(), "\"PPSA02222\":{\"fav\":true,\"pin\":false}") != NULL,
