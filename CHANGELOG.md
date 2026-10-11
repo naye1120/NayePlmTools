@@ -1,4 +1,54 @@
-## v0.5.2.169 (CN-FORK) — 2026-10-11
+## v0.5.2.170 (CN-FORK) — 2026-10-11
+
+> 用户口径（原文）：「P端改完名称，PC端变了，但 smb 没变，ps5 只有一个位置变了」
+> 「smb 里面是宇宙机器人88，我这里已经改成宇宙机器人1了，机器上还是宇宙机器人88」
+
+### 修 bug：改名在主机上只生效一个位置（appinfo 漏写语言槽）
+**根因**（真机 192.168.1.214 取证，PPSA21567 宇宙机器人）：`appinfo.db` 的
+`tbl_appinfo` / `tbl_conceptinfo` 里，同一个 titleId 的名字 key 是**一整套语言维度**：
+
+```
+tbl_appinfo     : TITLE, TITLE_00, TITLE_01, TITLE_02 ... TITLE_30   (+ TITLE_ID)
+tbl_conceptinfo : concept_name, concept_name_00 ... concept_name_30
+```
+
+`td_update_appinfo()` 自 `.118` 起只写 `key IN ('TITLE','TITLE_01')`（照抄 `y2jb-new`
+参考实现），**剩下几十个语言槽一个都没动**：
+- `TITLE_11` = 简体中文、`TITLE_10` = 繁体中文、`TITLE_09` = 韩文、`TITLE_27` = 泰文 …
+- 简中系统读的就是 **`TITLE_11`** → 读到的还是旧名 → **主屏 / SMP 显示老名字**。
+
+这就是「P端改了、PC端面板变了、PS5 只有一个位置变了、SMP 没变」的确切机制：
+我们只改了 `TITLE`/`TITLE_01`（+ app.db 的列），**用户所在语言的那个槽没改**。
+
+**修法**：匹配式从 `key IN ('TITLE','TITLE_01')` 改成
+`key = 'TITLE' OR key GLOB 'TITLE_[0-9]*'`（concept 侧同理）。
+- 之所以**不用 `LIKE 'TITLE_%'`**：`tbl_appinfo` 里还有个 **`TITLE_ID`** key，
+  值是标题号（`PPSA21567`），`TITLE_%` 会把它一起改成游戏名 —— 写坏身份字段比
+  不改名严重得多。`GLOB '[0-9]*'` 正好把它排除（第五个字符是 `I` 不是数字）。
+- 一个 tid 现在写 `appinfo.db` **14 行**（7 个 TITLE 槽 + 7 个 concept_name 槽），
+  以前只有 4 行。
+
+### 补宿主测试：`test/tile_db_test.c`（这个 bug 漏到今天的原因）
+仓库此前对 `tile_db.c` 两条写链**一个宿主测试都没有**（见 `app_visibility_test.c`
+开头那句自述），全靠真机消融 —— 而「语言槽」这种维度只有真正用过简中系统的用户才撞得到。
+新增 26 条断言，用 sqlite3 现造 appinfo.db/app.db 夹具（不依赖 python3），钉死四件事：
+① 全部 `TITLE_NN`/`concept_name_NN` 都写成新名（**简中槽 TITLE_11 单点一条**）；
+② **`TITLE_ID` 一个字节不许动**（负向对照）；③ 幂等；④ 别人的行 / 无关 key（AGE_LEVEL）不碰。
+**变异对照**：把匹配式退回旧写法 → 精确红 6 条（TITLE_00/09/10/11/27 + 简中槽那条）。
+
+### 测试
+- 新增 `test/tile_db_test.c`（26 checks）接入 `run_host_tests.sh`（复用 `/tmp/sqlite3_host.o`）。
+- 宿主套件 `overall: PASS`；`prospero-clang` 交叉编译 `tile_db.o` 零警告。
+- 前端未改，不需要重跑回归。
+
+### ⚠ 待真机验收（本轮**未**做写操作）
+真机 `192.168.1.214` 上改名的**完整链路仍需真机复核**：在面板改一个名字后，确认
+`TITLE_11`（简中）等语言槽与 `app.db` 的 `tbl_contentinfo.titleName` 都变成新名，
+SMP（`:10101/api/v1/games` → `title_name`）与主屏也跟着变。
+
+---
+
+
 
 > 用户口径（原文）：「游戏管理页面 游戏磁贴上边的排序按钮，不要了，放到右上角蓝框位置」
 

@@ -362,6 +362,27 @@ if [ -f /tmp/sqlite3_host.o ]; then
         src/psaccounts/third_party/cJSON.c /tmp/sqlite3_host.o -ldl
 fi
 
+# [CN-FORK] v0.5.2.170 改名写链（src/tile_db.c）的宿主测试 —— 从 .118 到 .169 一直缺席。
+#
+# 为什么现在补：真机 192.168.1.214 上暴露了一个真 bug ——
+#   tbl_appinfo 的名字 key 是**带语言后缀**的一整套：TITLE + TITLE_00/01/09/10/11/27…
+#   （简中=11、繁中=10、韩=09、泰=27），早年只写 TITLE/TITLE_01，于是**简中系统读
+#   TITLE_11 读到旧名**，主屏与 SMP 都显示老名字。用户原话：「P端改完名称，PC端变了，
+#   但 smb 没变」。这不是「偶发」而是**每个非英语用户都会撞上**。
+#
+# 这条测试用 sqlite3 现造 appinfo.db/app.db 夹具（不依赖 python3），钉死四件事：
+#   ① 全部 TITLE_NN / concept_name_NN 都写成新名；② TITLE_ID 一个字节不许动
+#   （它是标题号，被改成游戏名比不改名严重得多）；③ 幂等；④ 别人的行 / 无关 key 不碰。
+# 复用上面那份 /tmp/sqlite3_host.o（宿主工具链单独编的 sqlite），且必须编进 tile_db.c。
+if [ -f /tmp/sqlite3_host.o ]; then
+    run_one tile_db src/tile_db.c \
+        -Iinclude -Ithird_party/sqlite3 -Isrc/psaccounts/third_party \
+        -DTILE_DB_APPDB_PATH='"/tmp/pldmgr_tiledb_test/app.db"' \
+        -DTILE_DB_APPINFO_PATH='"/tmp/pldmgr_tiledb_test/appinfo.db"' \
+        -DTILE_DB_BAK_DIR='"/tmp/pldmgr_tiledb_test/dbbak"' \
+        src/json_helpers.c src/utils.c /tmp/sqlite3_host.o -ldl
+fi
+
 # [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（src/game_prefs.c）。
 # 落点 /data/nayeplmtools/game_prefs.json，纯文件系统 —— 不需要 sqlite。
 # 要钉死的是三态入参：前端一次只拨一颗按钮（fav 或 pin），**没带的那一项必须原样保留**

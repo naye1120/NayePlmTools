@@ -34,8 +34,14 @@ extern "C" {
 void tile_db_backup_dbs(void);
 
 /* 改名：把 app.db 的 titleName / conceptName / primaryTitleName 与 appinfo.db 的
- * TITLE / TITLE_01 / concept_name / concept_name_01 一起改成 new_name，
- * 一个库一个事务，只按 titleId（或读回来的 localConceptId）定位，绝不动别人的行。
+ * TITLE(**含全部 TITLE_00..30 语言槽**) / concept_name(**含全部 concept_name_00..30**)
+ * 一起改成 new_name，一个库一个事务，只按 titleId（或读回来的 localConceptId）定位，
+ * 绝不动别人的行。
+ *
+ * ⚠ [CN-FORK] v0.5.2.170 TITLE_NN / concept_name_NN 是**语言维度**（简中=11、繁中=10、
+ * 韩=09、泰=27…）。早年只写 TITLE + TITLE_01，于是简中系统读 TITLE_11 读到的是旧名，
+ * 表现为「改名后主屏/SMP 里还是旧名」。现在按 `key='TITLE' OR key GLOB 'TITLE_[0-9]*'`
+ * 全写，且用 GLOB 排掉 TITLE_ID（那是标题号，绝不能被改成游戏名）。
  *
  * 返回 0 = 名字现在就是 new_name（刚写进去，或本来就一致）；
  *      -1 = 参数不合法 / 库打不开 / 一行都没匹配到（游戏还没注册进 app.db）；

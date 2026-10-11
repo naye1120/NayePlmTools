@@ -15,9 +15,16 @@
  *                          或 localConceptId = <cid>（概念表；<cid> 是从
  *        tbl_contentinfo 读回来的 "cid:scp:..."，推不出来，只能读）
  *      /system_data/priv/mms/appinfo.db
- *        tbl_appinfo     SET val=<新名> WHERE titleId=<tid> AND key IN ('TITLE','TITLE_01')
+ *        tbl_appinfo     SET val=<新名> WHERE titleId=<tid>
+ *                                        AND (key='TITLE' OR key GLOB 'TITLE_[0-9]*')
  *        tbl_conceptinfo SET val=<新名> WHERE local_concept_id=<cid>
- *                                        AND key IN ('concept_name','concept_name_01')
+ *                                        AND (key='concept_name' OR
+ *                                             key GLOB 'concept_name_[0-9]*')
+ *    ⚠ [CN-FORK] v0.5.2.170 早年只写 TITLE/TITLE_01（照抄参考实现），**漏掉了
+ *    TITLE_00..30 这一整套语言槽** —— 简中系统读 TITLE_11，于是「改完名主屏还是
+ *    旧名」。TITLE_NN / concept_name_NN 是**语言维度**，不是可选别名，必须全写。
+ *    匹配式刻意不用 `LIKE 'TITLE_%'`：tbl_appinfo 里还有个 **TITLE_ID** key
+ *    （值是标题号），`TITLE_%` 会把它改成游戏名 —— 用 GLOB '[0-9]' 排掉它。
  *    **真机消融只写这 9 个平铺格子，AppInfoJson / ConceptInfoJson 镜像一字节不碰**，
  *    磁贴照样改了 —— 反过来原地改 JSON 会写坏：ConceptInfoJson 里带按字段的 byte
  *    "size"，字符串长度一变就与实际不符。per-account 的 tbl_iconinfo_<uid> /
@@ -352,7 +359,29 @@ static int td_update_appinfo_kv(sqlite3 *db, const char *sql_str,
     return written;
 }
 
-/* appinfo.db：TITLE / TITLE_01（按 titleId）+ concept_name(_01)（按 cid）。 */
+/* [CN-FORK] v0.5.2.170 名字 key 的语言维度 —— 只改 TITLE/TITLE_01 是个真 bug。
+ *
+ * 真机取证（192.168.1.214，PPSA21567「宇宙机器人」）：tbl_appinfo 里同一个
+ * titleId 下**并存**下面这一整套 key（值全是英文默认名，改名前）：
+ *     TITLE, TITLE_00, TITLE_01, TITLE_02 ... TITLE_30, (另有一个 TITLE_ID)
+ * 我们以前只写 TITLE + TITLE_01 —— 于是**简中系统读 TITLE_11、繁中读 TITLE_10、
+ * 韩文读 TITLE_09、泰文读 TITLE_27**，这些槽位一个都没动，主屏/SMP 照旧显示旧名。
+ * 用户看到的现象就是「改名只有一个位置变了 / SMP 里还是旧名」。
+ * tbl_conceptinfo 的 concept_name / concept_name_00..30 是同一个病，一并修。
+ *
+ * 匹配式用两个条件而不是 `LIKE 'TITLE_%'`：
+ *   · `key = 'TITLE'`            —— 不带数字的默认槽，必须留；
+ *   · `key GLOB 'TITLE_[0-9]*'`  —— 只要**数字后缀**的那些。
+ * ⚠ 绝不能用 `LIKE 'TITLE_%'`：tbl_appinfo 里还有一个 **TITLE_ID** key（值是
+ *   "PPSA21567" 这种标题号），`TITLE_%` 会把它一起改成游戏名 —— 那是把身份
+ *   字段写坏，比不改名严重得多。GLOB 的 `[0-9]` 正好把 TITLE_ID 排除在外
+ *   （它的第五个字符是 'I' 不是数字）。
+ * concept 那边同形（concept_id 是纯数字槽值，但 key 名没有 concept_id 这种兄弟，
+ * 仍统一用同一套匹配式，少一个特例少一个坑）。 */
+#define TD_TITLE_KEY_MATCH    "key = 'TITLE' OR key GLOB 'TITLE_[0-9]*'"
+#define TD_CONCEPT_KEY_MATCH  "key = 'concept_name' OR key GLOB 'concept_name_[0-9]*'"
+
+/* appinfo.db：TITLE / TITLE_00..30（按 titleId）+ concept_name(_00..30)（按 cid）。 */
 static int td_update_appinfo(const char *tid, const char *local_cid,
                              const char *new_name, int *matched_out) {
     sqlite3 *db = td_open(TILE_DB_APPINFO_PATH);
@@ -369,9 +398,9 @@ static int td_update_appinfo(const char *tid, const char *local_cid,
     written += td_update_appinfo_kv(
         db,
         "UPDATE tbl_appinfo SET val = ? WHERE titleId = ? "
-        "AND key IN ('TITLE','TITLE_01')",
+        "AND (" TD_TITLE_KEY_MATCH ")",
         "SELECT COUNT(*), SUM(CASE WHEN val IS NOT ? THEN 1 ELSE 0 END) "
-        "FROM tbl_appinfo WHERE titleId = ? AND key IN ('TITLE','TITLE_01')",
+        "FROM tbl_appinfo WHERE titleId = ? AND (" TD_TITLE_KEY_MATCH ")",
         new_name, tid, &m);
     matched += m;
     if (local_cid && local_cid[0]) {
@@ -379,10 +408,10 @@ static int td_update_appinfo(const char *tid, const char *local_cid,
         written += td_update_appinfo_kv(
             db,
             "UPDATE tbl_conceptinfo SET val = ? WHERE local_concept_id = ? "
-            "AND key IN ('concept_name','concept_name_01')",
+            "AND (" TD_CONCEPT_KEY_MATCH ")",
             "SELECT COUNT(*), SUM(CASE WHEN val IS NOT ? THEN 1 ELSE 0 END) "
             "FROM tbl_conceptinfo WHERE local_concept_id = ? "
-            "AND key IN ('concept_name','concept_name_01')",
+            "AND (" TD_CONCEPT_KEY_MATCH ")",
             new_name, local_cid, &m);
         matched += m;
     }
