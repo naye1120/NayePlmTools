@@ -1599,6 +1599,16 @@ POST 路由 `ROUTE_SYSTEM_APP_VISIBLE` **已登记进 `gr_post_limit`**（漏登
 - 新增文件：`include/tile_group.h` / `src/tile_group.c` / `test/tile_group_test.c` /
   `frontend/src/utils/at9Encode.js` / `frontend/src/utils/atrac9/`（6 个）/ `tools/atrac9_js_check.mjs`。
   ⚠ 新模块要同时补 **Makefile 的 `SRCS`** 与 **`http_server.c` 的 include** 两处；新头文件必须**自包含**。
+- **出包**：`NayePlmTools_0.5.2.166-me.elf`（NAYE00001 媒体栏）/ `-ga.elf`（NAYE00004 游戏栏），
+  两包各 **11,261,336 字节**，内嵌标题 `NayePlmTools v0.5.2.166 by naye (c676f86, built at
+  2026-10-11 05:16:51 UTC)`，`PLDMGR_VER:0.5.2.166`；`frontend/dist/index.html` **1,150,249 字节**，
+  与两颗 ELF 内嵌网页段（偏移 **+2231888**）**逐字节一致**；`0.5.2.165` 残留 **0** 处；
+  核对脚本 `pkg_166_verify.sh` **387 项全过**。
+  ⚠ **核对脚本里「编码器进包了没有」那条第一版是自欺的**：`grep -ao "atrac9"` 命中的是**模块路径**
+  （打包后消失）、`AT9_BITRATE_KBPS` 是**导出常量名**（terser mangle 会改名）—— 两个实测都是 0 次，
+  这种断言永远红、然后被人顺手注释掉。**能穿透打包的只有字符串字面量**：改用
+  `not a RIFF/WAVE file` + `createObjectURL`，再量 `?worker&inline` 生成的单引号源码串长度
+  （实测 86,514 字符、内部含 `superframe`）。**关键字 + 长度一起看，才防得住「打了个壳」。**
 
 ## 1. 仓库拓扑（工作区 d:\pldmanager）
 | 目录 | 角色 |
