@@ -123,6 +123,13 @@
  * 都有一个「下载」。后者的要害是**一个字节都不碰主机存档**（不是 sr_pull）。 */
 #define ROUTE_GAME_SAVE_SNAP_DOWNLOAD "/game_save_snap_download"
 #define ROUTE_GAME_SAVE_REMOTE_DOWNLOAD "/game_save_remote_download"
+/* [CN-FORK] v0.5.2.174 「快照活动」（GET，只读）：
+ *   /game_save_snap_log?tid=&n=20  → {"ok":true,"tid":"…","events":[{t,lv,x}]}
+ * 用户口径：「发生记录也没有写到屏幕上」—— 快照的**负向结果**（被静默窗口挡掉、
+ * 内容没变、排队重试）原来只在 pldmgr.log 里，界面上一个像素都不落。
+ * 这条只读最近 N 条事件（带时刻 / 级别），给「本地快照」那块界面用。
+ * ⚠ 它是 GET 且被界面轮询 —— 记得加进 `is_noisy_route()`，否则每 4 秒一条日志。 */
+#define ROUTE_GAME_SAVE_SNAP_LOG "/game_save_snap_log"
 #define ROUTE_GAME_MOUNT "/game_mount"
 #define ROUTE_GAME_UNMOUNT "/game_unmount"
 #define ROUTE_GAME_UNINSTALL "/game_uninstall"
@@ -149,7 +156,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.5.2.173" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.173，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.174" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.174，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，

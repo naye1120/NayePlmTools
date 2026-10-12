@@ -41,6 +41,10 @@
  *      的 uid** 前缀会被剥掉（`00000004_sdimg_X` → `sdimg_X`），不是本机 uid 的
  *      8 位数字前缀一律原样保留；garlic 自己的记账 `manifest.json` **不写进**主机
  *      的存档目录，但「没见过的合法条目」仍要照收（不许改成白名单）
+ *   ⑮ **快照活动事件环**（`.174`，用户报的「发生记录也没有写到屏幕上」）：按 tid
+ *      过滤 / 时间正序 / max 取最后 N 条 / 文本转义 / 满了覆盖 / 空 tid 不记；
+ *      端到端钉住「拍成 → OK 事件」与「内容没变 → **SKIP 事件**」两条 ——
+ *      负向结果上不了屏正是这一版要修的东西，只测正向等于没测
  *
  * 测不了的部分（写在前面，免得有人以为是漏了）：
  *   - HTTP 那一层（tid 到底在 query 还是 body）在 http_server.c，主机上没有
@@ -1309,6 +1313,155 @@ int main(void) {
         unlink(zsrc);
         unlink(zzip);
         (void)zd;
+    }
+
+    /* ── ⑮ 快照活动事件环（`.174`）───────────────────────────────────────────
+     * 用户口径：「发生记录也没有写到屏幕上」。这条环是**界面唯一的数据源**，所以
+     * 要钉的不是「环能写能读」，而是「界面拿到的 JSON 长什么样」：
+     *   ① 按 tid 过滤（切游戏不能串味）；空 tid 不记（不知道是谁的就别记）；
+     *   ② **时间正序**（界面从上往下读，最早在前）；
+     *   ③ `max` 取的是**最后** N 条，不是最前 N 条；
+     *   ④ 文本必须转义（文件名里真会出现 `"` 与 `\`，不转义界面 JSON.parse 直接抛）；
+     *   ⑤ 环满了从头覆盖，最新的那条一定还在；
+     *   ⑥ 端到端：真拍一份 → OK 事件；紧接着再拍 → **SKIP 事件**。
+     *      后半条才是这一版的重点 —— `.174` 存在的理由就是「负向结果也要看得见」，
+     *      只测拍成那一条的话，这个功能坏了测试照样绿。 */
+    {
+        const char *EA = "PPSA90001";
+        const char *EB = "PPSA90002";
+        char ev[8192];
+        int n;
+
+        game_saves_snap_ev_clear();
+        n = game_saves_snap_ev_json(EA, 16, ev, sizeof(ev));
+        CHECK(n > 0 && strstr(ev, "\"events\":[]") != NULL,
+              "① 清空后该是空列表（实得 %s）", ev);
+
+        game_saves_snap_ev(EA, GS_SNAP_EV_INFO, "第一条");
+        game_saves_snap_ev(EA, GS_SNAP_EV_OK, "第二条 %d", 2);
+        game_saves_snap_ev(EA, GS_SNAP_EV_SKIP, "第三条");
+        game_saves_snap_ev(EB, GS_SNAP_EV_FAIL, "别人的");
+        game_saves_snap_ev("", GS_SNAP_EV_INFO, "空 tid 不该被记");
+        game_saves_snap_ev(NULL, GS_SNAP_EV_INFO, "NULL 不该崩");
+
+        n = game_saves_snap_ev_json(EA, 16, ev, sizeof(ev));
+        CHECK(n > 0 && ev[0] == '{' && strstr(ev, "\"ok\":true") != NULL,
+              "① 该是 ok:true 的对象（实得 %s）", ev);
+        CHECK(strstr(ev, "\"tid\":\"PPSA90001\"") != NULL, "① tid 该回显");
+        CHECK(strstr(ev, "第一条") && strstr(ev, "第二条 2") && strstr(ev, "第三条"),
+              "① 三条都在：%s", ev);
+        CHECK(strstr(ev, "空 tid") == NULL, "① 空 tid 那条不该被记");
+        CHECK(strstr(ev, "NULL") == NULL, "① NULL tid 那条不该被记");
+        CHECK(strstr(ev, "别人的") == NULL, "① 别的游戏的不许串进来");
+        {
+            char *p1 = strstr(ev, "第一条");
+            char *p3 = strstr(ev, "第三条");
+            CHECK(p1 && p3 && p1 < p3, "② 该按时间正序（最早在前）：%s", ev);
+        }
+        CHECK(strstr(ev, "\"lv\":1") != NULL && strstr(ev, "\"lv\":2") != NULL,
+              "② 级别要带上（界面靠它上色）");
+        CHECK(strstr(ev, "\"t\":\"") != NULL, "② 每条都要带时刻");
+        CHECK(n >= 2 && ev[n - 2] == ']' && ev[n - 1] == '}',
+              "② 结尾该是 ]}（实得 …%s）", ev + (n > 6 ? n - 6 : 0));
+
+        n = game_saves_snap_ev_json(EB, 16, ev, sizeof(ev));
+        CHECK(strstr(ev, "别人的") != NULL && strstr(ev, "第一条") == NULL,
+              "① 按 tid 过滤（别的游戏只看得到自己那条）：%s", ev);
+
+        n = game_saves_snap_ev_json(NULL, 16, ev, sizeof(ev));
+        CHECK(strstr(ev, "第一条") && strstr(ev, "别人的"),
+              "① 空 tid = 全部游戏都回");
+
+        n = game_saves_snap_ev_json(EA, 2, ev, sizeof(ev));
+        CHECK(strstr(ev, "第三条") && strstr(ev, "第二条 2") && strstr(ev, "第一条") == NULL,
+              "③ max=2 取的是**最后**两条（第一条该被丢掉）：%s", ev);
+
+        /* 转义。note / 文件名里真会出现引号与反斜杠 —— 不转义就是坏 JSON，
+         * 界面那一下 JSON.parse 会直接抛，整块「最近活动」全白。 */
+        game_saves_snap_ev(EA, GS_SNAP_EV_INFO, "带\"引号\"和\\反斜杠\n换行");
+        n = game_saves_snap_ev_json(EA, 1, ev, sizeof(ev));
+        CHECK(strstr(ev, "\\\"引号\\\"") != NULL, "④ 双引号要转义：%s", ev);
+        CHECK(strstr(ev, "\\\\反斜杠") != NULL, "④ 反斜杠要转义：%s", ev);
+        CHECK(strchr(ev, '\n') == NULL, "④ 换行不能原样进 JSON：%s", ev);
+
+        /* 覆盖：环只有 64 格。写 80 条之后，第 15 条该没了、第 16 条是最老的。 */
+        game_saves_snap_ev_clear();
+        for (int i = 0; i < 80; i++) game_saves_snap_ev(EA, GS_SNAP_EV_INFO, "第%d条", i);
+        n = game_saves_snap_ev_json(EA, 64, ev, sizeof(ev));
+        CHECK(strstr(ev, "第79条") != NULL, "⑤ 最新那条必须在环里");
+        CHECK(strstr(ev, "第0条") == NULL, "⑤ 太老的该被覆盖掉");
+        CHECK(strstr(ev, "第16条") != NULL && strstr(ev, "第15条") == NULL,
+              "⑤ 64 格：第 16 条是活着的最老一条，第 15 条该被覆盖");
+
+        /* ⑥ 端到端：先动一下源（否则第一条就是「内容没变」，测不到 OK 那条），
+         *    拍一次 → 环里出现 OK；紧接着再拍 → 环里出现 SKIP。 */
+        put_blob(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_EVRING", 77);
+        game_saves_snap_ev_clear();
+        {
+            char smsg[256];
+            int m1 = game_saves_snap_run_now(TID_PS5, smsg, sizeof(smsg));
+            CHECK(m1 > 0, "⑥ 第一次该拍成（实得 %d, %s）", m1, smsg);
+            n = game_saves_snap_ev_json(TID_PS5, 16, ev, sizeof(ev));
+            CHECK(strstr(ev, "\"lv\":1") != NULL && strstr(ev, "快照") != NULL,
+                  "⑥ 拍成该留下一条 OK 事件（带快照名）：%s", ev);
+
+            smsg[0] = 0;
+            int m2 = game_saves_snap_run_now(TID_PS5, smsg, sizeof(smsg));
+            CHECK(m2 == 0, "⑥ 紧接着再拍不该生成新的（实得 rc=%d, %s）", m2, smsg);
+            n = game_saves_snap_ev_json(TID_PS5, 16, ev, sizeof(ev));
+            CHECK(strstr(ev, "\"lv\":2") != NULL &&
+                  strstr(ev, "内容与最近一份相同") != NULL,
+                  "⑥ **负向结果也要落进事件环**（用户报的「发生记录没上屏」）：%s", ev);
+        }
+
+        /* ⑦ 快照名字**必须严格大于已有的最新那个**。
+         *    这是写这个用例时顺出来的一条真 bug（`.140` 起就在）：
+         *    原来只判「这个目录名在不在」，空出来的老名字会被重新用上 ——
+         *    连拍两份得到 `…-010807` / `…-010808`，prune(keep=1) 删掉 010807 之后，
+         *    下一次又探到 010807 空闲，新快照就叫回 `010807`，**比留下的那份更旧**；
+         *    而 prune 按名字排序删「最旧的」→ 把**刚拍的那一份**删掉、留下更旧的。
+         *    用户设「保留 1 份」，手里拿到的却是上一次的存档。
+         *    这里**手工造一个「未来」的快照目录**来逼出这条分支 —— 靠 wall clock
+         *    走秒是碰运气，测试不能靠运气。 */
+        {
+            char fut[24], fdir[1200], fp[1200], cmd2[1200], maxname[24];
+            char smsg2[256];
+            time_t nw = time(NULL) + 90;   /* 明确落在「未来」 */
+            struct tm tmv;
+            localtime_r(&nw, &tmv);
+            strftime(fut, sizeof(fut), "%Y%m%d-%H%M%S", &tmv);
+
+            /* 只留这一个「未来」快照，形状确定，断言才有意义 */
+            snprintf(cmd2, sizeof(cmd2), "rm -rf " GAME_SAVES_SNAP_DIR "/" TID_PS5 "/" U2);
+            system(cmd2);
+            snprintf(cmd2, sizeof(cmd2), "mkdir -p " GAME_SAVES_SNAP_DIR "/" TID_PS5 "/" U2
+                                         "/" "%s", fut);
+            system(cmd2);
+            snprintf(fdir, sizeof(fdir), GAME_SAVES_SNAP_DIR "/" TID_PS5 "/" U2);
+            snprintf(fp, sizeof(fp), "%s/%s/sdimg_FUTURE", fdir, fut);
+            put_blob(fp, 32);
+            CHECK(access(fp, F_OK) == 0, "⑦ 造不出「未来」快照夹具（父目录不在？）：%s", fp);
+
+            put_blob(HOME "/" U2 "/savedata_prospero/" TID_PS5 "/sdimg_ORDER", 55);
+            int m3 = game_saves_snap_run_now(TID_PS5, smsg2, sizeof(smsg2));
+            CHECK(m3 > 0, "⑦ 该拍成（实得 %d, %s）", m3, smsg2);
+
+            maxname[0] = 0;
+            DIR *d3 = opendir(fdir);
+            if (d3) {
+                struct dirent *e3;
+                while ((e3 = readdir(d3)) != NULL) {
+                    if (strlen(e3->d_name) != 15) continue; /* 只认 YYYYmmdd-HHMMSS */
+                    if (!maxname[0] || strcmp(e3->d_name, maxname) > 0)
+                        snprintf(maxname, sizeof(maxname), "%s", e3->d_name);
+                }
+                closedir(d3);
+            }
+            CHECK(maxname[0] && strcmp(maxname, fut) > 0,
+                  "⑦ 新快照的名字该**严格大于**已有的最新那个（已有 %s，最新 %s）—— "
+                  "名字倒退会让 prune 删掉刚拍的那一份", fut, maxname);
+        }
+        game_saves_snap_ev_clear();
     }
 
     /* ⑩ 小栈。放在最后：它会动 U2 的源、也会给 U5 补一份快照（上面刚删掉），

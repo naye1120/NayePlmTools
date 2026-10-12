@@ -1080,99 +1080,35 @@ int game_auto_sync_action(const char *body, size_t len,
 #define GA_EXIT_SETTLE 5 /* 退出后再等这么久才推，给主机收尾写盘的时间 */
 #define GA_THREAD_STACK (1u << 20)
 
-/* ══ [CN-FORK] v0.5.2.172 退出快照的「延迟重试」══════════════════════════════
+/* ══ [CN-FORK] v0.5.2.174 退出快照：一个时机，没有静默窗口、没有重试 ═════════
  *
- * 用户口径：「游戏关闭的时候并没有自动存储本地快照」。
+ * 用户口径：「不需要静默窗口和重试，快照和推送时机一起，只用这一个时机和手动」。
  *
- * 真机日志实证（`.170`）：
- *     saves: PPSA21567 已退出 · 本地快照：存档刚被写过，等下一轮（0）
- * 连着三条 —— 快照**被触发了**（开关开着、退出也检测到了），但每一次都被
- * `gs_snap_take` 的静默窗口（`GS_SNAP_QUIET_SEC` = 20s）挡掉，返回 0。
+ * 历史：`.172` 这里有一整套「延迟重试」队列（`GA_SNAP_RETRY_MAX 40` × `GA_TICK 1`），
+ * 唯一目的是绕开 `gs_snap_take` 里那个 20 秒**静默窗口** —— 游戏退出那一刻主机会把
+ * 存档写下去，mtime 就是「刚刚」，于是每一次退出都被窗口挡掉、快照永远不生成。
+ * `.174` 把**静默窗口本身删了**（`GS_SNAP_QUIET_SEC` 已不存在），重试队列就没有
+ * 存在的理由，整条一起删。
  *
- * 根因是**触发方式变了、守卫没跟着变**：那句「宁可等下一轮」写在还有**定时守护**
- * 的年代（30 分钟一轮，「下一轮」真的会来）。`.154` 把定时守护整条删掉、只留
- * 「游戏退出」这一个触发点之后，退出是**一次性事件** —— 游戏已经没了，`prev`
- * 下一轮就变成空串，再也不会有人来补这一份。而退出那一刻主机会把存档写下去，
- * 存档的 mtime 就是「刚刚」，于是**每一次退出都被挡掉，本地快照永远不生成**。
+ * 现在本地快照只剩两个触发点，其中自动那一个与自动推送**共用同一个时刻**：
+ *   ① 检测到游戏退出（`game_auto_plan` 里 SNAP 与 PUSH 相邻，`GA_EXIT_SETTLE`
+ *      只等一次，见下面那个 `settled` 变量）；
+ *   ② 面板「本地快照」块上的「立即备份」。
  *
- * 修法：不改 `gs_snap_take` 的判据（判据本身是对的 —— 正在写就不能拍），而是把
- * 「下一轮」真的补上：跳过时把 tid 记进 pending，之后每个 tick 重试一次，直到
- * 拍成 / 内容没变 / 超过上限。
+ * **去重仍然保留**（`gs_snap_take` 里「内容与最近一份相同就不新增」）—— 那是去重，
+ * 不是时间窗：退出时如果存档一个字节都没变，本来就不该多落一份。
  *
- * 三条边界：
- *   ① **只在「没有游戏在跑」时重试** —— 用户要是又开了游戏，这一份就不该再补
- *      （存档可能已经在变，而且那是另一款游戏的事了）；
- *   ② **只重试「刚被写过」那一种** —— 「内容没变」重试多少次都一样（见
- *      `GS_SNAP_SKIP_*`），失败（<0）也不必重试；
- *   ③ 上限 `GA_SNAP_RETRY_MAX` 轮（1s 一轮），刚好覆盖 20s 静默窗口并留足余量 ——
- *      真机上存档 mtime 落在退出那一刻，而快照是在 `GA_EXIT_SETTLE` 之后才拍的，
- *      所以要等的时间 ≈ `GS_SNAP_QUIET_SEC - GA_EXIT_SETTLE`。
- *
- * ── [CN-FORK] v0.5.2.173 这条链在日志里为什么长这样（用户口径：「这里为什么这么缩链路」）
- * 一次「退出时快照」在真机上会印出 3~4 行，它们来自**三个不同的日志点、两个文件**，
- * 所以看着「跳」—— 每一行各说各的，没有统一的格式：
- *
- *   ① `saves: <TID> 已退出 · 本地快照：<note>（本轮没拍）`
- *      ← 本文件下面那个 GA_ACT_SNAP 分支。`<note>` 是 `gs_snap_take` 回的人话，
- *        `（…）` 是 `game_saves_snap_run_now_ex` 的**返回值**（>0 生成份数 / 0 跳过 /
- *        -1 失败）。`.172` 之前这里印的是裸的 `（0）`，光看日志分不清三种含义
- *        —— `.173` 改成写字的三种结果。
- *   ② `saves: <TID> 本地快照已排队重试（每 1 秒再试一次，最多 40 次）`
- *      ← 紧接在 ① 之后，因为「要不要重试」是**引擎**的决定（快照层不该知道引擎有
- *        待办队列，所以不能写在 game_saves.c 里）。
- *   ③ `saves: <TID>/<uid> 本地快照 <ts>（N 文件 / M 字节）`
- *      ← 来自 `game_saves.c` 的 `gs_snap_take`，是**真的拍成那一刻**才印的。所以它在
- *        重试成功时出现在 ② 和 ④ 之间 —— 顺序看着乱，其实是对的。
- *   ④ `saves: <TID> 本地快照重试成功：已生成 1 份快照`
- *      ← 本文件的 `ga_pend_snap_tick`。`① + ②` 和 `③ + ④` 是**同一件事的两头**。
- *
- * 措辞为什么这么短：`<note>` 是 `gs_snap_take` 的 out 参数，同一句话也走
- * `/game_save_snap` 的 `message` 字段回给前端（所以它必须是**用户能读的一行**，
- * 不能塞调试信息）。日志只是复用它 —— 这也是为什么日志看着「缩」。
- * ⚠ `test/game_auto_test.c` ⑩ 靠 `已排队重试` / `本地快照重试成功` 两个**子串**
- * 认这条链，改措辞时这两个词必须留着。 */
-#define GA_SNAP_RETRY_MAX 40
-
-static char g_pend_snap[32];   /* 待重试的快照 tid；空 = 没有。只在守护线程里读写 */
-static int  g_pend_snap_left;  /* 还能重试几轮 */
-
-/* 给这个 tid 排一次「延迟重试」。 */
-static void ga_pend_snap_arm(const char *tid) {
-    if (!tid || !tid[0]) return;
-    snprintf(g_pend_snap, sizeof(g_pend_snap), "%s", tid);
-    g_pend_snap_left = GA_SNAP_RETRY_MAX;
-}
-
-/* 每个 tick 调一次（在没有游戏运行时）。返回 1 = 还有待办，0 = 没有了。 */
-static int ga_pend_snap_tick(void) {
-    if (!g_pend_snap[0]) return 0;
-    char msg[200];
-    msg[0] = 0;
-    int reason = GS_SNAP_SKIP_NONE;
-    int made = game_saves_snap_run_now_ex(g_pend_snap, &reason, msg, sizeof(msg));
-    if (made > 0) {
-        pldmgr_log("[PLDMGR] saves: %s 本地快照重试成功：%s\n",
-                   g_pend_snap, msg[0] ? msg : "已生成");
-        g_pend_snap[0] = 0;
-        return 0;
-    }
-    if (made < 0) {   /* 硬错误（目录没了 / 写不进去）—— 再试也是白试 */
-        pldmgr_log("[PLDMGR] saves: %s 本地快照重试失败，放弃：%s\n",
-                   g_pend_snap, msg[0] ? msg : "快照失败");
-        g_pend_snap[0] = 0;
-        return 0;
-    }
-    /* made == 0：还是被跳过。只有「刚被写过」值得接着等，其余（内容没变 / 空）
-     * 现在放弃与等 40 秒后再放弃是同一件事，不如当场收摊、少写 40 行日志。 */
-    if (reason != GS_SNAP_SKIP_TOO_FRESH || --g_pend_snap_left <= 0) {
-        pldmgr_log("[PLDMGR] saves: %s 本地快照不再重试：%s\n",
-                   g_pend_snap, msg[0] ? msg : "已跳过");
-        g_pend_snap[0] = 0;
-        return 0;
-    }
-    return 1;
-}
-
+ * ── 这条链在日志/界面上长什么样
+ * 一次「退出时快照」印两行（真的拍成时，中间还有一行来自 game_saves.c）：
+ *   ① `saves: <TID> 已退出 · 本地快照：<note>（本轮生成 N 份 / 本轮没拍 / 本轮失败）`
+ *      ← 本文件的 GA_ACT_SNAP 分支。`（…）` 是 `game_saves_snap_run_now` 的返回值，
+ *        `.172` 之前这里印的是裸的 `（0）`，光看日志分不清三种含义（`.173` 改的）。
+ *   ② `saves: <TID>/<uid> 本地快照 <ts>（N 文件 / M 字节）`
+ *      ← `game_saves.c` 的 `gs_snap_take`，**真的拍成那一刻**才印。
+ * `<note>` 是 `gs_snap_take` 的 out 参数，同一句话也走 `/game_save_snap` 的
+ * `message` 字段回给前端 —— 所以它必须是「用户能读的一行」，不能塞调试信息。
+ * 同一批事件也进「快照活动」事件环（`game_saves_snap_ev`，`.174`），
+ * 面板上打开存档弹窗就能直接看到，不用去翻日志。 */
 void game_auto_tick(void) {
     char cur[32];
     cur[0] = 0;
@@ -1190,12 +1126,6 @@ void game_auto_tick(void) {
     snprintf(prev, sizeof(prev), "%s", g_prev_tid);
     snprintf(g_prev_tid, sizeof(g_prev_tid), "%s", cur);
     pthread_mutex_unlock(&g_ga_mu);
-
-    /* [CN-FORK] v0.5.2.172 待重试的退出快照。**必须排在下面那个早退之前** ——
-     * 退出之后 prev 与 cur 都是空串，每一轮都走早退，重试只能在这里做。
-     * 只在「没有游戏在跑」时补：用户又开了游戏就把待办丢掉（见 ga_pend_snap_arm）。 */
-    if (!cur[0]) ga_pend_snap_tick();
-    else g_pend_snap[0] = 0;
 
     if (!strcmp(prev, cur)) return; /* 绝大多数轮次走这里 */
 
@@ -1260,9 +1190,10 @@ void game_auto_tick(void) {
         }
 
         /* [CN-FORK] v0.5.2.154 退出时的本地快照（原来是定时守护，已删）。
-         * [CN-FORK] v0.5.2.172 跳过的要**排队重试** —— 退出是一次性事件，没有
-         * 「下一轮」，而退出那一刻存档刚被主机写完，几乎必然撞上静默窗口。
-         * 详见上面 ga_pend_snap_arm 那段。
+         * [CN-FORK] v0.5.2.174 **与自动推送同一个时刻**，没有静默窗口、没有重试
+         * （用户口径：「不需要静默窗口和重试，快照和推送时机一起，只用这一个时机
+         * 和手动」）。上面那个 `settled` 让两者共用同一次 `GA_EXIT_SETTLE` 等待，
+         * 所以「快照 + 推送」是一次退出里同时发生的事，不是两轮。
          * [CN-FORK] v0.5.2.173 日志措辞（用户口径：「这里为什么这么缩链路」）。
          * 原来这行是 `…：%s（%d）`，那个裸的 `（0）` 是 made 的返回值，光看日志
          * 分不清「拍成了 0 份」还是「没拍」还是「失败」。现在把三种结果写成字。 */
@@ -1270,18 +1201,15 @@ void game_auto_tick(void) {
             char smsg[200];
             char mtxt[24];
             smsg[0] = 0;
-            int sreason = GS_SNAP_SKIP_NONE;
-            int made = game_saves_snap_run_now_ex(steps[i].tid, &sreason, smsg, sizeof(smsg));
+            /* [CN-FORK] v0.5.2.174 事件环也要一条「开始」—— 界面上一条链总得有个头，
+             * 否则用户看到的第一行就是「跳过」，不知道是谁触发的。 */
+            game_saves_snap_ev(steps[i].tid, GS_SNAP_EV_INFO, "游戏退出，检查本地快照");
+            int made = game_saves_snap_run_now(steps[i].tid, smsg, sizeof(smsg));
             if (made > 0) snprintf(mtxt, sizeof(mtxt), "本轮生成 %d 份", made);
             else if (made == 0) snprintf(mtxt, sizeof(mtxt), "本轮没拍");
             else snprintf(mtxt, sizeof(mtxt), "本轮失败");
             pldmgr_log("[PLDMGR] saves: %s 已退出 · 本地快照：%s（%s）\n",
                        steps[i].tid, smsg[0] ? smsg : "已处理", mtxt);
-            if (made == 0 && sreason == GS_SNAP_SKIP_TOO_FRESH) {
-                ga_pend_snap_arm(steps[i].tid);
-                pldmgr_log("[PLDMGR] saves: %s 本地快照已排队重试（每 %ds 秒再试一次，最多 %d 次）\n",
-                           steps[i].tid, GA_TICK, GA_SNAP_RETRY_MAX);
-            }
             continue;
         }
 

@@ -934,6 +934,9 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_HISTORY_LIST) == 0) return 1;
     /* [CN-FORK] v0.5.1.64 删 /system_stats 轮询（该端点已随硬件信息功能一起下线） */
     if (strcmp(url, ROUTE_PKG_STATUS) == 0) return 1; /* [CN-FORK] PKG安装页轮询，降噪 */
+    /* [CN-FORK] v0.5.2.174 「快照活动」—— 存档弹窗开着的时候每 5 秒问一次，
+     * 就是为了让「排队重试 → 重试成功」这条链能被看着发生。降噪是必须的。 */
+    if (strcmp(url, ROUTE_GAME_SAVE_SNAP_LOG) == 0) return 1;
     if (strcmp(url, ROUTE_SMP_STATUS) == 0) return 1; /* [CN-FORK] v0.5.2.131 SMP 探活，拉起期间轮询，降噪 */
     if (strcmp(url, "/events") == 0) return 1;
     /* [CN-FORK] v0.5.2.99 远程游玩配对的进度查询，界面每 1 秒问一次，降噪；
@@ -2426,6 +2429,28 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         snprintf(qdisp, sizeof(qdisp), "attachment; filename=\"%s_%s_remote.zip\"",
                  qtid, qsave);
         return reply_file(conn, qpath, "application/zip", qdisp, 1);
+    } else if (strcmp(url, ROUTE_GAME_SAVE_SNAP_LOG) == 0) {
+        /* [CN-FORK] v0.5.2.174 「快照活动」只读接口（见 pldmgr.h 里那段）。
+         * 用户口径：「发生记录也没有写到屏幕上」。
+         *
+         * tid 可空（空 = 全部游戏）；不认识的 tid 回空列表而不是 400 —— 这条只是
+         * 展示用，前端换游戏时会有一瞬间 tid 还没跟上，报错只会闪一条红字。
+         * `n` 默认 16、封顶 64（与事件环同尺寸）。
+         *
+         * 缓冲走**栈**（6KB）：响应撑死 24 条 × 160 字节。用 alloc_response_buffer
+         * 那条路要 malloc 1MB（RESPONSE_BUFFER_SIZE），给一条每 5 秒轮询一次的
+         * 只读接口不值得。`queue_json` 是 MUST_COPY，传栈上数组是安全的。
+         * ⚠ 拼装函数保证「放不下就停手再收尾」，所以截断时也是**合法 JSON**。 */
+        const char *ltid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        const char *ln = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "n");
+        int lnmax = ln ? atoi(ln) : 0;
+        if (lnmax <= 0) lnmax = 16;
+        if (lnmax > 64) lnmax = 64;
+        char ljson[6144];
+        int lpos = game_saves_snap_ev_json(ltid, lnmax, ljson, sizeof(ljson));
+        if (lpos <= 0)
+            return queue_json(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "{\"ok\":false}", 13);
+        return queue_json(conn, MHD_HTTP_OK, ljson, (size_t)lpos);
     } else if (strcmp(url, ROUTE_GAME_SAVE_DELETE) == 0) {
         const char *xd = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
         const char *xs2 = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "save");

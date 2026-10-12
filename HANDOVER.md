@@ -5,7 +5,7 @@
 
 ## 0. 当前定稿状态
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-> - 版本：`MENU_VERSION = 0.5.2.173`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+> - 版本：`MENU_VERSION = 0.5.2.174`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 >   ⚠ 本「工作树」长段只记到 `.131`；`.137` 之后的沿革见 `CHANGELOG.md` 顶部与
 >   `D:/pldmanager/.workbuddy-ai/memory/`。`.172` = 修「游戏退出不落本地快照」+ 三张存档列表加下载按钮；
 >   `.173` = 删「存档转换」全链路 + 兼容导入搬独立满宽一行 + 导入 = 「改签」（落点只由选择器决定、

@@ -678,14 +678,13 @@ static int gs_app(char *b, size_t cap, size_t *pos, const char *fmt, ...) {
 #define GS_SNAP_MAX_LIST 64     /* 单个 (tid,uid) 下最多认这么多份 */
 #define GS_SNAP_MAX_REFS 512    /* 全局预算淘汰时一次最多收集这么多份 */
 /* [CN-FORK] v0.5.2.154 GS_SNAP_BOOT_DELAY / GS_SNAP_TICK / GS_SNAP_MAX_GAMES
- * 随「定时快照守护」一起删除（见下面那段说明）。 */
-
-/* 源目录最近这么多秒内被写过 → 本轮跳过（正在写的存档拷出来是撕裂的）。
- * 可被 -D 覆盖：宿主测试里夹具是**刚造出来**的，文件 mtime 就是「现在」，
- * 不置 0 的话每一份快照都会被这条挡掉，测不到后面任何东西。 */
-#ifndef GS_SNAP_QUIET_SEC
-#define GS_SNAP_QUIET_SEC 20
-#endif
+ * 随「定时快照守护」一起删除（见下面那段说明）。
+ *
+ * [CN-FORK] v0.5.2.174 **GS_SNAP_QUIET_SEC「静默窗口」整条删除**（用户口径：
+ * 「不需要静默窗口和重试，快照和推送时机一起，只用这一个时机和手动」）。
+ * 它原本是「源目录最近 N 秒被写过就不拍」的守卫，`.172` 为了绕过它又加了一整套
+ * 延迟重试队列 —— 两样一起删掉，快照就是「游戏退出时拍一次 + 手动点一次」。
+ * 留下的判断只有「内容没变就不新增」那一条（那是去重，不是时间窗）。 */
 
 /* 一把锁串起「退出时自动快照」与「立即备份 / 还原 / 删除」四条路径：
  * 同一时刻只允许一份快照在动，免得两个方向同时往同一个目录里写。 */
@@ -1124,19 +1123,130 @@ static void gs_sweep_temp(const char *dir) {
     closedir(d);
 }
 
+/* ══ [CN-FORK] v0.5.2.174 「快照活动」事件环 ══════════════════════════════════
+ *
+ * 用户口径：「发生记录也没有写到屏幕上」。
+ *
+ * 起因：`.172` 把「退出时快照」修好之后，那几行只进了
+ * `/data/nayeplmtools/pldmgr.log` 与**全局 100 行的内存环**（`/log` / `/events`）。
+ * 而「本地快照」那块界面只列**已经存在**的快照 —— 被静默窗口挡掉、内容没变、
+ * 排队重试这些**负向结果在界面上一个像素都不落**，用户看到的只是「份数没涨」，
+ * 分不清「压根没拍」和「拍了但内容没变」。
+ *
+ * 所以另起一个小环：**带时刻、按 tid 过滤、有级别**，专供界面读。
+ * 与 pldmgr_log 的分工 —— 日志给排查（全局 / 无时刻 / 会被刷掉），这里给用户看
+ * （每款游戏一条链 / 带时刻 / 能上色）。同一个事件点两处都写，措辞尽量一致，
+ * 这样用户拿日志和界面能对上号。
+ *
+ * ⚠ 为什么不去读 `/log` 再按关键字过滤：`/log` 的行**不带时间戳**（时间戳只写进
+ * 文件，见 log_server.c 的 log_append_file），而且 100 行会被别的东西刷掉 ——
+ * 拿它当界面数据源，用户看到的会是「有时有、有时没有」，比不显示更糟。
+ *
+ * ⚠ 环是**全局**的（不是每 tid 一个）：条数少（64）、每条带 tid、读时按 tid 过滤。
+ * 这样切游戏来回看还能看到上一款的链尾，而实现只有一份。
+ * ⚠ 全是 static 数组（约 9.5KB），**不占栈** —— 写入点挂在 64KB 栈的连接线程上。 */
+#define GS_SNAP_EV_RING 64
+#define GS_SNAP_EV_TEXT 120
+
+typedef struct {
+    char          tid[16];
+    char          t[9];          /* HH:MM:SS */
+    unsigned char lv;
+    char          x[GS_SNAP_EV_TEXT];
+} gs_snap_ev_t;
+
+static gs_snap_ev_t g_snap_ev[GS_SNAP_EV_RING];
+static int g_snap_ev_head;   /* 下一个要写的位置 */
+static int g_snap_ev_count;  /* 已写条数（封顶 GS_SNAP_EV_RING） */
+static pthread_mutex_t g_snap_ev_mu = PTHREAD_MUTEX_INITIALIZER;
+
+void game_saves_snap_ev_clear(void) {
+    pthread_mutex_lock(&g_snap_ev_mu);
+    g_snap_ev_head = 0;
+    g_snap_ev_count = 0;
+    pthread_mutex_unlock(&g_snap_ev_mu);
+}
+
+void game_saves_snap_ev(const char *tid, int lv, const char *fmt, ...) {
+    if (!tid || !tid[0] || !fmt) return;
+    if (lv < GS_SNAP_EV_INFO || lv > GS_SNAP_EV_FAIL) lv = GS_SNAP_EV_INFO;
+
+    gs_snap_ev_t ev;
+    memset(&ev, 0, sizeof(ev));
+    snprintf(ev.tid, sizeof(ev.tid), "%s", tid);
+    ev.lv = (unsigned char)lv;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(ev.x, sizeof(ev.x), fmt, ap);
+    va_end(ap);
+
+    /* 时刻只取 HH:MM:SS：界面上一行就那么宽，日期在「快照」那份列表里已经有。
+     * 跨天会不会歧义？环只有 64 条、退出事件一分钟最多几条，跨天时早滚出去了。 */
+    time_t now = time(NULL);
+    struct tm tmv;
+    if (localtime_r(&now, &tmv) != NULL)
+        strftime(ev.t, sizeof(ev.t), "%H:%M:%S", &tmv);
+
+    pthread_mutex_lock(&g_snap_ev_mu);
+    g_snap_ev[g_snap_ev_head] = ev;
+    g_snap_ev_head = (g_snap_ev_head + 1) % GS_SNAP_EV_RING;
+    if (g_snap_ev_count < GS_SNAP_EV_RING) g_snap_ev_count++;
+    pthread_mutex_unlock(&g_snap_ev_mu);
+}
+
+int game_saves_snap_ev_json(const char *tid, int max, char *buf, size_t size) {
+    if (!buf || size < 96) return 0;
+    if (max <= 0) max = 16;
+    if (max > GS_SNAP_EV_RING) max = GS_SNAP_EV_RING;
+
+    size_t bpos = 0;
+    bpos += snprintf(buf + bpos, size - bpos, "{\"ok\":true,\"tid\":\"");
+    {
+        char esc[64];
+        pldmgr_json_escape(tid ? tid : "", esc, sizeof(esc));
+        bpos += snprintf(buf + bpos, size - bpos, "%s", esc);
+    }
+    bpos += snprintf(buf + bpos, size - bpos, "\",\"events\":[");
+
+    /* 序列化在锁内做：转义是纯内存、不碰盘，而写事件的一方极其稀疏（一次退出几条）。
+     * 换出去反而要多一份 9.5KB 的副本 —— 这一帧挂在 64KB 栈的连接线程上，不值当。 */
+    pthread_mutex_lock(&g_snap_ev_mu);
+
+    int hit = 0; /* 先数命中数，才能从「最后 max 条」开始 */
+    for (int i = 0; i < g_snap_ev_count; i++) {
+        int p = (g_snap_ev_head - g_snap_ev_count + i + GS_SNAP_EV_RING) % GS_SNAP_EV_RING;
+        if (tid && tid[0] && strcmp(g_snap_ev[p].tid, tid) != 0) continue;
+        hit++;
+    }
+    int skip = (hit > max) ? (hit - max) : 0;
+    int seen = 0, first = 1;
+    for (int i = 0; i < g_snap_ev_count && bpos + 320 < size; i++) {
+        int p = (g_snap_ev_head - g_snap_ev_count + i + GS_SNAP_EV_RING) % GS_SNAP_EV_RING;
+        if (tid && tid[0] && strcmp(g_snap_ev[p].tid, tid) != 0) continue;
+        if (seen++ < skip) continue; /* 只要最后 max 条，早的先丢掉 */
+        char esc[GS_SNAP_EV_TEXT * 2];
+        pldmgr_json_escape(g_snap_ev[p].x, esc, sizeof(esc));
+        bpos += snprintf(buf + bpos, size - bpos,
+                         "%s{\"t\":\"%s\",\"lv\":%d,\"x\":\"%s\"}",
+                         first ? "" : ",", g_snap_ev[p].t, (int)g_snap_ev[p].lv, esc);
+        first = 0;
+    }
+    pthread_mutex_unlock(&g_snap_ev_mu);
+
+    bpos += snprintf(buf + bpos, size - bpos, "]}");
+    return (int)bpos;
+}
+
 /* ── 做一份快照 ─────────────────────────────────────────────────────────── */
-/* 返回 0 = 新生成一份（out_ts 已填）；1 = 跳过（内容没变 / 空 / 正在被写，note 回原因）；
+/* 返回 0 = 新生成一份（out_ts 已填）；1 = 跳过（内容没变 / 空，note 回原因）；
  * -1 = 失败（note 回人话）。调用方必须持有 g_snap_mu。
  *
- * [CN-FORK] v0.5.2.172 `skip_reason`（可空）回「跳过」的具体原因，取值是
- * `GS_SNAP_SKIP_*`。加这个出参是因为**「跳过」有两种截然不同的含义**：
- * 「存档刚被写过」（等一会儿再来就有）与「内容没变」（再来多少次都一样）。
- * 调用方（game_auto.c 的退出路径）必须能分开 —— 见 game_saves.h 里那段说明。 */
+ * [CN-FORK] v0.5.2.174 原来还有个 `skip_reason` 出参，用来区分「存档刚被写过」
+ * 与「内容没变」两种跳过（前者值得排队重试）。静默窗口与重试一起删掉之后，
+ * 跳过只剩「内容没变」和「空的」两种，都不需要重试 —— 出参没有消费方了。 */
 static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
-                        char *out_ts, size_t osz, char *note, size_t notesz,
-                        int *skip_reason) {
+                        char *out_ts, size_t osz, char *note, size_t notesz) {
     if (out_ts && osz) out_ts[0] = 0;
-    if (skip_reason) *skip_reason = GS_SNAP_SKIP_NONE;
     struct stat st;
     if (lstat(r->path, &st) != 0 || !S_ISDIR(st.st_mode)) {
         if (note) snprintf(note, notesz, "存档目录不存在");
@@ -1148,32 +1258,10 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
     gs_walk(r->path, &src, 0, &budget);
     if (src.files == 0) {
         if (note) snprintf(note, notesz, "存档里没有文件");
-        if (skip_reason) *skip_reason = GS_SNAP_SKIP_EMPTY;
+        game_saves_snap_ev(tid, GS_SNAP_EV_SKIP, "用户 %s · 存档里没有文件，没得拍", r->uid);
         return 1;
     }
     if (src.over) { if (note) snprintf(note, notesz, "存档条目太多，已跳过"); return -1; }
-
-    /* 正在被写就先不动：拷到一半的存档还原回去可能让主机认不出来。
-     * 宁可等一会儿 —— 快照的价值在于「有一份能用的」，不在于「有一份」。
-     *
-     * [CN-FORK] v0.5.2.172 ⚠ 这句话原本成立是因为当时有**定时守护**（30 分钟一轮），
-     * 「下一轮」真的会来。`.154` 把定时守护整条删掉、只留「游戏退出」这一个触发点
-     * 之后，「下一轮」就不存在了 —— 而游戏退出那一刻主机会把存档写下去，mtime 就是
-     * 「刚刚」，于是**每一次退出都被这里挡掉，本地快照永远不生成**（真机日志实证）。
-     * 这里不改判据（判据本身是对的：正在写就不能拍），改的是**调用方**：
-     * 现在把 TOO_FRESH 如实回出去，由 game_auto.c 排队重试，直到静默窗口过去。
-     *
-     * [CN-FORK] v0.5.2.173 提示文案也跟着改（用户口径：「这里为什么这么缩链路」）：
-     * 原来那句「存档刚被写过，等下一轮」在定时守护删掉之后就**没人知道「下一轮」是谁**
-     * 了 —— 现在等待方是明确的（守护线程的待办队列），所以直接把等待对象写出来。 */
-    time_t now = time(NULL);
-    if (src.max_mtime != 0 && now - src.max_mtime < GS_SNAP_QUIET_SEC) {
-        if (note)
-            snprintf(note, notesz, "存档刚被写过（%d 秒静默窗口还没过，稍后由重试补上）",
-                     (int)GS_SNAP_QUIET_SEC);
-        if (skip_reason) *skip_reason = GS_SNAP_SKIP_TOO_FRESH;
-        return 1;
-    }
 
     char udir[900];
     if (gs_snap_uid_dir(tid, r->uid, udir, sizeof(udir)) != 0) return -1;
@@ -1191,7 +1279,8 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
             if (old.files == src.files && old.bytes == src.bytes &&
                 old.max_mtime == src.max_mtime) {
                 if (note) snprintf(note, notesz, "内容与最近一份相同，未新增");
-                if (skip_reason) *skip_reason = GS_SNAP_SKIP_UNCHANGED;
+                game_saves_snap_ev(tid, GS_SNAP_EV_SKIP,
+                                   "用户 %s · 内容与最近一份相同，未新增", r->uid);
                 return 1;
             }
         }
@@ -1205,14 +1294,27 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
      * 顺手做，不给它单开一条守护路径（见 gs_sweep_temp 的注释）。 */
     gs_sweep_temp(udir);
 
-    /* 时间戳目录名要唯一：同一秒内再来一次就往后挪一秒（跨过 DST 也不会重复，
-     * 因为我们是拿拼好的名字去 lstat 试，而不是算差值）。 */
+    /* 时间戳目录名要唯一，**而且必须严格大于已有的最新那个**。
+     *
+     * 后半句是 `.174` 补的，它是一条真 bug（写 `.174` 的宿主用例时顺出来的）：
+     * 原来只判「这个目录名在不在」，于是**空出来的老名字会被重新用上** ——
+     * 同一秒连拍两份，第一份 `…-010807`、第二份 `…-010808`；`gs_snap_prune(keep=1)`
+     * 删掉 010807 之后，下一次 `i=0` 又探到 010807 空闲，于是新快照又叫回 `010807`
+     * —— **比留下来的那份（010808）更旧**。而 prune 是按名字排序删「最旧的」，
+     * 于是它把**刚拍的那一份**删掉、留下更旧的一份：用户设了「保留 1 份」，
+     * 手里拿到的却是上一次的存档。keep>1 时表现为列表里名字乱序（`ts[nt-1]`
+     * 不再是最新那份）→ 每一轮都判「内容变了」→ 重复落份数、份数虚涨。
+     * 名字格式是定宽 `YYYYmmdd-HHMMSS`，字典序 == 时间序，所以直接比字符串即可。
+     * （跨过 DST 也不会重复，因为我们是拿拼好的名字去 lstat 试，不是算差值。） */
+    const char *newest = (nt > 0) ? ts[nt - 1] : NULL;
+    time_t now = time(NULL);
     char tss[24];
     tss[0] = 0;
     for (int i = 0; i < 120; i++) {
         char cand[24];
         gs_snap_stamp(now + i, cand, sizeof(cand));
         if (!cand[0]) break;
+        if (newest && strcmp(cand, newest) <= 0) continue; /* 不许比已有的更旧 */
         char probe[1200];
         if (gs_snap_path(tid, r->uid, cand, probe, sizeof(probe)) != 0) break;
         struct stat ps;
@@ -1259,6 +1361,10 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
     if (note) snprintf(note, notesz, "已生成 %s", tss);
     pldmgr_log("[PLDMGR] saves: %s/%s 本地快照 %s（%lld 文件 / %lld 字节）\n",
                tid, r->uid, tss, cfiles, cbytes);
+    /* 字节数按原样写（与日志同一口径）。界面上这一行下面紧挨着的「快照」列表
+     * 会把它格式化成 MB/GB —— 事件行不重复做格式化，两处口径反而不会打架。 */
+    game_saves_snap_ev(tid, GS_SNAP_EV_OK, "用户 %s · 快照 %s（%lld 文件 / %lld 字节）",
+                       r->uid, tss, cfiles, cbytes);
     return 0;
 }
 
@@ -1346,10 +1452,8 @@ int game_saves_snap_enabled(const char *tid) {
     return en;
 }
 
-int game_saves_snap_run_now_ex(const char *tid, int *skip_reason,
-                               char *msg, size_t msgsz) {
+int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
     if (msg && msgsz) msg[0] = 0;
-    if (skip_reason) *skip_reason = GS_SNAP_SKIP_NONE;
     if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
 
     int keep = GAME_SAVES_SNAP_KEEP_DEF;
@@ -1365,25 +1469,16 @@ int game_saves_snap_run_now_ex(const char *tid, int *skip_reason,
     }
 
     int made = 0, skipped = 0, failed = 0;
-    /* [CN-FORK] v0.5.2.172 汇总各 root 的跳过原因：**只要有一个是「刚被写过」
-     * 就按「刚被写过」回** —— 那是唯一值得重试的那种（一个用户刚存过档，不代表
-     * 另一个用户那份也是刚写的，但整体重试一次没有坏处，且不会重复生成：
-     * 「内容没变」的那些 root 在重试时照样返回 UNCHANGED，不会多落一份）。 */
-    int reason = GS_SNAP_SKIP_NONE;
     char first[200];
     first[0] = 0;
     pthread_mutex_lock(&g_snap_mu);
     for (int i = 0; i < nr; i++) {
         char ts[24], note[200];
         ts[0] = note[0] = 0;
-        int r = GS_SNAP_SKIP_NONE;
-        int rc = gs_snap_take(tid, &roots[i], keep, ts, sizeof(ts), note, sizeof(note), &r);
+        int rc = gs_snap_take(tid, &roots[i], keep, ts, sizeof(ts), note, sizeof(note));
         if (rc == 0) made++;
-        else if (rc == 1) {
-            skipped++;
-            if (r == GS_SNAP_SKIP_TOO_FRESH) reason = GS_SNAP_SKIP_TOO_FRESH;
-            else if (r != GS_SNAP_SKIP_NONE && reason == GS_SNAP_SKIP_NONE) reason = r;
-        } else failed++;
+        else if (rc == 1) skipped++;
+        else failed++;
         if (rc != 0 && !first[0]) snprintf(first, sizeof(first), "%s", note);
     }
     pthread_mutex_unlock(&g_snap_mu);
@@ -1391,21 +1486,22 @@ int game_saves_snap_run_now_ex(const char *tid, int *skip_reason,
 
     if (made > 0) {
         if (msg) snprintf(msg, msgsz, "已生成 %d 份快照", made);
+        /* 拍成的那些，每个 root 已经在 gs_snap_take 里各记了一条 OK 事件（带 ts /
+         * 文件数 / 字节数）—— 这里只补「还有谁没拍成」，否则那一半就静默了。 */
+        if (failed > 0)
+            game_saves_snap_ev(tid, GS_SNAP_EV_FAIL, "另有 %d 个用户拍失败：%s",
+                               failed, first[0] ? first : "快照失败");
         return made;
     }
     if (failed > 0) {
         if (msg) snprintf(msg, msgsz, "%s", first[0] ? first : "快照失败");
+        game_saves_snap_ev(tid, GS_SNAP_EV_FAIL, "本轮没拍成：%s",
+                           first[0] ? first : "快照失败");
         return -1;
     }
-    if (skip_reason) *skip_reason = reason;
     if (msg) snprintf(msg, msgsz, "%s", first[0] ? first : "内容没变，未新增");
+    game_saves_snap_ev(tid, GS_SNAP_EV_SKIP, "%s", first[0] ? first : "内容没变，未新增");
     return skipped > 0 ? 0 : -1;
-}
-
-/* 旧签名的包装：现有调用方（`/game_save_snap` 的「立即备份」、宿主测试）不关心
- * 跳过原因，保持原样即可。 */
-int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
-    return game_saves_snap_run_now_ex(tid, NULL, msg, msgsz);
 }
 
 /* 删掉一份快照。0 成功，-1 失败（msg 回人话）。 */

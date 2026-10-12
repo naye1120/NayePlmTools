@@ -47,7 +47,6 @@ run_case() {
         -DGAME_SAVES_AUTO_PATH='"/tmp/pldmgr_saves_test/saves_auto.json"' \
         -DGAME_SAVES_PACK_DIR='"/tmp/pldmgr_saves_test/packs"' \
         -DGAME_SAVES_SNAP_DIR='"/tmp/pldmgr_saves_test/snap"' \
-        -DGS_SNAP_QUIET_SEC=0 \
         "$src" \
         src/game_job.c src/json_helpers.c src/utils.c src/inflate.c src/zip_io.c \
         src/psaccounts/third_party/cJSON.c test/stub_archive_global.c test/stub_sr_stat.c \

@@ -26,11 +26,11 @@
  *      全部穷举。`.152` 真机栽的是**策略**错（读不到进程状态时错误地放弃了
  *      SIGSTOP → 回落 LncUtil → 游戏跳后台切不回来），而真机那段在 `#ifdef`
  *      里、宿主编不到，所以判定抽成纯函数并导出，专供这一节。
- *   ⑩ 退出快照的**延迟重试**（`.172`）—— 「游戏关闭时没有自动存快照」的根因是
- *      `gs_snap_take` 的静默窗口「等下一轮」在定时守护被删（`.154`）后永无「下一轮」。
- *      这里钉住：被挡 → 排队 → 静默窗口过后真的补上。⚠ 靠「把 mtime 拨到未来」
- *      触发那条分支，与编译期的 `GS_SNAP_QUIET_SEC` 无关（宿主编的是 0，靠常量
- *      等于没测 —— 这正是这个 bug 一直没被宿主抓住的原因）。
+ *   ⑩ 退出快照的**时机**（`.174`）—— 「游戏关闭时没有自动存快照」的旧根因是
+ *      `gs_snap_take` 的静默窗口（`.154` 删定时守护后永无「下一轮」）。`.174` 把静默
+ *      窗口与 `.172` 的延迟重试**一起删了**：退出 → 当场拍，不看 mtime。这里钉住
+ *      「退出立刻 1 份、无「排队重试」日志、内容没变不重复拍」。⚠ 夹具把 mtime 拨到
+ *      **未来**（比真机更极端），旧版本在这会跳过，新版本必须照拍。
  *
  * 探测（sceLncUtilGetAppIdOfRunningBigApp）在宿主上没有那个符号，
  * 用 -DGA_HOST 关掉默认实现，测试自己装探针（game_auto_set_probe）。
@@ -1038,29 +1038,24 @@ static void t_verdict(void) {
           "只有「冻结后 CPU 还在涨」才算没冻住（唯一允许回落的输入）");
 }
 
-/* ══ ⑩ 退出快照的「延迟重试」（v0.5.2.172）════════════════════════════════
- * 用户口径：「游戏关闭的时候并没有自动存储本地快照」。
+/* ══ ⑩ 退出快照的「时机」（v0.5.2.174）════════════════════════════════════
+ * 用户口径：「游戏关闭的时候并没有自动存储本地快照」+「把所有的静默窗口全部去掉，
+ * 只有这一个时机和手动」。
  *
- * 真机日志实证：
+ * 旧真机日志实证（`.172` 之前）：
  *     saves: PPSA21567 已退出 · 本地快照：存档刚被写过，等下一轮（0）
- * 连着三条 —— 快照**被触发了**（开关开着、退出也检测到了），但每一次都被
- * `gs_snap_take` 的静默窗口（`GS_SNAP_QUIET_SEC`）挡掉、返回 0。
- * 根因是触发方式变了、守卫没跟着变：那句「宁可等下一轮」写在还有**定时守护**的
- * 年代（30 分钟一轮，「下一轮」真的会来）。`.154` 把定时守护整条删掉、只留
- * 「游戏退出」这一个触发点之后，退出是**一次性事件** —— 游戏已经没了，下一轮
- * `prev` 就变空串，再也没人来补这一份；而退出那一刻主机会把存档写下去，存档的
- * mtime 就是「刚刚」，于是**每一次退出都被挡掉，本地快照永远不生成**。
+ * 连着三条 —— 快照**被触发了**，但每一次都被 `gs_snap_take` 的静默窗口挡掉、返回 0。
+ * 那句「宁可等下一轮」写在还有**定时守护**的年代（30 分钟一轮）；`.154` 删掉守护、
+ * 只留「游戏退出」这一个触发点之后，退出是**一次性事件**，「下一轮」永不再来，
+ * 于是每一次退出都被挡掉、本地快照永远不生成。
+ *
+ * `.174` 的定案：**静默窗口整条删除**，`.172` 的延迟重试队列也一并删掉 —— 快照只在
+ * 两个时机发生：① 游戏退出（与「往远程推送」同一时刻）② 手动「立即备份」。
  *
  * 这一节钉三件事：
- *   ① 被静默窗口挡掉时**必须排进待办**（有日志、带 tid），而不是默默收摊；
- *   ② 静默窗口过去之后的下一个 tick **真的**把快照补上（这才是用户要的结果）；
- *   ③ 补完之后待办清空，不再重复生成。
- *
- * ⚠ 宿主上怎么造「被静默窗口挡掉」：把源存档的 mtime 拨到**未来**。
- * 判据是 `now - max_mtime < GS_SNAP_QUIET_SEC`，mtime 在未来时左边是负数，
- * 对任何非负窗口都成立 —— 于是**不用改编译期的 GS_SNAP_QUIET_SEC**（真机 20、
- * 宿主 0）就能走到同一条分支。刻意做成与常量无关：`run_host_tests.sh` 给
- * game_auto 编的是 `-DGS_SNAP_QUIET_SEC=0`，靠常量的话这一节等于没测。 */
+ *   ① 退出 → **当场拍成**，不看 mtime（夹具把 mtime 拨到未来，旧版本会跳过）；
+ *   ② 不再有「已排队重试」日志；
+ *   ③ 内容没变仍去重，再 tick 不重复生成。 */
 static void write_cfg_snap(const char *url, int snap_on) {
     char p[800], parent[800];
     snprintf(p, sizeof(p), "%s", AUTO_PATH);
@@ -1095,8 +1090,8 @@ static int snap_count(const char *tid) {
     return n;
 }
 
-static void t_snap_retry(void) {
-    printf("-- 退出快照的延迟重试（静默窗口挡掉之后必须补上）\n");
+static void t_snap_exit(void) {
+    printf("-- 退出快照的时机（退出当场拍成 / 无静默窗口 / 无排队重试）\n");
     char url[600];
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/ps5save", g_http_port);
 
@@ -1118,42 +1113,29 @@ static void t_snap_retry(void) {
     game_auto_tick();                 /* 启动：只开快照时这一步不该有动作 */
     CHECK(snap_count(TID) == 0, "还没退出就该 0 份快照（实得 %d）", snap_count(TID));
 
-    /* ── ① 退出，且存档 mtime 是「刚刚」（拨到未来 → 必然落在静默窗口内）──
-     * 真机上这就是「主机在退出那一刻写存档」的那一刻。 */
+    /* ── ① 退出 → **当场拍成**，不看 mtime、不排队 ──
+     * 真机上这就是「主机在退出那一刻写存档」的那一刻：存档 mtime 是「刚刚」
+     * （这里拨到未来，比真机更极端）。`.174` 起静默窗口整条删掉，所以退出必须
+     * 立刻拍成 —— 旧版本（`.172`）在这里会返回「跳过 + 排队重试」。 */
     long long now = (long long)time(NULL);
     set_mtime(SAVE_FILE, now + 300);
     set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now + 300);
 
     g_log_n = 0;
     g_fake_running = NULL;
-    game_auto_tick();                 /* 退出 → 快照步骤 → 被挡 → 排队 */
+    game_auto_tick();                 /* 退出 → 快照步骤 */
 
     CHECK(log_count("已退出 · 本地快照") == 1,
           "退出该走一次快照（实得 %d 条日志）", log_count("已退出 · 本地快照"));
-    CHECK(log_count("已排队重试") == 1,
-          "被静默窗口挡掉**必须**排队重试（实得 %d 条）", log_count("已排队重试"));
-    {
-        int q = log_at("已排队重试");
-        CHECK(q >= 0 && strstr(g_log[q], TID) != NULL, "排队日志该带 tid：%s",
-              q >= 0 ? g_log[q] : "(没有这行)");
-    }
-    CHECK(snap_count(TID) == 0, "这一轮还不该有快照（实得 %d）", snap_count(TID));
+    CHECK(snap_count(TID) == 1, "退出后该**当场拍成** 1 份（实得 %d）", snap_count(TID));
+    CHECK(log_count("已排队重试") == 0,
+          "`.174` 起不该再有「排队重试」（实得 %d 条）", log_count("已排队重试"));
 
-    /* ── ② 静默窗口过去 → 下一个 tick 必须把快照补上（用户要的结果）── */
-    set_mtime(SAVE_FILE, now - 300);
-    set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now - 300);
-    g_fake_running = NULL;
-    game_auto_tick();                 /* 没有游戏在跑 → 补快照 */
-
-    CHECK(snap_count(TID) == 1, "静默窗口过去后该补上 1 份快照（实得 %d）", snap_count(TID));
-    CHECK(log_count("本地快照重试成功") == 1, "补上时该留一行「重试成功」（实得 %d）",
-          log_count("本地快照重试成功"));
-
-    /* ③ 补完之后待办已清空，再 tick 也不该重复生成 */
+    /* ── ② 再 tick 不该重复生成（内容没变 → 去重仍然保留）── */
     int before = snap_count(TID);
     game_auto_tick();
     game_auto_tick();
-    CHECK(snap_count(TID) == before, "补完之后不该再生成（实得 %d / 期望 %d）",
+    CHECK(snap_count(TID) == before, "内容没变不该重复生成（实得 %d / 期望 %d）",
           snap_count(TID), before);
 
     g_fake_running = NULL;
@@ -1175,7 +1157,7 @@ int main(void) {
     t_verdict();
     t_pull_gate();
     t_pull_gate_e2e();
-    t_snap_retry();
+    t_snap_exit();
 
     stub_http_stop();
     printf("game_auto: %d checks, %d failures\n", g_checks, g_fails);

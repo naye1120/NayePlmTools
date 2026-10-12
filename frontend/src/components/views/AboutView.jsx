@@ -34,13 +34,41 @@ function GithubMark({ className = '' }) {
  */
 
 /* [CN-FORK] v0.5.2.163 参考致谢按用户口径收窄为「一个作者一行 + 项目链接」，
-  不再写「哪个文件」那一截。多位作者合作一个项目时也归并成一行。 */
+  不再写「哪个文件」那一截。多位作者合作一个项目时也归并成一行。
+ * [CN-FORK] v0.5.2.174 用户口径：「参考与致谢中差了好多，你把参考过的项目都写上，写全」。
+ *   上一版只列了 5 条（还是上游 README 的一个子集），而本分支真正参考/移植/依赖过的
+ *   项目远不止这些 —— 逐条从源码注释里核出来的（`src/` `include/` 的文件头 +
+ *   CHANGELOG/HANDOVER），分四组：上游与 SDK / 游戏与存档 / 音频与图像 / 风扇与系统。
+ *   只写「作者 + 项目 + 链接」，不写具体文件（沿用 .163 的口径）。 */
 const REFERENCES = [
+  /* ── 上游与 SDK ── */
+  { author: 'itsPLK', authorUrl: 'https://github.com/itsPLK', project: 'ps5-payload-manager（本分支上游）', projectUrl: 'https://github.com/itsPLK/ps5-payload-manager' },
+  { author: 'itsPLK', authorUrl: 'https://github.com/itsPLK', project: 'ps5_next_menu（侧栏与导航原型）', projectUrl: 'https://github.com/itsPLK/ps5_next_menu' },
+  { author: 'itsPLK', authorUrl: 'https://github.com/itsPLK', project: 'ps5-pkg-manager', projectUrl: 'https://github.com/itsPLK/ps5-pkg-manager' },
+  { author: 'itsPLK', authorUrl: 'https://github.com/itsPLK', project: 'ps5-bdjb-autoloader', projectUrl: 'https://github.com/itsPLK/ps5-bdjb-autoloader' },
+  { author: 'itsPLK', authorUrl: 'https://github.com/itsPLK', project: 'ps5-lua-autoloader', projectUrl: 'https://github.com/itsPLK/ps5-lua-autoloader' },
+  { author: 'itsPLK', authorUrl: 'https://github.com/itsPLK', project: 'ps5-y2jb-autoloader', projectUrl: 'https://github.com/itsPLK/ps5-y2jb-autoloader' },
   { author: 'John Törnblom', authorUrl: 'https://github.com/john-tornblom', project: 'ps5-payload-sdk', projectUrl: 'https://github.com/ps5-payload-dev/sdk' },
+  { author: 'ps5-payload-dev', authorUrl: 'https://github.com/ps5-payload-dev', project: 'pacbrew-repo（libsmb2 正式包）', projectUrl: 'https://github.com/ps5-payload-dev/pacbrew-repo' },
+  { author: 'ps5-payload-dev', authorUrl: 'https://github.com/ps5-payload-dev', project: 'websrv（libsmb2 用法参考）', projectUrl: 'https://github.com/ps5-payload-dev/websrv' },
+  { author: 'ps5-payload-dev', authorUrl: 'https://github.com/ps5-payload-dev', project: 'offact（离线账号激活，账号工具源自它）', projectUrl: 'https://github.com/ps5-payload-dev/offact' },
+
+  /* ── 游戏与存档 ── */
+  { author: 'drakmor', authorUrl: 'https://github.com/drakmor', project: 'ShadowMountPlus（挂载 / 游戏识别 / 详情跳转）', projectUrl: 'https://github.com/drakmor/ShadowMountPlus' },
+  { author: 'earthonion', authorUrl: 'https://github.com/earthonion', project: 'garlic-savemgr（兼容导入的格式依据）', projectUrl: 'https://github.com/earthonion/garlic-savemgr' },
   { author: 'manos555555', authorUrl: 'https://github.com/manos555555', project: 'PS5-Upload-Suite', projectUrl: 'https://github.com/manos555555/PS5-Upload-Suite' },
-  { author: 'drakmor', authorUrl: 'https://github.com/drakmor', project: 'ps5-hwinfo', projectUrl: 'https://github.com/drakmor/ps5-hwinfo' },
   { author: 'Pharaoh2k', authorUrl: 'https://github.com/Pharaoh2k', project: 'ps5debug-NG', projectUrl: 'https://github.com/Pharaoh2k/ps5debug-NG' },
-  { author: 'earthonion', authorUrl: 'https://github.com/earthonion', project: 'garlic-savemgr', projectUrl: 'https://github.com/earthonion/garlic-savemgr' },
+
+  /* ── 音频与图像 ── */
+  { author: 'blackbearreloaded', authorUrl: 'https://github.com/blackbearreloaded', project: 'ps5-at9-converter（浏览器端 ATRAC9 编码器移植自它）', projectUrl: 'https://github.com/blackbearreloaded/ps5-at9-converter' },
+  { author: 'Thealexbarney', authorUrl: 'https://github.com/Thealexbarney', project: 'LibAtrac9（ATRAC9 解码表来源，MIT）', projectUrl: 'https://github.com/Thealexbarney/LibAtrac9' },
+  { author: 'nothings', authorUrl: 'https://github.com/nothings', project: 'stb（stb_image / stb_image_write）', projectUrl: 'https://github.com/nothings/stb' },
+
+  /* ── 风扇与系统 ── */
+  { author: 'drakmor', authorUrl: 'https://github.com/drakmor', project: 'ps5-hwinfo（温度 / 传感器）', projectUrl: 'https://github.com/drakmor/ps5-hwinfo' },
+  { author: 'drakmor', authorUrl: 'https://github.com/drakmor', project: 'fan_target（风扇阈值）', projectUrl: 'https://github.com/drakmor/fan_target' },
+  { author: 'owendswang', authorUrl: 'https://github.com/owendswang', project: 'ps5-fan-control', projectUrl: 'https://github.com/owendswang/ps5-fan-control' },
+  { author: 'BenNoxXD', authorUrl: 'https://github.com/BenNoxXD', project: 'Disc Player 终止逻辑', projectUrl: 'https://github.com/BenNoxXD' },
 ]
 
 /* [CN-FORK] v0.5.2.156 用户：「精简所有更新日志，只把现在有的功能简单列出来就可以，
@@ -58,11 +86,13 @@ const CHANGELOG = [
   {
     date: "2026-10-13",
     items: [
-      "修「游戏退出不落本地快照」：本地快照的 20 秒静默窗口是定时快照时代留下的，定时快照废掉之后只剩「退出时」这一个触发点，于是每次退出都被它挡掉。现在退出时若存档刚被写过会排队重试（最多 40 秒），到点自动补一份。",
+      "本地快照只在两个时机发生：游戏退出时（与往远程推送同一时刻）和手动「立即备份」。删掉了全部「静默窗口」与延迟重试队列 —— 退出就当场拍，不再有「等下一轮」这种永远等不到的等待。",
+      "「本地快照」里新增「最近活动」：每一次快照的结果都写到屏幕上（含「内容没变、未新增」「没得拍」「拍失败」这些以前只在日志里的负向结果），带时刻。",
       "三张列表的每一行都加「下载」：存档列表（主机上当前那份）、远程存档（云上那份备份）、本地快照（某个时刻那份），三颗都排在删除按钮前面。",
       "存档管理版式调整：兼容导入（Garlic）从「存档列表」那张卡里搬出来单独占一行，目标用户与导入按钮并排；存档行不再被右侧那栏劈成两半。",
       "删掉「存档转换」：它想干的事（把别人的存档弄到自己名下）兼容导入本来就能做，而且是逐文件合并、更干净。",
       "兼容导入改成明确「改签」：不论存档原来属于谁，都落到你选定的用户名下，提示与确认框都写清楚；不再把 garlic 自带的 manifest.json 写进主机存档目录。",
+      "「参考与致谢」补全：把本分支参考 / 移植 / 依赖过的项目按来源分四组列全（上游与 SDK、游戏与存档、音频与图像、风扇与系统）。",
     ],
   },
   {

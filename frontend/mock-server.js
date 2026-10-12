@@ -1249,10 +1249,15 @@ app.post('/game_save_snap', (req, res) => {
     list.forEach((s) => {
       /* 内容没变就不新增 —— 与后端同一判据（这里拿 size+files+存档 mtime 当指纹） */
       const newest = snaps.find((x) => x.uid === s.id);
-      if (newest && newest.size === s.size && newest.files === s.files && newest.src === s.mtime) return;
+      if (newest && newest.size === s.size && newest.files === s.files && newest.src === s.mtime) {
+        snapEv(tid, 2, `用户 ${s.id} · 内容与最近一份相同，未新增`);
+        return;
+      }
       snaps.unshift({ uid: s.id, ts, mtime: s.mtime, size: s.size, files: s.files, src: s.mtime });
+      snapEv(tid, 1, `用户 ${s.id} · 快照 ${ts}（${s.files} 文件 / ${s.size} 字节）`);
       made++;
     });
+    if (made === 0) snapEv(tid, 2, '本轮没拍成：内容没变，未新增');
     /* 保留数裁剪：每个用户只留最近 keep 份。列表新的在前，从尾部砍。 */
     const keep = autoFor(tid).snap.keep; /* 读取路径：按生效值（全局优先）来保留 */
     MOCK_UIDS.forEach((uid) => {
@@ -1279,6 +1284,42 @@ app.post('/game_save_snap', (req, res) => {
     return res.json({ ok: true });
   }
   return res.status(400).json({ error: 'EBAD', message: '未知的 action' });
+});
+
+/* [CN-FORK] v0.5.2.174 「快照活动」事件环（后端 src/game_saves.c 的 g_snap_ev[] 同形）。
+ *   { t:'HH:MM:SS', lv:0信息/1成功/2跳过/3失败, x:'人话' }
+ * mock 也要有**负向结果**（跳过 / 失败）—— 那正是用户报的「发生记录没有写到屏幕上」
+ * 里最该看到的东西；只放成功事件的话这一段等于没测。 */
+const snapEvents = new Map();
+function snapEv(tid, lv, x) {
+  const d = new Date();
+  const p2 = (v) => String(v).padStart(2, '0');
+  const t = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+  const arr = snapEvents.get(tid) || [];
+  arr.push({ t, lv, x });
+  /* 环容量 64，与后端 GS_SNAP_EV_RING 一致。 */
+  while (arr.length > 64) arr.shift();
+  snapEvents.set(tid, arr);
+}
+/* 预置两条：让「最近活动」一打开就有东西看，也钉住「跳过也要显示」（负向结果）。 */
+snapEv('PPSA01234', 2, '用户 1a1d3627 · 内容与最近一份相同，未新增');
+snapEv('PPSA01234', 1, '用户 1a1d3627 · 快照 20261013-011500（3 文件 / 20971887 字节）');
+
+app.get('/game_save_snap_log', (req, res) => {
+  const tid = String(req.query.tid || '');
+  let n = parseInt(req.query.n, 10);
+  if (!Number.isFinite(n) || n <= 0) n = 16;
+  if (n > 64) n = 64;
+  /* tid 空 = 全部游戏；后端也是这个口径（且不认识的 tid 回空列表而不是 400）。 */
+  let all = [];
+  if (!tid) {
+    snapEvents.forEach((arr, k) => { all = all.concat(arr.map((e) => ({ ...e, tid: k }))); });
+  } else {
+    all = (snapEvents.get(tid) || []).slice();
+  }
+  /* 时间升序、取**最后** n 条（与后端 game_saves_snap_ev_json 的语义一致）。 */
+  const out = all.slice(-n);
+  res.json({ ok: true, tid, events: out });
 });
 
 /* [CN-FORK] v0.5.2.143 立即同步（手动推 / 拉）。与后端 /game_save_sync 同形：
@@ -2609,6 +2650,12 @@ app.post('/reset', (req, res) => {
    * /set_config 会把它存进 mockConfig；不清的话上一节设的全局远程会串到下一节的
    * 单游戏弹窗（显示「来自全局设置」而不是「本游戏已配置」）→ 假红。 */
   delete mockConfig.ARCHIVE_GLOBAL_CONFIG;
+  /* [CN-FORK] v0.5.2.174 「快照活动」事件环也清，然后**重新播下那两条基线** ——
+   * 基线是模块加载时播的，reset 之后若不补回，「最近活动」那一段就永远是空的，
+   * 回归里「打开就看得见记录」这条断言会假红。 */
+  snapEvents.clear();
+  snapEv('PPSA01234', 2, '用户 1a1d3627 · 内容与最近一份相同，未新增');
+  snapEv('PPSA01234', 1, '用户 1a1d3627 · 快照 20261013-011500（3 文件 / 20971887 字节）');
   listSnap = null;
   listSnapAt = 0;
   /* 预热状态也要清：否则 reset 之后 folder 游戏已经是「预热过」的，

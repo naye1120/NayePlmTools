@@ -112,6 +112,11 @@
  *     （内容没变就不新增，made=0 是正常结果）；restore 走的是与上传**同一条**
  *     整份替换逻辑（旧的先留一手，失败能退回去）。uid 与 ts 是路径的最后两段，
  *     非法一律 400 —— 别在别处再拼一次这个路径。
+ *   GET  /game_save_snap_log?tid=&n=  → { ok, tid, events:[{ t, lv, x }] }
+ *     [CN-FORK] v0.5.2.174 「快照活动」：最近 n 条快照事件（t=时刻 HH:MM:SS，
+ *     lv=0信息/1成功/2跳过/3失败，x=人话）。**负向结果也在这里** —— 内容没变、
+ *     没得拍、拍失败，原来只在 pldmgr.log 里、界面上看不到。tid 可空 = 全部游戏。
+ *     ⚠ 它是被界面轮询的 GET，后端已登记进 is_noisy_route()。
  *
  * 多媒体
  *   GET  /game_media?tid=<TID>
@@ -506,6 +511,20 @@ export function snapAction(tid, action, extra, opts) {
   return request('/game_save_snap', {
     ...opts, method: 'POST', body: { tid, action, ...(extra || {}) },
   })
+}
+
+/* [CN-FORK] v0.5.2.174 「快照活动」只读接口（GET）。
+ *   /game_save_snap_log?tid=&n=  → { ok, tid, events:[{ t, lv, x }] }
+ *     t  = 时刻「HH:MM:SS」（后端事件环里只有时刻，没有日期）
+ *     lv = 0 信息 / 1 成功 / 2 跳过 / 3 失败
+ *     x  = 一句人话
+ *
+ * 为什么要单开一条而不是复用全局 /log：/log 的内存环**没有时间戳**（时间戳只写进
+ * pldmgr.log 文件），而且那 100 行会被其它模块冲掉 —— 快照的**负向结果**
+ * （内容没变、没得拍、拍失败）在界面上一个像素都不落，用户看不到「到底跑没跑」。
+ * tid 可空 = 全部游戏；后端按时间升序回**最近 n 条**。 */
+export function getSnapEvents(tid, n = 16, opts) {
+  return request(`/game_save_snap_log${q({ tid, n })}`, opts)
 }
 
 /* [CN-FORK] v0.5.2.142 立即同步（手动推 / 拉）。action = 'push' | 'pull'；

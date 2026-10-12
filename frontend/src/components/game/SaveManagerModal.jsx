@@ -9,7 +9,7 @@ import Segmented from '../ui/Segmented'
 import { Block, Chip, Note, MiniEmpty, ProgressBar, GridRow } from './parts'
 import { formatSizeAlways, formatStamp } from './format'
 import {
-  getSaves, saveDownloadUrl, uploadSave, deleteSave, snapAction,
+  getSaves, saveDownloadUrl, uploadSave, deleteSave, snapAction, getSnapEvents,
   syncSaves, getRemoteSaveInfo, deleteRemoteSave, importGarlic,
   snapDownloadUrl, remoteSaveDownloadUrl,
 } from '../../utils/gameApi'
@@ -122,6 +122,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   const [busyRemote, setBusyRemote] = useState('')   // 正在删远程存档的那个 uid
   const [importing, setImporting] = useState(false)  // garlic 兼容导入进行中
   const [gxUid, setGxUid] = useState('')             // garlic 导入的目标用户（多用户时才让人选）
+  const [snapEvents, setSnapEvents] = useState([])   // [CN-FORK] .174 「最近活动」事件列表
   const fileRef = useRef(null)
   const gxRef = useRef(null)                         // garlic 导入用的独立 input（accept 与去向都不同）
   const pendingSlot = useRef(null)                   // null = 新存档；字符串 = 覆盖该槽
@@ -177,6 +178,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     setSnapping(false); setBusySnap(''); setSyncing('')
     setImporting(false); setGxUid('')
     setRemoteInfos({}); setBusyRemote('')
+    setSnapEvents([])
   }
 
   useEffect(() => {
@@ -184,6 +186,29 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 打开/换游戏时拉一次存档列表与自动存档配置
     load()
   }, [show, tid, load])
+
+  /* [CN-FORK] v0.5.2.174 「最近活动」轮询。
+   *
+   * 用户口径：「发生记录也没有写到屏幕上」。快照的**负向结果**（内容没变 / 没得拍 /
+   * 拍失败）在 pldmgr.log 里有，但界面上一个像素都不落 —— 用户看不到「到底跑没跑」。
+   * 这里在弹窗打开期间每 5 秒拉一次最近事件，把「静默的失败」变成看得见的记录。
+   *
+   * 与 load() 分开、用独立的 effect，是因为它的节奏（5s）与存档列表（只在打开时拉
+   * 一次）不同；合并会让列表每 5 秒重渲染一次，弹窗里的输入焦点/滚动位置都会抖。
+   * 换游戏（tid 变）时旧定时器随 effect 清理一起停掉，不会串台。 */
+  useEffect(() => {
+    if (!show || !tid) return undefined
+    let alive = true
+    const pull = async () => {
+      try {
+        const r = await getSnapEvents(tid, 16)
+        if (alive && r && Array.isArray(r.events)) setSnapEvents(r.events)
+      } catch { /* 只读展示，拉不到就保持上一份，不弹红字 */ }
+    }
+    pull()
+    const timer = setInterval(pull, 5000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [show, tid])
 
   if (!show || !game) return null
 
@@ -901,7 +926,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
             <GridRow
               cols={RO_COLS}
               label={t('game.snap_when', '备份时机')}
-              value={t('game.snap_when_exit', '每次游戏退出后')}
+              value={t('game.snap_when_exit', '每次游戏退出时（与推送远程同一时刻）')}
             />
             <GridRow
               cols={RO_COLS}
@@ -986,6 +1011,43 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                 {t('game.snap_hint',
                   '一行 = 某个用户在某时刻的整份存档。「还原」用它整份覆盖当前存档（失败会自动退回），「删除」只删快照、不动主机上的存档。存档内容没变时不会新增，所以份数涨得很慢。')}
               </p>
+            </div>
+
+            {/* ── [CN-FORK] v0.5.2.174 「最近活动」──
+             * 用户口径：「发生记录也没有写到屏幕上」。
+             * 上面那个列表只画**已经存在**的快照，于是「这一轮到底跑了没有」永远是空白
+             * —— 内容没变、没得拍、拍失败都不落像素。这一段把后端事件环（每 5 秒拉一次）
+             * 摊开，含**负向结果**，时间戳也在（全局 /log 的内存环没有时刻）。
+             * 与「快照列表」分工：上面是**结果**（有哪些份），这里是**过程**（跑没跑、为什么没拍）。 */}
+            <div className="mt-4 pt-4 border-t border-white/10">
+              <div className="flex items-center gap-2 mb-2">
+                <Activity className="w-4 h-4 text-zinc-400" />
+                <span className="panel-body font-semibold text-white">
+                  {t('game.snap_events_title', '最近活动')}
+                </span>
+              </div>
+              {snapEvents.length === 0 ? (
+                <p className="panel-tiny text-zinc-500">
+                  {t('game.snap_events_empty',
+                    '还没有记录。游戏退出后（或点「立即备份」）这里会显示每一次快照的结果。')}
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {snapEvents.map((ev, i) => {
+                    const lv = ev.lv | 0
+                    const tone = lv === 1 ? 'text-emerald-400'
+                      : lv === 3 ? 'text-rose-400'
+                        : lv === 2 ? 'text-amber-400'
+                          : 'text-zinc-400'
+                    return (
+                      <li key={`${ev.t}-${i}`} className="flex items-start gap-2 panel-tiny">
+                        <span className="tabular-nums text-zinc-500 shrink-0">{ev.t}</span>
+                        <span className={tone}>{ev.x}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
             </div>
           </Block>
         )}

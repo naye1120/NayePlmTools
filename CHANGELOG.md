@@ -1,3 +1,73 @@
+## v0.5.2.174 (CN-FORK) — 2026-10-13
+
+> 用户口径（原文）：
+> ① 「你还要告诉我本地快照为什么要进行退出和重试，而且发生记录也没有写到屏幕上」
+> ② 「你干活利索点，别弄一些乱七八糟没用的测试对比啥的，太浪费时间。现在调整一个逻辑，
+>    存档的本地快照保存和往远程推送的时机是一起的，把所有的所谓的静默窗口全部去掉。
+>    只有这一个时机和手动。」
+> ③ 「参考与致谢中差了好多，你把参考过的项目都写上，写全。」
+
+### ① 删掉「静默窗口」与延迟重试 —— 快照只在两个时机发生
+
+`.172` 的根因是：`gs_snap_take()` 里有个 `GS_SNAP_QUIET_SEC`（真机 20 秒）——
+`now - src.max_mtime < 20` 就返回「存档刚被写过，等下一轮」。那句守卫写在还有**定时守护**
+的年代（30 分钟一轮，「下一轮」真的会来）；`.154` 删掉定时守护、只留「游戏退出」这一个
+触发点之后，退出是**一次性事件**，而退出那一刻主机正好把存档写下去 → mtime 恒为「刚刚」→
+**每一次退出都被挡掉，本地快照永远不生成**。`.172` 的补救是「排队重试（≤40s）」。
+
+`.174` 按用户口径把两层一起删干净：**静默窗口整条删除，`.172` 的延迟重试队列也删掉**。
+现在快照只有两个时机 ——
+
+| 时机 | 位置 |
+|---|---|
+| 游戏退出 | `game_auto_plan()` 的 `GA_ACT_SNAP`，**与 `GA_ACT_PUSH` 相邻**，共用同一次 `GA_EXIT_SETTLE`（`settled` 变量只等一次） |
+| 手动「立即备份」 | `POST /game_save_snap {action:"run"}` |
+
+删除清单：`src/game_saves.c` 的 `GS_SNAP_QUIET_SEC` 定义与静默窗口分支、`gs_snap_take()`
+的 `int *skip_reason` 出参、`include/game_saves.h` 的 `GS_SNAP_SKIP_*` 与
+`game_saves_snap_run_now_ex()`、`src/game_auto.c` 的 `GA_SNAP_RETRY_MAX` / `g_pend_snap[]` /
+`ga_pend_snap_arm()` / `ga_pend_snap_tick()`、`test/run_host_tests.sh` 里三处
+`-DGS_SNAP_QUIET_SEC=0`（宏已不存在）。**唯一保留的跳过理由 = 「内容与最近一份相同」**。
+
+### ② 「快照活动」上屏 —— 负向结果不再只躺在日志里
+
+用户口径：「发生记录也没有写到屏幕上」。原来快照的**负向结果**（内容没变 / 没得拍 / 拍失败）
+只写 `pldmgr.log` 与全局 100 行内存环（`/log`、`/events`），而前端从不读它们；「本地快照」
+那块界面只列**已经存在**的快照 → 负向结果**一个像素都不落**，用户看不到「到底跑没跑」。
+
+新增一条只读接口 + 一块界面：
+
+- **后端** `src/game_saves.c` 的 64 条事件环（`g_snap_ev[]`，全 `static`，不占栈），
+  `game_saves_snap_ev()` 发射、`game_saves_snap_ev_json()` 按时间升序回**最近 N 条**；
+  `GET /game_save_snap_log?tid=&n=`（`n` 默认 16、封顶 64；tid 空 = 全部游戏；
+  6KB **栈**缓冲 + `queue_json`，不走 `alloc_response_buffer` 的 1MB）。
+  ⚠ 它是被界面轮询的 GET，已登记进 `is_noisy_route()`。
+- **前端** `SaveManagerModal.jsx` 的「本地快照」块新增「最近活动」子段，弹窗打开期间
+  **每 5 秒**拉一次（独立 effect，与存档列表的一次性 `load()` 分开，避免列表每 5 秒重渲染）；
+  `gameApi.js` 新增 `getSnapEvents()`；mock 也真记事件（含**跳过**），`/reset` 会重播基线。
+
+**为什么不直接复用 `/log`**：内存环里那 100 行**没有时间戳**（时间戳只写进文件），而且会被
+其它模块冲掉 —— 拿它当界面数据源既没有时刻、又随时丢记录。
+
+### ③ 顺手修掉一个真 bug：快照名字可以「倒退」
+
+写 ② 的端到端用例时暴露的（`.140` 起就有）：`gs_snap_take()` 的撞名循环只判「这个名字在不在」，
+于是被 `gs_snap_prune` 删掉的名字会被**再次复用**。`keep=1` 时表现为「新拍的那份名字比活着
+的那份还旧」→ 下一轮 prune 按名字排序删「最旧」→ **把刚拍的删掉、留下旧的**；`keep>1` 时
+表现为名字乱序 → 每轮都判「内容变了」→ 重复快照、份数虚高。
+修法：新名字必须**严格大于**已有的最新那个（`strcmp(cand, newest) > 0`）。
+
+### ④ 「参考与致谢」补全
+
+上一版只列 5 条（还是上游 README 的一个子集）。现在按来源分四组列全（22 条）：
+上游与 SDK（itsPLK 六个仓库 / John Törnblom 的 SDK / ps5-payload-dev 的 pacbrew-repo、
+websrv、offact）、游戏与存档（drakmor 的 ShadowMountPlus、earthonion 的 garlic-savemgr、
+manos555555、Pharaoh2k）、音频与图像（blackbearreloaded、Thealexbarney 的 LibAtrac9、
+nothings 的 stb）、风扇与系统（drakmor 的 ps5-hwinfo / fan_target、owendswang、BenNoxXD）。
+`README.md` 的「致谢」同步改写。
+
+---
+
 ## v0.5.2.173 (CN-FORK) — 2026-10-13
 
 > 用户口径（原文）：「存档转换的标签和功能删除。这个调整布局，单独放一行。导入的时候如果是

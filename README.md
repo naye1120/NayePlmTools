@@ -129,16 +129,33 @@ bash tools/build_tiles.sh
 
 ## 致谢
 
-- [itsPLK](https://github.com/itsPLK) —— 原版 Payload Manager 作者，本分支的上游。
+本分支的改动参考、移植或依赖了下列开源项目（按来源分组，只列作者与项目）：
+
+**上游与 SDK**
+
+- [itsPLK](https://github.com/itsPLK) —— [ps5-payload-manager](https://github.com/itsPLK/ps5-payload-manager)（原版 Payload Manager，本分支的上游）、[ps5_next_menu](https://github.com/itsPLK/ps5_next_menu)（侧栏与导航原型）、[ps5-pkg-manager](https://github.com/itsPLK/ps5-pkg-manager)、[ps5-bdjb-autoloader](https://github.com/itsPLK/ps5-bdjb-autoloader)、[ps5-lua-autoloader](https://github.com/itsPLK/ps5-lua-autoloader)、[ps5-y2jb-autoloader](https://github.com/itsPLK/ps5-y2jb-autoloader)。
 - [John Törnblom](https://github.com/john-tornblom) —— [ps5-payload-sdk](https://github.com/ps5-payload-dev/sdk) 与多个参考 payload。
+- [ps5-payload-dev](https://github.com/ps5-payload-dev) —— [pacbrew-repo](https://github.com/ps5-payload-dev/pacbrew-repo)（`libsmb2` 正式包）、[websrv](https://github.com/ps5-payload-dev/websrv)（`libsmb2` 用法参考）、[offact](https://github.com/ps5-payload-dev/offact)（离线账号激活，账号工具源自它）。
+
+**游戏与存档**
+
+- [drakmor](https://github.com/drakmor) —— [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)（挂载 / 游戏识别 / 详情跳转）、[ps5-hwinfo](https://github.com/drakmor/ps5-hwinfo)、[fan_target](https://github.com/drakmor/fan_target)。
+- [earthonion](https://github.com/earthonion) —— [garlic-savemgr](https://github.com/earthonion/garlic-savemgr)（兼容导入的格式依据）。
 - [manos555555](https://github.com/manos555555) —— [PS5-Upload-Suite](https://github.com/manos555555/PS5-Upload-Suite)。
-- [drakmor](https://github.com/drakmor) —— [ps5-hwinfo](https://github.com/drakmor/ps5-hwinfo)。
 - [Pharaoh2k](https://github.com/Pharaoh2k) —— [ps5debug-NG](https://github.com/Pharaoh2k/ps5debug-NG)。
-- [earthonion](https://github.com/earthonion) —— [garlic-savemgr](https://github.com/earthonion/garlic-savemgr)。
+
+**音频与图像**
+
 - [blackbearreloaded](https://github.com/blackbearreloaded) —— [ps5-at9-converter](https://github.com/blackbearreloaded/ps5-at9-converter)（本分支的浏览器端 ATRAC9 编码器移植自该项目）。
+- [Thealexbarney](https://github.com/Thealexbarney) —— [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9)（ATRAC9 解码表来源，MIT）。
+- [nothings](https://github.com/nothings) —— [stb](https://github.com/nothings/stb)（`stb_image` / `stb_image_write`）。
+
+**风扇与系统**
+
+- [owendswang](https://github.com/owendswang) —— [ps5-fan-control](https://github.com/owendswang/ps5-fan-control)，以及上游贡献。
 - [BenNoxXD](https://github.com/BenNoxXD) —— Disc Player 终止逻辑。
-- [owendswang](https://github.com/owendswang) —— 上游贡献。
-- 以及所有参与 PS5 homebrew 社区的开发者。
+
+以及所有参与 PS5 homebrew 社区的开发者。
 
 ---
 

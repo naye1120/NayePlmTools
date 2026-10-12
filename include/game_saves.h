@@ -228,34 +228,53 @@ int game_saves_remove(const char *tid, const char *save, char *msg, size_t msgsz
  * 于是这里不再有 start_daemon，也不再需要「按每款游戏各自的间隔判定到期」。 */
 
 /* 立即给这个游戏做一份快照（游戏退出时自动触发 / 用户点「立即备份」）。
- * 返回已生成/跳过的份数（>=0），msg 回一句人话；<0 是参数或目录层面的硬错误。 */
+ * 返回已生成/跳过的份数（>=0），msg 回一句人话；<0 是参数或目录层面的硬错误。
+ *
+ * [CN-FORK] v0.5.2.174 **触发时机只剩两个，与推送同一个时刻**（用户口径：
+ * 「快照和推送时机一起，只用这一个时机和手动」）：
+ *   ① 检测到游戏退出时（game_auto.c 的扫描线程，与自动推送同一轮、同一个
+ *      `GA_EXIT_SETTLE` 之后）；
+ *   ② 用户在「本地快照」块里点「立即备份」。
+ * `.172` 那套「静默窗口 + 排队重试」整条删除 —— 见下面 `GS_SNAP_*` 的历史说明。
+ * 跳过只剩一种：**内容与最近一份相同**（去重，不是时间窗）。 */
 int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz);
-
-/* [CN-FORK] v0.5.2.172 快照被「跳过」的原因 —— 给 game_auto.c 的退出重试逻辑用。
- *
- * 起因（真机日志实证）：游戏退出那一刻主机会把存档写下去，`gs_snap_take` 的
- * 「静默窗口」（`GS_SNAP_QUIET_SEC` = 20s）于是判定「存档刚被写过」→ 跳过并回
- * 「等下一轮」。可 `.154` 起快照的触发点**只剩「游戏退出」这一个**，而退出是一次性
- * 事件 —— 根本不存在「下一轮」，于是本地快照永远不生成。真机日志里那一串
- * `已退出 · 本地快照：存档刚被写过，等下一轮（0）` 就是它。
- *
- * 所以要把「可重试」与「重试也没用」区分开：
- *   · `GS_SNAP_SKIP_TOO_FRESH` —— 存档刚被写过；等静默窗口过去再拍就有了（**要重试**）；
- *   · `GS_SNAP_SKIP_UNCHANGED` —— 内容与最近一份相同；重试多少次都一样；
- *   · `GS_SNAP_SKIP_EMPTY`     —— 存档目录里没有文件。 */
-#define GS_SNAP_SKIP_NONE      0
-#define GS_SNAP_SKIP_UNCHANGED 1
-#define GS_SNAP_SKIP_TOO_FRESH 2
-#define GS_SNAP_SKIP_EMPTY     3
-
-/* 与 `game_saves_snap_run_now` 同一件事，只是多回一个「跳过原因」（skip_reason 可空）。
- * 返回值语义完全一致。 */
-int game_saves_snap_run_now_ex(const char *tid, int *skip_reason,
-                               char *msg, size_t msgsz);
 
 /* [CN-FORK] v0.5.2.154 这个游戏的本地快照开着没有（全局优先，与内部 gs_snap_cfg 同口径）。
  * 给 game_auto.c 的扫描线程用：游戏退出时先问一句，开着才备份。 */
 int game_saves_snap_enabled(const char *tid);
+
+/* ── [CN-FORK] v0.5.2.174 「快照活动」（用户口径：「发生记录也没有写到屏幕上」）─────
+ *
+ * 为什么需要它：`.172` 修好「退出时快照」之后，那四行日志只进了
+ * `/data/nayeplmtools/pldmgr.log` 与**全局 100 行的内存环**（`/log` / `/events`）。
+ * 而快照的**负向结果**（被静默窗口挡掉、内容没变、排队重试、重试成功）在界面上
+ * 一个像素都不落 —— 「本地快照」那块只列**已经存在**的快照，没拍成就什么都没有，
+ * 用户看到的只是「份数没涨」，分不清「没拍」和「拍了但没变」。
+ *
+ * 所以另起一个小事件环：**带时间戳、按 tid 过滤、有级别**，专供界面读。
+ * 与 `pldmgr_log` 的分工：日志给排查（全局、无时间戳、会被刷掉），这里给用户看
+ * （每款游戏一条链、带时刻、能上色）。两处都在同一个事件点写，措辞尽量一致。
+ *
+ * 为什么不做成「读 /log 再按关键字过滤」：`/log` 的行**不带时间戳**（时间戳只写进
+ * 文件，见 log_server.c 的 log_append_file），而且 100 行会被别的东西刷掉 ——
+ * 拿它当界面数据源，用户看到的会是「有时有、有时没有」。 */
+#define GS_SNAP_EV_INFO 0  /* 一般过程（检测到退出、开始检查） */
+#define GS_SNAP_EV_OK   1  /* 真的拍成了一份 */
+#define GS_SNAP_EV_SKIP 2  /* 按设计跳过（内容没变 / 静默窗口 / 空） */
+#define GS_SNAP_EV_FAIL 3  /* 失败 */
+
+/* 记一条事件。tid 为空则不记（不知道是谁的就别记）。fmt 是 printf 风格。 */
+void game_saves_snap_ev(const char *tid, int lv, const char *fmt, ...);
+
+/* 把最近的事件拼成 JSON：`{"ok":true,"tid":"…","events":[{"t":"14:03:21","lv":2,"x":"…"}]}`。
+ * `tid` 非空 → 只回这款游戏的；为空 → 回全部（按 tid 空串不记，所以实际都有 tid）。
+ * `max` <=0 取默认（16）。按**时间正序**输出（最早在前），与界面从上往下读一致。
+ * 返回写入长度（不含结尾 NUL）；buf 太小会被截断成合法 JSON 的几率不高 —— 调用方
+ * 给 8KB 以上（事件最多 24 条 × 160 字节）。 */
+int game_saves_snap_ev_json(const char *tid, int max, char *buf, size_t size);
+
+/* 清空事件环（宿主测试用；也让「立即备份」失败后能重来一遍干净的链）。 */
+void game_saves_snap_ev_clear(void);
 
 /* POST /game_save_snap：body 是 JSON
  *   {tid, action:"run"}                       → 立即备份
