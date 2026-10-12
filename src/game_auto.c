@@ -1210,6 +1210,19 @@ void game_auto_tick(void) {
             else snprintf(mtxt, sizeof(mtxt), "本轮失败");
             pldmgr_log("[PLDMGR] saves: %s 已退出 · 本地快照：%s（%s）\n",
                        steps[i].tid, smsg[0] ? smsg : "已处理", mtxt);
+            /* [CN-FORK] v0.5.2.174 快照**成功**时补一条系统通知（用户口径：「游戏结束时
+             * 存档本地快照成功的时候要 pldmgr_notify 一条信息」）。
+             *
+             * 为什么只发成功这一档：这是**后台**动作，退出游戏那一刻用户往往已经回到
+             * 主屏、不看面板了 —— 一条「已备份」的系统弹窗是唯一能当场告诉他「存档安全
+             * 落地了」的通道（同 .147 给推 / 拉加通知的理由）。
+             * 「没拍成 / 没得拍 / 失败」**刻意不发**：那是负向结果，弹窗只会平白吓人；
+             * 它们已经进了「本地快照 → 最近活动」与 pldmgr.log，用户想看时看得到。
+             * ⚠ `pldmgr_notify` 内部还会补一条 `[Notify] …` 进日志 —— 那是通知真的
+             * 发出去了的证据（同 .147 的注释）。 */
+            if (made > 0)
+                pldmgr_notify("本地快照完成\n%s · %s\n（游戏退出时自动备份）",
+                              steps[i].tid, smsg[0] ? smsg : "已生成快照");
             continue;
         }
 

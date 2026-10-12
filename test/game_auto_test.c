@@ -1122,6 +1122,7 @@ static void t_snap_exit(void) {
     set_mtime(SAVE_DIR "/sdimg_sce_bu_TEST", now + 300);
 
     g_log_n = 0;
+    g_notify_n = 0;
     g_fake_running = NULL;
     game_auto_tick();                 /* 退出 → 快照步骤 */
 
@@ -1131,12 +1132,31 @@ static void t_snap_exit(void) {
     CHECK(log_count("已排队重试") == 0,
           "`.174` 起不该再有「排队重试」（实得 %d 条）", log_count("已排队重试"));
 
+    /* ── ①b 快照**成功**要发一条系统通知（`.174` 用户口径：「游戏结束时存档本地快照
+     * 成功的时候要 pldmgr_notify 一条信息」）──
+     * 退出游戏那一刻用户往往已经回主屏、不看面板，系统弹窗是唯一能当场告诉他
+     * 「存档安全落地」的通道。只发成功这一档：负向结果（没拍成 / 没得拍）刻意不发，
+     * 它们在「最近活动」与日志里。 */
+    CHECK(notify_count("本地快照完成") == 1,
+          "快照成功后该发**一条**「本地快照完成」通知（实得 %d 条）",
+          notify_count("本地快照完成"));
+    {
+        int at = notify_at("本地快照完成");
+        CHECK(at >= 0 && strstr(g_notify[at], TID) != NULL,
+              "通知里要带游戏编号（口径：一条信息说得清是哪个游戏）");
+        CHECK(at >= 0 && strstr(g_notify[at], "已生成") != NULL,
+              "通知里要说清生成了几份（实得「%s」）", at >= 0 ? g_notify[at] : "(没有)");
+    }
+
     /* ── ② 再 tick 不该重复生成（内容没变 → 去重仍然保留）── */
     int before = snap_count(TID);
+    int nbefore = g_notify_n;
     game_auto_tick();
     game_auto_tick();
     CHECK(snap_count(TID) == before, "内容没变不该重复生成（实得 %d / 期望 %d）",
           snap_count(TID), before);
+    CHECK(g_notify_n == nbefore,
+          "没拍成时**不该**再弹通知（实得多了 %d 条）", g_notify_n - nbefore);
 
     g_fake_running = NULL;
     game_auto_set_probe(NULL);
