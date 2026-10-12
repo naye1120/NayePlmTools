@@ -23,6 +23,18 @@
 ### 仓库
 本 fork 独立发布到 `github.com/naye1120/NayePlmTools`（public），`cn-fork` 分支作为其 `main`。
 
+### 出包
+`NayePlmTools_0.5.2.171-me.elf`（NAYE00001 媒体栏）· `-ga.elf`（NAYE00004 游戏栏），
+两包各 **11,294,104 字节**（比 `.170` 的 11,261,336 大 ~32.7KB = 内联的收款码图片），
+md5 `04dbd6d74eaa052c68cf0e21eaa014a5` / `a55801ed35d321a235e0749515e49074`。
+标题 `NayePlmTools v0.5.2.171 by naye (8b897fd, …)`（真实 commit 哈希非 DEV；
+`[TITLE_PLACEHOLDER]` 已消费；`.170` 残留 0；内嵌网页 blob 与 `frontend/dist/index.html`
+逐字节一致）。`pkg_171_verify.sh` **ALL CHECKS PASSED** —— 继承 `.170` 全部断言
+（后端改名修复指纹仍在 ⇒ 这轮前端改动没碰坏改名链），**新增 `.171` 产物层指纹**：
+dist 与 ELF 里 `data:image/png;base64` 必须在（图片真的内联了，否则嵌进 ELF 必 404）、
+无外链 `donate-qr` 引用、`github.com/naye1120/NayePlmTools` 在、
+旧的坏地址 `github.com/naye/ps5-payload-manager` 已消失。
+
 ---
 
 ## v0.5.2.170 (CN-FORK) — 2026-10-11
