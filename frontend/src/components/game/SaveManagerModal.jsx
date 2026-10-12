@@ -12,6 +12,7 @@ import { formatSizeAlways, formatStamp } from './format'
 import {
   getSaves, saveDownloadUrl, uploadSave, deleteSave, snapAction,
   syncSaves, getRemoteSaveInfo, deleteRemoteSave, importGarlic, convertSave,
+  snapDownloadUrl, remoteSaveDownloadUrl,
 } from '../../utils/gameApi'
 import {
   resolveAutoForGame, resolveRemoteForGame, remoteSummary,
@@ -40,7 +41,15 @@ const tidFromName = (name) => {
  *   ② 远程位置只读摘要 + 逐用户远程信息（`.147` 并进本卡，原来是并排的第三张卡）
  *      + 「立即拉取 / 立即推送」+ 引擎上次干了什么（auto_state）；
  *   ③ 存档列表（下载 / 上传覆盖 / 删除 / 上传新的 / **garlic 兼容导入**）
- *     与本地快照列表（立即备份 / 还原 / 删除）。
+ *     与本地快照列表（立即备份 / 还原 / **下载** / 删除）。
+ *
+ * [CN-FORK] v0.5.2.172 **三张列表的每一行都有一颗「下载」**（用户口径：「所有存档列表
+ * 删除按钮前边加一个下载按钮」）。三颗按钮下的是**同一层东西的不同一份**：
+ *   存档列表 → 主机上**当前**那份   /game_save_download
+ *   远程存档 → **远端**那份备份     /game_save_remote_download
+ *   本地快照 → **某个时刻**的那份   /game_save_snap_download
+ * 三颗都排在「删除」前面。⚠ 远程那颗与左边的「立即拉取」不是一回事：拉取会把主机上
+ * 这份**整份替换**掉，下载只把云上那份拿到电脑上（后端走 sr_fetch，一个字节都不碰主机）。
  *
  * 版式（`.147`）：第一行三栏 = ① / ② / ③，各占 1/3；本地快照仍单独满宽铺开。
  * 配置（远程位置 / 自动存档 / 快照参数）全部在「设置 → 存档配置」一处，对所有游戏生效。
@@ -641,6 +650,22 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                                   </span>
                                 )}
                               </div>
+                              {/* [CN-FORK] v0.5.2.172 下载按钮排在删除**前面**（用户口径：
+                                  「所有存档列表删除按钮前边加一个下载按钮」）。它只在
+                                  远端确实有这一份时出现 —— 点了才发现没得下是最差的一种提示。
+                                  与左边「立即拉取」是两回事：拉取会整份替换主机存档，
+                                  下载只把云上那份拿到电脑上（后端走 sr_fetch，不碰主机）。 */}
+                              {canDel && (
+                                <a
+                                  className="icon-btn shrink-0"
+                                  href={remoteSaveDownloadUrl(tid, sv.id)}
+                                  download
+                                  title={t('game.remote_download', '下载远程存档')}
+                                  aria-label={t('game.remote_download', '下载远程存档')}
+                                >
+                                  <Download className="w-4 h-4" />
+                                </a>
+                              )}
                               {canDel && (
                                 <button
                                   type="button"
@@ -934,6 +959,18 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                           >
                             <RotateCcw className="w-4 h-4" />
                           </button>
+                          {/* [CN-FORK] v0.5.2.172 下载这一份快照（后端把它打成 zip 直出）。
+                              与上面「还原」的分工：还原是**就地**整份覆盖主机存档，
+                              下载是把它拿到电脑上留个底。排在删除**前面**（用户口径）。 */}
+                          <a
+                            className="icon-btn"
+                            href={snapDownloadUrl(tid, sn.uid, sn.ts)}
+                            download
+                            title={t('game.snap_download', '下载快照')}
+                            aria-label={t('game.snap_download', '下载快照')}
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
                           <button
                             type="button"
                             className="icon-btn is-danger"

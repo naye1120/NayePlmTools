@@ -41,6 +41,7 @@
 #include "game_media.h" /* [CN-FORK] v0.5.2.115 多媒体管理 /game_media*（六条 + 任务两条） */
 #include "game_runtime.h" /* [CN-FORK] v0.5.2.116 删源 / 挂载 / 卸载挂载 / 卸载安装 */
 #include "game_saves.h"   /* [CN-FORK] v0.5.2.116 存档六条 */
+#include "save_remote.h"  /* [CN-FORK] v0.5.2.172 SR_ENOTFOUND（远程存档下载的「远端没有」）*/
 #include "game_auto.h"    /* [CN-FORK] v0.5.2.142 自动存档手动推 / 拉 */
 #include "game_title.h"   /* [CN-FORK] v0.5.2.116 改名 + 磁贴两层图六条 */
 #include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
@@ -2395,6 +2396,55 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                     zmsg[0] ? zmsg : "找不到这个存档");
         snprintf(disp, sizeof(disp), "attachment; filename=\"%s_saves.zip\"", xd);
         return reply_file(conn, zpath, "application/zip", disp, 1);
+    } else if (strcmp(url, ROUTE_GAME_SAVE_SNAP_DOWNLOAD) == 0) {
+        /* [CN-FORK] v0.5.2.172 下载**一份本地快照**（打包即下，与 /game_save_download
+         * 同一套：同步打完、fd 直出、流完自动清理）。
+         * 文件名只用 tid / uid / ts —— 三个都是受控字符集（tid 是 alnum、
+         * uid 是十六进制、ts 是 YYYYmmdd-HHMMSS），拼进 Content-Disposition 安全。 */
+        const char *ntid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        const char *nuid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "uid");
+        const char *nts = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "ts");
+        if (!ntid || !nuid || !nts)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid / uid / ts");
+        if (mkdir(GAME_SAVES_PACK_DIR, 0777) != 0 && errno != EEXIST)
+            return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                                    "无法创建下载临时目录");
+        char npath[900], nmsg[192], ndisp[220];
+        nmsg[0] = 0;
+        snprintf(npath, sizeof(npath), "%s/%s_%s_%lld_%d.zip", GAME_SAVES_PACK_DIR,
+                 ntid, nuid, (long long)time(NULL), (int)getpid());
+        if (game_saves_snap_pack(ntid, nuid, nts, npath, NULL, nmsg, sizeof(nmsg)) != 0)
+            return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT",
+                                    nmsg[0] ? nmsg : "找不到这份快照");
+        snprintf(ndisp, sizeof(ndisp), "attachment; filename=\"%s_%s_%s.zip\"",
+                 ntid, nuid, nts);
+        return reply_file(conn, npath, "application/zip", ndisp, 1);
+    } else if (strcmp(url, ROUTE_GAME_SAVE_REMOTE_DOWNLOAD) == 0) {
+        /* [CN-FORK] v0.5.2.172 下载**远端那一份**存档。同步取回临时文件再直出 ——
+         * 与「立即拉取」的区别是它一个字都不碰主机存档（见 game_saves.h）。
+         * 「远端没有这份」回 404（前端当「没得下」），连不上 / 没配回 502 +
+         * 人话 —— 这两类原因用户能自己修，回 500 只会让人以为面板坏了。 */
+        const char *qtid = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+        const char *qsave = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "save");
+        if (!qtid || !qsave)
+            return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid 或 save");
+        if (mkdir(GAME_SAVES_PACK_DIR, 0777) != 0 && errno != EEXIST)
+            return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                                    "无法创建下载临时目录");
+        char qpath[900], qmsg[192], qdisp[200];
+        qmsg[0] = 0;
+        snprintf(qpath, sizeof(qpath), "%s/remote_%s_%lld_%d.zip", GAME_SAVES_PACK_DIR,
+                 qtid, (long long)time(NULL), (int)getpid());
+        int qrc = game_saves_remote_download(qtid, qsave, qpath, qmsg, sizeof(qmsg));
+        if (qrc != 0)
+            return queue_json_error(conn,
+                                    qrc == SR_ENOTFOUND ? MHD_HTTP_NOT_FOUND
+                                                        : MHD_HTTP_BAD_GATEWAY,
+                                    qrc == SR_ENOTFOUND ? "ENOENT" : "EREMOTE",
+                                    qmsg[0] ? qmsg : "下载远程存档失败");
+        snprintf(qdisp, sizeof(qdisp), "attachment; filename=\"%s_%s_remote.zip\"",
+                 qtid, qsave);
+        return reply_file(conn, qpath, "application/zip", qdisp, 1);
     } else if (strcmp(url, ROUTE_GAME_SAVE_DELETE) == 0) {
         const char *xd = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
         const char *xs2 = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "save");

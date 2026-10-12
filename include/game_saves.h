@@ -143,10 +143,27 @@ int game_saves_test(const char *body, size_t len, char *buf, size_t size);
 int game_saves_pack(const char *tid, const char *save, const char *out_path,
                     long long *out_files, char *msg, size_t msgsz);
 
+/* [CN-FORK] v0.5.2.172 GET /game_save_snap_download：把**一份本地快照**
+ * （GAME_SAVES_SNAP_DIR/<TID>/<uid>/<ts>）整份打成 STORE zip 写到 out_path。
+ * zip 内的顶层目录用 `<uid>_<ts>`（一次下好几份时包名不会撞）。
+ * ts 必须过 gs_snap_ts_ok（YYYYmmdd-HHMMSS），uid 必须过 gs_uid_ok。
+ * 0 成功（调用方负责流完之后 unlink）；-1 失败，msg 里是人话。 */
+int game_saves_snap_pack(const char *tid, const char *uid, const char *ts,
+                         const char *out_path, long long *out_files,
+                         char *msg, size_t msgsz);
+
 /* [CN-FORK] v0.5.2.145 GET /game_save_remote_info：取某用户远程存档的只读元数据
  * （大小 / 文件数 / 修改时间），供前端「远程游戏」标签展示。返回写入长度，<0 出错。
  * 配置解析全局优先 → per-game 回落。输出 JSON 见 game_saves.c 注释。 */
 int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t size);
+
+/* [CN-FORK] v0.5.2.172 GET /game_save_remote_download：把**远端那一份**存档取到
+ * out_path（本地一个文件，调用方负责流完之后 unlink）。配置解析与 remote_info /
+ * remote_delete 逐字同口径（全局优先 → per-game 回落）。
+ * ⚠ 走 sr_fetch，**不是 sr_pull** —— 后者会整份替换主机存档（见 save_remote.h）。
+ * 0 成功；SR_ENOTFOUND = 远端没有这份；-1 = 失败，msg 里是人话。 */
+int game_saves_remote_download(const char *tid, const char *save, const char *out_path,
+                               char *msg, size_t msgsz);
 
 /* [CN-FORK] v0.5.2.159 POST /game_save_remote_delete：删掉**远端**那一份存档。
  * 配置解析与 game_saves_remote_info 同一条口径（全局优先 → per-game 回落），
@@ -213,6 +230,28 @@ int game_saves_remove(const char *tid, const char *save, char *msg, size_t msgsz
 /* 立即给这个游戏做一份快照（游戏退出时自动触发 / 用户点「立即备份」）。
  * 返回已生成/跳过的份数（>=0），msg 回一句人话；<0 是参数或目录层面的硬错误。 */
 int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz);
+
+/* [CN-FORK] v0.5.2.172 快照被「跳过」的原因 —— 给 game_auto.c 的退出重试逻辑用。
+ *
+ * 起因（真机日志实证）：游戏退出那一刻主机会把存档写下去，`gs_snap_take` 的
+ * 「静默窗口」（`GS_SNAP_QUIET_SEC` = 20s）于是判定「存档刚被写过」→ 跳过并回
+ * 「等下一轮」。可 `.154` 起快照的触发点**只剩「游戏退出」这一个**，而退出是一次性
+ * 事件 —— 根本不存在「下一轮」，于是本地快照永远不生成。真机日志里那一串
+ * `已退出 · 本地快照：存档刚被写过，等下一轮（0）` 就是它。
+ *
+ * 所以要把「可重试」与「重试也没用」区分开：
+ *   · `GS_SNAP_SKIP_TOO_FRESH` —— 存档刚被写过；等静默窗口过去再拍就有了（**要重试**）；
+ *   · `GS_SNAP_SKIP_UNCHANGED` —— 内容与最近一份相同；重试多少次都一样；
+ *   · `GS_SNAP_SKIP_EMPTY`     —— 存档目录里没有文件。 */
+#define GS_SNAP_SKIP_NONE      0
+#define GS_SNAP_SKIP_UNCHANGED 1
+#define GS_SNAP_SKIP_TOO_FRESH 2
+#define GS_SNAP_SKIP_EMPTY     3
+
+/* 与 `game_saves_snap_run_now` 同一件事，只是多回一个「跳过原因」（skip_reason 可空）。
+ * 返回值语义完全一致。 */
+int game_saves_snap_run_now_ex(const char *tid, int *skip_reason,
+                               char *msg, size_t msgsz);
 
 /* [CN-FORK] v0.5.2.154 这个游戏的本地快照开着没有（全局优先，与内部 gs_snap_cfg 同口径）。
  * 给 game_auto.c 的扫描线程用：游戏退出时先问一句，开着才备份。 */

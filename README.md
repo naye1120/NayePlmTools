@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
- <img src="./pldmgr_screenshot.png" width="640" />
+ <img src="./pldmgr_screenshot.png" width="640" alt="NayePlmTools 界面：游戏列表（中文）" />
 </p>
 
 ---

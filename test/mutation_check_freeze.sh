@@ -2,6 +2,17 @@
 # [CN-FORK] v0.5.2.152 变异对照（四个变异，都必须被抓住）。
 # [CN-FORK] v0.5.2.154 又加三个（gate / snap / runblock），共七个。
 #
+# ── 变异 ⑧「retry」：撞上静默窗口后**不排队重试**（= `.172` 那个 bug 原样放回）──
+# `.172` 用户口径：「游戏关闭的时候并没有自动存储本地快照」。根因是 `gs_snap_take`
+# 的 20 秒静默窗口在 `.154` 删掉定时守护之后**永远等不到「下一轮」**，而主机正好在
+# 退出那一刻写存档 —— 于是每一次退出都被挡掉，快照列表永远不增长。
+# 这个变异删掉整个「排队重试」块（含那行日志）：日志里那句「已排队重试」不见了，
+# 而且**再也补不上**。之所以必须用「排队日志 + 最终补上的份数」两条一起证，是因为
+# 「没动作」在面板上一点异常都看不出来 —— 只有这两条能把「真的补上了」与「装作补上了」
+# 分开。⚠ 只删 `ga_pend_snap_arm()` 一行是**不够**的：日志会照旧打印「已排队重试」，
+# 于是那条断言变成空话（实测只删一行时红数只有 2，被 run_case 判成 BAD）。
+# 期望：恰好 4 条红（排队日志 2 条 + 补上的份数 1 + 重试成功日志 1）。
+#
 # 跑法：bash test/mutation_check_freeze.sh            （EXIT 0 = 全部都被抓住）
 #       bash test/mutation_check_freeze.sh order      （只跑顺序那个）
 #       bash test/mutation_check_freeze.sh handle     （只跑「凭据没交出去」那个）
@@ -10,7 +21,8 @@
 #       bash test/mutation_check_freeze.sh gate       （只跑「远程不比本地新还去拉」那个）
 #       bash test/mutation_check_freeze.sh snap       （只跑「退出时不快照」那个）
 #       bash test/mutation_check_freeze.sh runblock   （只跑「运行中也让推拉」那个）
-# 不接进 run_host_tests.sh：它要重编七遍（与 mutation_check_media.sh 同一理由）。
+#       bash test/mutation_check_freeze.sh retry      （只跑「撞静默窗口不重试」那个）
+# 不接进 run_host_tests.sh：它要重编八遍（与 mutation_check_media.sh 同一理由）。
 #
 # ── 变异 ①「order」：把 freeze 挪到 ga_do_inner **之后**（先拉后冻）──────────
 # 这个修复的全部价值就在**顺序**上（用户口径：暂停游戏 → 拉取存档）。而顺序恰恰是
@@ -258,10 +270,34 @@ PY
     rm -rf "$W"
 fi
 
+if [ "$WANT" = "both" ] || [ "$WANT" = "retry" ]; then
+    W=$(mktemp -d)
+    # 把整个「排队重试」块删掉 = 撞上静默窗口之后没人再补 —— 等价于把 `.172` 的 bug 放回去。
+    # ⚠ 必须**连日志一起删**：只删 `ga_pend_snap_arm()` 那一行的话，日志照旧打印
+    #   「已排队重试」而其实什么都没排 —— 那样「排队日志」这条断言就成了空话
+    #   （实测只删一行时它照样绿，红数只有 2）。整块删掉才是「这个功能从没加过」。
+    python3 - "$W/game_auto.c" <<'PY'
+import sys, pathlib
+src = pathlib.Path('src/game_auto.c').read_text(encoding='utf-8')
+BLOCK = ('            if (made == 0 && sreason == GS_SNAP_SKIP_TOO_FRESH) {\n'
+         '                ga_pend_snap_arm(steps[i].tid);\n'
+         '                pldmgr_log("[PLDMGR] saves: %s 本地快照已排队重试（最多 %ds）\\n",\n'
+         '                           steps[i].tid, GA_SNAP_RETRY_MAX * GA_TICK);\n'
+         '            }\n')
+assert src.count(BLOCK) == 1, '变异锚点（排队重试那一整块）没找到或不止一处'
+out = src.replace(BLOCK, '', 1)
+assert out != src and BLOCK not in out, 'mutation failed'
+pathlib.Path(sys.argv[1]).write_text(out, encoding='utf-8')
+print('  变异已注入：撞上静默窗口后不排队重试（= 退出快照永远补不上）')
+PY
+    run_case retry "$W/game_auto.c" 4 4 '排队重试\|排队日志\|重试成功\|该补上 1 份快照' || bad=1
+    rm -rf "$W"
+fi
+
 echo
 if [ "$bad" -eq 0 ]; then
     echo "MUTATION OK：变异都被抓住了 —— 顺序 / 凭据 / 机制代号 / 判定策略 /"
-    echo "            拉取前比新旧 / 退出时快照 / 运行中拒拦 七条断言都不是虚的"
+    echo "            拉取前比新旧 / 退出时快照 / 运行中拒拦 / 退出快照重试 八条断言都不是虚的"
     exit 0
 fi
 echo "MUTATION BAD：有变异没被抓住（守卫不可信）"

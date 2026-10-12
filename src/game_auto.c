@@ -1080,6 +1080,75 @@ int game_auto_sync_action(const char *body, size_t len,
 #define GA_EXIT_SETTLE 5 /* 退出后再等这么久才推，给主机收尾写盘的时间 */
 #define GA_THREAD_STACK (1u << 20)
 
+/* ══ [CN-FORK] v0.5.2.172 退出快照的「延迟重试」══════════════════════════════
+ *
+ * 用户口径：「游戏关闭的时候并没有自动存储本地快照」。
+ *
+ * 真机日志实证（`.170`）：
+ *     saves: PPSA21567 已退出 · 本地快照：存档刚被写过，等下一轮（0）
+ * 连着三条 —— 快照**被触发了**（开关开着、退出也检测到了），但每一次都被
+ * `gs_snap_take` 的静默窗口（`GS_SNAP_QUIET_SEC` = 20s）挡掉，返回 0。
+ *
+ * 根因是**触发方式变了、守卫没跟着变**：那句「宁可等下一轮」写在还有**定时守护**
+ * 的年代（30 分钟一轮，「下一轮」真的会来）。`.154` 把定时守护整条删掉、只留
+ * 「游戏退出」这一个触发点之后，退出是**一次性事件** —— 游戏已经没了，`prev`
+ * 下一轮就变成空串，再也不会有人来补这一份。而退出那一刻主机会把存档写下去，
+ * 存档的 mtime 就是「刚刚」，于是**每一次退出都被挡掉，本地快照永远不生成**。
+ *
+ * 修法：不改 `gs_snap_take` 的判据（判据本身是对的 —— 正在写就不能拍），而是把
+ * 「下一轮」真的补上：跳过时把 tid 记进 pending，之后每个 tick 重试一次，直到
+ * 拍成 / 内容没变 / 超过上限。
+ *
+ * 三条边界：
+ *   ① **只在「没有游戏在跑」时重试** —— 用户要是又开了游戏，这一份就不该再补
+ *      （存档可能已经在变，而且那是另一款游戏的事了）；
+ *   ② **只重试「刚被写过」那一种** —— 「内容没变」重试多少次都一样（见
+ *      `GS_SNAP_SKIP_*`），失败（<0）也不必重试；
+ *   ③ 上限 `GA_SNAP_RETRY_MAX` 轮（1s 一轮），刚好覆盖 20s 静默窗口并留足余量 ——
+ *      真机上存档 mtime 落在退出那一刻，而快照是在 `GA_EXIT_SETTLE` 之后才拍的，
+ *      所以要等的时间 ≈ `GS_SNAP_QUIET_SEC - GA_EXIT_SETTLE`。 */
+#define GA_SNAP_RETRY_MAX 40
+
+static char g_pend_snap[32];   /* 待重试的快照 tid；空 = 没有。只在守护线程里读写 */
+static int  g_pend_snap_left;  /* 还能重试几轮 */
+
+/* 给这个 tid 排一次「延迟重试」。 */
+static void ga_pend_snap_arm(const char *tid) {
+    if (!tid || !tid[0]) return;
+    snprintf(g_pend_snap, sizeof(g_pend_snap), "%s", tid);
+    g_pend_snap_left = GA_SNAP_RETRY_MAX;
+}
+
+/* 每个 tick 调一次（在没有游戏运行时）。返回 1 = 还有待办，0 = 没有了。 */
+static int ga_pend_snap_tick(void) {
+    if (!g_pend_snap[0]) return 0;
+    char msg[200];
+    msg[0] = 0;
+    int reason = GS_SNAP_SKIP_NONE;
+    int made = game_saves_snap_run_now_ex(g_pend_snap, &reason, msg, sizeof(msg));
+    if (made > 0) {
+        pldmgr_log("[PLDMGR] saves: %s 本地快照重试成功：%s\n",
+                   g_pend_snap, msg[0] ? msg : "已生成");
+        g_pend_snap[0] = 0;
+        return 0;
+    }
+    if (made < 0) {   /* 硬错误（目录没了 / 写不进去）—— 再试也是白试 */
+        pldmgr_log("[PLDMGR] saves: %s 本地快照重试失败，放弃：%s\n",
+                   g_pend_snap, msg[0] ? msg : "快照失败");
+        g_pend_snap[0] = 0;
+        return 0;
+    }
+    /* made == 0：还是被跳过。只有「刚被写过」值得接着等，其余（内容没变 / 空）
+     * 现在放弃与等 40 秒后再放弃是同一件事，不如当场收摊、少写 40 行日志。 */
+    if (reason != GS_SNAP_SKIP_TOO_FRESH || --g_pend_snap_left <= 0) {
+        pldmgr_log("[PLDMGR] saves: %s 本地快照不再重试：%s\n",
+                   g_pend_snap, msg[0] ? msg : "已跳过");
+        g_pend_snap[0] = 0;
+        return 0;
+    }
+    return 1;
+}
+
 void game_auto_tick(void) {
     char cur[32];
     cur[0] = 0;
@@ -1097,6 +1166,12 @@ void game_auto_tick(void) {
     snprintf(prev, sizeof(prev), "%s", g_prev_tid);
     snprintf(g_prev_tid, sizeof(g_prev_tid), "%s", cur);
     pthread_mutex_unlock(&g_ga_mu);
+
+    /* [CN-FORK] v0.5.2.172 待重试的退出快照。**必须排在下面那个早退之前** ——
+     * 退出之后 prev 与 cur 都是空串，每一轮都走早退，重试只能在这里做。
+     * 只在「没有游戏在跑」时补：用户又开了游戏就把待办丢掉（见 ga_pend_snap_arm）。 */
+    if (!cur[0]) ga_pend_snap_tick();
+    else g_pend_snap[0] = 0;
 
     if (!strcmp(prev, cur)) return; /* 绝大多数轮次走这里 */
 
@@ -1160,13 +1235,22 @@ void game_auto_tick(void) {
             settled = 1;
         }
 
-        /* [CN-FORK] v0.5.2.154 退出时的本地快照（原来是定时守护，已删）。 */
+        /* [CN-FORK] v0.5.2.154 退出时的本地快照（原来是定时守护，已删）。
+         * [CN-FORK] v0.5.2.172 跳过的要**排队重试** —— 退出是一次性事件，没有
+         * 「下一轮」，而退出那一刻存档刚被主机写完，几乎必然撞上静默窗口。
+         * 详见上面 ga_pend_snap_arm 那段。 */
         if (steps[i].act == GA_ACT_SNAP) {
             char smsg[200];
             smsg[0] = 0;
-            int made = game_saves_snap_run_now(steps[i].tid, smsg, sizeof(smsg));
+            int sreason = GS_SNAP_SKIP_NONE;
+            int made = game_saves_snap_run_now_ex(steps[i].tid, &sreason, smsg, sizeof(smsg));
             pldmgr_log("[PLDMGR] saves: %s 已退出 · 本地快照：%s（%d）\n",
                        steps[i].tid, smsg[0] ? smsg : "已处理", made);
+            if (made == 0 && sreason == GS_SNAP_SKIP_TOO_FRESH) {
+                ga_pend_snap_arm(steps[i].tid);
+                pldmgr_log("[PLDMGR] saves: %s 本地快照已排队重试（最多 %ds）\n",
+                           steps[i].tid, GA_SNAP_RETRY_MAX * GA_TICK);
+            }
             continue;
         }
 

@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h> /* [CN-FORK] v0.5.2.172 sr_fetch 落盘后 stat 取字节数 */
 #include <unistd.h>
 
 /* libsmb2 的头文件**不自包含**，顺序也不能换：
@@ -874,29 +875,22 @@ static int sr_finish_pull(const char *tid, const char *uid, const char *tmp,
     return 0;
 }
 
-/* ── 拉取 ───────────────────────────────────────────────────────────────── */
-int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
-            long long *out_files, long long *out_bytes, char *err, size_t errsz) {
-    if (out_files) *out_files = 0;
-    if (out_bytes) *out_bytes = 0;
-    if (err && errsz) err[0] = 0;
-
+/* ── 下载：把远端那份 zip 取到本地一个文件 ───────────────────────────────
+ * [CN-FORK] v0.5.2.172 从 sr_pull 里抽出这一段，「拉取」与「下载远程存档」共用。
+ * 0 成功（path 已就位）；SR_ENOTFOUND = 远端没有这份；-1 = 失败（err 人话）。
+ *
+ * 为什么必须抽出来、而不是让下载直接复用 sr_pull：sr_pull 的落点是 sr_finish_pull，
+ * 它会把 zip **解包并整份替换主机存档**（游戏启动时那条路的语义）。拿它做下载
+ * 等于「点一下下载，本地存档反被云上那份覆盖了」—— 这是这一轮最不能出的错。 */
+static int sr_download_to(const sr_cfg_t *c, const char *tid, const char *uid,
+                          const char *path, char *err, size_t errsz) {
     char url[SR_URL_MAX];
     if (sr_build_url(c, tid, uid, url, sizeof(url), err, errsz) != 0) return -1;
 
-    char tmp[SR_URL_MAX];
-    if (sr_tmp_path("pull", tid, uid, tmp, sizeof(tmp), err, errsz) != 0) return -1;
+    /* SMB 不走 curl —— SDK 那份 libcurl 没编 smb，这条线是 libsmb2。 */
+    if (!strcmp(c->mode, "smb")) return sr_smb_pull(c, tid, uid, path, err, errsz);
 
-    if (!strcmp(c->mode, "smb")) {
-        int rc = sr_smb_pull(c, tid, uid, tmp, err, errsz);
-        if (rc != 0) {
-            unlink(tmp);
-            return rc; /* 可能是 SR_ENOTFOUND，原样往上抛 */
-        }
-        return sr_finish_pull(tid, uid, tmp, out_files, out_bytes, err, errsz);
-    }
-
-    FILE *f = fopen(tmp, "wb");
+    FILE *f = fopen(path, "wb");
     if (!f) {
         if (err) snprintf(err, errsz, "建不了临时文件（%s）", strerror(errno));
         return -1;
@@ -906,7 +900,7 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
     CURL *cu = curl_easy_init();
     if (!cu) {
         fclose(f);
-        unlink(tmp);
+        unlink(path);
         if (err) snprintf(err, errsz, "初始化传输失败");
         return -1;
     }
@@ -937,7 +931,7 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
     fclose(f);
 
     if (rc != CURLE_OK) {
-        unlink(tmp);
+        unlink(path);
         /* FTP 这边「远端还没有这个文件」有两种表现，必须都算「没得拉」：
          *   - RETR 一个不存在的文件 → CURLE_REMOTE_FILE_NOT_FOUND
          *   - **CWD 到一个还不存在的目录 → 550 → CURLE_REMOTE_ACCESS_DENIED**
@@ -959,17 +953,55 @@ int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
         return -1;
     }
     if (http == 404) {
-        unlink(tmp);
+        unlink(path);
         if (err) snprintf(err, errsz, "远程还没有这个游戏的存档");
         return SR_ENOTFOUND;
     }
     if (http >= 400) {
-        unlink(tmp);
+        unlink(path);
         if (err) snprintf(err, errsz, "远程拒绝了这次下载（HTTP %ld）", http);
         return -1;
     }
 
+    return 0;
+}
+
+/* ── 拉取（把远端那份**整份替换**进主机存档）────────────────────────────── */
+int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
+            long long *out_files, long long *out_bytes, char *err, size_t errsz) {
+    if (out_files) *out_files = 0;
+    if (out_bytes) *out_bytes = 0;
+    if (err && errsz) err[0] = 0;
+
+    char tmp[SR_URL_MAX];
+    if (sr_tmp_path("pull", tid, uid, tmp, sizeof(tmp), err, errsz) != 0) return -1;
+
+    int rc = sr_download_to(c, tid, uid, tmp, err, errsz);
+    if (rc != 0) {
+        unlink(tmp);
+        return rc; /* 可能是 SR_ENOTFOUND，原样往上抛 */
+    }
     return sr_finish_pull(tid, uid, tmp, out_files, out_bytes, err, errsz);
+}
+
+/* ── 下载远程存档（原样取回，一个字节都不碰主机存档）──────────────────────
+ * [CN-FORK] v0.5.2.172 前端「远程存档」那一行的下载按钮用。
+ * 0 成功（out_path 已就位）；SR_ENOTFOUND = 远端没有这份；-1 = 失败（err 人话）。
+ * *out_bytes 回实际落盘的字节数（可为 NULL）。 */
+int sr_fetch(const char *tid, const char *uid, const sr_cfg_t *c,
+             const char *out_path, long long *out_bytes, char *err, size_t errsz) {
+    if (out_bytes) *out_bytes = 0;
+    if (err && errsz) err[0] = 0;
+    if (!out_path || !out_path[0]) {
+        if (err) snprintf(err, errsz, "缺少输出路径");
+        return -1;
+    }
+    int rc = sr_download_to(c, tid, uid, out_path, err, errsz);
+    if (rc == 0 && out_bytes) {
+        struct stat sb;
+        if (stat(out_path, &sb) == 0) *out_bytes = (long long)sb.st_size;
+    }
+    return rc;
 }
 
 /* ── 只读元数据（方案 A：前端「远程游戏」标签展示用）────────────────────── */

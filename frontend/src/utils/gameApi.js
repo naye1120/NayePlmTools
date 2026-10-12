@@ -79,6 +79,12 @@
  *     必然遇到，不该是一条红报错）；真的连不上 / 协议不支持才是 400 + message。
  *     note 是给人话的总结，界面直接展示。
  *   GET  /game_save_download?tid=&save=  → 二进制（zip）
+ *        [CN-FORK] v0.5.2.172 三条下载路（都是 GET + query，浏览器自己落文件）：
+ *          主机上**当前**那份存档 → /game_save_download?tid=&save=
+ *          **本地快照**那一份     → /game_save_snap_download?tid=&uid=&ts=
+ *          **远端**那一份         → /game_save_remote_download?tid=&save=
+ *        三条都直接当 `<a href download>` 用。最后一条的要害是它**一个字节都不碰
+ *        主机存档**（不是「立即拉取」——那条会把本地整份替换掉）。
  *   POST /game_save_upload?tid=&save=    裸 body（zip） → {ok, files, size}
  *   GET  /game_save_delete?tid=&save=    → {ok}
  *   POST /game_save_import_garlic?tid=&save=&name=   裸 body（镜像或 zip） → {ok, files}
@@ -452,6 +458,21 @@ export function testRemote(tid, cfg, opts) {
 
 export function saveDownloadUrl(tid, saveId) {
   return `/game_save_download${q({ tid, save: saveId })}`
+}
+
+/* [CN-FORK] v0.5.2.172 下载一份**本地快照**（后端把那份快照目录打成 zip 直出）。
+ * uid / ts 原样回传 —— 它们是快照路径的最后两段，别在别处再拼一次。
+ * 走 qa()（不追加 `_=Date.now()`）：这是**资源 URL**，与 saveDownloadUrl 那种
+ * 一次性请求不同 —— 见 v0.5.2.166 那条注释（`_=` 会让「值变了没有」永判不等）。 */
+export function snapDownloadUrl(tid, uid, ts) {
+  return `/game_save_snap_download${qa({ tid, uid, ts })}`
+}
+
+/* [CN-FORK] v0.5.2.172 下载**远端那一份**存档（后端取回远端 zip 直出）。
+ * ⚠ 与「立即拉取」不是一回事：拉取会把主机上这份**整份替换**掉，
+ * 下载只把云上那份拿到电脑上，主机存档一个字节都不动。 */
+export function remoteSaveDownloadUrl(tid, saveId) {
+  return `/game_save_remote_download${qa({ tid, save: saveId })}`
 }
 
 export function uploadSave(tid, saveId, blob, opts) {

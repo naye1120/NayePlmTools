@@ -99,6 +99,18 @@ int sr_push(const char *tid, const char *uid, const sr_cfg_t *c,
 int sr_pull(const char *tid, const char *uid, const sr_cfg_t *c,
             long long *out_files, long long *out_bytes, char *err, size_t errsz);
 
+/* [CN-FORK] v0.5.2.172 把远端那一份存档 zip **原样取到本地一个文件**：不解包、
+ * 更**一个字节都不碰主机存档**。前端「远程存档」那一行的下载按钮用。
+ *
+ * ⚠ 与 sr_pull 的区别是**要害**，别拿 sr_pull 顶替：sr_pull 的落点是
+ *   `game_saves_import_file`（整份替换主机存档，游戏启动时那条路的语义），
+ *   拿它做下载等于「点一下下载，本地存档反被云上那份覆盖了」。
+ *
+ * 0 成功（out_path 已就位）；SR_ENOTFOUND = 远端没有这份；-1 = 失败（err 人话）。
+ * *out_bytes 回实际落盘的字节数（可为 NULL）。 */
+int sr_fetch(const char *tid, const char *uid, const sr_cfg_t *c,
+             const char *out_path, long long *out_bytes, char *err, size_t errsz);
+
 /* [CN-FORK] v0.5.2.145 **只读**地取一份远程存档的真实元数据，供前端「远程游戏」
  * 标签展示与本地存档列表同款的信息（大小 / 修改时间 / 文件数）。
  *   out_size  ← <uid>.zip 的字节数（smb2_stat / 协议 stat 直接拿，真实）

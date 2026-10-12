@@ -23,6 +23,8 @@
  *   ⑨ 本地快照：立即备份 / 内容没变不新增 / 只改了哪个用户就只新增哪个 /
  *      保留数裁剪 / 一键还原 / 删除 / uid 与 ts 的路径穿越一律拒 /
  *      间隔与保留数的归一化（86400 不能被当成越界回落成 30 分钟）
+ *   ⑨b 快照打包下载（`.172`）：顶层目录 `<uid>_<ts>` / 含主机记账 _bu_ 备份 /
+ *      源快照不动 / 坏 tid·uid·ts 与不存在的快照一律拒且不落盘
  *   ⑨c 崩溃留下的 .tmp_* / .rst_* 会被清掉，且**不误删正在写的那一份**
  *   ⑩ **整条快照链必须能在 32KB 线程栈上跑完**（真机连接线程只有 64KB 上下）
  *   ⑪ garlic 兼容导入（`.154`）：逐文件合并 / 裸镜像必须带文件名 /
@@ -744,6 +746,69 @@ int main(void) {
     CHECK(count_temp_in(HOME "/" U2 "/savedata_prospero") == 0,
           "还原在父目录里留了 .old_*/.rst_* 半成品（%d 个）",
           count_temp_in(HOME "/" U2 "/savedata_prospero"));
+
+    /* ── ⑨b 快照打包下载（v0.5.2.172）────────────────────────────────────── *
+     * 面板上「下载快照」把**某一时刻的那一份**整包成 zip 交给浏览器。
+     * 与 game_saves_pack（打主机上当前那份存档）同一套打包机，只是源换成
+     * GAME_SAVES_SNAP_DIR/<TID>/<uid>/<ts>。钉三条不变量：
+     *   ① 顶层目录用 `<uid>_<ts>` —— 一次可能下好几份快照，都用 tid 做顶层名
+     *      会互相覆盖，而解压出来也得能看出「谁的、哪一刻」；
+     *   ② 快照目录里的每个文件都在包里（含主机记账 sdimg_sce_bu_*）；
+     *   ③ **源快照必须原封不动** —— 边打包边把自己的源删掉/写脏是记过的坑。
+     * 反向对照：坏 tid / 坏 uid / 坏 ts / 不存在的快照一律拒，且不落盘。 */
+    {
+        const char *zsnap = ROOT "/snap.zip";
+        long long sfiles = 0;
+        unlink(zsnap);
+        CHECK(game_saves_snap_pack(TID_PS5, U2, ts2b, zsnap, &sfiles, msg, sizeof(msg)) == 0,
+              "快照打包失败: %s", msg);
+        CHECK(sfiles > 0, "快照包该有文件，实得 %lld", sfiles);
+        CHECK(exists_reg(zsnap), "快照 zip 没落盘");
+        {
+            struct stat st;
+            if (stat(zsnap, &st) == 0 && st.st_size > 22) {
+                char *zb = (char *)malloc((size_t)st.st_size + 1);
+                int fd = open(zsnap, O_RDONLY);
+                CHECK(fd >= 0, "快照 zip 打不开");
+                if (fd >= 0 && zb) {
+                    ssize_t got = read(fd, zb, (size_t)st.st_size);
+                    if (got > 0) {
+                        char pre[64];
+                        snprintf(pre, sizeof(pre), U2 "_%s", ts2b);
+                        CHECK(memcmp(zb, "PK\x03\x04", 4) == 0, "不是 zip 本地文件头");
+                        CHECK(mem_find(zb, (size_t)got, pre, strlen(pre)) != NULL,
+                              "zip 里没有顶层目录 %s（头几个字节: %.60s）", pre, zb);
+                        CHECK(mem_find(zb, (size_t)got, "sdimg_STARBOARD", 15) != NULL,
+                              "zip 里没有 sdimg_STARBOARD");
+                        CHECK(mem_find(zb, (size_t)got, "sdimg_sce_bu_sdmemory", 20) != NULL,
+                              "zip 里没有 _bu_ 备份 —— 快照打包漏了它，还原会缺件");
+                    }
+                    close(fd);
+                }
+                free(zb);
+            }
+        }
+        /* 打包过之后**源快照必须还在** */
+        {
+            char sp[1024];
+            snprintf(sp, sizeof(sp),
+                     GAME_SAVES_SNAP_DIR "/" TID_PS5 "/" U2 "/%s/sdimg_STARBOARD", ts2b);
+            CHECK(exists_reg(sp), "打包把快照源文件弄没了：%s", sp);
+        }
+        unlink(zsnap);
+
+        /* 反向对照：坏参数一律拒，且不落盘 */
+        CHECK(game_saves_snap_pack("nope", U2, ts2b, zsnap, &sfiles, msg, sizeof(msg)) < 0,
+              "坏 tid 的快照打包居然成功了");
+        CHECK(game_saves_snap_pack(TID_PS5, "../x", ts2b, zsnap, &sfiles, msg, sizeof(msg)) < 0,
+              "坏 uid 的快照打包居然成功了");
+        CHECK(game_saves_snap_pack(TID_PS5, U2, "../../etc", zsnap, &sfiles, msg, sizeof(msg)) < 0,
+              "坏 ts 的快照打包居然成功了");
+        CHECK(game_saves_snap_pack(TID_PS5, U2, "20200101-000000", zsnap, &sfiles,
+                                   msg, sizeof(msg)) < 0,
+              "不存在的快照打包居然成功了");
+        CHECK(!exists_reg(zsnap), "被拒的快照打包却落了盘");
+    }
 
     /* uid / ts 是路径的最后两段 —— 穿越一律在拼路径之前就被拒 */
     const char *bad[] = {

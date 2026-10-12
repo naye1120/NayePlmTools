@@ -1381,6 +1381,25 @@ app.get('/game_save_download', (req, res) => {
   res.send(EMPTY_ZIP);
 });
 
+/* [CN-FORK] v0.5.2.172 两条下载路由（与后端同形：GET + query，回 zip 二进制）。
+ * mock 不真打包，回一个空 zip 就够 —— 前端要验的是「链接指向对、点了真开始下载」。 */
+app.get('/game_save_snap_download', (req, res) => {
+  const { tid, uid, ts } = req.query;
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', disposition(`${tid}_${uid}_${ts}.zip`));
+  res.send(EMPTY_ZIP);
+});
+
+app.get('/game_save_remote_download', (req, res) => {
+  const { tid, save } = req.query;
+  if (remoteGone.has(`${tid}/${save}`)) {
+    return res.status(404).json({ error: 'ENOENT', message: '远程还没有这个游戏的存档' });
+  }
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', disposition(`${tid}_${save}_remote.zip`));
+  res.send(EMPTY_ZIP);
+});
+
 app.post('/game_save_upload', express.raw({ type: () => true, limit: '512mb' }), (req, res) => {
   const tid = String(req.query.tid || '');
   const uid = String(req.query.save || '');

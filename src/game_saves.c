@@ -1126,10 +1126,17 @@ static void gs_sweep_temp(const char *dir) {
 
 /* ── 做一份快照 ─────────────────────────────────────────────────────────── */
 /* 返回 0 = 新生成一份（out_ts 已填）；1 = 跳过（内容没变 / 空 / 正在被写，note 回原因）；
- * -1 = 失败（note 回人话）。调用方必须持有 g_snap_mu。 */
+ * -1 = 失败（note 回人话）。调用方必须持有 g_snap_mu。
+ *
+ * [CN-FORK] v0.5.2.172 `skip_reason`（可空）回「跳过」的具体原因，取值是
+ * `GS_SNAP_SKIP_*`。加这个出参是因为**「跳过」有两种截然不同的含义**：
+ * 「存档刚被写过」（等一会儿再来就有）与「内容没变」（再来多少次都一样）。
+ * 调用方（game_auto.c 的退出路径）必须能分开 —— 见 game_saves.h 里那段说明。 */
 static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
-                        char *out_ts, size_t osz, char *note, size_t notesz) {
+                        char *out_ts, size_t osz, char *note, size_t notesz,
+                        int *skip_reason) {
     if (out_ts && osz) out_ts[0] = 0;
+    if (skip_reason) *skip_reason = GS_SNAP_SKIP_NONE;
     struct stat st;
     if (lstat(r->path, &st) != 0 || !S_ISDIR(st.st_mode)) {
         if (note) snprintf(note, notesz, "存档目录不存在");
@@ -1139,14 +1146,26 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
     gs_stat_t src = {0, 0, 0, 0};
     unsigned budget = GS_MAX_WALK;
     gs_walk(r->path, &src, 0, &budget);
-    if (src.files == 0) { if (note) snprintf(note, notesz, "存档里没有文件"); return 1; }
+    if (src.files == 0) {
+        if (note) snprintf(note, notesz, "存档里没有文件");
+        if (skip_reason) *skip_reason = GS_SNAP_SKIP_EMPTY;
+        return 1;
+    }
     if (src.over) { if (note) snprintf(note, notesz, "存档条目太多，已跳过"); return -1; }
 
     /* 正在被写就先不动：拷到一半的存档还原回去可能让主机认不出来。
-     * 宁可等下一轮 —— 快照的价值在于「有一份能用的」，不在于「有一份」。 */
+     * 宁可等下一轮 —— 快照的价值在于「有一份能用的」，不在于「有一份」。
+     *
+     * [CN-FORK] v0.5.2.172 ⚠ 这句话原本成立是因为当时有**定时守护**（30 分钟一轮），
+     * 「下一轮」真的会来。`.154` 把定时守护整条删掉、只留「游戏退出」这一个触发点
+     * 之后，「下一轮」就不存在了 —— 而游戏退出那一刻主机会把存档写下去，mtime 就是
+     * 「刚刚」，于是**每一次退出都被这里挡掉，本地快照永远不生成**（真机日志实证）。
+     * 这里不改判据（判据本身是对的：正在写就不能拍），改的是**调用方**：
+     * 现在把 TOO_FRESH 如实回出去，由 game_auto.c 排队重试，直到静默窗口过去。 */
     time_t now = time(NULL);
     if (src.max_mtime != 0 && now - src.max_mtime < GS_SNAP_QUIET_SEC) {
         if (note) snprintf(note, notesz, "存档刚被写过，等下一轮");
+        if (skip_reason) *skip_reason = GS_SNAP_SKIP_TOO_FRESH;
         return 1;
     }
 
@@ -1166,6 +1185,7 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
             if (old.files == src.files && old.bytes == src.bytes &&
                 old.max_mtime == src.max_mtime) {
                 if (note) snprintf(note, notesz, "内容与最近一份相同，未新增");
+                if (skip_reason) *skip_reason = GS_SNAP_SKIP_UNCHANGED;
                 return 1;
             }
         }
@@ -1320,8 +1340,10 @@ int game_saves_snap_enabled(const char *tid) {
     return en;
 }
 
-int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
+int game_saves_snap_run_now_ex(const char *tid, int *skip_reason,
+                               char *msg, size_t msgsz) {
     if (msg && msgsz) msg[0] = 0;
+    if (skip_reason) *skip_reason = GS_SNAP_SKIP_NONE;
     if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
 
     int keep = GAME_SAVES_SNAP_KEEP_DEF;
@@ -1337,16 +1359,25 @@ int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
     }
 
     int made = 0, skipped = 0, failed = 0;
+    /* [CN-FORK] v0.5.2.172 汇总各 root 的跳过原因：**只要有一个是「刚被写过」
+     * 就按「刚被写过」回** —— 那是唯一值得重试的那种（一个用户刚存过档，不代表
+     * 另一个用户那份也是刚写的，但整体重试一次没有坏处，且不会重复生成：
+     * 「内容没变」的那些 root 在重试时照样返回 UNCHANGED，不会多落一份）。 */
+    int reason = GS_SNAP_SKIP_NONE;
     char first[200];
     first[0] = 0;
     pthread_mutex_lock(&g_snap_mu);
     for (int i = 0; i < nr; i++) {
         char ts[24], note[200];
         ts[0] = note[0] = 0;
-        int rc = gs_snap_take(tid, &roots[i], keep, ts, sizeof(ts), note, sizeof(note));
+        int r = GS_SNAP_SKIP_NONE;
+        int rc = gs_snap_take(tid, &roots[i], keep, ts, sizeof(ts), note, sizeof(note), &r);
         if (rc == 0) made++;
-        else if (rc == 1) skipped++;
-        else failed++;
+        else if (rc == 1) {
+            skipped++;
+            if (r == GS_SNAP_SKIP_TOO_FRESH) reason = GS_SNAP_SKIP_TOO_FRESH;
+            else if (r != GS_SNAP_SKIP_NONE && reason == GS_SNAP_SKIP_NONE) reason = r;
+        } else failed++;
         if (rc != 0 && !first[0]) snprintf(first, sizeof(first), "%s", note);
     }
     pthread_mutex_unlock(&g_snap_mu);
@@ -1360,8 +1391,15 @@ int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
         if (msg) snprintf(msg, msgsz, "%s", first[0] ? first : "快照失败");
         return -1;
     }
+    if (skip_reason) *skip_reason = reason;
     if (msg) snprintf(msg, msgsz, "%s", first[0] ? first : "内容没变，未新增");
     return skipped > 0 ? 0 : -1;
+}
+
+/* 旧签名的包装：现有调用方（`/game_save_snap` 的「立即备份」、宿主测试）不关心
+ * 跳过原因，保持原样即可。 */
+int game_saves_snap_run_now(const char *tid, char *msg, size_t msgsz) {
+    return game_saves_snap_run_now_ex(tid, NULL, msg, msgsz);
 }
 
 /* 删掉一份快照。0 成功，-1 失败（msg 回人话）。 */
@@ -2004,6 +2042,68 @@ int game_saves_pack(const char *tid, const char *save, const char *out_path,
     return 0;
 }
 
+/* [CN-FORK] v0.5.2.172 把**一份本地快照**打包成 zip 供下载。
+ *
+ * 与 game_saves_pack（打主机上当前那份存档）是同一套打包机（gs_pack_walk /
+ * zip_write），只是源目录换成 GAME_SAVES_SNAP_DIR/<TID>/<uid>/<ts>。
+ *
+ * zip 内的顶层目录用 `<uid>_<ts>`：一次可能下好几份快照，包名一样会互相覆盖，
+ * 而 ts 是 15 字符的时间戳（gs_snap_ts_ok 已保证），拼进去是安全的。
+ *
+ * 快照本身就是**整份存档的副本**，所以这份 zip 与 /game_save_download 出来的那份
+ * 是同一层东西 —— 想还原，走「上传存档」即可（不需要另开一条导入路径）。 */
+int game_saves_snap_pack(const char *tid, const char *uid, const char *ts,
+                         const char *out_path, long long *out_files,
+                         char *msg, size_t msgsz) {
+    if (msg && msgsz) msg[0] = 0;
+    if (out_files) *out_files = 0;
+    if (!gs_tid_ok(tid) || !gs_uid_ok(uid) || !gs_snap_ts_ok(ts)) {
+        if (msg) snprintf(msg, msgsz, "参数不合法");
+        return -1;
+    }
+    char dir[1200];
+    if (gs_snap_path(tid, uid, ts, dir, sizeof(dir)) != 0) {
+        if (msg) snprintf(msg, msgsz, "路径异常");
+        return -1;
+    }
+    struct stat sb;
+    if (lstat(dir, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
+        if (msg) snprintf(msg, msgsz, "找不到这份快照");
+        return -1;
+    }
+
+    char prefix[80];
+    snprintf(prefix, sizeof(prefix), "%s_%s", uid, ts);
+
+    gs_pack_t t;
+    memset(&t, 0, sizeof(t));
+    t.max = (int)GAME_SAVES_MAX_ENTRIES;
+    t.prefix = prefix;
+    gs_pack_walk(dir, "", 0, &t);
+
+    if (t.bad || t.n == 0) {
+        free(t.e);
+        if (msg) snprintf(msg, msgsz, t.n == 0 ? "这份快照是空的" : "快照里的文件太多（上限 4096）");
+        return -1;
+    }
+
+    if (ensure_dir_recursive(GAME_SAVES_PACK_DIR) != 0) {
+        free(t.e);
+        if (msg) snprintf(msg, msgsz, "无法创建临时目录（%s）", strerror(errno));
+        return -1;
+    }
+    const char *err = "打包失败";
+    int rc = zip_write(out_path, t.e, t.n, NULL, &err);
+    free(t.e);
+    if (rc != 0) {
+        if (msg) snprintf(msg, msgsz, "%s", err);
+        return -1;
+    }
+    if (out_files) *out_files = t.n;
+    pldmgr_log("[PLDMGR] saves: %s/%s/%s 快照 packed -> %s\n", tid, uid, ts, out_path);
+    return 0;
+}
+
 /* ── 上传 ───────────────────────────────────────────────────────────────── */
 typedef struct {
     char base[700];
@@ -2518,6 +2618,53 @@ int game_saves_remote_delete(const char *tid, const char *save, char *msg, size_
     if (st == 0 || st == SR_ENOTFOUND) return 0;
     if (msg) snprintf(msg, msgsz, "%s", err[0] ? err : "删除远程存档失败");
     return -1;
+}
+
+/* [CN-FORK] v0.5.2.172 把**远端那一份**存档取到本地一个文件，供面板直出下载
+ * （前端「远程存档」那一行的下载按钮）。
+ *
+ * 配置解析与上面的 game_saves_remote_info / remote_delete **逐字同一口径**
+ * （全局优先 → 本游戏回落）—— 四条路各解析各的会出现「界面上看到的远程在 A
+ * 共享、下载的却是 B」，这种错法比下载失败危险得多。
+ *
+ * ⚠ 走 sr_fetch，**不是 sr_pull**：sr_pull 是「整份替换主机存档」（游戏启动时
+ *   那条路的语义），拿它做下载会把用户当前的存档覆盖掉。见 save_remote.h。
+ *
+ * 0 成功（out_path 已就位）；SR_ENOTFOUND = 远端没有这份（前端当「没得下」）；
+ * -1 = 失败（msg 人话）。 */
+int game_saves_remote_download(const char *tid, const char *save, const char *out_path,
+                               char *msg, size_t msgsz) {
+    if (msg && msgsz) msg[0] = 0;
+    if (!gs_tid_ok(tid) || !gs_uid_ok(save) || !out_path || !out_path[0]) {
+        if (msg) snprintf(msg, msgsz, "参数不合法");
+        return -1;
+    }
+
+    char jbuf[4096];
+    int got = 0;
+    if (config_read_archive_global(jbuf, sizeof(jbuf)) > 0) got = 1;
+    else if (game_saves_auto_json(tid, jbuf, sizeof(jbuf)) > 0) got = 1;
+    if (!got) {
+        if (msg) snprintf(msg, msgsz, "还没有配置远程位置");
+        return -1;
+    }
+
+    sr_cfg_t rc;
+    gs_fill_remote_cfg(jbuf, &rc);
+
+    char err[256];
+    err[0] = 0;
+    int st = sr_fetch(tid, save, &rc, out_path, NULL, err, sizeof(err));
+    if (st == SR_ENOTFOUND) {
+        if (msg) snprintf(msg, msgsz, "%s", err[0] ? err : "远程还没有这个游戏的存档");
+        return SR_ENOTFOUND;
+    }
+    if (st != 0) {
+        if (msg) snprintf(msg, msgsz, "%s", err[0] ? err : "下载远程存档失败");
+        return -1;
+    }
+    pldmgr_log("[PLDMGR] saves: %s/%s 远程存档下载 -> %s\n", tid, save, out_path);
+    return 0;
 }
 
 /* ══ [CN-FORK] v0.5.2.154 存档目录的「最近被写过的时刻」 ══════════════════════
