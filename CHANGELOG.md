@@ -79,6 +79,33 @@ manos555555、Pharaoh2k）、音频与图像（blackbearreloaded、Thealexbarney
 nothings 的 stb）、风扇与系统（drakmor 的 ps5-hwinfo / fan_target、owendswang、BenNoxXD）。
 `README.md` 的「致谢」同步改写。
 
+### ⑤ 出包（产物指纹）
+
+`NayePlmTools_0.5.2.175-me.elf`（NAYE00001 媒体栏）· `-ga.elf`（NAYE00004 游戏栏），
+两包各 **11,294,104 字节**，md5 `e2ffe6674f6c47719e28ec92fe3f0ab6` /
+`2b0299ff1d36fcc2dd7ce197c1006008`。标题
+`NayePlmTools v0.5.2.175 by naye (6a187dd, …)`（真实 commit 哈希，非 DEV；
+`[[TITLE_PLACEHOLDER]]` 已消费；`.174` 残留 0；`frontend/dist/index.html`（1,190,949 字节）
+与 ELF 内嵌 blob 在偏移 `+2232672` **逐字节相等**）。
+
+`pkg_175_verify.sh` **ALL CHECKS PASSED** —— 继承 `.170`～`.173` 全部断言，新增 `.175` 的：
+dist 与 ELF 必须有「最近活动」/`snap_events_title`/「与推送远程同一时刻」/「主机系统通知」；
+dist 里 `排队重试`、`存档刚被写过` 残留 0；ELF 必须有 `/game_save_snap_log`、
+`游戏退出，检查本地快照`、`内容与最近一份相同，未新增`、`本地快照完成`，
+以及两条致谢条目（`drakmor/ShadowMountPlus`、`Thealexbarney/LibAtrac9`）。
+
+宿主套件 `overall: PASS`（`game_saves` **266**、`game_auto` **173**，各 0 failures）；
+前端 `game112` **404/404**、`nav112` **20/20**、`pack125` **15/15**。
+
+⚠ **版本号说明**：这批改动按时间本来该走 `.174`，但 `.174` 这个序号上一轮已经占用并作废，
+所以实际出的是 **`.175`**（内容与文中所有 `.174` 字样指的不是同一批产物）。核对脚本已按
+`.175` 重新命名（`git mv`）。
+
+### 未做（需用户明确同意）
+
+- `.173` / `.174` / `.175` 三个包都**还没推真机**（`192.168.1.214`）。
+- 本批提交只推到了本地，未 push 到 `origin/main`。
+
 ---
 
 ## v0.5.2.173 (CN-FORK) — 2026-10-13

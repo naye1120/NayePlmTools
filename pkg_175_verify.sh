@@ -53,7 +53,7 @@
 set -uo pipefail
 
 VER=0.5.2.175
-COMMIT=PLACEHOLDER
+COMMIT=6a187dd
 PREV=0.5.2.174
 REPO_URL='github.com/naye1120/NayePlmTools'
 OLD_URL='github.com/naye/ps5-payload-manager'
