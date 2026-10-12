@@ -1,3 +1,127 @@
+## v0.5.2.172 (CN-FORK) — 2026-10-12
+
+> 用户口径（原文）：「重点修复bug，首先帮我核实一下 兼容存档导入，是什么逻辑，导入的是加密的
+> 还是解密的，导入的时候是不是强制改签，还有游戏关闭的时候并没有自动存储本地快照」
+> 「所有存档列表删除按钮前边加一个下载按钮，并实现下载」
+
+### ① 修 bug：游戏退出时本地快照永远不落地
+
+**根因**：`gs_snap_take()`（`src/game_saves.c`）有一条静默窗口
+`GS_SNAP_QUIET_SEC`（真机 **20 秒**）：
+
+```c
+if (src.max_mtime != 0 && now - src.max_mtime < GS_SNAP_QUIET_SEC) {
+    ... "存档刚被写过，等下一轮"
+    return 1;
+}
+```
+
+这句「等下一轮」是**定时守护**（30 分钟一轮）时代写的。`.154` 把定时守护整条删掉、只留
+「游戏退出」这一个触发点之后，**「下一轮」永远不会来**；而主机恰好是在退出那一刻写存档
+→ mtime 恒为「刚刚」→ **每一次退出都被挡掉，快照列表永远不增长**。
+
+真机日志实证（用户那台）：`saves: PPSA21567 已退出 · 本地快照：存档刚被写过，等下一轮（0）` ×3。
+
+**修法**（三层）：
+
+- `gs_snap_take()` 扩出参 `int *skip_reason`，取值 `GS_SNAP_SKIP_{NONE,UNCHANGED,TOO_FRESH,EMPTY}`。
+  调用方由此能区分「内容没变」「刚被写过」「空的」—— **只有 TOO_FRESH 值得等**。
+- 新增 `game_saves_snap_run_now_ex()`（把各根目录的跳过原因聚合，TOO_FRESH 优先）；
+  原 `game_saves_snap_run_now()` 变成薄包装，老调用方一行不用改。
+- `src/game_auto.c` 加一条**延迟重试队列**：退出那一步若被静默窗口挡掉就
+  `ga_pend_snap_arm()`（`GA_SNAP_RETRY_MAX 40` × `GA_TICK 1` = 最多 40 秒），
+  之后每轮 `ga_pend_snap_tick()` 在**没有游戏运行时**补拍。
+  ⚠ tick 必须挂在 `game_auto_tick()` 那个 `if (!strcmp(prev, cur)) return;` 早退**之前** ——
+  退出之后 prev 与 cur 都是空串，每一轮都走早退，重试只能在那里做。
+  用户又开了游戏就把待办丢掉（`else g_pend_snap[0] = 0;`）。
+
+### ② 新增：三张存档列表的「下载」按钮（都排在「删除」前面）
+
+| 列表 | 下的是哪一份 | 路由 |
+|---|---|---|
+| 存档列表 | 主机上**当前**那份 | `/game_save_download`（`.116` 起就有） |
+| 远程存档 | **远端**那份备份 | `/game_save_remote_download`（新，**GET**） |
+| 本地快照 | **某个时刻**的那份 | `/game_save_snap_download`（新，**GET**） |
+
+- `src/save_remote.c`：把 `sr_pull` 里的取回逻辑抽成 `sr_download_to()`，`sr_pull` 与新的
+  `sr_fetch()` 共用。⚠ **`sr_fetch` 一个字节都不碰主机存档** —— 图省事直接复用 `sr_pull`
+  会变成「点下载，主机上这份被云端那份整份覆盖」，是最坏的一种 bug（`include/save_remote.h`
+  的声明上方写了警告）。
+- `src/game_saves.c`：新增 `game_saves_snap_pack()`（把某一份快照打包，zip 顶层目录
+  `<uid>_<ts>` —— 一次可能下好几份，都用 tid 当顶层名会互相覆盖）与
+  `game_saves_remote_download()`（远程配置解析与 `game_saves_remote_info` **同一口径**）。
+- `src/http_server.c`：两条 GET 路由。「远端没有这份」回 **404 ENOENT**（前端当「没得下」），
+  「连不上 / 没配」回 **502 EREMOTE** + 人话 —— 这两类原因用户能自己修，回 500 只会让人
+  以为面板坏了。两条都是 **GET**，所以不进 `gr_post_limit()`。
+- 前端 `SaveManagerModal.jsx`：三颗按钮的 `aria-label` **刻意不同**
+  （`下载` / `下载快照` / `下载远程存档`），既方便读屏，也让回归能精确取用。
+
+### ③ 核实结论：garlic 兼容导入（用户问的三件事）
+
+- **导入的是「已经加密」的镜像，不是解密后的明文。** 兼容对象是 garlic-savemgr 在主机盘上
+  原样看到的那个东西：PS5 → 裸的一个 `sdimg_<名>`；PS4 → 一个 zip，里面是 `sdimg_<名>`
+  与配套的 `<名>.bin` 密封密钥。面板**既不解密也不加密** —— 后者要 `/dev/pfsmgr` 的 ioctl
+  （`0xc0845302`）+ `libSceFsInternalForVsh` 的 dlsym + 进程提权，属于内核级动作
+  （本项目 `.54` 有整机死机的前科）。
+- **不强制改签**（没有「把存档改签到当前账户」这一步）。全仓 grep
+  `pfsmgr|sceFsInternal|re-?sign|reseal|改签|签名` 只找到「为什么不这么做」的注释。
+  整条链是**原样搬运**：先落暂存 `.tmp_gx_<pid>_<ts>` → **逐文件合并**
+  （保留主机自己的记账 `sdimg_sce_bu_*` / `sdimg_sce_sdmemory`）→ 整包成功才 rename。
+- 不传 `save` 时落到**当前前台用户**（`.165`）；garlic 导出名开头的 `<TID>_` 会被剥掉。
+
+### 测试与守卫
+
+- 宿主新增 `test/game_auto_test.c` ⑩：**用「把存档 mtime 拨到未来」触发 TOO_FRESH 分支**，
+  刻意**不依赖编译期的 `GS_SNAP_QUIET_SEC`**（宿主编的是 0、真机是 20；靠常量的话这一节等于
+  没测 —— 而「宿主全绿、真机炸」正是这个项目栽过三次的形状）。
+  断言链：退出被挡 → 排队日志 ×1（带 tid）→ 此刻 0 份快照 → 静默窗口过去 → 补上 1 份 +
+  「重试成功」×1 → 再 tick 不重复生成。
+  ⚠ 夹具必须在**快照关着**的时候归零 prev：上一节结束时 prev 里还留着 TID，开着快照去归零
+  会被当成「游戏退出」而立刻落一份（第一版就是在这里「实得 1」红掉的）。
+- 宿主新增 `test/game_saves_test.c` ⑨b：快照打包（顶层目录 `<uid>_<ts>` / 含 `_bu_` 备份 /
+  源快照不动 / 坏 tid·uid·ts 与不存在的快照一律拒**且不落盘**）。
+- `test/stub_sr_stat.c` 补 `sr_fetch` 替身（`game_saves` 关卡是纯文件系统那一路，不带
+  `save_remote.c`）。替身口径与 `sr_stat` / `sr_delete` 一致：**绝不回 0、绝不回 SR_ENOTFOUND**。
+- `test/mutation_check_freeze.sh` 新增变异 ⑧「retry」：整块删掉排队重试（**含那行日志**）→ 4 条红。
+  ⚠ 只删 `ga_pend_snap_arm()` 一行是**不够**的：日志照旧打印「已排队重试」，那条断言就变成空话
+  （实测红数只有 2，被 `run_case` 判成 BAD）。
+- 前端回归 `game112.mjs`：数存档行的判据从 `a[download]` **收窄到 `a[aria-label="下载"]`**
+  （三张列表现在都有 `a[download]` 了），并新增两条 href 断言 + 一次真实
+  `page.waitForEvent('download')` 验落盘名（`/^PPSA01234_1a1d362\d_\d{8}-\d{6}\.zip$/`）。
+- `src/save_remote.c` 补 `#include <sys/stat.h>`（`sr_fetch` 落盘后要 stat 取字节数）——
+  漏了它 `game_saves` 关卡直接 `BUILD FAILED`。
+
+### 结果
+
+- 宿主套件 `overall: PASS`（`game_saves` **226** / `game_auto` **172**，各 0 failures；
+  变异 `mutation_check_freeze.sh retry` MUTATION OK）。
+- 前端 `game112` **393/393**、`nav112` **20/20**、`pack125` **15/15**（构建产物层）。
+- README 界面图换成本 fork 自己的界面截图（游戏列表，中文，`pldmgr_screenshot.png` 992×824）。
+
+### 出包
+
+`NayePlmTools_0.5.2.172-me.elf`（NAYE00001 媒体栏）· `-ga.elf`（NAYE00004 游戏栏），
+两包各 **11,294,104 字节**，md5 `d20e83df1d680d6fcb3869b3156c8f72` /
+`15d8d66b19841e409c8493f28c057c15`。标题 `NayePlmTools v0.5.2.172 by naye (89a8ccb, …)`
+（真实 commit 哈希非 DEV；`[[TITLE_PLACEHOLDER]]` 已消费；`.171` 残留 0；
+`frontend/dist/index.html`（1,188,901 字节）与 ELF 内嵌 blob 在偏移 2,232,896 **逐字节一致**）。
+
+`pkg_172_verify.sh` **ALL CHECKS PASSED** —— 继承 `.170`（改名修复的 SQL 指纹仍在 ⇒ 没碰坏
+改名链）与 `.171`（捐赠码内联 + 仓库地址）全部断言，**新增 `.172` 产物层指纹**：
+dist 与两个 ELF 里必须有 `/game_save_snap_download` 与 `/game_save_remote_download`
+（少一个那颗按钮就是 404）、dist 里必须有「下载快照」「下载远程存档」、
+ELF 里必须有 `找不到这份快照`（= `game_saves_snap_pack` 真的编进去了）与
+`本地快照已排队重试`（= `.172` 的退出快照重试真的在包里）。
+
+### 未做（需用户明确同意）
+
+真机 `192.168.1.214` 的推包与验收 —— 写操作红线，未经同意不做。验收口径：
+面板开本地快照 → 开一个游戏再退出 → 日志里应出现
+`已退出 · 本地快照：存档刚被写过，等下一轮（0）` 紧跟 `本地快照已排队重试（最多 40s）`，
+40 秒内再出现 `本地快照重试成功`，快照列表多出 1 份。
+
+---
+
 ## v0.5.2.171 (CN-FORK) — 2026-10-12
 
 > 用户口径（原文）：「将这个项目推送到我自己的gitHub naye1120 … 将我的捐赠码换成这个图片，
