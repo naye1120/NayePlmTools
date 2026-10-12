@@ -1,3 +1,30 @@
+## v0.5.2.171 (CN-FORK) — 2026-10-12
+
+> 用户口径（原文）：「将这个项目推送到我自己的gitHub naye1120 … 将我的捐赠码换成这个图片，
+> 另外将我的github地址也写上」「仓库名称用我软件名称」
+
+### 「关于」页：捐赠码换成真实收款码图片 + 补上本 fork 仓库地址
+- **捐赠二维码改成图片**：原先右侧那张码是用 `QRCodeSVG` 现场画的**仓库链接**二维码
+  （`https://github.com/naye/ps5-payload-manager`）—— 扫出来只是打开 GitHub，**不是收款码**，
+  等于「捐赠」按钮扫了个寂寞。现在改成真实收款码图片 `frontend/src/assets/donate-qr.png`
+  （用户提供的 500×500 PNG，27,765 B）。
+  ⚠ 产物是 `viteSingleFile` 单页 HTML 嵌进 ELF，所以图片**必须内联**：走 Vite 资源 import，
+  `assetsInlineLimit=100000` 把它转成 base64 `data:` URI 烧进 HTML。已核对 dist 里
+  `data:image/png;base64` 出现 1 次、**无外链 `.png` 引用**（否则嵌进 ELF 后必 404）。
+- **补上本 fork 仓库地址**（用户口径「把我的 github 地址也写上」）：新增常量
+  `forkRepoUrl = 'https://github.com/naye1120/NayePlmTools'`，两处展示 ——
+  ① 左侧「关于本 Fork」信息表新增一行「本 Fork 地址」（在上游地址下一行）；
+  ② 右侧卡片在收款码下方加一颗**与「支持 itsPLK」同档的 GitHub 按钮**（带自带 GitHub mark）。
+- 新增 i18n 键（`locales-overlay/zh-CN.json` + `en-US.json`，JSX 内联兜底同口径）：
+  `donate.fork_repo` / `donate.fork_repo_label` / `donate.fork_qr_alt` / `donate.fork_maintainer_qr`。
+- ⚠ `QRCodeSVG` 在 `AboutView` 里已不再使用（`MediaManagerModal` / `ManageSourcesView` /
+  `StorageHub` 仍在用，依赖保留）；`forkDonateUrl` 变量已删除。
+
+### 仓库
+本 fork 独立发布到 `github.com/naye1120/NayePlmTools`（public），`cn-fork` 分支作为其 `main`。
+
+---
+
 ## v0.5.2.170 (CN-FORK) — 2026-10-11
 
 > 用户口径（原文）：「P端改完名称，PC端变了，但 smb 没变，ps5 只有一个位置变了」

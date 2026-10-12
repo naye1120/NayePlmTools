@@ -1,10 +1,14 @@
 import React from 'react'
 import { Info, BookMarked, ScrollText, Heart } from 'lucide-react'
-import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
 import { isPS5 } from '../../utils/helpers'
 import PageHead from '../ui/PageHead'
 import Section from '../ui/Section'
+/* [CN-FORK] v0.5.2.171 本 fork 的捐赠收款码改成**图片**（原先是用 QRCodeSVG 现场画的
+ * 仓库链接二维码，扫出来只是打开 GitHub，不是收款）。图片走 Vite 资源导入 —— 产物是
+ * viteSingleFile 单页 HTML，assetsInlineLimit=100000 会把这张 27KB 的 PNG 内联成
+ * base64 data URI 烧进 HTML，所以不会多出外链文件（否则嵌进 ELF 后必 404）。 */
+import donateQr from '../../assets/donate-qr.png'
 
 /* [CN-FORK] v0.5.2.163 lucide-react 1.x **删掉了全部品牌图标**（`Github` / `Twitter` …），
  * 从它那儿 import `Github` 会在模块求值时直接抛
@@ -123,10 +127,12 @@ const AboutView = ({ version }) => {
   const { t } = useTranslation()
   const upstreamRepoUrl = 'https://github.com/itsPLK/ps5-payload-manager'
   /* [CN-FORK] v0.5.2.163 原作者的捐赠入口（来自其上游仓库 DONATE.md）。
-   * 本 fork 维护者 naye 的捐赠二维码：左侧面板展示，二维码内容是收款码链接
-   * （项目尚未公布占位，发布者填入真实收款码后即可扫码打赏）。 */
+   * [CN-FORK] v0.5.2.171 本 fork 维护者 naye 的**仓库地址**与**捐赠收款码**：
+   *   - 仓库地址（`forkRepoUrl`）直接显示在「关于本 Fork」信息表与右侧卡片上；
+   *   - 捐赠二维码改成真实收款码图片（`assets/donate-qr.png`），不再是仓库链接的
+   *     现场二维码 —— 那个扫出来只打开 GitHub，用户要的是「扫码打赏」。 */
   const originalDonateUrl = 'https://github.com/itsPLK/ps5-payload-manager/blob/main/DONATE.md'
-  const forkDonateUrl = 'https://github.com/naye/ps5-payload-manager'
+  const forkRepoUrl = 'https://github.com/naye1120/NayePlmTools'
 
   return (
     <div className="space-y-6">
@@ -136,9 +142,9 @@ const AboutView = ({ version }) => {
       />
 
       {/* ── 关于本 Fork + 捐赠栏**：左右并排 ──────────────────────────────
-       * 左侧：fork 信息（原作者 / 上游 / 程序名 / 版本 / 维护者 naye）。
+       * 左侧：fork 信息（原作者 / 上游 / **本 fork 仓库** / 程序名 / 版本）。
        * 右侧：两块「支持」 —— 上方是原作者 itsPLK 的捐赠链接（按钮指向其 DONATE.md），
-       *        下方是本 fork 维护者 naye 的捐赠二维码（QRCodeSVG 直接画在板上）。
+       *        下方是本 fork 维护者 naye 的**捐赠收款码图片** + **本 fork 仓库按钮**。
        * 这就是用户要求的「取消支持作者板块，在关于本fork右边加原作者捐赠连接和本作者捐赠二维码」
        * 的实现 —— 不再单开一个 Section，并进同一行更紧凑。 */}
       <Section
@@ -161,6 +167,14 @@ const AboutView = ({ version }) => {
             <dd>
               <a href={upstreamRepoUrl} target="_blank" rel="noopener noreferrer" className="text-ps-blue hover:underline break-all">
                 github.com/itsPLK/ps5-payload-manager
+              </a>
+            </dd>
+            {/* [CN-FORK] v0.5.2.171 本 fork 自己的仓库地址（用户口径：「把我的 github
+                地址也写上」）。放在上游地址下一行，同一种链接样式。 */}
+            <dt className="text-zinc-500">{t("donate.fork_repo", "本 Fork 地址")}</dt>
+            <dd>
+              <a href={forkRepoUrl} target="_blank" rel="noopener noreferrer" className="text-ps-blue hover:underline break-all">
+                github.com/naye1120/NayePlmTools
               </a>
             </dd>
             <dt className="text-zinc-500">{t("donate.fork_upstream_version", "上游版本")}</dt>
@@ -191,16 +205,42 @@ const AboutView = ({ version }) => {
             </span>
           </a>
 
-          {/* 下：本 fork 维护者捐赠二维码 —— 固定 QR 码形态，与头像/原本那个
-              「查看捐赠方式」按钮属于同一档视觉。SVG 直接画，规避图片外链。 */}
+          {/* 下：本 fork 维护者捐赠二维码 —— **真实收款码图片**（v0.5.2.171 起，
+              之前是用 QRCodeSVG 画的仓库链接二维码，扫出来只是打开 GitHub）。
+              图片经 Vite 资源导入，单文件产物里被内联成 base64 data URI。 */}
           <div className="w-full flex flex-col items-center gap-2 px-4 py-4 rounded-2xl border border-ps-blue/30 bg-ps-blue/5">
             <div className="bg-white p-3 rounded-xl shadow-[0_0_40px_rgba(56,139,253,0.2)]">
-              <QRCodeSVG value={forkDonateUrl} size={isPS5 ? 200 : 140} level="H" />
+              <img
+                src={donateQr}
+                alt={t("donate.fork_qr_alt", "捐赠收款码")}
+                width={isPS5 ? 200 : 140}
+                height={isPS5 ? 200 : 140}
+                className="block w-auto h-auto"
+                style={{ width: isPS5 ? 200 : 140, height: isPS5 ? 200 : 140 }}
+              />
             </div>
             <span className="flex items-center gap-1.5 text-ps-blue text-xs font-bold uppercase tracking-wider mt-1">
               <Heart className="w-3.5 h-3.5 fill-current" />
-              本 Fork 维护者 naye
+              {t("donate.fork_maintainer_qr", "本 Fork 维护者 {{maintainer}}", { maintainer: "naye" })}
             </span>
+            {/* [CN-FORK] v0.5.2.171 维护者的 GitHub 仓库入口（用户口径：「把我的 github
+                地址也写上」）。做成与上方「支持 itsPLK」同档的按钮，视觉对称。 */}
+            <a
+              href={forkRepoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center gap-3 px-4 py-3 bg-ps-blue/10 border border-ps-blue/30 hover:bg-ps-blue/20 rounded-2xl transition-colors group"
+            >
+              <span className="p-2 rounded-xl bg-ps-blue/20 text-ps-blue shrink-0">
+                <GithubMark className="w-5 h-5" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[11px] uppercase tracking-wider text-ps-blue/80 font-bold">
+                  {t("donate.fork_repo_label", "本 Fork 仓库")}
+                </span>
+                <span className="block text-white font-bold truncate">github.com/naye1120/NayePlmTools</span>
+              </span>
+            </a>
           </div>
         </div>
       </Section>
