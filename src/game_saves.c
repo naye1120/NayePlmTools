@@ -1154,17 +1154,23 @@ static int gs_snap_take(const char *tid, const gs_root_t *r, int keep,
     if (src.over) { if (note) snprintf(note, notesz, "存档条目太多，已跳过"); return -1; }
 
     /* 正在被写就先不动：拷到一半的存档还原回去可能让主机认不出来。
-     * 宁可等下一轮 —— 快照的价值在于「有一份能用的」，不在于「有一份」。
+     * 宁可等一会儿 —— 快照的价值在于「有一份能用的」，不在于「有一份」。
      *
      * [CN-FORK] v0.5.2.172 ⚠ 这句话原本成立是因为当时有**定时守护**（30 分钟一轮），
      * 「下一轮」真的会来。`.154` 把定时守护整条删掉、只留「游戏退出」这一个触发点
      * 之后，「下一轮」就不存在了 —— 而游戏退出那一刻主机会把存档写下去，mtime 就是
      * 「刚刚」，于是**每一次退出都被这里挡掉，本地快照永远不生成**（真机日志实证）。
      * 这里不改判据（判据本身是对的：正在写就不能拍），改的是**调用方**：
-     * 现在把 TOO_FRESH 如实回出去，由 game_auto.c 排队重试，直到静默窗口过去。 */
+     * 现在把 TOO_FRESH 如实回出去，由 game_auto.c 排队重试，直到静默窗口过去。
+     *
+     * [CN-FORK] v0.5.2.173 提示文案也跟着改（用户口径：「这里为什么这么缩链路」）：
+     * 原来那句「存档刚被写过，等下一轮」在定时守护删掉之后就**没人知道「下一轮」是谁**
+     * 了 —— 现在等待方是明确的（守护线程的待办队列），所以直接把等待对象写出来。 */
     time_t now = time(NULL);
     if (src.max_mtime != 0 && now - src.max_mtime < GS_SNAP_QUIET_SEC) {
-        if (note) snprintf(note, notesz, "存档刚被写过，等下一轮");
+        if (note)
+            snprintf(note, notesz, "存档刚被写过（%d 秒静默窗口还没过，稍后由重试补上）",
+                     (int)GS_SNAP_QUIET_SEC);
         if (skip_reason) *skip_reason = GS_SNAP_SKIP_TOO_FRESH;
         return 1;
     }
@@ -2725,6 +2731,15 @@ int game_saves_local_mtime(const char *tid, const char *uid, long long *out_mtim
  * （`PPSA27836_sdimg_STARBOARD` → `sdimg_STARBOARD`），因为主机只认后者。
  * 详见 gs_gx_name_for —— 这也是 `.165` 修掉的那条 bug 的一半。
  *
+ * [CN-FORK] v0.5.2.173 「改签」（用户口径：「导入的时候如果是其他用户的存档，直接
+ * 改签成当前选定用户的」）。本函数就是**唯一**的改签入口（`.173` 删掉了单独的
+ * 「存档转换」，那件事本来就该由这里做）。三件事：
+ *   ① **落点只由 `save` 决定** —— 与文件从哪来、原来属于谁无关。镜像里读不出原主人
+ *      （加密 PFS），所以「改签」不是去改镜像里的账号，而是**换落点**。
+ *   ② 文件名里别人留下的 `<uid>_` 前缀**剥掉**（见 gs_gx_name_for ②）。
+ *   ③ garlic 自己的记账（`manifest.json`）**不落地**（见 gs_gx_cb）。
+ * 日志里把「落到谁名下 / 剥了几个 / 丢了几个记账文件」都写出来，真机排查不用猜。
+ *
  * ⚠ **先落到暂存目录、整包成功才合并进存档目录**（见下面的 stage 一段）：
  * zip_extract 是**遇到坏条目才整包拒收**的，直接往存档目录里写的话，包里第 N 个
  * 条目名字不合法时前 N-1 个已经躺在用户的存档目录里了 —— 那会让主机把这份存档
@@ -2735,6 +2750,13 @@ typedef struct {
     const char *dir;
     const char *tid;       /* 当前游戏 —— 用来判「文件名里的 TID 是不是别人」 */
     char bad_tid[16];      /* 包里出现的、且**不等于当前游戏**的 TID；空 = 没发现 */
+    /* [CN-FORK] v0.5.2.173 「改签」用的两样东西（用户口径：「导入的时候如果是其他
+     * 用户的存档，直接改签成当前选定用户的」）。 */
+    const char *uid;       /* 本次改签到的目标用户（gs_root_or_create 解析出来的那个） */
+    char uids[16][64];     /* 本机 /user/home 下**真实存在**的 uid，见 gs_gx_name_for ② */
+    int  nuids;
+    int  skipped;          /* 被丢掉的 garlic 自带记账文件数（manifest.json 之类） */
+    int  resign;           /* 被剥掉 uid 前缀的文件数 = 真的发生了「改签」的痕迹 */
     long long files;
     long long bytes;
     int bad;
@@ -2759,20 +2781,58 @@ typedef struct {
  *   ② 顺手把认出来的 TID 与当前游戏对一下，**不是当前游戏的记进 bad_tid**
  *      （`gs_gx_merge` 之前整包拒收，一个字节都不碰用户的存档目录）。
  *      这个判定必须看**原始名字**：① 剥完 TID 就没了，所以 `.165` 起不再扫暂存目录
- *      —— 扫那里等于把 `.156` 那条判定悄悄废掉。 */
+ *      —— 扫那里等于把 `.156` 那条判定悄悄废掉。
+ *
+ * ── [CN-FORK] v0.5.2.173 再加一步：剥掉「别人留下的 uid 前缀」= 改签 ──────────
+ * 用户口径：「导入的时候如果是其他用户的存档，直接改签成当前选定用户的」。
+ *
+ * 为什么「改签」在这里只能是**换落点 + 名字归一**：存档镜像是加密 PFS 镜像，里面
+ * 一个字节都读不出原主人（也改不动 —— 那要 /dev/pfsmgr ioctl + 提权，`.54` 有死机
+ * 前科）。所以真正的落点由 `save`（选定的目标 uid）决定，这一步只负责把文件名里
+ * 可能残留的**别人 uid 前缀**抹掉：`1a1d3627_sdimg_STARBOARD` 写成盘上就是这个名字，
+ * 而主机要找的是 `sdimg_STARBOARD` → 导入报成功、进游戏没存档（与 `.165` 剥 TID
+ * 前缀是同一个病）。
+ *
+ * ⚠ 只在那个前缀**确实是本机 /user/home 下的一个 uid** 时才剥（`g->uids`）——
+ * 与 ①「认不出来一律原样返回」同一条原则：说不清 ≠ 要改名。猜错一个字母的代价是
+ * 把一个合法镜像改成一个主机找不到的名字，这比不剥严重得多。 */
 static const char *gs_gx_name_for(gs_gx_t *g, const char *base) {
     char got[16];
-    if (!base || !game_saves_tid_from_name(base, got, sizeof(got))) return base;
-    if (g && g->tid && strcmp(got, g->tid) != 0 && !g->bad_tid[0])
-        snprintf(g->bad_tid, sizeof(g->bad_tid), "%s", got);
-    size_t n = strlen(got);                 /* TID 恒 9 位（gs_tid_from_name 的形态） */
-    if (strlen(base) <= n || base[n] != '_') return base;
-    for (size_t i = 0; i < n; i++) {        /* 大小写不敏感：got 已归一成大写 */
-        char c = base[i];
-        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-        if (c != got[i]) return base;
+    if (!base || !*base) return base;
+
+    /* ① garlic 的 `<TID>_` 前缀 */
+    if (game_saves_tid_from_name(base, got, sizeof(got))) {
+        if (g && g->tid && strcmp(got, g->tid) != 0 && !g->bad_tid[0])
+            snprintf(g->bad_tid, sizeof(g->bad_tid), "%s", got);
+        size_t n = strlen(got);             /* TID 恒 9 位（gs_tid_from_name 的形态） */
+        if (strlen(base) > n && base[n] == '_') {
+            size_t i = 0;
+            for (; i < n; i++) {            /* 大小写不敏感：got 已归一成大写 */
+                char c = base[i];
+                if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+                if (c != got[i]) break;
+            }
+            if (i == n) base = base + n + 1;
+        }
     }
-    return base + n + 1;                    /* base[n]=='_' ⇒ 余下至少 1 字节，不会是空串 */
+
+    /* ② 别人的 uid 前缀（`<uid>_sdimg_…`）—— 剥掉就是「改签」 */
+    if (g && g->nuids > 0) {
+        for (int k = 0; k < g->nuids; k++) {
+            size_t n = strlen(g->uids[k]);
+            if (n == 0 || strlen(base) <= n || base[n] != '_') continue;
+            size_t i = 0;
+            for (; i < n; i++) {            /* 大小写不敏感：uids[] 是小写 */
+                char c = base[i];
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                if (c != g->uids[k][i]) break;
+            }
+            if (i != n) continue;
+            g->resign++;
+            return base + n + 1;            /* base[n]=='_' ⇒ 余下至少 1 字节 */
+        }
+    }
+    return base;
 }
 
 /* zip_extract 用的落盘回调：**只取 basename**，不接受任何目录层级。
@@ -2789,6 +2849,18 @@ static int gs_gx_cb(void *user, const char *name, const unsigned char *data,
     }
     const char *base = strrchr(name, '/');
     base = base ? base + 1 : name;
+    /* [CN-FORK] v0.5.2.173 garlic 自己的记账**不搬进主机的存档目录**。
+     *
+     * 真机取证（`/user/home/1a1d3627/savedata_prospero/PPSA21567/manifest.json`，
+     * 367 字节）：garlic 的导出包里带一个
+     * `{version,title_id,title_name,export_time,saves[{name,size,type,is_backup}]}`，
+     * `.172` 之前它被原样写进那个目录 —— 那是**主机的**系统目录，不该出现第三方
+     * 文件；主机也不读它（它只读 sdimg_*）。这条与 `.165` 剥 `<TID>_` 前缀是同一类
+     * 「外部字节别原样落地」的修补。
+     *
+     * 只精确跳这一个名字，**不搞「只收 sdimg_* / *.bin」的白名单**：白名单碰到
+     * 没见过的合法条目会把用户的存档悄悄丢掉，代价不对称（同 `.156` 那条判定）。 */
+    if (strcmp(base, "manifest.json") == 0) { g->skipped++; return 0; }
     if (!gs_slot_ok(base)) return 0;   /* 跳过而不是中止：包里可能有我们不认识的东西 */
     base = gs_gx_name_for(g, base);
     if (!gs_slot_ok(base)) return 0;   /* 剥完仍要合规（防御；上面已保证非空） */
@@ -2888,6 +2960,11 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
     memset(&g, 0, sizeof(g));
     g.dir = stage;
     g.tid = tid;
+    /* [CN-FORK] v0.5.2.173 改签的落点 = gs_root_or_create 解析出来的那个 uid
+     * （`save` 给了就是它，没给就是当前前台用户）。只用于日志与「剥别人的 uid 前缀」。 */
+    g.uid = r.uid;
+    /* 本机真实存在的 uid 列表：只有命中它们才会剥文件名开头的 `<uid>_`。 */
+    g.nuids = gs_user_ids(g.uids, 16);
 
     char err[256];
     err[0] = 0;
@@ -2937,154 +3014,12 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
     }
     gs_rmtree(stage);
 
-    pldmgr_log("[PLDMGR] saves: %s garlic 导入 ok -> %s (%lld files, %lld bytes)\n",
-               tid, r.path, g.files, g.bytes);
+    /* [CN-FORK] v0.5.2.173 改签的日志（真机排查就靠这一行）：
+     * 落到谁名下 / 剥掉几个别人 uid 前缀 / 丢掉几个 garlic 自带记账文件。
+     * `uid=` 用 r.uid（= 本次真正写进去的那个用户目录）。 */
+    pldmgr_log("[PLDMGR] saves: %s garlic 导入 ok -> %s (改签 uid=%s, %lld files, %lld bytes,"
+               " 剥uid前缀 %d, 丢记账 %d)\n",
+               tid, r.path, r.uid, g.files, g.bytes, g.resign, g.skipped);
     if (out_files) *out_files = g.files;
-    return 0;
-}
-
-/* ══ [CN-FORK] v0.5.2.163 存档转换（用户 → 用户）════════════════════════════
- * 用户口径：「可以将其他用户的存档转换成当前用户可以使用的」。
- *
- * 语义与 garlic 兼容导入同源 —— **逐文件覆盖合并**，不是整份替换：目标用户的存档
- * 目录里还有主机给**这个用户**建的记账（sdimg_sce_bu_* / sdimg_sce_sdmemory），
- * 换掉它们会让主机认不出这份存档。
- *
- * 与 import_garlic 唯一的区别是来源：那边是上传上来的字节，这边是主机上**另一个
- * 用户**已经存在的存档目录。所以不需要解包，直接把源目录整棵树复制到暂存目录、
- * 整份成功之后再 merge 进目标目录 —— 中途失败（磁盘满 / 源被删）时目标目录
- * 一个字节都不会被改坏，崩溃留下的 `.tmp_cv_*` 由 gs_sweep_temp() 扫掉。
- *
- * 路径缓冲走 malloc（不是栈）：递归的每一层都会用到，栈上放会随深度线性增长
- * —— 与 gs_copy_tree 同一个理由（真机连接线程只有 64KB 栈）。 */
-static int gs_merge_tree(const char *stage, const char *dst, int depth) {
-    if (depth > GS_SNAP_MAX_DEPTH) return -1;
-    DIR *d = opendir(stage);
-    if (!d) return -1;
-    char *sp = (char *)malloc(1200);
-    char *dp = (char *)malloc(1200);
-    if (!sp || !dp) { free(sp); free(dp); closedir(d); return -1; }
-    struct dirent *e;
-    int rc = 0;
-    while ((e = readdir(d)) != NULL) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        if (snprintf(sp, 1200, "%s/%s", stage, e->d_name) >= 1200 ||
-            snprintf(dp, 1200, "%s/%s", dst, e->d_name) >= 1200) { rc = -1; break; }
-        struct stat st;
-        if (lstat(sp, &st) != 0) continue; /* 半路消失的条目跳过，不算失败 */
-        if (S_ISDIR(st.st_mode)) {
-            if (ensure_dir_recursive(dp) != 0) { rc = -1; break; }
-            if (gs_merge_tree(sp, dp, depth + 1) != 0) { rc = -1; break; }
-        } else if (S_ISREG(st.st_mode)) {
-            /* 同目录内 rename：覆盖同名、原子替换，不会出现半截文件。 */
-            if (rename(sp, dp) != 0) { rc = -1; break; }
-        }
-    }
-    free(sp);
-    free(dp);
-    closedir(d);
-    return rc;
-}
-
-int game_saves_convert(const char *tid, const char *source, const char *target,
-                       long long *out_files, char *msg, size_t msgsz) {
-    if (out_files) *out_files = 0;
-    if (msg && msgsz) msg[0] = 0;
-    if (!gs_tid_ok(tid)) { if (msg) snprintf(msg, msgsz, "标题 ID 不合法"); return -1; }
-    if (!source || !*source || !gs_uid_ok(source)) {
-        if (msg) snprintf(msg, msgsz, "来源用户标识不合法");
-        return -1;
-    }
-    if (!target || !*target || !gs_uid_ok(target)) {
-        if (msg) snprintf(msg, msgsz, "目标用户标识不合法");
-        return -1;
-    }
-    if (!strcmp(source, target)) {
-        if (msg) snprintf(msg, msgsz, "来源与目标是同一个用户，不需要转换");
-        return -1;
-    }
-
-    /* 来源必须是**真实存在**的那一份：找不到就直接说清楚，别悄悄建一个空目录。 */
-    gs_root_t src;
-    if (gs_root_by_uid(tid, source, &src) != 0) {
-        if (msg) snprintf(msg, msgsz, "来源用户在这款游戏上没有存档");
-        return -1;
-    }
-
-    /* 目标：已有就复用；没有就按**来源那一档**（PS5 savedata_prospero / PS4 savedata）
-     * 建一个同名目录 —— 把 PS4 的存档倒进 PS5 的槽位只会让主机认不出来。 */
-    gs_root_t dst;
-    if (gs_root_by_uid(tid, target, &dst) != 0) {
-        char ids[16][64];
-        int nu = gs_user_ids(ids, 16);
-        int found = 0;
-        for (int i = 0; i < nu; i++)
-            if (!strcmp(ids[i], target)) found = 1;
-        if (!found) {
-            if (msg) snprintf(msg, msgsz, "主机上没有这个用户（%s）", target);
-            return -1;
-        }
-        const char *slot = strcmp(src.kind, "PS4") == 0 ? "savedata" : "savedata_prospero";
-        snprintf(dst.uid, sizeof(dst.uid), "%s", target);
-        snprintf(dst.kind, sizeof(dst.kind), "%s", src.kind);
-        snprintf(dst.path, sizeof(dst.path), "%s/%s/%s/%s", GS_HOME, target, slot, tid);
-        char parent[640];
-        snprintf(parent, sizeof(parent), "%s/%s/%s", GS_HOME, target, slot);
-        if (ensure_dir_recursive(parent) != 0) {
-            if (msg) snprintf(msg, msgsz, "无法创建目标存档目录（%s）", strerror(errno));
-            return -1;
-        }
-    }
-
-    /* 暂存目录放目标根的**父目录**下（同一个文件系统 → 最后一步是 rename）。
-     * 名字带 `.tmp_` 前缀，gs_sweep_temp() 才会把崩溃留下的残骸扫掉。 */
-    char stage[1300];
-    {
-        char parent[1300];
-        snprintf(parent, sizeof(parent), "%s", dst.path);
-        char *sl = strrchr(parent, '/');
-        if (sl) *sl = 0;
-        if (snprintf(stage, sizeof(stage), "%s/.tmp_cv_%d_%u",
-                     parent, (int)getpid(), (unsigned)time(NULL)) >= (int)sizeof(stage)) {
-            if (msg) snprintf(msg, msgsz, "存档目录路径过长");
-            return -1;
-        }
-    }
-    gs_rmtree(stage); /* 万一 pid / 秒级时间戳撞上了上一次的残骸 */
-    if (ensure_dir_recursive(stage) != 0) {
-        if (msg) snprintf(msg, msgsz, "建不了临时目录");
-        return -1;
-    }
-
-    gs_cp_t c;
-    if (gs_cp_open(&c) != 0) {
-        gs_rmtree(stage);
-        if (msg) snprintf(msg, msgsz, "内存不足");
-        return -1;
-    }
-    int rc = gs_copy_tree(src.path, stage, &c, 0);
-    long long nfiles = c.files, nbytes = c.bytes;
-    gs_cp_close(&c);
-    if (rc != 0) {
-        gs_rmtree(stage);
-        if (msg) snprintf(msg, msgsz, "复制来源存档失败（磁盘满？）");
-        return -1;
-    }
-    if (nfiles == 0) {
-        gs_rmtree(stage);
-        if (msg) snprintf(msg, msgsz, "来源用户的存档是空的");
-        return -1;
-    }
-
-    if (gs_merge_tree(stage, dst.path, 0) != 0) {
-        gs_rmtree(stage);
-        if (msg) snprintf(msg, msgsz, "写入目标存档目录失败（磁盘满？）");
-        return -1;
-    }
-    gs_rmtree(stage);
-
-    pldmgr_log("[PLDMGR] saves: %s 存档转换 %s -> %s ok (%lld files, %lld bytes)\n",
-               tid, src.uid, dst.uid, nfiles, nbytes);
-    if (out_files) *out_files = nfiles;
     return 0;
 }

@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import {
   Save, RefreshCw, Download, Upload, Trash2, AlertTriangle, HardDrive, FileArchive,
   History, RotateCcw, CloudDownload, CloudUpload, Activity, PackagePlus,
-  ArrowLeftRight, X,
 } from 'lucide-react'
 import Modal from '../ui/Modal'
 import Segmented from '../ui/Segmented'
@@ -11,7 +10,7 @@ import { Block, Chip, Note, MiniEmpty, ProgressBar, GridRow } from './parts'
 import { formatSizeAlways, formatStamp } from './format'
 import {
   getSaves, saveDownloadUrl, uploadSave, deleteSave, snapAction,
-  syncSaves, getRemoteSaveInfo, deleteRemoteSave, importGarlic, convertSave,
+  syncSaves, getRemoteSaveInfo, deleteRemoteSave, importGarlic,
   snapDownloadUrl, remoteSaveDownloadUrl,
 } from '../../utils/gameApi'
 import {
@@ -40,8 +39,9 @@ const tidFromName = (name) => {
  *   ① 这个游戏**实际生效**的自动存档状态（开关 / 两个时机）—— 只读，来自设置页「存档配置」；
  *   ② 远程位置只读摘要 + 逐用户远程信息（`.147` 并进本卡，原来是并排的第三张卡）
  *      + 「立即拉取 / 立即推送」+ 引擎上次干了什么（auto_state）；
- *   ③ 存档列表（下载 / 上传覆盖 / 删除 / 上传新的 / **garlic 兼容导入**）
+ *   ③ 存档列表（下载 / 上传覆盖 / 删除 / 上传新的）
  *     与本地快照列表（立即备份 / 还原 / **下载** / 删除）。
+ *   ④ **兼容导入（Garlic）单独一块满宽铺开**（`.173` 从 ③ 里搬出来的，见下）。
  *
  * [CN-FORK] v0.5.2.172 **三张列表的每一行都有一颗「下载」**（用户口径：「所有存档列表
  * 删除按钮前边加一个下载按钮」）。三颗按钮下的是**同一层东西的不同一份**：
@@ -51,7 +51,15 @@ const tidFromName = (name) => {
  * 三颗都排在「删除」前面。⚠ 远程那颗与左边的「立即拉取」不是一回事：拉取会把主机上
  * 这份**整份替换**掉，下载只把云上那份拿到电脑上（后端走 sr_fetch，一个字节都不碰主机）。
  *
- * 版式（`.147`）：第一行三栏 = ① / ② / ③，各占 1/3；本地快照仍单独满宽铺开。
+ * 版式（`.147`）：第一行三栏 = ① / ② / ③，各占 1/3；兼容导入（④）与本地快照（⑤）
+ * 各自满宽单独一行。
+ * [CN-FORK] v0.5.2.173 为什么把 ④ 从 ③ 里搬出来：用户口径「这个调整布局，单独放一行」
+ * —— ④ 原来挂在「存档列表」那张卡里，而那张卡只占屏幕的 1/3。目标用户选择器（两颗
+ * 分段按钮）+ 导入按钮 + 三行长提示挤在 1/3 宽里，提示被折成 6~7 行，用户看到的
+ * 截图就是那一团。搬出来之后宽屏下选择器与按钮并排一行、提示满宽一行。
+ * 同时删掉了每行右侧那栏「存档转换」（用户口径：「存档转换的标签和功能删除」）——
+ * 它把存档行挤成两栏，而它想解决的事（把别人的存档弄到自己名下）**兼容导入本来就能做**
+ * 且做得更干净（见下）。
  * 配置（远程位置 / 自动存档 / 快照参数）全部在「设置 → 存档配置」一处，对所有游戏生效。
  *
  * 为什么把「配置」和「动作」这样分：配置是**跨游戏共享的一份**（同一台 NAS、同一个节奏），
@@ -77,6 +85,20 @@ const tidFromName = (name) => {
  *    —— 所以从 garlic 搬过来的东西**不能**走上传那条路。单独一块、不去挤标题栏。
  * ③ **快照只读行删掉「间隔（分钟）」**：定时快照已废，触发时机改成了「游戏退出时」，
  *    留一个恒定的数字只会让人以为还能调（参数在设置页「存档配置」里也只剩开关 + 保留份数）。
+ *
+ * ── [CN-FORK] v0.5.2.173 兼容导入 = 「改签」的唯一入口 ─────────────────────
+ * 用户口径：「导入的时候如果是其他用户的存档，直接改签成当前选定用户的。」
+ *
+ * 语义落在后端（`game_saves_import_garlic`），前端这里只有两条约定：
+ *   ① **落点由「导入到哪个用户」这一个选择器唯一决定**，与文件从哪来无关 ——
+ *      存档镜像里一个字节都读不出「它原来属于谁」（那是加密 PFS 镜像），所以
+ *      「改签」= 把它落到你选定的那个用户的存档目录里 + 把文件名归一（剥掉 garlic 的
+ *      `<TID>_` 与别人留下的 `<uid>_` 前缀），而不是去改镜像里的账号信息
+ *      （那是内核级动作，见后端注释）。
+ *   ② 这个选择器**总是**显示、默认当前用户（`.165`）。用户看不到它就等于
+ *      「导入到哪去了」不可知，而「导入报成功、进游戏没存档」的两个根因之一正是落错人。
+ * 所以本块自己占一行、不挤进「存档列表」那张 1/3 宽的卡里 —— 它是**独立的动作**，
+ * 不是列表的附属品。
  */
 
 /* 只读状态行的标签列要宽一些：`GridRow` 默认的 86px 是给详情页那种短标签
@@ -100,10 +122,6 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
   const [busyRemote, setBusyRemote] = useState('')   // 正在删远程存档的那个 uid
   const [importing, setImporting] = useState(false)  // garlic 兼容导入进行中
   const [gxUid, setGxUid] = useState('')             // garlic 导入的目标用户（多用户时才让人选）
-  /* [CN-FORK] v0.5.2.163 存档转换：每行的「转换自」弹层。
-   * 当某行的 target 选好后调起一个极简二级菜单：列出其它 uid（saves 数组中除了自己）。
-   * 选完调 convertSave(tid, source, target)；后端按 garlic 兼容导入的逐文件合并语义复制。 */
-  const [convertFor, setConvertFor] = useState(null)  // { target: uid } | null
   const fileRef = useRef(null)
   const gxRef = useRef(null)                         // garlic 导入用的独立 input（accept 与去向都不同）
   const pendingSlot = useRef(null)                   // null = 新存档；字符串 = 覆盖该槽
@@ -146,22 +164,6 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     if (failed) setErr(failed)
   }, [tid, t, config])
 
-  /* [CN-FORK] v0.5.2.163 存档转换：把来源用户的存档合并到目标用户。
-   * 单独抽成一个 useCallback 而不是写在 JSX 的内联 async 箭头里 ——
-   * 后者会被 react-hooks/refs 当成「渲染期访问 ref」（它看不出来那是个事件处理器），
-   * 而这里确实要 await load()（重新扫一遍主机存档目录）。 */
-  const doConvert = useCallback(async (sourceId, targetId) => {
-    setConvertFor(null)
-    try {
-      const r = await convertSave(tid, sourceId, targetId)
-      addToast?.(t('game.convert_done', '已从用户 {{from}} 转换到 {{to}}（{{n}} 个文件）',
-        { from: sourceId, to: targetId, n: (r && r.files) || '?' }))
-      await load()
-    } catch (e) {
-      addToast?.(e.message || t('game.convert_fail', '转换失败'), 'error')
-    }
-  }, [tid, addToast, load, t])
-
   /* 打开 / 换游戏时把列表与上传状态归零。
    * 写在**渲染期**（键为 tid）而不是 effect 里：effect 体里同步 setState 会引发级联渲染，
    * 而「prop 变了就把这几个 state 重置」本来就属于 React 官方说的「渲染期调整 state」。 */
@@ -175,7 +177,6 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     setSnapping(false); setBusySnap(''); setSyncing('')
     setImporting(false); setGxUid('')
     setRemoteInfos({}); setBusyRemote('')
-    setConvertFor(null)
   }
 
   useEffect(() => {
@@ -280,9 +281,12 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
       const r = await importGarlic(tid, uid, file.name, file)
       /* 提示里带上落到哪个用户 —— 导入「没生效」最常见的两种原因（落错人 / 名字不对）
        * 里，落错人是用户唯一能从界面上一眼确认的。这里用不带「（当前）」后缀的短标签，
-       * 否则提示会变成「已导入到用户 X（当前）（1 个文件）」，两层括号很别扭。 */
+       * 否则提示会变成「已导入到用户 X（当前）（1 个文件）」，两层括号很别扭。
+       * [CN-FORK] v0.5.2.173 明确写「已改签到」：用户口径「导入的时候如果是其他用户的
+       * 存档，直接改签成当前选定用户的」—— 提示里把这件事说出来，用户才不用去猜
+       * 这份存档现在挂在谁名下。 */
       addToast?.(t('game.garlic_imported',
-        '已导入到{{target}}（{{n}} 个文件）',
+        '已改签并导入到{{target}}（{{n}} 个文件）',
         {
           n: (r && r.files) || '?',
           target: uid
@@ -313,13 +317,15 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
     }
     /* [CN-FORK] v0.5.2.165 目标用户 = 当前用户优先（gxTarget）。
      * 老代码是 `gxUid || saves[0].id || ''`：当前用户没在这款游戏上存过档时，
-     * saves[0] 是**别人**，而 saves 只有一条时连选择器都不显示 —— 导入静默落错人。 */
+     * saves[0] 是**别人**，而 saves 只有一条时连选择器都不显示 —— 导入静默落错人。
+     * [CN-FORK] v0.5.2.173 这个 uid 就是「改签」的落点：后端只用它决定写进哪个
+     * 用户的存档目录，文件里读不出原主人（加密镜像），所以不必也不该从文件里猜。 */
     const uid = gxTarget
     if (!showConfirm) { doGarlicImport(file, uid); return }
     showConfirm(
       t('game.garlic_import_title', '兼容导入 Garlic 存档'),
       t('game.garlic_import_confirm',
-        '把「{{name}}」导入到{{target}}？只覆盖同名的存档镜像，主机自己的备份（_bu_）与系统存档不会被删。',
+        '把「{{name}}」改签到{{target}}？不论这份存档原来属于谁，都会落到这个用户名下；只覆盖同名的存档镜像，主机自己的备份（_bu_）与系统存档不会被删。',
         {
           name: file.name,
           target: uid
@@ -721,151 +727,139 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                 <MiniEmpty icon={HardDrive}>{t('game.saves_empty', '这个游戏还没有存档')}</MiniEmpty>
               ) : (
                 <ul className="space-y-1.5">
-                  {saves.map((sv) => {
-                    /* [CN-FORK] v0.5.2.163 转换源 = saves 里除了自己以外的所有 uid。
-                     * 单人主机下永远是 0 条，按钮置灰；多用户时点开是一个 inline 下拉。 */
-                    const otherUids = saves.filter((x) => x.id !== sv.id)
-                    return (
-                      <li
-                        key={sv.id}
-                        className="flex items-stretch gap-2 p-2.5 rounded-lg border border-white/10 bg-white/[0.02]"
-                      >
-                        {/* 第一列：存档信息 + 下载/上传/删除三颗按钮（原版内容） */}
-                        <div className="min-w-0 flex-1 flex items-center gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-white panel-body font-semibold truncate">
-                                {t('game.save_user', '用户 {{uid}}', { uid: sv.name || sv.id })}
-                              </span>
-                              {sv.kind && <Chip tone="info">{sv.kind}</Chip>}
-                            </div>
-                            <div className="panel-tiny text-zinc-500 mt-0.5 tabular-nums">
-                              {formatSizeAlways(sv.size)}
-                              {sv.files ? ` · ${t('game.n_files', '{{n}} 个文件', { n: sv.files })}` : ''}
-                              {formatStamp(sv.mtime) ? ` · ${formatStamp(sv.mtime)}` : ''}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <a
-                              className="icon-btn"
-                              href={saveDownloadUrl(tid, sv.id)}
-                              download
-                              title={t('game.save_download', '下载')}
-                              aria-label={t('game.save_download', '下载')}
-                            >
-                              <Download className="w-4 h-4" />
-                            </a>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              disabled={!!uploading || busyId === sv.id}
-                              title={t('game.save_overwrite', '上传覆盖')}
-                              aria-label={t('game.save_overwrite', '上传覆盖')}
-                              onClick={() => pickFile(sv.id)}
-                            >
-                              <Upload className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              className="icon-btn is-danger"
-                              disabled={busyId === sv.id}
-                              title={t('game.save_delete', '删除')}
-                              aria-label={t('game.save_delete', '删除')}
-                              onClick={() => onDelete(sv)}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
+                  {saves.map((sv) => (
+                    /* [CN-FORK] v0.5.2.173 这一行**只剩一栏**：右侧那栏「存档转换」已删
+                     * （用户口径：「存档转换的标签和功能删除」）。它原本把整行劈成两半，
+                     * 而它想干的事（把别人的存档弄到自己名下）兼容导入本来就能做。 */
+                    <li
+                      key={sv.id}
+                      className="flex items-center gap-3 p-2.5 rounded-lg border border-white/10 bg-white/[0.02]"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-white panel-body font-semibold truncate">
+                            {t('game.save_user', '用户 {{uid}}', { uid: sv.name || sv.id })}
+                          </span>
+                          {sv.kind && <Chip tone="info">{sv.kind}</Chip>}
                         </div>
-
-                        {/* 第二列：存档转换（用户口径：「可以将其他用户的存档转换成
-                            当前用户可以使用的」）。仅在 multi-user 时点亮，单人主机
-                            永远显示按钮但置灰 + 一句说明，避免界面大变化。 */}
-                        <div className="w-full sm:w-[200px] shrink-0 border-l border-white/10 pl-2.5 flex flex-col justify-center gap-1.5">
-                          <p className="panel-micro uppercase tracking-wider text-zinc-500 font-bold">
-                            {t('game.convert_title', '存档转换')}
-                          </p>
-                          {otherUids.length === 0 ? (
-                            <p className="panel-tiny text-zinc-500 leading-snug">
-                              {t('game.convert_no_other', '本机只有这一个用户，无可转换来源')}
-                            </p>
-                          ) : (
-                            <button
-                              type="button"
-                              className="btn btn-outline w-full !justify-start"
-                              disabled={!!uploading}
-                              onClick={() => setConvertFor({ target: sv.id })}
-                            >
-                              <ArrowLeftRight className="w-4 h-4" />
-                              <span>{t('game.convert_btn', '从其它用户转入')}</span>
-                            </button>
-                          )}
-                          <p className="panel-tiny text-zinc-500 leading-snug">
-                            {t('game.convert_hint', '把别的用户的存档镜像合并到本用户，覆盖同名文件；主机自己的备份不动。')}
-                          </p>
+                        <div className="panel-tiny text-zinc-500 mt-0.5 tabular-nums">
+                          {formatSizeAlways(sv.size)}
+                          {sv.files ? ` · ${t('game.n_files', '{{n}} 个文件', { n: sv.files })}` : ''}
+                          {formatStamp(sv.mtime) ? ` · ${formatStamp(sv.mtime)}` : ''}
                         </div>
-                      </li>
-                    )
-                  })}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <a
+                          className="icon-btn"
+                          href={saveDownloadUrl(tid, sv.id)}
+                          download
+                          title={t('game.save_download', '下载')}
+                          aria-label={t('game.save_download', '下载')}
+                        >
+                          <Download className="w-4 h-4" />
+                        </a>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          disabled={!!uploading || busyId === sv.id}
+                          title={t('game.save_overwrite', '上传覆盖')}
+                          aria-label={t('game.save_overwrite', '上传覆盖')}
+                          onClick={() => pickFile(sv.id)}
+                        >
+                          <Upload className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn is-danger"
+                          disabled={busyId === sv.id}
+                          title={t('game.save_delete', '删除')}
+                          aria-label={t('game.save_delete', '删除')}
+                          onClick={() => onDelete(sv)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
                 </ul>
               )}
 
                 <p className="panel-tiny text-zinc-500 mt-3">
                   {t('game.save_hint', '一行 = 一个用户在这个游戏上的整份存档（含主机自己的 _bu_ 备份）。下载与上传都是整份 zip，上传会整份替换。')}
                 </p>
-
-                {/* ── garlic 兼容导入（v0.5.2.154）──
-                    单独一块、用一根发丝线隔开，而不是挤进标题栏那颗按钮旁边：
-                    它和「上传存档」是**两回事**（整份替换 vs 逐文件合并），
-                    并排放在一起用户会以为「都是上传，选一个就行」。 */}
-                <div className="mt-3 pt-3 border-t border-white/10">
-                  {/* [CN-FORK] v0.5.2.165 目标用户**总是**显示，而且默认是当前用户。
-                      老代码只在 saves.length > 1 时才画选择器、默认值取 saves[0] ——
-                      当前用户没在这款游戏上存过档时，saves 里可能只有别人一条，
-                      于是连选择器都不出现、导入静默落到错误的人名下。 */}
-                  <div className="mb-2">
-                    <p className="panel-tiny text-zinc-500 mb-1.5">
-                      {t('game.garlic_target', '导入到哪个用户')}
-                    </p>
-                    {targetUsers.length > 1 ? (
-                      <Segmented
-                        options={targetUsers.map((u) => ({ value: u, label: userLabel(u) }))}
-                        value={gxTarget}
-                        onChange={setGxUid}
-                        label={t('game.garlic_target', '导入到哪个用户')}
-                        className="w-full"
-                        itemClassName="flex-1"
-                      />
-                    ) : (
-                      <p className="panel-tiny text-zinc-300">
-                        {targetUsers.length
-                          ? userLabel(targetUsers[0])
-                          : t('game.garlic_to_default', '默认用户')}
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-outline w-full"
-                    disabled={!!importing || !!uploading}
-                    onClick={pickGarlic}
-                  >
-                    <PackagePlus className="w-4 h-4" />
-                    <span>
-                      {importing
-                        ? t('game.garlic_importing', '正在导入…')
-                        : t('game.garlic_import', '兼容导入（Garlic）')}
-                    </span>
-                  </button>
-                  {importing && <div className="mt-2"><ProgressBar indeterminate /></div>}
-                  <p className="panel-tiny text-zinc-500 mt-2 leading-snug">
-                    {t('game.garlic_hint',
-                      '导入 garlic-savemgr 导出的加密存档：PS5 是一个 sdimg_ 开头的镜像文件（没有后缀），PS4 是一个 zip 包。只覆盖同名的镜像，主机自己的备份与系统存档不动。')}
-                  </p>
-                </div>
               </Block>
             </div>
           </div>
+        )}
+
+        {/* ── ④ 兼容导入（Garlic）──
+         * [CN-FORK] v0.5.2.173 从「存档列表」那张 1/3 宽的卡里搬出来，单独满宽一行
+         * （用户口径：「这个调整布局，单独放一行」）。
+         *
+         * 为什么它必须是**独立的一块**而不是列表的附属：
+         *   · 它和「上传存档」是**两回事** —— 上传 = 整份替换（把整个 <TID> 目录换掉），
+         *     导入 = **逐文件合并**（只覆盖 garlic 导出的那几个镜像）。并排放在一起，
+         *     用户会以为「都是上传，选一个就行」。
+         *   · 它是**跨用户**的动作：落点由「导入到哪个用户」决定，与列表里当前有几条
+         *     存档无关。挂在某一行下面会让人以为「只对这一行生效」。
+         *   · 1/3 宽装不下：目标用户分段按钮 + 导入按钮 + 三行长提示挤在一起会被折成
+         *     六到七行（用户截的图就是那一团）。搬出来之后宽屏下选择器与按钮并排一行、
+         *     提示满宽一行。 */}
+        {data && (
+          <Block
+            title={t('game.garlic_title', '兼容导入（Garlic）')}
+            icon={PackagePlus}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+              {/* [CN-FORK] v0.5.2.165 目标用户**总是**显示，而且默认是当前用户。
+                  老代码只在 saves.length > 1 时才画选择器、默认值取 saves[0] ——
+                  当前用户没在这款游戏上存过档时，saves 里可能只有别人一条，
+                  于是连选择器都不出现、导入静默落到错误的人名下。 */}
+              <div className="min-w-0 sm:w-[360px] shrink-0">
+                <p className="panel-tiny text-zinc-500 mb-1.5">
+                  {t('game.garlic_target', '导入到哪个用户')}
+                </p>
+                {targetUsers.length > 1 ? (
+                  <Segmented
+                    options={targetUsers.map((u) => ({ value: u, label: userLabel(u) }))}
+                    value={gxTarget}
+                    onChange={setGxUid}
+                    label={t('game.garlic_target', '导入到哪个用户')}
+                    className="w-full"
+                    itemClassName="flex-1"
+                  />
+                ) : (
+                  <p className="panel-tiny text-zinc-300">
+                    {targetUsers.length
+                      ? userLabel(targetUsers[0])
+                      : t('game.garlic_to_default', '默认用户')}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline w-full sm:w-[240px] shrink-0"
+                disabled={!!importing || !!uploading}
+                onClick={pickGarlic}
+              >
+                <PackagePlus className="w-4 h-4" />
+                <span>
+                  {importing
+                    ? t('game.garlic_importing', '正在导入…')
+                    : t('game.garlic_import', '兼容导入（Garlic）')}
+                </span>
+              </button>
+            </div>
+            {importing && <div className="mt-3"><ProgressBar indeterminate /></div>}
+            <p className="panel-tiny text-zinc-500 mt-3 leading-snug">
+              {t('game.garlic_hint',
+                '导入 garlic-savemgr 导出的加密存档：PS5 是一个 sdimg_ 开头的镜像文件（没有后缀），PS4 是一个 zip 包。只覆盖同名的镜像，主机自己的备份与系统存档不动。')}
+            </p>
+            <p className="panel-tiny text-zinc-500 mt-1.5 leading-snug">
+              {t('game.garlic_resign_hint',
+                '不论这份存档原来属于谁，都会落到你上面选定的用户名下（存档镜像里读不出原主人，所以「改签」= 换落点 + 把文件名归一）。')}
+            </p>
+          </Block>
         )}
 
         {/* ── ⑤ 本地快照（v0.5.2.140）──
@@ -1016,60 +1010,6 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
           onChange={onGarlicFile}
         />
       </div>
-
-      {/* [CN-FORK] v0.5.2.163 存档转换源选择浮层 —— 选好来源用户后调
-       * convertSave(tid, source, target)，后端按 garlic 兼容导入的逐文件合并语义复制。
-       * 刻意**不写成 JSX 里的 IIFE**：`{cond && (() => {…})()}` 会被 react-hooks 的
-       * 新规则当成「渲染期调用」，于是里面那句 onClick 变成「渲染期传 ref」而报错。 */}
-      {convertFor && (
-        <div
-          className="fixed inset-0 z-[1100] bg-black/85 flex items-center justify-center p-4"
-          role="dialog" aria-modal="true"
-          aria-label={t('game.convert_dialog', '转换为')}
-          onClick={() => setConvertFor(null)}
-        >
-          <div
-            className="bg-ps-surface rounded-2xl border border-white/10 p-6 max-w-md w-full space-y-4 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[11px] uppercase tracking-wider text-ps-blue font-bold">
-                  {t('game.convert_dialog', '档案转换')}
-                </p>
-                <p className="text-white font-bold text-base mt-0.5">
-                  {t('game.convert_to_user', '转换为：用户 {{uid}}', { uid: convertFor.target })}
-                </p>
-              </div>
-              <button type="button" className="icon-btn shrink-0" onClick={() => setConvertFor(null)} title={t('app.buttons.close', '关闭')} aria-label={t('app.buttons.close', '关闭')}>
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              {t('game.convert_choose_source', '选择来源用户 —— 它的存档镜像会被逐文件合并到你刚选的那个用户（同名覆盖，主机自己的备份 _bu_ 不动）。')}
-            </p>
-            <ul className="space-y-1.5 max-h-[50vh] overflow-y-auto custom-scrollbar">
-              {saves.filter((x) => x.id !== convertFor.target).map((o) => (
-                <li key={o.id}>
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-3 p-3 rounded-lg border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] hover:border-ps-blue/30 transition-colors text-left"
-                    onClick={() => doConvert(o.id, convertFor.target)}
-                  >
-                    <ArrowLeftRight className="w-4 h-4 text-ps-blue shrink-0" />
-                    <span className="min-w-0">
-                      <span className="block text-white font-semibold">{t('game.user', '用户')} {o.name || o.id}</span>
-                      <span className="block panel-tiny text-zinc-500 tabular-nums">
-                        {formatSizeAlways(o.size)}{o.files ? ` · ${o.files} ${t('game.files_unit', '个文件')}` : ''}{formatStamp(o.mtime) ? ` · ${formatStamp(o.mtime)}` : ''}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
     </Modal>
   )
 }

@@ -276,17 +276,20 @@ if [ "$WANT" = "both" ] || [ "$WANT" = "retry" ]; then
     # ⚠ 必须**连日志一起删**：只删 `ga_pend_snap_arm()` 那一行的话，日志照旧打印
     #   「已排队重试」而其实什么都没排 —— 那样「排队日志」这条断言就成了空话
     #   （实测只删一行时它照样绿，红数只有 2）。整块删掉才是「这个功能从没加过」。
+    # ⚠ [CN-FORK] v0.5.2.173 锚点改成**结构式**（按 if 行 + 下一个 `}` 定位），
+    #   不再把日志原文抄进来 —— `.173` 改了一次日志措辞，抄原文的锚点当场失配，
+    #   而脚本只会打一句 traceback 然后判 BAD，看起来像「守卫坏了」。
     python3 - "$W/game_auto.c" <<'PY'
 import sys, pathlib
 src = pathlib.Path('src/game_auto.c').read_text(encoding='utf-8')
-BLOCK = ('            if (made == 0 && sreason == GS_SNAP_SKIP_TOO_FRESH) {\n'
-         '                ga_pend_snap_arm(steps[i].tid);\n'
-         '                pldmgr_log("[PLDMGR] saves: %s 本地快照已排队重试（最多 %ds）\\n",\n'
-         '                           steps[i].tid, GA_SNAP_RETRY_MAX * GA_TICK);\n'
-         '            }\n')
-assert src.count(BLOCK) == 1, '变异锚点（排队重试那一整块）没找到或不止一处'
-out = src.replace(BLOCK, '', 1)
-assert out != src and BLOCK not in out, 'mutation failed'
+HEAD = '            if (made == 0 && sreason == GS_SNAP_SKIP_TOO_FRESH) {\n'
+assert src.count(HEAD) == 1, '变异锚点（排队重试那一整块）没找到或不止一处'
+a = src.index(HEAD)
+TAIL = '\n            }\n'
+b = src.index(TAIL, a)
+out = src[:a] + src[b + len(TAIL):]
+assert out != src and HEAD not in out, 'mutation failed'
+assert 'ga_pend_snap_arm(steps[i].tid);' not in out, 'mutation failed'
 pathlib.Path(sys.argv[1]).write_text(out, encoding='utf-8')
 print('  变异已注入：撞上静默窗口后不排队重试（= 退出快照永远补不上）')
 PY

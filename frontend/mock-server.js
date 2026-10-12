@@ -1447,11 +1447,23 @@ app.get('/game_save_delete', (req, res) => {
  * `<TID>_<镜像名>`（它 ui.html 里就是 `s.title_id + '_' + s.save_name`，而 save_name
  * 是盘上的 `sdimg_<dir_name>`），而主机只认后半截 —— 老代码把上传名原样写进存档目录，
  * 于是主机要找的 `sdimg_<dir_name>` 压根不存在（用户报的「导入后没生效」）。
- * 开头那段认得出来就剥掉，认不出（用户改过名）原样保留。 */
+ * 开头那段认得出来就剥掉，认不出（用户改过名）原样保留。
+ *
+ * [CN-FORK] v0.5.2.173 再加一步「改签」：剥掉**本机真实存在的 uid** 前缀
+ * （`1a1d3627_sdimg_X` → `sdimg_X`）。与后端同一条原则 —— 只在那个前缀**确实是
+ * /user/home 下的一个用户目录名**时才剥，认不出来一律原样返回（说不清 ≠ 要改名）。
+ * 返回 `{ stored, resigned }`：`resigned` = 真的剥了 uid 前缀，回归靠它证「改签发生了」。 */
 function gxStoredName(name) {
-  const s = String(name || '');
+  let s = String(name || '');
   const m = /^[A-Za-z]{4}\d{5}_/.exec(s);
-  return m ? s.slice(m[0].length) : s;
+  if (m) s = s.slice(m[0].length);
+  for (const u of MOCK_UIDS) {
+    if (s.length > u.length && s[u.length] === '_'
+        && s.slice(0, u.length).toLowerCase() === u) {
+      return { stored: s.slice(u.length + 1), resigned: true };
+    }
+  }
+  return { stored: s, resigned: false };
 }
 
 app.post('/game_save_import_garlic', express.raw({ type: () => true, limit: '512mb' }), (req, res) => {
@@ -1474,6 +1486,9 @@ app.post('/game_save_import_garlic', express.raw({ type: () => true, limit: '512
     return res.status(400).json({ error: 'EBAD', message: `主机上没有这个用户（${uid}）` });
   }
   const files = isZip ? 2 : 1;
+  /* [CN-FORK] v0.5.2.173 裸镜像按 gxStoredName 剥前缀（TID + 本机 uid）；zip 里自带名字。
+   * `skippedManifest` = garlic 自己的 manifest.json 没被写进主机存档目录（后端同口径）。 */
+  const gx = isZip ? { stored: name || '(zip 内自带)', resigned: false } : gxStoredName(name);
   gameState.garlicImports.push({
     tid,
     uid: user,
@@ -1482,7 +1497,9 @@ app.post('/game_save_import_garlic', express.raw({ type: () => true, limit: '512
     uidQuery: uid,
     name: isZip ? (name || '(zip 内自带)') : name,
     /* 真正会落盘的名字（zip 里自带的名字原样，裸镜像按 gxStoredName 剥前缀）。 */
-    stored: isZip ? (name || '(zip 内自带)') : gxStoredName(name),
+    stored: gx.stored,
+    resigned: gx.resigned,
+    skippedManifest: isZip,
     files, size: body.length, isZip,
   });
   res.json({ ok: true, files, uid: user });
@@ -2196,37 +2213,6 @@ app.post('/tile_group_order', (req, res) => {
   });
   console.log(`[Mock] tile_group_order ${order.length} 项 -> 主机重排 ${moved} 条`);
   res.json({ ok: true, moved, host_ok: true, message: moved > 0 ? `主机固定列表已重排 ${moved} 条` : '顺序没有变化' });
-});
-
-/* [CN-FORK] v0.5.2.163 存档转换：把**另一个用户**在这款游戏上的存档合并到目标用户。
- * 与后端 game_saves_convert 同形（body: {tid, source, target}）。
- * 语义是**逐文件合并**（不是整份替换），所以这里只记账、不改 saves 列表 ——
- * 与 garlic 导入同一个理由（合并只覆盖同名镜像，主机自己的记账原样保留）。 */
-app.post('/game_save_convert', (req, res) => {
-  const tid = String((req.body && req.body.tid) || '');
-  const source = String((req.body && req.body.source) || '');
-  const target = String((req.body && req.body.target) || '');
-  if (!tid || !source || !target) {
-    return res.status(400).json({ error: 'EINVAL', message: '缺少 tid / source / target' });
-  }
-  if (source === target) {
-    return res.status(400).json({ error: 'EBAD', message: '来源与目标是同一个用户，不需要转换' });
-  }
-  const list = savesFor(tid);
-  const src = list.find((s) => s.id === source);
-  if (!src) return res.status(400).json({ error: 'EBAD', message: '来源用户在这款游戏上没有存档' });
-  /* 目标用户不在列表里 → 真机上会按来源那一档新建目录，这里跟着补一条。 */
-  let dst = list.find((s) => s.id === target);
-  if (!dst) {
-    dst = { id: target, kind: src.kind, mtime: src.mtime, size: src.size, files: src.files };
-    list.push(dst);
-  } else {
-    dst.size = src.size;
-    dst.files = src.files;
-    dst.mtime = src.mtime;
-  }
-  logs.push(`[PLDMGR] saves: ${tid} 存档转换 ${source} -> ${target} ok (${src.files} files)`);
-  res.json({ ok: true, files: src.files });
 });
 
 // [CN-FORK] 风扇温控 mock（预览用）：开关只置 enabled+清 applied；apply 才置生效。

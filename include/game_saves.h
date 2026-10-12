@@ -285,22 +285,15 @@ int game_saves_local_mtime(const char *tid, const char *uid, long long *out_mtim
  *     不再是「uid 升序第一个」—— 后者会把存档导到别人名下（用户报的「没对当前用户生效」）；
  *   · 文件名开头那段 garlic 的 `<TID>_` **会被剥掉**（`PPSA27836_sdimg_X` → `sdimg_X`），
  *     因为主机只认后者；同一段 TID 还用来做「不是当前游戏就整包拒收」的判定。
+ *
+ * [CN-FORK] v0.5.2.173 本函数 = 「改签」的**唯一**入口（单独的「存档转换」已删）：
+ *   · 落点只由 `save` 决定，与文件从哪来无关（镜像里读不出原主人，所以改签 = 换落点）；
+ *   · 文件名开头若是**本机真实存在的 uid**（`1a1d3627_sdimg_X`）也剥掉 —— 那是别人留下的；
+ *   · garlic 自带的记账（`manifest.json`）**不写进**主机的存档目录。
  * 0 成功（*out_files 回写入的文件数），-1 失败（msg 回人话）。 */
 int game_saves_import_garlic(const char *tid, const char *save, const char *name,
                              const unsigned char *body, size_t len,
                              long long *out_files, char *msg, size_t msgsz);
-
-/* [CN-FORK] v0.5.2.163 POST /game_save_convert：把**另一个用户**在这款游戏上的存档
- * 转换（复制）到目标用户名下，让当前用户也能用上。
- *
- *   body: {tid, source, target}   source / target 都是 /user/home 下的 uid
- *
- * 与 game_saves_import_garlic 同一套语义：**逐文件覆盖合并**（不是整份替换），
- * 目标用户自己的记账（sdimg_sce_bu_* / sdimg_sce_sdmemory）原样保留。
- * 目标用户还没有这款游戏的存档时，按**来源那一档**（PS5/PS4）新建目录。
- * 0 成功（*out_files = 写入的文件数），-1 失败（msg 回人话）。 */
-int game_saves_convert(const char *tid, const char *source, const char *target,
-                       long long *out_files, char *msg, size_t msgsz);
 
 /* [CN-FORK] v0.5.2.156 从 garlic 导出的文件名里认游戏（`<TID>_<存档目录名>` 那一段）。
  * 返回 1 = 认出来了（*out 写 9 位**大写** TID，缓冲至少 10 字节）；0 = 认不出来。

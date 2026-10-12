@@ -650,20 +650,6 @@ export function gameMusicUrl(tid) {
   return `/game_music${qa({ tid })}`
 }
 
-/* ── [CN-FORK] v0.5.2.163 存档转换 ───────────────────────────────────────
- * 把「用户 A 的存档」一键转换到「当前用户」可用的格式 —— 走 garlic 兼容导入的同一条
- * 逐文件合并路径，只是 save 不传（= 后端取本机第一个用户，行为与上传一致）；
- * 多用户主机上前端可指定目标 uid（save=uid）。
- *   POST /game_save_convert         {tid, source, target} → {ok, files}
- *      source = 来源用户 uid（用户 A）
- *      target = 目标用户 uid（当前用户）
- * 与 importGarlic 同源，区别在于这个是从**本机**已有存档目录里复制，而不是从 zip / 镜像。 */
-export function convertSave(tid, source, target, opts) {
-  return request('/game_save_convert', {
-    ...opts, method: 'POST', body: { tid, source, target },
-  })
-}
-
 /* ── 挂载 / 卸载（运行时层，对应 ShadowMountPlus 的 games/mount|unmount）─── */
 export function mountGame(tid, mode, opts) {
   return request('/game_mount', { ...opts, method: 'POST', body: { tid, mode } })

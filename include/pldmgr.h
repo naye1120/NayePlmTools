@@ -116,8 +116,6 @@
  * `.163` 那条 /game_music 只落我们自己的目录，主机不读 —— 这才是「背景音乐
  * 改动没有生效」的根因。编码在浏览器里做（见 include/game_music.h 的长注释）。 */
 #define ROUTE_GAME_MUSIC_AT9 "/game_music_at9"
-/* [CN-FORK] v0.5.2.163 存档转换：把其它用户存档逐文件合并到目标用户（不传文件体）。 */
-#define ROUTE_GAME_SAVE_CONVERT "/game_save_convert"
 /* [CN-FORK] v0.5.2.172 两条**下载**路由（GET，参数全走 query，浏览器自己落文件）：
  *   /game_save_snap_download?tid=&uid=&ts=   把一份**本地快照**打成 zip 直出
  *   /game_save_remote_download?tid=&save=    把**远端**那一份存档取回来直出
@@ -151,7 +149,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.5.2.172" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.172，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.5.2.173" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.173，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，

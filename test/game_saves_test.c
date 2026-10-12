@@ -37,6 +37,10 @@
  *      当前用户生效」）：不带 save 时落到**前台用户**（不是 uid 最小的那个），
  *      且 garlic 的 `<TID>_` 前缀会被剥掉（主机只认 `sdimg_<dir_name>`）；
  *      两条都带反向对照，且剥前缀不许把 ⑬ 的游戏判定弄丢
+ *   ⑭b **导入 = 「改签」**（`.173`）：落点只由 `save` 决定；文件名里**本机真实存在
+ *      的 uid** 前缀会被剥掉（`00000004_sdimg_X` → `sdimg_X`），不是本机 uid 的
+ *      8 位数字前缀一律原样保留；garlic 自己的记账 `manifest.json` **不写进**主机
+ *      的存档目录，但「没见过的合法条目」仍要照收（不许改成白名单）
  *
  * 测不了的部分（写在前面，免得有人以为是漏了）：
  *   - HTTP 那一层（tid 到底在 query 还是 body）在 http_server.c，主机上没有
@@ -1217,6 +1221,94 @@ int main(void) {
          * 留一个多出来的用户目录会让那些计数断言无端变化。 */
         snprintf(cmd, sizeof(cmd), "rm -rf " HOME "/%s", fg);
         system(cmd);
+    }
+
+    /* ── ⑭b 导入 = 「改签」（`.173`）──────────────────────────────────────────
+     * 用户口径：「导入的时候如果是其他用户的存档，直接改签成当前选定用户的。」
+     * `.173` 把单独的「存档转换」删了 —— 那件事本来就该由导入做，所以这里把
+     * 「改签」的三条判据钉死：
+     *
+     *   ① **落点只由 `save` 决定**，与文件里写着谁的名字无关。存档镜像是加密 PFS
+     *      镜像，读不出原主人，所以「改签」只能是「换落点 + 把文件名归一」。
+     *   ② 文件名开头若是**本机真实存在的 uid**（`00000004_sdimg_X`）就剥掉 ——
+     *      那是别人留下的痕迹，主机要找的是 `sdimg_X`。
+     *      反向对照：**不是**本机 uid 的 8 位数字前缀（`99999999_…`）必须原样保留
+     *      —— 猜错一个前缀的代价是把合法镜像改成主机找不到的名字（与 `.165` 那条
+     *      「说不清 ≠ 要改名」同一条原则）。
+     *   ③ garlic 自己的记账（`manifest.json`）**不写进主机的存档目录**。真机取证：
+     *      /user/home/1a1d3627/savedata_prospero/PPSA21567/manifest.json（367 字节）
+     *      就是 `.172` 之前被原样写进去的。
+     *      反向对照：**别为了跳它就改成「只收 sdimg_* / *.bin」的白名单** ——
+     *      白名单碰到没见过的合法条目会把用户的存档悄悄丢掉。下面 `weird_thing.dat`
+     *      那条就是给这个反向对照立的桩。 */
+    {
+        const char *zd = ROOT "/gx_resign";
+        char sdir2[900];
+        char p[900];
+        char rmsg[256];
+        long long rnf = 0;
+        long zn2;
+        static const unsigned char img[64] = { 0x50, 0x46, 0x53, 0x00, 0xAA, 0xBB };
+        const char *zerr = NULL;
+
+        snprintf(sdir2, sizeof(sdir2), "%s/%s/savedata_prospero/%s", HOME, U2, TID_PS5);
+
+        /* ① 裸镜像，名字里带**别人**（U4）的 uid 前缀，目标却是 U2 → 落到 U2、剥掉前缀。
+         *    「别人」必须用**本机真实存在**的 uid：判据就是拿 /user/home 下的目录名比对。 */
+        int grc = game_saves_import_garlic(TID_PS5, U2, U4 "_sdimg_RESIGN",
+                                           img, sizeof(img), &rnf, rmsg, sizeof(rmsg));
+        CHECK(grc == 0, "带别人 uid 前缀的裸镜像该导入成功（rc=%d, %s）", grc, rmsg);
+        CHECK(rnf == 1, "该写进 1 个文件，实得 %lld", rnf);
+        snprintf(p, sizeof(p), "%s/sdimg_RESIGN", sdir2);
+        CHECK(exists_reg(p), "① 改签后该落到选定用户 %s 下、名字剥成 sdimg_RESIGN: %s", U2, p);
+        snprintf(p, sizeof(p), "%s/%s_sdimg_RESIGN", sdir2, U4);
+        CHECK(access(p, F_OK) != 0, "① 别人 uid 前缀没被剥掉，主机找不到这个镜像: %s", p);
+
+        /* ② 反向对照：前缀**不是**本机 uid（99999999 不存在）→ 一个字节都不许改 */
+        grc = game_saves_import_garlic(TID_PS5, U2, "99999999_sdimg_KEEP",
+                                       img, sizeof(img), &rnf, rmsg, sizeof(rmsg));
+        CHECK(grc == 0, "认不出的前缀该放行（rc=%d, %s）", grc, rmsg);
+        snprintf(p, sizeof(p), "%s/99999999_sdimg_KEEP", sdir2);
+        CHECK(exists_reg(p), "② 不是本机 uid 的前缀必须原样保留（说不清 ≠ 要改名）: %s", p);
+
+        /* ③ garlic 的包（manifest.json + 镜像 + 一个我们没见过的合法条目）：
+         *    记账不落地、镜像与未知条目照收。 */
+        const char *zsrc = ROOT "/gx_resign_src";
+        const char *zzip = ROOT "/gx_resign.zip";
+        put_blob(zsrc, 80);
+        zip_ent_t ze[3];
+        memset(ze, 0, sizeof(ze));
+        snprintf(ze[0].abs, sizeof(ze[0].abs), "%s", zsrc);
+        snprintf(ze[0].zname, sizeof(ze[0].zname), "manifest.json");
+        snprintf(ze[1].abs, sizeof(ze[1].abs), "%s", zsrc);
+        snprintf(ze[1].zname, sizeof(ze[1].zname), "sdimg_GZMAN");
+        snprintf(ze[2].abs, sizeof(ze[2].abs), "%s", zsrc);
+        snprintf(ze[2].zname, sizeof(ze[2].zname), "weird_thing.dat");
+        CHECK(zip_write(zzip, ze, 3, NULL, &zerr) == 0, "造 manifest 包失败: %s",
+              zerr ? zerr : "?");
+        zn2 = read_all(zzip, g_buf, sizeof(g_buf));
+        CHECK(zn2 > 22, "manifest 包读不进来: %ld", zn2);
+        grc = game_saves_import_garlic(TID_PS5, U2, NULL, (unsigned char *)g_buf, (size_t)zn2,
+                                       &rnf, rmsg, sizeof(rmsg));
+        CHECK(grc == 0, "带 manifest 的包该导入成功（rc=%d, %s）", grc, rmsg);
+        CHECK(rnf == 2, "③ manifest.json 不该计数（该收 2 个），实得 %lld", rnf);
+        snprintf(p, sizeof(p), "%s/sdimg_GZMAN", sdir2);
+        CHECK(exists_reg(p), "③ 镜像该照常落盘: %s", p);
+        snprintf(p, sizeof(p), "%s/weird_thing.dat", sdir2);
+        CHECK(exists_reg(p),
+              "③ 没见过的合法条目也要照收 —— 别把实现改成「只收 sdimg_*」的白名单: %s", p);
+        snprintf(p, sizeof(p), "%s/manifest.json", sdir2);
+        CHECK(access(p, F_OK) != 0,
+              "③ garlic 自己的记账被写进了主机的存档目录: %s", p);
+
+        /* 收干净：⑩ 会在这份夹具上再跑一遍快照链，别给它多留几个文件。 */
+        snprintf(p, sizeof(p), "%s/sdimg_RESIGN", sdir2); unlink(p);
+        snprintf(p, sizeof(p), "%s/99999999_sdimg_KEEP", sdir2); unlink(p);
+        snprintf(p, sizeof(p), "%s/sdimg_GZMAN", sdir2); unlink(p);
+        snprintf(p, sizeof(p), "%s/weird_thing.dat", sdir2); unlink(p);
+        unlink(zsrc);
+        unlink(zzip);
+        (void)zd;
     }
 
     /* ⑩ 小栈。放在最后：它会动 U2 的源、也会给 U5 补一份快照（上面刚删掉），

@@ -315,8 +315,7 @@ static size_t gr_post_limit(const char *url) {
         strcmp(url, ROUTE_GAME_MOUNT) == 0 ||
         strcmp(url, ROUTE_GAME_UNMOUNT) == 0 ||
         strcmp(url, ROUTE_GAME_UNINSTALL) == 0 ||
-        strcmp(url, ROUTE_GAME_SAVE_REMOTE_DELETE) == 0 || /* [CN-FORK] v0.5.2.159 body 只有 tid + save */
-        strcmp(url, ROUTE_GAME_SAVE_CONVERT) == 0 /* [CN-FORK] v0.5.2.163 body 只有 tid + source + target */)
+        strcmp(url, ROUTE_GAME_SAVE_REMOTE_DELETE) == 0) /* [CN-FORK] v0.5.2.159 body 只有 tid + save */
         return (size_t)1 << 20;
     /* [CN-FORK] v0.5.2.158 「个性化软件」的开关：body 只有 tid + hidden 两个字段。
      * ⚠ 新加 POST 路由必须在这里登记，否则请求体压根不收（见上面的文件头注释）。
@@ -676,24 +675,6 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         int n = snprintf(out, size,
                          "{\"ok\":true,\"bytes\":%lld,\"host\":true,\"message\":\"%s\"}",
                          bytes, esc);
-        return (n < 0 || (size_t)n >= size) ? -1 : n;
-    }
-
-    /* [CN-FORK] v0.5.2.163 存档转换：body 里只有 tid / source / target。实现 = game_saves_convert()。 */
-    if (strcmp(url, ROUTE_GAME_SAVE_CONVERT) == 0) {
-        char rtid[64], rsrc[64], rtgt[64], msg[240];
-        long long files = 0;
-        msg[0] = 0;
-        if (gr_json_str(body, len, "tid", rtid, sizeof(rtid)) != 1 ||
-            gr_json_str(body, len, "source", rsrc, sizeof(rsrc)) != 1 ||
-            gr_json_str(body, len, "target", rtgt, sizeof(rtgt)) != 1)
-            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
-                               "缺少 tid / source / target");
-        if (game_saves_convert(rtid, rsrc, rtgt, &files, msg, sizeof(msg)) != 0)
-            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
-                               msg[0] ? msg : "转换失败");
-        *code = MHD_HTTP_OK;
-        int n = snprintf(out, size, "{\"ok\":true,\"files\":%lld}", files);
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
