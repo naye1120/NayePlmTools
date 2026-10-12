@@ -1,15 +1,19 @@
 #!/bin/bash
-# Verify NayePlmTools_0.5.2.174 build artifacts (both tile variants).
+# Verify NayePlmTools_0.5.2.175 build artifacts (both tile variants).
 #
-# [CN-FORK] 本脚本**继承** pkg_173_verify.sh 的全部检查，再加 .174 专属断言。
+# [CN-FORK] 本脚本**继承** pkg_173_verify.sh 的全部检查，再加 .174/.175 专属断言。
 # 每轮出包都基于上一版加断言，不从零写 —— 老断言能守住的老问题别让它回流。
 #
-# .174 是**三件事**（用户三条口径）：
+# ⚠ 版本号说明：这批改动**本打算出 .174**，但 .174 这个序号当时已被占用/作废，
+#   所以实际出的是 **.175**（代码内容与 CHANGELOG 里写的 `.174` 完全相同）。
+#
+# .174/.175 是**四件事**（用户四条口径）：
 #   A. 删掉「静默窗口」（GS_SNAP_QUIET_SEC）与 `.172` 的延迟重试队列 ——
 #      本地快照只剩两个时机：① 游戏退出（与「往远程推送」同一时刻）② 手动「立即备份」；
 #   B. 「快照活动」上屏 —— 新增 GET /game_save_snap_log + 界面「最近活动」子段
 #      （负向结果：内容没变 / 没得拍 / 拍失败，以前只在日志里）；
-#   C. 「参考与致谢」补全（5 条 → 22 条，四组）。
+#   C. 快照**成功**时发一条主机系统通知（pldmgr_notify「本地快照完成」）；
+#   D. 「参考与致谢」补全（5 条 → 22 条，四组）。
 # 所以 .170 的后端 SQL 指纹、.171 的前端指纹、.172 的两条下载路由、.173 的改签指纹
 # 必须**继续全绿**。
 #
@@ -45,12 +49,12 @@
 #       `静默窗口还没过`、`排队重试`、`存档刚被写过`。
 #
 # Usage (WSL — needs grep/cmp from coreutils):
-#   bash pkg_174_verify.sh
+#   bash pkg_175_verify.sh
 set -uo pipefail
 
-VER=0.5.2.174
-COMMIT=b894dba
-PREV=0.5.2.173
+VER=0.5.2.175
+COMMIT=PLACEHOLDER
+PREV=0.5.2.174
 REPO_URL='github.com/naye1120/NayePlmTools'
 OLD_URL='github.com/naye/ps5-payload-manager'
 DIR="$(cd "$(dirname "$0")" && pwd)"
