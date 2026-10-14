@@ -6,28 +6,27 @@ const LogViewer = ({ logs }) => {
   const { t } = useTranslation()
   const scrollRef = useRef(null)
   const [isAtBottom, setIsAtBottom] = useState(true)
-  const [hasNewLogs, setHasNewLogs] = useState(false)
+  const [readLogs, setReadLogs] = useState(logs)
+  const hasNewLogs = logs !== readLogs
 
   const handleScroll = () => {
     if (!scrollRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
     const atBottom = scrollHeight - scrollTop - clientHeight < 100
+    if (atBottom || isAtBottom) setReadLogs(logs)
     setIsAtBottom(atBottom)
-    if (atBottom) setHasNewLogs(false)
   }
 
   useEffect(() => {
     if (isAtBottom) {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'auto' })
-    } else {
-      setHasNewLogs(true)
     }
   }, [logs, isAtBottom])
 
   const scrollToBottom = () => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
     setIsAtBottom(true)
-    setHasNewLogs(false)
+    setReadLogs(logs)
   }
 
   return (

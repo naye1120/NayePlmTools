@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>Mutation policy fixture</title><pre id="result">RUNNING</pre>
+<script type="module">
+const params = new URLSearchParams(location.search)
+const mode = params.get('mode') || 'trusted'
+const api = params.get('target') || location.origin
+const result = document.getElementById('result')
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+try {
+  if (mode === 'foreign') {
+    const image = new Image()
+    await new Promise(resolve => { image.onload = image.onerror = resolve; image.src = api + '/abort' })
+    const frame = document.createElement('iframe'); frame.name = 'target'; document.body.append(frame)
+    const form = document.createElement('form'); form.action = api + '/set_config'; form.method = 'POST'; form.target = 'target'
+    const input = document.createElement('input'); input.name = 'FAVORITES'; input.value = 'foreign'; form.append(input); document.body.append(form)
+    await new Promise(resolve => { frame.onload = resolve; form.submit() })
+    await fetch(api + '/set_config', { method: 'POST', mode: 'no-cors', body: '{}' })
+    let blocked = false
+    try { await fetch(api + '/set_config', { method: 'POST', headers: { 'X-PLDMGR-Request': '1' }, body: '{}' }) }
+    catch { blocked = true }
+    if (!blocked) throw new Error('foreign custom-header fetch was authorized')
+    navigator.sendBeacon(api + '/set_config', new Blob(['{}'], { type: 'application/json' }))
+    await fetch(api + '/shutdown', { mode: 'no-cors' })
+    await wait(100)
+    result.textContent = JSON.stringify({ done: true, mode, blocked })
+  } else {
+    const { mutationFetch, saveConfigOnExit } = await import(params.has('proxy') ? '/src/utils/mutationRequest.js' : '/__test_mutation.js')
+    if (mode === 'unload') {
+      window.addEventListener('pagehide', () => saveConfigOnExit('{}'))
+      parent.postMessage('ready', location.origin)
+    } else {
+      const config = await mutationFetch('/set_config', { body: '{}' })
+      const abort = await mutationFetch('/abort')
+      if (!config.ok || !abort.ok) throw new Error(`trusted actions failed ${config.status}/${abort.status}`)
+      if (!saveConfigOnExit('{}')) throw new Error('beacon was not queued')
+      const frame = document.createElement('iframe')
+      const ready = new Promise(resolve => window.addEventListener('message', e => {
+        if (e.source === frame.contentWindow && e.origin === location.origin && e.data === 'ready') resolve()
+      }))
+      frame.src = location.pathname + '?mode=unload' + (params.has('proxy') ? '&proxy=1' : '')
+      document.body.append(frame); await ready; frame.remove()
+      await wait(100)
+      result.textContent = JSON.stringify({ done: true, mode, actions: 2, beacons: 2 })
+    }
+  }
+} catch (error) { result.textContent = JSON.stringify({ done: false, error: String(error) }) }
+</script>

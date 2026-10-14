@@ -1,7 +1,4 @@
-/* [CN-FORK] v0.5.2.99 eslint 不认 Node 全局（与 vite.config.js 同一处理），这里只声明用到的两个 */
-/* global process, Buffer */
 import express from 'express';
-import cors from 'cors';
 import http from 'node:http'; // [CN-FORK] PKG Manager 桩服务：真实监听 8844 供本地端到端验证
 import net from 'node:net';   // [CN-FORK] 真实 TCP 探活（与实机 pkgmanager.c 探活语义一致）
 import { readFileSync } from 'node:fs'; // [CN-FORK] v0.5.2.113 /version 从 pldmgr.h 现读版本号
@@ -21,10 +18,31 @@ const MENU_VERSION = (() => {
     return 'dev';
   }
 })();
+import { mutationPolicy } from './mock-policy.js';
+import fs from 'fs';
+import path from 'path';
 
 const app = express();
-app.use(cors());
+app.use(mutationPolicy);
 app.use(express.json());
+app.use(express.text({ type: 'text/plain', limit: '1mb' }));
+app.use((req, res, next) => {
+  if (typeof req.body === 'string') {
+    try { req.body = JSON.parse(req.body); }
+    catch { return res.status(400).json({ error: 'Invalid JSON' }); }
+  }
+  next();
+});
+
+// Public development fixture files are fetched as ordinary cross-origin GETs
+// by the README view; this exception never authorizes API preflights/mutations.
+const publicFixture = (req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*'); next();
+};
+// Serve the locally generated details/ README folder (repo root)
+app.use('/details', publicFixture, express.static(path.resolve(process.cwd(), '..', 'details')));
+app.use('/test_icons.json', publicFixture, express.static(path.resolve(process.cwd(), '..', 'test_icons.json')));
+app.use('/test_repo.json', publicFixture, express.static(path.resolve(process.cwd(), '..', 'test_repo.json')));
 
 // Log all requests to terminal
 app.use((req, res, next) => {
@@ -40,24 +58,26 @@ let logs = [
   "[PLDMGR] Found 3 payloads on storage"
 ];
 
-const remoteRepository = [
-  {
-    name: "ftpsrv",
-    filename: "ftpsrv_v0.19.elf",
-    url: "https://itsplk.github.io/ps5_payloads/payloads/ftpsrv_v0.19.elf",
-    description: "A simple FTP server that accepts connections on port 2121",
-    version: "v0.19",
-    checksum: "e6c1babbfd5e1b766d12b659853b514b9faedf6333cbe8cb514b1a3e79b7ce39"
-  },
-  {
-    name: "kstuff-lite",
-    filename: "kstuff-lite_v1.03.elf",
-    url: "https://itsplk.github.io/ps5_payloads/payloads/kstuff-lite_v1.03.elf",
-    description: "Lite version of kstuff",
-    version: "v1.03",
-    checksum: "54df47a48d9c5ee4338ef70ba66093908a4f2845e53468bdd7c080b65d7488c1"
-  }
-];
+// Load the new-schema test repository (icons, author, release_notes, details_url)
+let remoteRepository = [];
+let remoteIcons = {};
+try {
+  const testRepo = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), '..', 'test_repo.json'), 'utf8'));
+  remoteRepository = testRepo.payloads || [];
+  remoteIcons = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "..", "test_icons.json"), "utf8")).icons;
+} catch {
+  console.log('[Mock] Could not load ../test_repo.json — using built-in payloads');
+  remoteRepository = [
+    {
+      name: "ftpsrv",
+      filename: "ftpsrv_v0.19.elf",
+      url: "https://itsplk.github.io/ps5_payloads/payloads/ftpsrv_v0.19.elf",
+      description: "A simple FTP server that accepts connections on port 2121",
+      version: "v0.19",
+      checksum: "e6c1babbfd5e1b766d12b659853b514b9faedf6333cbe8cb514b1a3e79b7ce39"
+    }
+  ];
+}
 
 const communityRepository = [
   {
@@ -65,14 +85,20 @@ const communityRepository = [
     filename: "ps5_hen_test_v1.0.elf",
     url: "https://example.com/payloads/ps5_hen_test_v1.0.elf",
     description: "Community hen test payload — no checksum",
-    version: "v1.0"
+    version: "v1.0",
+    author: "hen-community",
+    release_notes: "## v1.0\n\n- No icon set — exercises the deterministic fake-icon fallback",
+    details_url: "details/etahen.md"
   },
   {
     name: "Debug Tool",
     filename: "debug_tool_v2.1.elf",
     url: "https://example.com/payloads/debug_tool_v2.1.elf",
     description: "Debug utility from community repo",
-    version: "v2.1"
+    version: "v2.1",
+    author: "ps5-payload-dev",
+    release_notes: "## v2.1\n\n- Second community payload",
+    details_url: "details/elfldr.md"
   }
 ];
 
@@ -2326,6 +2352,20 @@ app.get('/get_config', (req, res) => {
   res.json(mockConfig);
 });
 
+/* [CN-FORK] v0.6.0 合入：上游新增的两条 mock 路必须留着。
+ *  /repository_icons      —— RepositoryContext 的 icon 缓存按 source= 拉图标目录；
+ *                           官方源（default）回 test_icons.json 那份，社区源刻意回空，
+ *                           让「无图标兜底」那条路在本地也能看到。
+ *  /repository_cache_clear —— 设置页「仓库缓存」行打它；fork 的 mock 原本没这条，
+ *                           本地点一下只会 404。 */
+app.get('/repository_icons', (req, res) => {
+  const src = req.query.source;
+  if (src === 'default') return res.json({ icons: remoteIcons });
+  if (src === 'source_community' || src === 'source_cn') return res.json({ icons: {} });
+  return res.status(404).json({ icons: {} });
+});
+app.post('/repository_cache_clear', (req, res) => res.json({ ok: true }));
+
 /* [CN-FORK] v0.5.1.65 跟后端 repository_list_json / sources_multi_repository_list_json 保持同一套开关语义：
  * 默认云端仓库关掉后，官方源整组不输出；单来源模式下直接回空清单（cache_status=disabled）。 */
 const buildRepositoryResponse = () => {
@@ -2341,8 +2381,10 @@ const buildRepositoryResponse = () => {
     groups.push({
       id: 'default',
       name: 'Official Repository',
+      url: MOCK_DEFAULT_REPO_URL,
       last_update: lastRepositoryUpdate,
       error: false,
+      icons_revision: 'mock-icons-v1',
       payloads: remoteRepository.map(p => ({ ...p, source_id: 'default', source_name: 'Official Repository' }))
     });
   }
@@ -2350,6 +2392,7 @@ const buildRepositoryResponse = () => {
   groups.push({
     id: 'source_cn',
     name: 'repo.630810.xyz',
+    url: 'https://repo.630810.xyz/payloads.json',
     last_update: lastRepositoryUpdate,
     error: false,
     payloads: communityRepository.map(p => ({ ...p, source_id: 'source_cn', source_name: 'repo.630810.xyz' }))
@@ -2361,7 +2404,7 @@ app.get('/repository_payloads', (req, res) => {
   res.json(buildRepositoryResponse());
 });
 
-app.get('/repository_refresh', (req, res) => {
+app.post('/repository_refresh', (req, res) => {
   lastRepositoryUpdate = Math.floor(Date.now() / 1000);
   logs.push(`[PLDMGR] Repository manually refreshed`);
   res.json(buildRepositoryResponse());
@@ -2382,7 +2425,7 @@ app.post('/sources_set', (req, res) => {
   res.send('OK');
 });
 
-app.get('/sources_add', (req, res) => {
+app.post('/sources_add', (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ ok: false, message: 'Missing url' });
   // Mock: always succeed with a fake source name derived from the URL
@@ -2393,7 +2436,7 @@ app.get('/sources_add', (req, res) => {
   res.json({ ok: true, name: fakeName });
 });
 
-app.get('/sources_remove', (req, res) => {
+app.post('/sources_remove', (req, res) => {
   const idx = parseInt(req.query.index);
   if (isNaN(idx) || idx <= 0 || idx >= mockSources.length) {
     return res.status(400).json({ ok: false, message: 'Invalid index or cannot remove default source' });
@@ -2403,7 +2446,7 @@ app.get('/sources_remove', (req, res) => {
   res.json({ ok: true, message: 'OK' });
 });
 
-app.get('/repository_install', (req, res) => {
+app.post('/repository_install', (req, res) => {
   const { filename } = req.query;
   if (!filename) {
     return res.status(400).json({ ok: false, message: 'Missing filename' });
@@ -2517,7 +2560,10 @@ app.post('/system_app_pin', (req, res) => {
   res.json({ ok: true, tid, pinned, message: '' });
 });
 
-app.get(/^\/loadpayload:(.*)/, (req, res) => {
+/* [CN-FORK] v0.6.0 合入：/loadpayload:* 在上游安全层里是 POST（前端走 mutationFetch），
+ * mock-policy 对非预期方法直接回 405，所以抽成共用 handler、两条方法都接；
+ * GET 那份留给老调用与手工 curl。 */
+const handleLoadPayload = (req, res) => {
   const path = req.params[0];
   logs.push(`[PLDMGR] Executing payload: ${path}`);
   /* [CN-FORK] v0.5.2.83 模拟拉起：已知桩程序延迟 1.5s 起监听端口 + 登记进程名，
@@ -2531,9 +2577,12 @@ app.get(/^\/loadpayload:(.*)/, (req, res) => {
     }, 1500);
   }
   res.send('OK');
-});
+};
 
-app.get('/manage\\:delete', (req, res) => {
+app.get(/^\/loadpayload:(.*)/, handleLoadPayload);
+app.post(/^\/loadpayload:(.*)/, handleLoadPayload);
+
+app.post('/manage\\:delete', (req, res) => {
   const filename = req.query.filename;
   logs.push(`[PLDMGR] Deleted payload: ${filename}`);
   res.send('OK');
@@ -2545,14 +2594,14 @@ app.post('/manage\\:upload', (req, res) => {
   res.send('OK');
 });
 
-app.get('/abort', (req, res) => {
+app.post('/abort', (req, res) => {
   logs.push(`[PLDMGR] Autoload sequence aborted by user`);
   autoloadStatus.remaining = -1;
   autoloadStatus.current = "IDLE";
   res.send('OK');
 });
 
-app.get('/autoload_clear', (req, res) => {
+app.post('/autoload_clear', (req, res) => {
   logs.push(`[PLDMGR] Autoload status cleared`);
   autoloadStatus.done = 0;
   autoloadStatus.current = "IDLE";
@@ -2560,13 +2609,22 @@ app.get('/autoload_clear', (req, res) => {
   res.send('OK');
 });
 
-app.get('/shutdown', (req, res) => {
+app.post('/shutdown', (req, res) => {
   logs.push(`[PLDMGR] System shutdown requested`);
   res.send('Shutting down...');
   process.exit(0);
 });
 
 // SSE for logs
+app.get('/processes_list', (req, res) => res.json([]));
+app.get('/history_list', (req, res) => res.json([]));
+app.post('/process_kill', (req, res) => res.json({ ok: true }));
+app.get('/usb_move_check', (req, res) => res.json({
+  status: 'ready', path: req.query.path, filename: path.basename(req.query.path || 'test.elf'),
+  folder_exists: false, existing: null,
+}));
+app.post('/usb_move_perform', (req, res) => res.json({ ok: true, message: 'Mock import complete' }));
+
 app.get('/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');

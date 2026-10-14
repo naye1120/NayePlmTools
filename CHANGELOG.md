@@ -1,3 +1,70 @@
+## v0.6.0.176 (CN-FORK) — 2026-10-14 · 上游 v0.6.0 全量合并
+
+> 用户口径（原文）：「熟悉一下项目，然后将上游最新的更新拉取并合并」。
+> 合并前确认三点：**全量合并** / **保留 `/data/nayeplmtools/` 数据目录** / 出包版本 **0.6.0.176**。
+
+### ① 上游区间与合并方式
+
+merge-base `e4e72dc`（v0.5.2）→ `fe5ca81`（v0.6.0），在临时分支 `merge-upstream-060` 上做**全量合并**
+（保留 fork 全部改动，不做「只挑上游新文件」的窄合并）。冲突集中在 16 个前端文件，逐个人工裁决：
+**fork 语义优先、上游新增能力并入**。C 后端无文本冲突（fork 的文件与上游新文件不重叠），
+但编译期/运行期有 4 类必须处理的适配（见 ②）。
+
+### ② fork 侧必须处理的 4 类适配（全部已落地）
+
+**1) 栈帧红线（最重要）**：上游 v0.6.0 新增/改写的 4 个函数栈帧超 32 KB ——
+`slot_write_meta` **111,064 B**、`sources_multi_repository_list_json` **66,584 B**、
+`payload_mgr_list_json` **53,848 B**、`slot_migrate_legacy` **42,488 B**。真机 HTTP 线程栈只有
+64 KB（`MHD_USE_THREAD_PER_CONNECTION`），宿主 8 MB 栈**全绿**、真机必然 SIGSEGV。已全部堆化：
+`SlotMetaJsonScratch` / `IconMetaJsonScratch` / `RepoPayloadJsonScratch` / `PayloadListJsonScratch`
+四个 malloc 结构，`ensure_icons` 加 `noinline` 防被 `-Os` 内联回调用方。**上游 CI 没接
+`tools/check_stack_frames.sh`**，这条只能靠 fork 自己守。
+
+**2) `include/pkgmanager.h` 的 include 必须用尖括号**：上游 `tests/` 的宿主 runner 会把
+`pldmgr.h` 打补丁（数据目录重定向到临时目录）后写进 build 目录，并以 `-I<build>` **先于**
+`-Iinclude` 传入。`pkgmanager.h` 原先用 `#include "pldmgr.h"`，引号 include 会**相对自身目录
+(`include/`) 解析**、拿到**另一份** `pldmgr.h`，于是同一 TU 载入两份、`#pragma once` 按路径
+去重失效 → `SCAN_DIRS` 等重定义、编译失败。改成 `#include <pldmgr.h>` 后与调用方走同一条
+`-I` 搜索链、收敛到同一文件；生产构建 (`-Iinclude`) 与 fork 自有宿主测试行为不变。
+
+**3) 数据目录改名连带测试夹具**：fork 的 `/data/pldmgr` → `/data/nayeplmtools`、配置文件
+`nayeplmtools_config.txt`、U 盘库目录名 `nayeplmtools`。上游 runner 的 `.replace('/data/pldmgr', …)`
+在 fork 下**空转**，需补第二次替换；U 盘夹具目录名、配置文件名也要跟着改。
+
+**4) fork 的 config.c / http_server.c 引 cJSON**（上游不引）：宿主 runner 需补
+`-Isrc/psaccounts/third_party` 并链 `src/psaccounts/third_party/cJSON.c`（生产构建经 Makefile
+`SRCS` 链入，行为一致）。
+
+### ③ 上游 v0.6.0 新增的构建门槛，把 fork 既有 lint 债变成硬阻断
+
+上游把 `frontend/package.json` 的 `lint` 改成 `eslint . --max-warnings=0`，并**新增
+`prebuild: npm run lint && npm test`** —— 于是 `npm run build` 会先跑 lint + 单测。
+fork 里有 **9 个既有 lint 错误**（4 × `react-hooks/set-state-in-effect`、4 × `no-unused-vars`、
+1 × `no-redeclare`），HEAD 时代因为**没有 prebuild** 所以从不影响出包，现在会直接卡住构建。
+本轮按最小改动清账：`set-state-in-effect` 四处加**定向 disable 注释**（`load()` 内部先 `await`
+再 `setState`，并非同步 setState，规则偏保守）；`atrac9/container.js` 的 `catch (e)` 改 `catch {}`；
+`encoder.js` 三个未使用符号加 `_` 前缀（`varsIgnorePattern: '^[A-Z_]'` / 新增的
+`argsIgnorePattern: '^_'` 正好放行）；`vite.config.js` 删掉多余的 `/* global process */`
+（上游 eslint 配置已对 `*config.js` 注入 `globals.node`，同时声明触发 `no-redeclare`）。
+
+### ④ 验证结果
+
+- **ELF 出包成功**：`NayePlmTools_0.6.0.176.elf`，12,367,448 B，版本号已烧成 `.176`。
+- **栈帧守卫全绿**：`=== check_stack_frames: 全部函数栈帧 <= 32768 B ===`。
+- **fork 自有宿主测试**：`bash test/run_host_tests.sh` → `==== overall: PASS ====`。
+- **前端**：`eslint .` 0 错；`npm test` **118/118**（在 WSL 里跑；Windows 宿主会因
+  「node 内再 spawn node」EBUSY 假失败，属环境问题）。
+- 上游 `tests/`（复数）自带套件：17 个 runner 中 11 个 PASS；剩余为 fork 结构差异所致，
+  **有意留 backlog**，详见 `FORK-CN.md` §4.1「已知欠账」。fork 的验证门槛始终是
+  `test/run_host_tests.sh`（单数），不是上游那套。
+
+### ⑤ 未做/待确认
+
+- 未推真机（`.173`–`.176` 均未推）。出包后按惯例先 `/shutdown` 再推、成功只认 `GET /version`。
+- `.175` 的两笔提交（`6a187dd` / `7cde065`）此前未 push 到 `origin/main`，本轮一并处理。
+
+---
+
 ## v0.5.2.175 (CN-FORK) — 2026-10-13
 
 > 用户口径（原文）：
@@ -5168,6 +5235,25 @@ SMP 首次轮询即一致，且源文件回到 **2902 B（与原厂件零字节�
 
 ### 🛠️ Backend & Bug Fixes
 * **云端仓库启动预取 (`repository_ensure_fresh`)**: 修正 TTL 判断。开机时 PS5 系统时钟常未同步/回退，导致 `now < last_update`（`delta < 0`）；旧写法把 `delta < 0` 当成可复用缓存，造成「启动不自动刷新、必须手动点」。现改为仅当「时间可信且距上次刷新 < 60 秒」才复用磁盘缓存，其余（时钟回退 `delta < 0`、真正超期 `delta >= 60`、缓存文件缺失）启动一律联网刷新。手动刷新 `/repository_payloads?refresh=1`（`force_refresh=1`）行为不变。
+## v0.6.0
+
+### 🚀 Features & UX Improvements
+* **Repository Browser Overhaul**: Rebuilt **Get Payloads** into a full store experience with a card grid, search, source filtering, and live install status badges.
+* **Payload Details**: Added a dedicated details page showing payload README documentation and version info.
+* **Cross-Browser Favorites**: Dashboard favorites are now stored on the console, keeping your favorites and custom order synced across all browsers and devices.
+* **Controller & History Navigation**: Pressing Back / Circle on your PS5 controller or browser now closes modals, details, and edit modes instead of exiting the browser. Added URL links for direct navigation.
+* **UI Polish & Quality of Life**: Refreshed Autoload screen styling with improved auto-saving, redesigned payload launch overlay, support for custom repository payload icons and source badges, and cleaner notification toasts.
+* **New Language**:
+  * **Dutch** (thanks to JensJ56)
+* **Translations**: Updated localization files across all 17 supported languages.
+
+### 🛠️ Backend & Bug Fixes
+* **Autoload Network Resilience**: Fixed repository network timeouts on boot delaying the autoload sequence ([#109](https://github.com/itsPLK/ps5-payload-manager/pull/109), thanks to [kianborg](https://github.com/kianborg)).
+* **Fresh PS5 Install Fix**: Fixed installer failing on brand new PS5 systems ([#108](https://github.com/itsPLK/ps5-payload-manager/issues/108)).
+* **Security & Verification**: Added checksum verification for repository downloads and restricted actions to POST requests with origin validation.
+* **Stability Improvements**: Resolved crashes with large repository catalogs, improved memory handling, fixed connection cleanup, and other minor stability improvements and bug fixes.
+
+**Full Changelog**: [v0.5.2...v0.6.0](https://github.com/itsPLK/ps5-payload-manager/compare/v0.5.2...v0.6.0)
 
 ## v0.5.2
 - Rebuilt with latest SDK

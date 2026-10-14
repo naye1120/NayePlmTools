@@ -2,6 +2,7 @@
 
 # Tools
 PYTHON := python3
+HOST_CC ?= clang
 CC     := /opt/ps5-payload-sdk/bin/prospero-clang
 STRIP  := /opt/ps5-payload-sdk/bin/prospero-strip
 
@@ -39,7 +40,7 @@ SRCS := src/main.c src/http_server.c src/config.c src/log_server.c \
         src/sha256.c src/json_helpers.c src/repository.c src/sources.c \
         src/payload_mgr.c src/process_mgr.c \
         src/ps5_launcher.c src/notification.c src/utils.c src/autoload.c \
-        src/app_installer.c src/history_mgr.c \
+        src/app_installer.c src/history_mgr.c src/slot.c \
         src/pkgmanager.c src/pkgmanager_blob.S src/quicklinks.c src/thermal.c src/game_mgr.c src/fan_control.c
 # [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF（常用配置「账号 / 远程游玩」板块）
 # api.c 是原工程 websrv.c 的并入版：只留 /api/… 接口，监听循环/内嵌首页/exit 都不要了
@@ -96,6 +97,34 @@ CFLAGS := -Os -Wall -ffunction-sections -fdata-sections $(INCLUDES) $(VARIANT_CF
 LDFLAGS := -Wl,--gc-sections
 
 all: $(ELF)
+
+# These tests execute the HTTP handler on the host with PS5 services stubbed.
+# See DEVELOPMENT.md for the isolated container option and native build gate.
+.PHONY: test-host test-frontend test
+test-host:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_json_escape_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_json_decode_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_json_backend_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_json_size_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_allocation_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_integrity_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_repository_icons_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_self_update_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_storage_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_autoload_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_launcher_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_process_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_log_stream_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_config_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_http_tests.py --autoload-only
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_http_tests.py --logs-only
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_http_tests.py --config-only
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_http_tests.py
+
+test-frontend:
+	cd frontend && npm run lint && npm test
+
+test: test-host test-frontend
 
 # Build the React frontend
 .PHONY: frontend-build

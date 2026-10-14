@@ -1,0 +1,47 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  http-responses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build host-test environment
+        run: docker build -f tests/Dockerfile -t pldmgr-tests .
+      - name: Test backend JSON and HTTP with sanitizers and real sockets
+        run: docker run --rm --network=none -v "$GITHUB_WORKSPACE:/src:ro" pldmgr-tests make test-host
+
+  shared-state:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check concurrent config, sources, history, autoload and logs with ThreadSanitizer
+        run: |
+          python3 tests/run_repository_icons_tests.py --thread-sanitize
+          python3 tests/run_config_tests.py --thread-sanitize
+          python3 tests/run_autoload_tests.py --thread-sanitize
+          python3 tests/run_log_stream_tests.py --thread-sanitize
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+      - name: Check mock server method/origin contract
+        run: node tests/run_mock_security_tests.mjs

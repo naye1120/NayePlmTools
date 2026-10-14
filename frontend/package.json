@@ -4,7 +4,7 @@
   "version": "0.1.1",
   "type": "module",
   "browserslist": [
-    "safari >= 12",
+    "safari >= 11",
     "chrome >= 80"
   ],
   "scripts": {
@@ -12,15 +12,21 @@
     "mock": "node mock-server.js",
     "dev:mock": "concurrently \"npm run mock\" \"npm run dev\"",
     "build": "vite build",
-    "lint": "eslint .",
+    "test": "node --test tests/*.test.mjs",
+    "lint": "eslint . --max-warnings=0",
     "preview": "vite preview",
-    "extract": "i18next"
+    "extract": "i18next",
+    "prebuild": "npm run lint && npm test",
+    "test:browser": "node ../tests/run_autoload_editor_browser_tests.mjs && node ../tests/run_autoload_editor_browser_tests.mjs --lifecycle && node ../tests/run_markdown_locale_browser_tests.mjs && node ../tests/run_markdown_locale_browser_tests.mjs --repository-icons",
+    "postbuild": "node ../tools/check_frontend_bundle.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
+    "dompurify": "^3.4.13",
     "i18next": "^26.3.6",
     "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^1.8.0",
+    "marked": "^18.0.9",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

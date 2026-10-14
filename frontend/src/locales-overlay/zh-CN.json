@@ -624,5 +624,42 @@
 
   "storage_hub.lan_badge": "局域网",
   "storage_hub.scan_hint": "手机扫码打开本面板",
-  "storage_hub.server_addr_hint": "在电脑或手机浏览器里输入这个地址即可打开本面板"
+  "storage_hub.server_addr_hint": "在电脑或手机浏览器里输入这个地址即可打开本面板",
+
+  "storage_hub.installed_title": "已安装的 Payload",
+  "storage_hub.cloud_repo_title": "云端仓库",
+  "storage_hub.library_empty": "库为空",
+  "storage_hub.remove_payload": "删除 Payload",
+  "storage_hub.update_btn": "更新",
+  "storage_hub.update_to_version": "更新（至 v{{version}}）",
+
+  "autoload.saving": "保存中……",
+  "autoload.saved": "已保存",
+  "autoload_overlay.conflict": "冲突：etaHEN + KStuff 已启用",
+  "settings.kill_disc_title": "关闭光盘播放器",
+  "settings.kill_disc_desc": "启动时自动终止光盘播放器应用（适用于 BD-JB 光盘用户）。",
+
+  "thermal.title": "温控管理",
+  "thermal.desc": "CPU / GPU / SSD 实时温度与风扇转速，并可设定按温度调速的目标阈值。",
+  "thermal.fan": "风扇",
+  "thermal.fan_ctrl_title": "风扇温控",
+  "thermal.fan_target": "目标温度",
+  "thermal.fan_presets": "档位",
+  "thermal.fan_preset_quiet": "静音",
+  "thermal.fan_preset_std": "标准",
+  "thermal.fan_preset_perf": "性能",
+  "thermal.fan_apply": "应用",
+  "thermal.fan_applied": "已应用",
+  "thermal.fan_apply_fail": "应用失败（后端未接入）",
+  "thermal.fan_on": "已启用",
+  "thermal.fan_off": "未启用",
+  "thermal.fan_st_none": "未接入",
+  "thermal.fan_st_inactive": "未生效",
+  "thermal.fan_not_supported": "当前主机/后端未接入风扇控制（/dev/icc_fan 调速待单独确认后落地）。",
+  "thermal.fan_hint_off": "未启用：打开右上角开关后方可调节目标温度。",
+  "thermal.fan_hint": "目标温度越低风扇越积极（更凉、更吵）；越高越安静（更热）。",
+  "thermal.fan_hint_notapplied": "已启用但尚未生效：设定目标温度后点「应用」。",
+  "thermal.read_fail": "读取失败",
+  "thermal.safe_mode": "主机处于安全模式（safe_mode），温控探测已停用。",
+  "thermal.pending": "温控数据待接入"
 }

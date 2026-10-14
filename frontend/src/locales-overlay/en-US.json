@@ -622,5 +622,42 @@
 
   "storage_hub.lan_badge": "LAN",
   "storage_hub.scan_hint": "Scan with your phone to open this panel",
-  "storage_hub.server_addr_hint": "Type this address into a browser on your PC or phone to open this panel"
+  "storage_hub.server_addr_hint": "Type this address into a browser on your PC or phone to open this panel",
+
+  "storage_hub.installed_title": "Installed Payloads",
+  "storage_hub.cloud_repo_title": "Cloud Repository",
+  "storage_hub.library_empty": "Library Empty",
+  "storage_hub.remove_payload": "Remove Payload",
+  "storage_hub.update_btn": "Update",
+  "storage_hub.update_to_version": "Update (to v{{version}})",
+
+  "autoload.saving": "Saving Changes...",
+  "autoload.saved": "All Changes Saved",
+  "autoload_overlay.conflict": "Conflict: etaHEN + KStuff active",
+  "settings.kill_disc_title": "Kill Disc Player",
+  "settings.kill_disc_desc": "Automatically terminate the Disc Player application on startup (for BD-JB users).",
+
+  "thermal.title": "Thermal Management",
+  "thermal.desc": "Live CPU / GPU / SSD temperatures and fan speed, plus a target temperature for temperature-based fan control.",
+  "thermal.fan": "Fan",
+  "thermal.fan_ctrl_title": "Fan Control",
+  "thermal.fan_target": "Target temperature",
+  "thermal.fan_apply": "Apply",
+  "thermal.fan_applied": "Applied",
+  "thermal.fan_apply_fail": "Apply failed (backend not wired up)",
+  "thermal.fan_on": "Enabled",
+  "thermal.fan_off": "Disabled",
+  "thermal.fan_st_inactive": "Not applied",
+  "thermal.fan_st_none": "Not available",
+  "thermal.fan_not_supported": "This console/backend does not support fan control (/dev/icc_fan tuning is still pending verification).",
+  "thermal.fan_presets": "Presets",
+  "thermal.fan_preset_quiet": "Quiet",
+  "thermal.fan_preset_std": "Standard",
+  "thermal.fan_preset_perf": "Performance",
+  "thermal.fan_hint": "A lower target temperature makes the fan more aggressive (cooler but louder); higher is quieter but hotter.",
+  "thermal.fan_hint_off": "Disabled: turn on the switch in the top-right corner to adjust the target temperature.",
+  "thermal.fan_hint_notapplied": "Enabled but not applied yet: set a target temperature and press \"Apply\".",
+  "thermal.read_fail": "Read failed",
+  "thermal.safe_mode": "The console is in safe mode, so thermal probing is disabled.",
+  "thermal.pending": "Thermal data pending"
 }

@@ -3,16 +3,19 @@
 #include "pldmgr.h"
 #include <string.h>
 #include <stdio.h>
+#include <pthread.h>
 
 #define MAX_HISTORY_ITEMS 20
 #define MAX_PATH_LEN 512
 
 static char history[MAX_HISTORY_ITEMS][MAX_PATH_LEN];
 static int history_count = 0;
+static pthread_mutex_t history_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void history_mgr_add(const char *path) {
-    if (!path || path[0] == '\0') return;
+    if (!path || path[0] == '\0' || strlen(path) >= MAX_PATH_LEN) return;
 
+    pthread_mutex_lock(&history_mutex);
     /* Check if already in history */
     int existing_idx = -1;
     for (int i = 0; i < history_count; i++) {
@@ -48,17 +51,24 @@ void history_mgr_add(const char *path) {
             history_count++;
         }
     }
+    pthread_mutex_unlock(&history_mutex);
 }
 
 size_t history_mgr_to_json(char *buf, size_t max_size) {
-    JsonListBuilder jb = { buf, max_size, 0, 1 };
+    if (!buf || !max_size) return 0;
+    char snapshot[MAX_HISTORY_ITEMS][MAX_PATH_LEN];
+    pthread_mutex_lock(&history_mutex);
+    int count = history_count;
+    memcpy(snapshot, history, sizeof(snapshot));
+    pthread_mutex_unlock(&history_mutex);
+    JsonListBuilder jb = { buf, max_size, 0, 1, 0 };
     buf[0] = '\0';
 
     json_append(&jb, "{\"history\":[\n");
 
-    for (int i = 0; i < history_count; i++) {
-        char path_escaped[1024];
-        pldmgr_json_escape(history[i], path_escaped, sizeof(path_escaped));
+    for (int i = 0; i < count; i++) {
+        char path_escaped[6 * 512];
+        json_escape_checked(&jb, snapshot[i], path_escaped, sizeof(path_escaped));
         json_append(&jb, "%s  \"%s\"", (i > 0) ? ",\n" : "", path_escaped);
     }
 

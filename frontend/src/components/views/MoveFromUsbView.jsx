@@ -1,12 +1,18 @@
-import React, { useState, useEffect } from 'react'
-import { RefreshCw, AlertTriangle, CheckCircle2, Info, Usb } from 'lucide-react'
+/* [CN-FORK] v0.6.0 合入：导入取两侧并集 —— 上游补了 apiFetch/mutationFetch/useCallback
+ * 与 ArrowLeft/HardDrive/Cpu/Loader2（文件本体的刷新链就是上游那版），fork 补了
+ * RefreshCw（上面重试按钮在用）与共用 UI 组件 PageHead/Section/LoadingState。 */
+import { apiFetch, mutationFetch } from '../../utils/mutationRequest'
+import React, { useState, useEffect, useCallback } from 'react'
+import { ArrowLeft, HardDrive, Cpu, AlertTriangle, CheckCircle2, Loader2, Info, Usb, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '../../utils/helpers'
 import PageHead from '../ui/PageHead' /* [CN-FORK] v0.5.2.94 页头/板块/加载归一 */
 import Section from '../ui/Section'
 import LoadingState from '../ui/LoadingState'
 /* [CN-FORK] v0.5.2.102 按功能分色（样张 A + I2）：重试＝青（btn-info，信息工具类），
- * 复制/覆盖写入＝金（btn-warn），「移动到内部」仍是本页唯一主操作（蓝），返回/取消＝紫。 */
+ * 复制/覆盖写入＝金（btn-warn），「移动到内部」仍是本页唯一主操作（蓝），返回/取消＝紫。
+ * 上游 0.6.0 把按钮组改成了「替换&复制 / 替换&移动 / 保留两者&复制 / 保留两者&移动」四条
+ * （后端 slot_commit_file 支持 keep_both，汉语文案走上游内联的 locales/zh-CN.json），
+ * 本页就这样统一，.btn 那几处留在上面重试/返回按钮上。 */
 
 const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
   const { t } = useTranslation()
@@ -14,34 +20,38 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
   const [details, setDetails] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
 
-  useEffect(() => {
-    checkPayload()
-  }, [path])
-
-  const checkPayload = async () => {
+  const checkPayload = useCallback(async () => {
     setStatus('loading')
     try {
-      const res = await fetch(`/usb_move_check?path=${encodeURIComponent(path)}`)
+      const res = await apiFetch(`/usb_move_check?path=${encodeURIComponent(path)}`)
       const data = await res.json()
       if (data.error) {
         setErrorMsg(data.error)
         setStatus('error')
       } else {
         setDetails(data)
-        if (data.status === 'exists_same') setStatus('exists_same')
-        else if (data.status === 'exists_different' || data.folder_exists) setStatus('exists_different')
-        else setStatus('confirm')
+        if (data.status === 'exists_same' || data.status === 'exists_different' || data.folder_exists || data.existing) {
+          setStatus('exists_different')
+        } else {
+          setStatus('confirm')
+        }
       }
-    } catch (e) {
+    } catch {
       setErrorMsg(t("move_usb.conn_failed", "Failed to connect to backend"))
       setStatus('error')
     }
-  }
+  }, [path, t])
 
-  const performMove = async (overwrite = false, keepOriginal = false) => {
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    checkPayload()
+  }, [checkPayload])
+
+  const performMove = async (mode = 'new', keepOriginal = false) => {
     setStatus('processing')
     try {
-      const res = await fetch(`/usb_move_perform?path=${encodeURIComponent(path)}&overwrite=${overwrite}&keep_original=${keepOriginal}`)
+      const modeParam = (mode === true || mode === 'replace') ? 'replace' : (mode === 'keep_both' ? 'keep_both' : 'new')
+      const res = await mutationFetch(`/usb_move_perform?path=${encodeURIComponent(path)}&mode=${encodeURIComponent(modeParam)}&keep_original=${keepOriginal}`)
       const data = await res.json()
       if (data.error) {
         setErrorMsg(data.error)
@@ -53,7 +63,7 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
           onComplete()
         }, 2000)
       }
-    } catch (e) {
+    } catch {
       setErrorMsg(t("move_usb.op_failed", "Operation failed"))
       setStatus('error')
     }
@@ -126,12 +136,29 @@ const MoveFromUsbView = ({ path, onBack, onComplete, addToast }) => {
                 </p>
               </div>
             </div>
-            <div className="stack-x">
-              <button onClick={onBack} className="btn btn-ghost flex-1">{t("move_usb.cancel_btn", "Cancel")}</button>
-              <div className="flex flex-1">
-                <button onClick={() => performMove(true, true)} className="btn btn-warn flex-1">{t("move_usb.overwrite_copy_btn", "Overwrite & Copy")}</button>
-                <button onClick={() => performMove(true, false)} className="btn btn-primary flex-1 ml-2">{t("move_usb.overwrite_move_btn", "Overwrite & Move")}</button>
+            {/* [CN-FORK] v0.6.0 合入：按钮组取上游侧 —— 它多给了一条「保留两者」（后端
+                slot_commit_file 支持 keep_both），且文案键走上游内联的 locales/zh-CN.json
+                （fork 的 locales-overlay 里没有 move_usb.*，走旧键只会落英语默认值）。 */}
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button onClick={() => performMove('replace', true)} className="flex-1 py-3.5 md:py-4 rounded-xl bg-amber-600/80 hover:bg-amber-600 text-white font-black uppercase italic text-sm transition-all shadow-md">
+                  {t("move_usb.replace_copy_btn", "Replace & Copy")}
+                </button>
+                <button onClick={() => performMove('replace', false)} className="flex-1 py-3.5 md:py-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black uppercase italic text-sm transition-all shadow-lg">
+                  {t("move_usb.replace_move_btn", "Replace & Move")}
+                </button>
               </div>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button onClick={() => performMove('keep_both', true)} className="flex-1 py-3.5 md:py-4 rounded-xl bg-ps-blue/70 hover:bg-ps-blue/90 text-white font-black uppercase italic text-sm transition-all shadow-md">
+                  {t("move_usb.keep_both_copy_btn", "Keep both & Copy")}
+                </button>
+                <button onClick={() => performMove('keep_both', false)} className="flex-1 py-3.5 md:py-4 rounded-xl bg-ps-blue hover:bg-ps-blue/80 text-white font-black uppercase italic text-sm transition-all shadow-lg shadow-ps-blue/20">
+                  {t("move_usb.keep_both_move_btn", "Keep both & Move")}
+                </button>
+              </div>
+              <button onClick={onBack} className="w-full py-3 rounded-xl bg-white/5 hover:bg-white/10 text-white font-bold uppercase text-xs transition-all border border-white/10">
+                {t("move_usb.cancel_btn", "Cancel")}
+              </button>
             </div>
           </div>
         )}

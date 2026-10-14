@@ -3,7 +3,8 @@
 > 本文档由本次改造（深色/浅色双主题、中文菜单布局、多语言 overlay、本地调试环境）
 > 沉淀而来。**升级上游前请先读第 4 节。**
 
-上游仓库：<https://github.com/itsPLK/ps5-payload-manager>（本次基线：v0.5.1 / commit 218f291）
+上游仓库：<https://github.com/itsPLK/ps5-payload-manager>
+（**当前基线：v0.6.0 / commit `fe5ca81`**，2026-10-14 全量合并；上一基线 v0.5.1 / `218f291`）
 
 ---
 
@@ -107,6 +108,46 @@ git checkout cn-fork && git rebase main        # 或 merge，二选一
 - 永远不改 C 后端的路由/配置键/文件路径（升级 ELF 时前端产物直接嵌入，后端行为保持一致）；
 - 不修改 `frontend/src/locales`（子模块）；
 - 上游版本号变更后，在本文件顶部更新「基线」记录。
+
+### 4.1 本次合并记录：v0.5.2 → v0.6.0（2026-10-14，merge 分支 `merge-upstream-060`）
+
+- 上游区间：merge-base `e4e72dc`（v0.5.2）→ `fe5ca81`（v0.6.0）。
+- 合并方式：**全量合并**（保留 fork 全部改动）；**保留 `/data/nayeplmtools/` 数据目录**（不跟随上游的
+  `/data/pldmgr`）；出包版本 **0.6.0.176**。
+- 前端冲突 16 个文件全部按「fork 语义优先 + 上游新增能力并入」裁决；i18n overlay 补齐 thermal 词条。
+
+**上游 v0.6.0 带来的新架构（fork 已接纳）**：`RepositoryContext`、`src/slot.c`、`json_helpers.h`、
+`src/process_mgr.c`、`src/log_server.c`；`json_helpers.c` 新增 `json_escape_checked()`，并把
+`pldmgr_json_escape()` 的签名由 `void` 改成 `int`（fork 已同步）。
+
+**合并后 fork 侧必须记住的 4 条适配**（都已在树里）：
+
+1. **栈帧红线**：上游 4 个函数栈帧超 32KB（`slot_write_meta` 111 KB、`sources_multi_repository_list_json`
+   66 KB、`payload_mgr_list_json` 53 KB、`slot_migrate_legacy` 42 KB），真机 64 KB 线程栈下会
+   SIGSEGV。fork 已全部堆化（`*JsonScratch` 结构 malloc）。**上游 CI 没接 `tools/check_stack_frames.sh`**，
+   别指望它替我们拦。
+2. **`include/pkgmanager.h` 的 `#include <pldmgr.h>` 必须是尖括号**：上游 `tests/` 的宿主 runner 把
+   `pldmgr.h` 打补丁后写进 build 目录并以 `-I<build>` 先于 `-Iinclude` 传入；若用引号，该头会相对
+   `include/` 解析、拿到**另一份** `pldmgr.h`，`#pragma once` 按路径去重失效 → `SCAN_DIRS` 等重定义。
+3. **`tests/`（复数）是上游自带套件，`test/`（单数）是 fork 自己的**。fork 的验证门槛是
+   `bash test/run_host_tests.sh`（内部含 `check_stack_frames.sh` / `check_post_routes.sh`）；
+   上游 `make test-host`（跑 `tests/run_*.py`）**未完全适配 fork**，见下方「已知欠账」。
+4. **数据目录改名连带影响测试夹具**：凡是从 `include/pldmgr.h` 生成补丁副本的 runner，都要把
+   `/data/pldmgr` **和** `/data/nayeplmtools` 各替换一次；配置文件名为 `nayeplmtools_config.txt`；
+   U 盘库目录名 `nayeplmtools`（legacy `pldmgr`/`payload-manager` 仅 self-update/migration 认）。
+   `src/config.c` / `src/http_server.c` 引 cJSON → runner 需 `-Isrc/psaccounts/third_party` 并链
+   `src/psaccounts/third_party/cJSON.c`。
+
+**已知欠账（有意留 backlog，不是合并缺陷）**：
+- 上游 `tests/run_http_tests.py` 四种模式：fork 的 `http_server.c` 调了 ~66 个 fork 专有函数
+  （`game_saves_*` / `game_media_*` / `game_title_*` / `game_music_*` / `game_prefs_*` /
+  `game_runtime_*` / `game_mgr_*` / `app_pin_*` / `app_vis_*` / `tile_group_*` / `quicklinks_*` /
+  `thermal_*` / `fan_control_*` / `pkgmanager_*` / `psaccounts_*` / `config_read_archive_global`），
+  上游 `tests/http_backend_stubs.c` 未覆盖 → 链接失败。要跑通得补一整套桩。
+- 上游 `tests/run_integrity_tests.py` 用 `openssl ... -days -1` 造过期证书；**OpenSSL ≥ 3.4 拒绝负
+  days**（"end date before start date"）。CI 镜像 `ubuntu:24.04`（OpenSSL 3.0.13）仍可跑，本地新版
+  OpenSSL 会失败。
+- 上游 `tests/syncTime.test.mjs` 在 Windows 上因「node 内再 spawn node」EBUSY + 不认 `TZ` 无法运行。
 
 ## 5. 本地测试/调试环境（Windows 已验证）
 

@@ -1,14 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react'
-import { Cpu, RefreshCw, XCircle, Search, AlertTriangle, Activity, Info, Trash2 } from 'lucide-react'
+/* [CN-FORK] v0.6.0 合入：导入取两侧并集 —— 上游补了 requestScope/mutationRequest/
+ * useCallback/useRef/Loader2（文件本体就是上游那版刷新链，这些符号都在用），
+ * fork 的共用 UI 组件（PageHead/Section/EmptyState/LoadingState/Switch）与 isPS5
+ * 也仍在下面用 → 两类都留。 */
+import { createRequestScope } from '../../utils/requestScope'
+import { apiFetch, mutationFetch } from '../../utils/mutationRequest'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { Cpu, RefreshCw, XCircle, Search, AlertTriangle, Activity, Loader2, Info, Trash2 } from 'lucide-react'
 import { useTranslation, Trans } from 'react-i18next'
-import { cn, isPS5 } from '../../utils/helpers'
+import { cn } from '../../utils/helpers'
 import PageHead from '../ui/PageHead' /* [CN-FORK] v0.5.2.94 页头/板块/空态/加载归一 */
 import Section from '../ui/Section'
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import Switch from '../ui/Switch'
 
-const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
+const ActiveProcessesView = ({ addToast, showConfirm }) => {
   const { t } = useTranslation()
   const [processes, setProcesses] = useState([])
   const [loading, setLoading] = useState(true)
@@ -16,34 +22,46 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
   const [showAll, setShowAll] = useState(false)
   const [search, setSearch] = useState('')
 
-  const fetchProcesses = async (isBackground = false) => {
-    if (!isBackground) setLoading(true)
-    if (!isBackground) setError(false)
+  const requestRef = useRef(null)
+  const killRef = useRef(null)
+  const aliveRef = useRef(false)
+  const refreshTimerRef = useRef(null)
+  const fetchProcesses = useCallback(async () => {
+    requestRef.current?.abort()
+    const controller = createRequestScope()
+    requestRef.current = controller
     try {
-      const res = await fetch('/processes_list')
+      const res = await apiFetch('/processes_list', { signal: controller.signal, cache: 'no-store' })
       if (!res.ok) throw new Error()
       const data = await res.json()
-      if (data && data.processes) {
-        setProcesses(data.processes)
-      } else {
-        setProcesses([])
-      }
+      if (controller.aborted) return
+      if (!Array.isArray(data?.processes)) throw new Error()
+      const entries = data.processes.filter(p => Number.isInteger(p.pid) && p.pid >= 0 &&
+        typeof p.name === 'string' && Number.isFinite(p.memory) && p.memory >= 0)
+      setProcesses(entries)
+      setError(false)
     } catch {
-      if (!isBackground) setError(true)
+      if (!controller.aborted) setError(true)
     } finally {
-      if (!isBackground) setLoading(false)
+      if (!controller.aborted) setLoading(false)
     }
-  }
-
-  useEffect(() => {
-    fetchProcesses()
-    
-    const intervalId = setInterval(() => {
-      fetchProcesses(true)
-    }, 15000)
-
-    return () => clearInterval(intervalId)
   }, [])
+  const refresh = () => { setLoading(true); setError(false); void fetchProcesses() }
+  useEffect(() => {
+    aliveRef.current = true
+    // StrictMode's setup/cleanup probe cancels this startup task before it can
+    // issue a duplicate request; initial loading is already visible.
+    const initialId = setTimeout(fetchProcesses, 0)
+    const intervalId = setInterval(fetchProcesses, 15000)
+    return () => {
+      aliveRef.current = false
+      clearTimeout(initialId)
+      clearInterval(intervalId)
+      clearTimeout(refreshTimerRef.current)
+      requestRef.current?.abort()
+      killRef.current?.abort()
+    }
+  }, [fetchProcesses])
 
   const filteredProcesses = useMemo(() => {
     let result = processes
@@ -68,17 +86,23 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
       t("active_processes.kill_modal_title", "Kill Process"),
       t("active_processes.kill_modal_message", "Are you sure you want to kill {{name}} (PID: {{pid}})?", { name: proc.name, pid: proc.pid }),
       async () => {
+        if (!aliveRef.current) return
+        const controller = createRequestScope()
+        killRef.current = controller
         try {
-          const res = await fetch(`/process_kill?pid=${proc.pid}`)
+          const res = await mutationFetch(`/process_kill?pid=${proc.pid}`, { signal: controller.signal })
           const data = await res.json()
+          if (controller.aborted) return
           if (res.ok) {
             setProcesses(prev => prev.filter(p => p.pid !== proc.pid));
             addToast(t("active_processes.kill_success", "Successfully killed {{name}}", { name: proc.name }))
-            setTimeout(() => fetchProcesses(), 1000);
+            clearTimeout(refreshTimerRef.current);
+            refreshTimerRef.current = setTimeout(fetchProcesses, 1000);
           } else {
             addToast(data.error || t("active_processes.kill_failed", "Failed to kill {{name}}", { name: proc.name }), "error")
           }
-        } catch (e) {
+        } catch {
+          if (controller.aborted) return
           addToast(t("active_processes.kill_error", "Error killing {{name}}", { name: proc.name }), "error")
         }
       },
@@ -137,6 +161,8 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
         {loading && processes.length === 0 ? (
           <LoadingState label={t("active_processes.fetching", "Fetching process list...")} />
         ) : error ? (
+          /* [CN-FORK] 错误态仍走共用 <EmptyState>：本文件另一处空态（下面 no_processes 那处）
+             用的就是它，且重试按钮按 v0.5.2.102 的约定走 btn-info 青档。 */
           <EmptyState
             icon={AlertTriangle}
             iconClassName="text-red-500 opacity-60"
@@ -144,7 +170,7 @@ const ActiveProcessesView = ({ ip, addToast, showConfirm }) => {
             className="border border-red-500/20 rounded-xl bg-red-950/5"
             action={
               /* [CN-FORK] v0.5.2.102 重试从红档换成青档（btn-info＝刷新/重试类），红只留给 kill 这类不可逆 */
-              <button onClick={() => fetchProcesses()} className="btn btn-info">
+              <button onClick={refresh} className="btn btn-info">
                 <RefreshCw className="w-4 h-4" />
                 <span>{t("active_processes.retry", "Retry")}</span>
               </button>

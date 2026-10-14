@@ -18,7 +18,16 @@ void pldmgr_utils_strip_config_line(char *s);
 /* [CN-FORK] 安全模式哨兵：PLDMGR_SAFE_MODE_FLAG 存在即返回 1。用来在实机死机、
  * 又进不了页面时靠 FTP 建一个空文件止血（免重编译）。 */
 int pldmgr_utils_safe_mode(void);
-void pldmgr_json_escape(const char *src, char *dst, size_t dst_size);
+
+/* Escape a NUL-terminated string for use between JSON quotes. Preserve valid
+ * UTF-8; replace each invalid UTF-8 byte with \ufffd. Returns 0 on success,
+ * -1 on insufficient capacity (or invalid arguments). With nonzero capacity,
+ * truncation leaves a terminated prefix of complete escapes/UTF-8 scalars.
+ * Source and destination must not overlap. Worst-case capacity is 6*strlen+1. */
+int pldmgr_json_escape(const char *src, char *dst, size_t dst_size);
+int is_pldmgr_name(const char *name);
+int is_pldmgr_official_source(const char *url);
+int is_legacy_official_repo_url(const char *url);
 
 /* [CN-FORK] v0.5.2.142 libcurl 的全局初始化，**全进程只做一次**。
  *

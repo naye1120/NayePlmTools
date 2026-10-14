@@ -1,162 +1,313 @@
-import React, { useState, useEffect } from 'react'
-import { RefreshCw, ArrowLeft, ArrowRight, Activity, Zap, ChevronUp, ChevronDown, Trash2, CheckCircle2 } from 'lucide-react'
-import { cn, isPS5, isSystemPayload } from '../../utils/helpers'
+import { saveConfigOnExit } from '../../utils/mutationRequest'
+import React, { useState, useEffect, useMemo, useCallback, useRef, useSyncExternalStore } from 'react'
+import { RefreshCw, Loader2, ArrowLeft, ArrowRight, Activity, Zap, ChevronUp, ChevronDown, Trash2, Globe, CheckCircle2 } from 'lucide-react'
+import { cn, isPS5, isSystemPayload, parsePayloadName, formatSourceTag } from '../../utils/helpers'
 import { useTranslation } from 'react-i18next'
 import PayloadName from '../ui/PayloadName'
+import PayloadIcon from '../ui/PayloadIcon'
 import Modal from '../ui/Modal'
+/* [CN-FORK] v0.6.0 合入：导入取两侧并集 —— fork 的 PageHead/EmptyState（页面外壳与
+   空态在用）与上游的 createAutoloadEditorSession / useRepository / isOfficialSource
+   （本体的 editor session 与仓库元数据解析在用）互不重叠，都留。 */
 import PageHead from '../ui/PageHead' /* [CN-FORK] v0.5.2.94 页头粘顶 + 空态归一 */
 import EmptyState from '../ui/EmptyState'
+import { createAutoloadEditorSession } from '../../utils/autoloadEditorSession'
+import { useRepository } from '../../contexts/RepositoryContext'
+import { isOfficialSource } from '../../utils/payloadStatus'
 
-const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) => {
+const AutoloadView = ({
+  items = [],
+  payloads = [],
+  config,
+  onSaveConfig,
+  onToast,
+  delayModal: delayModalProp,
+  setDelayModal: setDelayModalProp,
+}) => {
   const { t } = useTranslation()
+  const repoContext = useRepository()
+  const getRepoEntry = repoContext?.getRepoEntry
+  const findRepoEntryById = repoContext?.findRepoEntryById
   const [subView, setSubView] = useState('list')
-  const [enabled, setEnabled] = useState(false)
-  const [autoloadList, setAutoloadList] = useState([])
-  const [showDelayModal, setShowDelayModal] = useState(false)
+  const [localDelayModal, setLocalDelayModal] = useState(false)
+  const showDelayModal = delayModalProp !== undefined ? delayModalProp : localDelayModal
+  const setShowDelayModal = setDelayModalProp || setLocalDelayModal
   const [customDelay, setCustomDelay] = useState('')
+  const [session] = useState(createAutoloadEditorSession)
+  const { initialized: isInitialized, enabled, list: autoloadList, saving, error: saveError } =
+    useSyncExternalStore(session.subscribe, session.getSnapshot)
+
+  /* [CN-FORK] v0.6.0 合入：上游把保存状态整个搬进了 editor session（snapshot.saving/error），
+   * fork 原来的 [saving, setSaving] / [saved, setSaved] 两个本地 useState 随之退役。这里保住
+   * fork 的页头反馈：saving 直接读 session，saved 由「saving 落沿且没报错」派生、2 秒后消失
+   * （时长与原 setTimeout 2000 一致）。 */
   const [saved, setSaved] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [isInitialized, setIsInitialized] = useState(false)
-  const lastSyncedRef = React.useRef('')
-
-  // Load initial config
+  const wasSavingRef = useRef(false)
   useEffect(() => {
-    if (config) {
-      const en = config.AUTOLOAD_ENABLED === true || config.AUTOLOAD_ENABLED === "true"
-      const listStr = config.AUTOLOAD_LIST || ''
-      setEnabled(en)
-      setAutoloadList(listStr.split(',').filter(x => x))
-      lastSyncedRef.current = `${en}:${listStr}`
-      setIsInitialized(true)
+    if (wasSavingRef.current && !saving && !saveError) {
+      setSaved(true)
+      const timer = setTimeout(() => setSaved(false), 2000)
+      wasSavingRef.current = saving
+      return () => clearTimeout(timer)
     }
-  }, [config])
+    wasSavingRef.current = saving
+    return undefined
+  }, [saving, saveError])
 
-  // Debounced Auto-Save
+  useEffect(() => { session.setSave(onSaveConfig) }, [session, onSaveConfig])
+  useEffect(() => { session.initialize(config) }, [session, config])
   useEffect(() => {
-    if (!isInitialized) return
+    const flush = () => session.flush(saveConfigOnExit)
+    window.addEventListener('beforeunload', flush)
+    window.addEventListener('pagehide', flush)
+    return () => {
+      flush()
+      window.removeEventListener('beforeunload', flush)
+      window.removeEventListener('pagehide', flush)
+    }
+  }, [session])
 
-    const currentState = `${enabled}:${autoloadList.join(',')}`
-    if (currentState === lastSyncedRef.current) return
-
-    const timer = setTimeout(async () => {
-      const shouldEnable = enabled
-      const finalList = autoloadList.map(p => p === 'DELAY' ? '!1000' : p)
-      const finalStr = finalList.join(',')
-
-      setSaving(true)
-      const success = await onSaveConfig({
-        AUTOLOAD_ENABLED: shouldEnable,
-        AUTOLOAD_LIST: finalStr
+  const availableSlots = useMemo(() => {
+    if (items && items.length > 0) {
+      return items.filter(
+        (it) => it.slot && !isSystemPayload(it.filename) && !isSystemPayload(it.name) && it.id !== 'pldmgr' && !autoloadList.includes(it.slot)
+      )
+    }
+    // Fallback if items not loaded yet
+    return payloads
+      .filter((p) => !p.includes('/mnt/usb') && !isSystemPayload(p))
+      .map((p) => {
+        const fn = p.split('/').pop()
+        return { slot: fn, filename: fn, name: fn }
       })
+      .filter((it) => !autoloadList.includes(it.slot))
+  }, [items, payloads, autoloadList])
 
-      if (success) {
-        lastSyncedRef.current = `${shouldEnable}:${finalStr}`
-        setSaved(true)
-        setTimeout(() => setSaved(false), 2000)
+  const getItemInfo = useCallback(
+    (key) => {
+      if (!key) return null
+      if (items && items.length > 0) {
+        const match = items.find(
+          (it) => it.slot === key || it.filename === key || it.path === key
+        )
+        if (match) return match
       }
-      setSaving(false)
-    }, 1500)
+      return null
+    },
+    [items]
+  )
 
-    return () => clearTimeout(timer)
-  }, [autoloadList, enabled, isInitialized, onSaveConfig])
-
-  const internalPayloads = payloads.filter(p => !p.includes('/mnt/usb') && !isSystemPayload(p)).map(p => p.split('/').pop())
-  const availablePayloads = internalPayloads.filter(p => !autoloadList.includes(p))
-
-  const handleToggle = (val) => {
-    setEnabled(val)
-  }
-
-  const addPayload = (p) => {
-    const isKstuff = p.toLowerCase().includes('kstuff');
-    if (isKstuff) {
-      const existing = autoloadList.find(x => x.toLowerCase().includes('kstuff'));
-      if (existing) {
-        onToast(t("autoload.conflict_kstuff", "Conflict: Multiple KStuff payloads detected."), 'error');
-        return;
+  const idCounts = useMemo(() => {
+    const counts = {}
+    if (items) {
+      for (const it of items) {
+        if (it?.kind === 'repo' && it?.id) {
+          counts[it.id] = (counts[it.id] || 0) + 1
+        }
       }
     }
-    setAutoloadList([...autoloadList, p]);
+    return counts
+  }, [items])
+
+  const resolveCardMeta = useCallback(
+    (keyOrItem) => {
+      if (!keyOrItem) return null
+      const item = typeof keyOrItem === 'object' ? keyOrItem : getItemInfo(keyOrItem)
+      const rawKey = typeof keyOrItem === 'string' ? keyOrItem : (keyOrItem.slot || keyOrItem.filename || '')
+
+      const parsed = parsePayloadName(item?.filename || rawKey)
+      if (parsed.isDelay) {
+        return {
+          isDelay: true,
+          displayName: t("autoload.delay_item", "Delay ({{seconds}}s)", { seconds: parsed.delaySeconds || 1 }),
+          version: null,
+          author: null,
+          icon: null,
+          sourceName: null,
+          iconName: 'Delay',
+        }
+      }
+
+      const itemObj = item || {
+        slot: rawKey,
+        filename: rawKey.split('/').pop(),
+        name: rawKey.split('/').pop(),
+        kind: 'local',
+      }
+
+      let displayName = itemObj.name || itemObj.filename || ''
+      let version = itemObj.version || null
+      let author = null
+      let icon = null
+      let sourceName = null
+
+      if (itemObj.kind === 'local') {
+        displayName = itemObj.name || parsed.displayName
+        version = itemObj.version || parsed.version
+        sourceName = t("app.dashboard.other_source_badge", "Other Source")
+      } else {
+        const repoMeta = (getRepoEntry && itemObj.source_url && itemObj.id)
+          ? getRepoEntry(itemObj.source_url, itemObj.id)
+          : (findRepoEntryById && itemObj.id ? findRepoEntryById(itemObj.id) : null)
+        displayName = repoMeta?.name || itemObj.name || itemObj.id || itemObj.filename
+        version = itemObj.version || repoMeta?.version || null
+        author = repoMeta?.author || itemObj.author || null
+        icon = repoMeta?.icon || null
+        const hasDup = Boolean(itemObj.id && idCounts[itemObj.id] > 1)
+        const repName = itemObj.source_name || repoMeta?.source_name || null
+        const isOfficial = isOfficialSource(repName, itemObj.source_url || repoMeta?.source_url)
+        if (!isOfficial && (hasDup || config?.MULTI_SOURCES_ENABLED)) {
+          sourceName = repName
+        }
+      }
+
+      return {
+        isDelay: false,
+        slot: itemObj.slot || rawKey,
+        filename: itemObj.filename || rawKey,
+        displayName,
+        version,
+        author,
+        icon,
+        sourceName,
+        iconName: itemObj.filename || displayName || 'Payload',
+      }
+    },
+    [getItemInfo, getRepoEntry, findRepoEntryById, idCounts, config, t]
+  )
+
+  const handleToggle = val => session.edit({ enabled: val })
+
+  const addPayload = (slotKey) => {
+    const latest = session.getSnapshot().list
+    if (slotKey.toLowerCase().includes('kstuff') && latest.some(x => x.toLowerCase().includes('kstuff'))) {
+      onToast(t("autoload.conflict_kstuff", "Conflict: Multiple KStuff payloads detected."), 'error')
+      return
+    }
+    session.edit(state => ({ list: [...state.list, slotKey] }))
     setSubView('list')
   }
-
   const addDelay = (ms) => {
-    setAutoloadList([...autoloadList, `!${ms}`])
+    session.edit(state => ({ list: [...state.list, `!${ms}`] }))
     setShowDelayModal(false)
     setSubView('list')
   }
-
-  const moveUp = (index) => {
-    if (index === 0) return
-    const newList = [...autoloadList]
-      ;[newList[index - 1], newList[index]] = [newList[index], newList[index - 1]]
-    setAutoloadList(newList)
-  }
-
-  const moveDown = (index) => {
-    if (index === autoloadList.length - 1) return
-    const newList = [...autoloadList]
-      ;[newList[index + 1], newList[index]] = [newList[index], newList[index + 1]]
-    setAutoloadList(newList)
-  }
+  const removePayload = index => session.edit(state => ({ list: state.list.filter((_, i) => i !== index) }))
+  const move = (index, direction) => session.edit(state => {
+    const list = [...state.list], target = index + direction
+    if (index < 0 || index >= list.length || target < 0 || target >= list.length) return {}
+    ;[list[index], list[target]] = [list[target], list[index]]
+    return { list }
+  })
+  const moveUp = index => move(index, -1)
+  const moveDown = index => move(index, 1)
+  const saveNotice = saveError && (
+    <div role="alert" className="p-3 text-red-400 flex items-center gap-4">
+      <span>{t("app.toasts.save_failed", "Save failed")}</span>
+      <button onClick={() => session.retry()} className="px-4 py-2 rounded-xl bg-white/10">
+        {t("active_processes.retry", "Retry")}
+      </button>
+    </div>
+  )
 
   const renderAvailable = () => (
-    <div className="space-y-8 flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between shrink-0">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center justify-between shrink-0 h-11 mb-4">
         <div className="flex items-center space-x-4">
           {subView === 'add' && (
             <button onClick={() => setSubView('list')} className="p-2 bg-white/5 rounded-xl border border-white/10 lg:hidden">
               <ArrowLeft className="w-5 h-5" />
             </button>
           )}
-          <h3 className="label-caps !text-white !opacity-100 text-xl tracking-widest">{t("autoload.available_title", "Available Payloads")}</h3>
+          <h2 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight">
+            {t("autoload.available_title", "Available Payloads")}
+          </h2>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar min-h-0 pb-6">
-        <div className="grid grid-cols-1 gap-4">
-          {availablePayloads.map(p => {
-            const isKstuff = p.toLowerCase().includes('kstuff');
-            const hasKstuff = autoloadList.some(x => x.toLowerCase().includes('kstuff'));
-            const isBlocked = isKstuff && hasKstuff;
+      <div className="glass-panel p-4 md:p-5 rounded-ps-3xl border-white/10 flex-1 overflow-hidden flex flex-col min-h-0">
+        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar min-h-0 pb-2">
+          <div className="grid grid-cols-1 gap-2.5">
+            {availableSlots.map((item) => {
+              const meta = resolveCardMeta(item)
+              const isKstuff = (item.id || item.filename || item.slot || '').toLowerCase().includes('kstuff')
+              const hasKstuff = autoloadList.some((x) => x.toLowerCase().includes('kstuff'))
+              const isBlocked = isKstuff && hasKstuff
 
-            return (
+              return (
+                <button
+                  key={item.slot}
+                  onClick={() => !isBlocked && addPayload(item.slot)}
+                  disabled={isBlocked}
+                  className={cn(
+                    "group glass-card pl-4 pr-3 py-2.5 rounded-ps-xl flex flex-col justify-center border transition-all text-left relative min-h-[72px] w-full",
+                    isBlocked
+                      ? "opacity-40 grayscale cursor-not-allowed border-white/5"
+                      : "border-white/5 hover:border-ps-blue hover:bg-ps-blue/5 focus:border-ps-blue focus:outline-none"
+                  )}
+                >
+                  <div className="flex items-center justify-between w-full z-10 my-auto">
+                    <div className="flex items-center gap-3.5 min-w-0 pr-2 flex-1">
+                      <PayloadIcon icon={meta?.icon} name={meta?.iconName} className="w-11 h-11 text-xl shrink-0" />
+                      <div className="min-w-0 flex-1 flex flex-col justify-center">
+                        <PayloadName
+                          path={meta?.filename || meta?.slot}
+                          version={meta?.version}
+                          hideVersion={true}
+                          displayName={meta?.displayName}
+                          className="text-white text-lg md:text-xl leading-snug"
+                          stacked={false}
+                        />
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {meta?.version && (
+                            <span className="text-[10px] text-zinc-400 font-bold bg-white/10 px-1.5 py-0.5 rounded uppercase shrink-0 leading-none">
+                              {meta.version}
+                            </span>
+                          )}
+                          {meta?.author && (
+                            <div className="text-[10px] text-zinc-500 font-medium truncate leading-none">
+                              {meta.author}
+                            </div>
+                          )}
+                        </div>
+                        {meta?.sourceName && (
+                          <div className="flex items-center mt-0.5">
+                            <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400 font-bold bg-white/10 px-1.5 py-0.5 rounded uppercase shrink-0 max-w-full select-none leading-none" title={meta.sourceName}>
+                              <Globe className="w-3 h-3 text-zinc-400 shrink-0" />
+                              <span className="truncate">{formatSourceTag(meta.sourceName)}</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <ArrowRight className={cn(
+                        "w-5 h-5 transition-all shrink-0",
+                        isBlocked
+                          ? "text-zinc-800"
+                          : "text-zinc-500 group-hover:text-ps-blue group-hover:translate-x-1"
+                      )} />
+                    </div>
+                  </div>
+                  <div className="absolute inset-0 rounded-ps-xl bg-ps-blue/0 group-hover:bg-ps-blue/5 transition-colors z-0 pointer-events-none" />
+                </button>
+              )
+            })}
+            <div className="pt-2 border-t border-white/10 mt-1">
               <button
-                key={p}
-                onClick={() => !isBlocked && addPayload(p)}
-                disabled={isBlocked}
-                className={cn(
-                  "flex items-start justify-between p-6 glass-card rounded-2xl border-white/20 transition-all text-left",
-                  isBlocked ? "opacity-40 cursor-not-allowed" : "bg-white/[0.03] hover:border-ps-blue group"
-                )}
+                onClick={() => setShowDelayModal(true)}
+                className="group glass-card pl-4 pr-3 py-2.5 rounded-ps-xl flex items-center justify-between border border-dashed border-white/20 hover:border-ps-blue hover:bg-ps-blue/5 focus:border-ps-blue focus:outline-none transition-all text-left relative min-h-[58px] w-full"
               >
-                <PayloadName path={p} className={cn(isBlocked ? "text-zinc-500" : "text-white")} stacked />
-                <ArrowRight className={cn("w-6 h-6 transition-all shrink-0 mt-1", isBlocked ? "text-zinc-800" : "text-zinc-500 group-hover:text-ps-blue group-hover:translate-x-2")} />
+                <div className="flex items-center gap-3.5 min-w-0 pr-2">
+                  <div className="w-10 h-10 text-lg shrink-0 rounded-xl flex items-center justify-center border border-ps-blue/30 bg-ps-blue/10 text-ps-blue">
+                    <Zap className="w-5 h-5" />
+                  </div>
+                  <span className="font-bold text-white uppercase tracking-tight text-base leading-none">
+                    {t("autoload.add_delay_btn", "Add Delay")}
+                  </span>
+                </div>
+                <ArrowRight className="w-5 h-5 text-zinc-500 group-hover:text-ps-blue group-hover:translate-x-1 transition-all shrink-0" />
               </button>
-            )
-          })}
-          <div className="pt-4 border-t border-white/10 mt-4">
-            <button
-              onClick={() => setShowDelayModal(true)}
-              className="w-full flex items-center justify-between p-6 bg-white/[0.03] rounded-2xl border border-dashed border-white/20 hover:border-ps-blue group transition-all"
-            >
-              <div className="flex items-center space-x-4">
-                <Zap className="w-6 h-6 text-ps-blue" />
-                <span className="font-bold text-white uppercase tracking-tight text-xl">{t("autoload.add_delay_btn", "Add Delay")}</span>
-              </div>
-              <ArrowRight className="w-6 h-6 text-zinc-500 group-hover:text-ps-blue group-hover:translate-x-2 transition-all" />
-            </button>
-          </div>
-          <div className="pt-8 border-t border-white/5 mt-8 text-center space-y-4">
-            <p className="text-zinc-500 text-sm font-bold uppercase tracking-widest opacity-60">{t("autoload.missing_payload", "Missing a payload?")}</p>
-            <button
-              onClick={() => onRedirect('storage', 'usb-storage')}
-              className="group flex flex-col items-center mx-auto space-y-3"
-            >
-              <div className="flex items-center space-x-3 text-ps-blue group-hover:text-white transition-colors">
-                <span className="font-black italic text-lg uppercase tracking-tight">{t("autoload.move_usb_btn", "Move from USB to Internal")}</span>
-              </div>
-              <p className="text-xs text-zinc-600 max-w-[200px] leading-relaxed">{t("autoload.move_usb_desc", "Required for payloads you want to use in the Autoload sequence.")}</p>
-            </button>
+            </div>
           </div>
         </div>
       </div>
@@ -172,36 +323,104 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
         {t("autoload.sequence_title_1", "Autoload")} <span className="text-ps-blue">{t("autoload.sequence_title_2", "Sequence")}</span>
       </h3>
 
+      {/* [CN-FORK] v0.6.0 合入：外层保留 fork 的「板块小标题 + glass-panel + space-y-4 滚动
+          容器」（本函数尾部的空态与手机端「添加」按钮就是按这个结构收的）；行内容取上游
+          0.6.0 的 rich card —— 图标 / 版本 / 作者 / 来源徽标，与左列「可用的 Payload」
+          同款，两列视觉才不割裂。移动/移出仍走 session 的 moveUp/moveDown/removePayload。 */}
       <div className="glass-panel p-4 rounded-ps-2xl border-white/10 flex-1 overflow-hidden flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-2 mb-2 pb-6">
-          {autoloadList.map((p, i) => (
-            <div key={`${p}-${i}`} className="relative row-link flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
-              {/* [CN-FORK] v0.5.2.99 序号从「绝对定位压在行左上角」改成正常流里的前导列。
-                  旧写法有两个问题：一是它的底 bg-dark 在项目里根本没有定义（Tailwind 生成不出这条
-                  规则 → 透明），数字是悬空压在 payload 名字上的；二是它锚在行的 border-box 角上，
-                  名字容器只给了 pl-2，450px 宽下两者实测重叠 16×14px，第一个字被序号盖住。
-                  现在序号占固定 1.5rem 前导列，名字跟着往后排，谁也不叠谁。 */}
-              <div className="flex items-center min-w-0">
-                <span className="w-6 flex-none text-center text-[12px] font-black text-zinc-500 tabular-nums">{i + 1}</span>
-                <div className="min-w-0 ml-1">
-                  <PayloadName path={p} className="text-white" stacked />
+            {autoloadList.map((p, i) => {
+              const meta = resolveCardMeta(p)
+              return (
+                <div
+                  key={`${p}-${i}`}
+                  className="group glass-card pl-4 pr-3 py-2.5 rounded-ps-xl flex flex-col justify-center border border-white/5 hover:border-ps-blue/40 focus-within:border-ps-blue transition-all text-left relative min-h-[72px]"
+                >
+                  <div className="flex items-center justify-between w-full z-10 my-auto">
+                    <div className="flex items-center gap-3.5 min-w-0 pr-2 flex-1">
+                      <div className="relative shrink-0">
+                        {meta?.isDelay ? (
+                          <div className="w-11 h-11 text-xl rounded-2xl flex items-center justify-center border border-ps-blue/30 bg-ps-blue/10 text-ps-blue">
+                            <Zap className="w-5 h-5" />
+                          </div>
+                        ) : (
+                          <PayloadIcon icon={meta?.icon} name={meta?.iconName} className="w-11 h-11 text-xl shrink-0" />
+                        )}
+                        <div className="absolute -top-1.5 -left-1.5 z-20 w-5 h-5 rounded-full bg-ps-blue border border-black/60 flex items-center justify-center text-[10px] font-black text-white shadow select-none">
+                          {i + 1}
+                        </div>
+                      </div>
+                      <div className="min-w-0 flex-1 flex flex-col justify-center">
+                        <PayloadName
+                          path={meta?.filename || p}
+                          version={meta?.version}
+                          hideVersion={true}
+                          hideIcon={meta?.isDelay}
+                          displayName={meta?.displayName}
+                          className="text-white text-lg md:text-xl leading-snug"
+                          stacked={false}
+                        />
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {meta?.version && (
+                            <span className="text-[10px] text-zinc-400 font-bold bg-white/10 px-1.5 py-0.5 rounded uppercase shrink-0 leading-none">
+                              {meta.version}
+                            </span>
+                          )}
+                          {meta?.author && (
+                            <div className="text-[10px] text-zinc-500 font-medium truncate leading-none">
+                              {meta.author}
+                            </div>
+                          )}
+                        </div>
+                        {meta?.sourceName && (
+                          <div className="flex items-center mt-0.5">
+                            <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400 font-bold bg-white/10 px-1.5 py-0.5 rounded uppercase shrink-0 max-w-full select-none leading-none" title={meta.sourceName}>
+                              <Globe className="w-3 h-3 text-zinc-400 shrink-0" />
+                              <span className="truncate">{formatSourceTag(meta.sourceName)}</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0 z-20 ml-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          moveUp(i)
+                        }}
+                        disabled={i === 0}
+                        title={t("autoload.move_up", "Move Up")}
+                        className="p-1.5 bg-white/5 hover:bg-ps-blue focus:bg-ps-blue hover:text-white focus:text-white text-zinc-400 rounded-lg border border-white/5 hover:border-ps-blue focus:border-ps-blue transition-all disabled:opacity-20 disabled:pointer-events-none"
+                      >
+                        <ChevronUp className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          moveDown(i)
+                        }}
+                        disabled={i === autoloadList.length - 1}
+                        title={t("autoload.move_down", "Move Down")}
+                        className="p-1.5 bg-white/5 hover:bg-ps-blue focus:bg-ps-blue hover:text-white focus:text-white text-zinc-400 rounded-lg border border-white/5 hover:border-ps-blue focus:border-ps-blue transition-all disabled:opacity-20 disabled:pointer-events-none"
+                      >
+                        <ChevronDown className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          removePayload(i)
+                        }}
+                        title={t("autoload.remove", "Remove")}
+                        className="p-1.5 bg-white/5 hover:bg-red-600 focus:bg-red-600 hover:text-white focus:text-white text-zinc-400 hover:border-red-500 focus:border-red-500 rounded-lg border border-white/5 transition-all"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="absolute inset-0 rounded-ps-xl bg-ps-blue/0 group-hover:bg-ps-blue/5 transition-colors z-0 pointer-events-none" />
                 </div>
-              </div>
-              {/* [CN-FORK] v0.5.2.94 三个 32px 小方钮换成共用 .icon-btn（与 PC 44px / 电视 68px 同一档命中区）；
-                  原来 hover 才变实心橙，电视端没有 hover，看着像三块不能按的灰片。 */}
-              <div className="flex items-center">
-                <button onClick={() => moveUp(i)} disabled={i === 0} title={t("autoload.move_up", "上移")} className="icon-btn">
-                  <ChevronUp />
-                </button>
-                <button onClick={() => moveDown(i)} disabled={i === autoloadList.length - 1} title={t("autoload.move_down", "下移")} className="icon-btn">
-                  <ChevronDown />
-                </button>
-                <button onClick={() => setAutoloadList(autoloadList.filter((_, idx) => idx !== i))} title={t("autoload.remove_item", "移出序列")} className="icon-btn is-danger">
-                  <Trash2 />
-                </button>
-              </div>
-            </div>
-          ))}
+              )
+            })}
           {autoloadList.length === 0 && (
             <EmptyState icon={Activity} title={t("autoload.sequence_empty", "Sequence Empty")} dashed={false} className="py-16" />
           )}
@@ -220,9 +439,19 @@ const AutoloadView = ({ payloads, config, onSaveConfig, onToast, onRedirect }) =
     </div>
   )
 
+  if (!isInitialized) {
+    return (
+      <div role="status" className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-zinc-400">
+        <Loader2 aria-hidden="true" className="w-8 h-8 animate-spin text-ps-blue" />
+        <span>{t("autoload.loading_config", "Loading autoload settings...")}</span>
+      </div>
+    )
+  }
+
   if (!enabled) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center space-y-8 text-center p-6 md:p-12">
+        {saveNotice}
         <div className="relative h-24 w-24 md:h-32 md:w-32 mx-auto">
           <div className="absolute inset-0 bg-ps-blue/20 rounded-full" />
           <div className="relative flex items-center justify-center h-full w-full bg-black/40 border border-white/10 rounded-3xl md:rounded-[2.5rem] shadow-2xl">

@@ -1,3 +1,0 @@
-[submodule "frontend/src/locales"]
-	path = frontend/src/locales
-	url = https://github.com/itsPLK/ps5-payload-manager-translations.git

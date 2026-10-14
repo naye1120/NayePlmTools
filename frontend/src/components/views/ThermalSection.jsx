@@ -65,6 +65,9 @@ function FanControlCard() {
     }
   }, [])
 
+  /* [CN-FORK] v0.6.0.176 挂载即读一次配置是刻意为之（loadCfg 内部先 await 再 setState，
+   * 不是同步 setState）；上游新 eslint 规则 react-hooks/set-state-in-effect 对此偏保守。 */
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadCfg() }, [loadCfg])
 
   const apply = async () => {
@@ -209,6 +212,9 @@ export default function ThermalSection() {
     inflightRef.current = false
   }, [t])
 
+  /* [CN-FORK] v0.6.0.176 挂载即读一次是刻意为之（load 内部先 await 再 setState，
+   * 不是同步 setState）；上游新 eslint 规则 react-hooks/set-state-in-effect 对此偏保守。 */
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load() }, [load])
 
   // 只读自动刷新：页面隐藏时暂停，回到前台立即补一次

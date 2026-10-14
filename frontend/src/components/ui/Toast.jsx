@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { CheckCircle2, AlertTriangle, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../utils/helpers'
@@ -20,14 +20,24 @@ import { cn } from '../../utils/helpers'
 const Toast = ({ message, type = 'success', onClose }) => {
   const { t } = useTranslation()
 
+  /* [CN-FORK] v0.6.0 合入：上游把 onClose 收进 closeRef 再让定时器调它。调用方
+   * （App.jsx 的 addToast/removeToast）每次渲染都换一个新的内联引用，直接写进依赖
+   * 数组会让倒计时每次重渲染都清零重排 —— 长错误（9s 档）可能永远不消失。 */
+  const closeRef = useRef(onClose)
+  useEffect(() => {
+    closeRef.current = onClose
+  }, [onClose])
+
+  /* [CN-FORK] v0.5.2.93 分级驻留：成功 4s、错误 9s（电视端 3 秒读不完一条长错误），
+   * 另有右上角「X」可随时手动关。 */
   useEffect(() => {
     const ms = type === 'error' ? 9000 : 4000
-    const timer = setTimeout(onClose, ms)
+    const timer = setTimeout(() => closeRef.current(), ms)
     return () => clearTimeout(timer)
-  }, [onClose, type])
+  }, [type])
 
   return (
-    <div className={cn(
+    <div role={type === 'success' ? 'status' : 'alert'} className={cn(
       'pointer-events-auto flex items-center gap-2 px-3 py-2 rounded-xl border shadow-lg',
       'max-w-[min(92vw,32rem)] text-[13px] leading-snug',
       type === 'success'

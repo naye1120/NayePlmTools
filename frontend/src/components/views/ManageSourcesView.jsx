@@ -1,3 +1,4 @@
+import { apiFetch, mutationFetch } from '../../utils/mutationRequest'
 import React, { useState, useEffect } from 'react'
 import {
   Plus, Trash2, ChevronUp, ChevronDown,
@@ -21,7 +22,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
   const [showAddForm, setShowAddForm] = useState(false)
 
   useEffect(() => {
-    fetch('/sources_list')
+    apiFetch('/sources_list')
       .then(r => r.json())
       .then(d => {
         if (d?.sources) setSources(d.sources)
@@ -32,7 +33,7 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
 
   const saveSources = async (updated) => {
     try {
-      const res = await fetch('/sources_set', {
+      const res = await mutationFetch('/sources_set', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sources: updated })
@@ -75,11 +76,11 @@ const ManageSourcesView = ({ onBack, ip, addToast, showConfirm }) => {
     if (!newUrl.trim()) return
     setAdding(true)
     try {
-      const res = await fetch(`/sources_add?url=${encodeURIComponent(newUrl.trim())}`)
+      const res = await mutationFetch(`/sources_add?url=${encodeURIComponent(newUrl.trim())}`)
       const data = await res.json()
       if (data.ok) {
         // Reload sources list
-        const listRes = await fetch('/sources_list')
+        const listRes = await apiFetch('/sources_list')
         const listData = await listRes.json()
         if (listData?.sources) setSources(listData.sources)
         setNewUrl('')

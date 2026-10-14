@@ -2,6 +2,10 @@ import React, { useState } from 'react'
 import { Terminal, ChevronRight, Globe, Languages, Palette, CloudDownload, Power, Save, AppWindow } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../utils/helpers'
+/* [CN-FORK] v0.6.0 合入：导入取两侧并集 —— LANGUAGE_NAMES（上游的语言选择行在用）
+ * 与 fork 的 ThemeToggle/PageHead/Section/Switch/Segmented/ArchiveConfigModal/SystemAppsModal
+ * （外观切换、页头板块、互斥档位、两个弹窗）互不重叠，都留。 */
+import { LANGUAGE_NAMES } from '../../utils/localeSupport'
 // [CN-FORK] 外观（深/浅色）切换控件
 import ThemeToggle from '../../theme/ThemeToggle'
 import PageHead from '../ui/PageHead'
@@ -49,15 +53,15 @@ const SettingRow = ({ title, description, children, icon: Icon, stacked }) => (
   </div>
 )
 
-/* [CN-FORK] v0.5.2.94 「点整行去别处」的四份副本（管理来源 / 日志 / 更新日志 / 支持作者）收成一个：
- * 整行就是按钮，命中区从图标那条 24px 变成整行，遥控器移到行上直接确认即可。 */
-const NavRow = ({ icon: Icon, title, description, onClick, danger }) => (
+/* [CN-FORK] v0.5.2.94 「点整行去别处」的几份副本（管理来源 / 存档配置 / 日志 / 个性化软件）
+ * 收成一个：整行就是按钮，命中区从图标那条 24px 变成整行，遥控器移到行上直接确认即可。 */
+const NavRow = ({ icon: _Icon, title, description, onClick, danger }) => (
   <button
     onClick={onClick}
     className="row-link group w-full text-left flex items-center p-4 md:p-5 bg-white/[0.03] rounded-xl border border-white/10 hover:border-ps-blue/30 transition-colors"
   >
     <div className="p-3 shrink-0 -ml-3">
-      <Icon className={cn("w-5 h-5", danger ? "text-zinc-500 group-hover:text-red-500" : "text-ps-blue")} />
+      <_Icon className={cn("w-5 h-5", danger ? "text-zinc-500 group-hover:text-red-500" : "text-ps-blue")} />
     </div>
     <div className="min-w-0 flex-1 ml-3">
       <p className="font-bold text-white text-base tracking-tight leading-tight">{title}</p>
@@ -68,7 +72,9 @@ const NavRow = ({ icon: Icon, title, description, onClick, danger }) => (
   </button>
 )
 
-const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate }) => {
+/* [CN-FORK] v0.6.0 合入：签名取并集 —— addToast 是 fork 侧在用的（toast 通知），
+ * onClearCache 是上游「仓库缓存」行在用的，两个都要。 */
+const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate, onClearCache }) => {
   const { t, i18n } = useTranslation()
   const [showArchiveConfig, setShowArchiveConfig] = useState(false)
   /* [CN-FORK] v0.5.2.158 「个性化软件」弹窗 */
@@ -82,18 +88,21 @@ const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate 
   const defaultRepo = config.DEFAULT_REPO_ENABLED === true
   const [followBrowserLanguage, setFollowBrowserLanguage] = useState(isFollowingBrowserLanguage)
 
-  const getLanguageDisplayName = (lang) => {
-    let displayName = lang;
+  const [clearingCache, setClearingCache] = useState(false)
+  const [cacheMessage, setCacheMessage] = useState('')
+  const handleClearCache = async () => {
+    if (clearingCache) return
+    setClearingCache(true)
+    setCacheMessage('')
     try {
-      const baseLang = lang.split('-')[0];
-      const lookupLang = lang.startsWith('zh') ? lang : baseLang;
-      displayName = new Intl.DisplayNames([lang], { type: 'language' }).of(lookupLang);
-      displayName = displayName.charAt(0).toUpperCase() + displayName.slice(1);
+      await onClearCache()
+      setCacheMessage(t('settings.cache_cleared', 'Repository cache cleared.'))
     } catch {
-      return lang;
-    }
-    return displayName;
-  };
+      setCacheMessage(t('settings.cache_failed', 'Could not clear repository cache.'))
+    } finally { setClearingCache(false) }
+  }
+
+  const getLanguageDisplayName = lang => LANGUAGE_NAMES[lang] || lang;
 
   const currentLang = i18n.resolvedLanguage || i18n.language || 'en';
   const selectedLanguage = followBrowserLanguage ? FOLLOW_BROWSER_LANGUAGE : currentLang;
@@ -232,6 +241,24 @@ const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate 
            * 关掉后开机不再拉 payloads.json，管理页也不出这一组目录 */}
           <SettingRow title={t("settings.default_repo_title", "Default Cloud Repository")} description={t("settings.default_repo_desc", "The built-in official payload catalog. Turn it off to stop every request to it (including the startup refresh); your own sources keep working.")} icon={CloudDownload}>
             <Switch checked={defaultRepo} onChange={(v) => onSaveConfig({ DEFAULT_REPO_ENABLED: v })} label={t("settings.default_repo_title", "Default Cloud Repository")} />
+          </SettingRow>
+
+          {/* [CN-FORK] v0.6.0 合入：上游的「仓库缓存」行（清掉已下载的目录与图标后重新拉取，
+              已安装的 payload 与设置不动）。它依赖公共区里的 handleClearCache/clearingCache/
+              cacheMessage 与 App 传下来的 onClearCache。上游那份「管理来源」大按钮与本节
+              末尾 fork 的 <NavRow> 管理来源重复 → 不保留。vertical 在本文件的 SettingRow 上
+              叫 stacked（入参名），照本文件口径改。 */}
+          <SettingRow
+            title={t('settings.cache_title', 'Repository Cache')}
+            description={t('settings.cache_desc', 'Clear downloaded catalogs and icons, then fetch fresh copies. Installed payloads and your settings are preserved.')}
+            icon={Globe}
+            stacked
+          >
+            <button onClick={handleClearCache} disabled={clearingCache}
+              className="px-5 py-3 rounded-xl bg-white/10 hover:bg-ps-blue/20 disabled:opacity-50 font-bold">
+              {clearingCache ? t('settings.cache_clearing', 'Clearing…') : t('settings.cache_clear', 'Clear Cache')}
+            </button>
+            {cacheMessage && <p role="status" className="mt-3 text-sm text-zinc-400">{cacheMessage}</p>}
           </SettingRow>
         </div>
 

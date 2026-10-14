@@ -174,7 +174,7 @@ export function isAt9(bytes) {
   try {
     readAt9(bytes);
     return true;
-  } catch (e) {
+  } catch {
     return false;
   }
 }

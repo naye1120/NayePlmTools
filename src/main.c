@@ -24,8 +24,11 @@
 #include "repository.h"
 #include "sources.h"     /* [CN-FORK] v0.5.2.67 预置默认来源 sources_seed_defaults */
 #include "payload_mgr.h"  /* [CN-FORK] bootstrap_self_sync */
+#include "slot.h"         /* [UPSTREAM] v0.6.0 槽位化存储 */
 #include "ps5_launcher.h"
 #include "app_installer.h"
+#include "process_mgr.h"  /* [UPSTREAM] v0.6.0 进程快照（/api/processes） */
+#include "log_server.h"   /* [UPSTREAM] v0.6.0 日志流生命周期 */
 #include "utils.h" /* [CN-FORK] pldmgr_get_local_ip 提前取 IP */
 #include "fan_control.h" /* [CN-FORK] 风扇温控常驻重发守护 */
 #include "game_title.h"  /* [CN-FORK] v0.5.2.137 启动自愈：把 name.txt 重放到主机各层 */
@@ -62,14 +65,19 @@ extern volatile int http_keep_running;
  * 风扇、名字自愈）不受它管，各自在创建处单独给栈。 */
 #define HTTP_THREAD_STACK (1u << 20)
 
-static struct MHD_Daemon *http_daemon_start(unsigned short port) {
+/* [CN-FORK] v0.5.2.99 + [UPSTREAM] v0.6.0 合并：MHD 生命周期收成一个函数。
+ * 上游 v0.6.0 在起停时维护日志流（log_stream_start/stop），fork 侧则多一层
+ * THREAD_STACK_SIZE 失败回退（见上方注释）—— 两者都保留。调用点原有 4 处
+ * （首启、待机唤醒、换 IP、断网回环），统一走这里，避免漏掉任一副作用。 */
+static struct MHD_Daemon *start_http_daemon(unsigned int port) {
+    log_stream_start();
     /* 带栈大小先试一把：万一这个 SDK 的 MHD 不认这个选项，start_daemon 会直接
      * 返回 NULL —— 那等于整个面板起不来。所以失败就**去掉选项重试一次**，
      * 宁可退回默认栈，也不能因为一个优化项把服务弄没。 */
     struct MHD_Daemon *d = MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, port, NULL, NULL,
         &http_on_request, NULL, MHD_OPTION_NOTIFY_COMPLETED,
-        &http_on_request_completed, NULL,
+        &http_request_completed, NULL,
         /* ⚠ 这个选项的参数类型是 size_t（MHD 那边 va_arg(ap, size_t)），
          * 传 unsigned int 在 x86-64 变参下会读到高 32 位的垃圾。 */
         MHD_OPTION_THREAD_STACK_SIZE, (size_t)HTTP_THREAD_STACK,
@@ -79,16 +87,23 @@ static struct MHD_Daemon *http_daemon_start(unsigned short port) {
         return d;
     }
     pldmgr_log("[PLDMGR] http: 不接受 THREAD_STACK_SIZE，退回默认栈重试\n");
-    return MHD_start_daemon(
+    d = MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_DEBUG, port, NULL, NULL,
         &http_on_request, NULL, MHD_OPTION_NOTIFY_COMPLETED,
-        &http_on_request_completed, NULL, MHD_OPTION_END);
+        &http_request_completed, NULL, MHD_OPTION_END);
+    if (!d) log_stream_stop();
+    return d;
 }
 
 static volatile sig_atomic_t resume_flag = 0;
 
 static void handle_sigcont(int sig) { resume_flag = 1; }
 
+/* [CN-FORK] 保留 fork 版 find_pid：**前缀匹配**（`strncmp`），因为
+ * kinfo_proc.ki_tdname 只有 16 字节，"NayePlmTools.elf" 正好 16 字符会被截成
+ * "NayePlmTools.el"；上游 process_find_pid 用精确 `strcmp`，在 fork 的进程名下
+ * 会漏判旧进程 → 老版本占着 8911 端口杀不掉。上游 process_mgr.c 仍编入（/api/
+ * processes 用），但本处启动自愈走 fork 自己的实现。 */
 static pid_t find_pid(const char *name) {
     int mib[4] = {1, 14, 8, 0};
     pid_t mypid = getpid();
@@ -133,6 +148,11 @@ extern int sceUserServiceInitialize(void *);
 
 __attribute__((used)) volatile const char pldmgr_version_sig[] = "PLDMGR_VER:" MENU_VERSION;
 
+static void stop_http_daemon(struct MHD_Daemon *daemon) {
+    log_stream_stop();
+    MHD_stop_daemon(daemon);
+}
+
 int main(int argc, char *argv[]) {
     struct MHD_Daemon *daemon;
     unsigned short port = DEFAULT_PORT;
@@ -142,8 +162,8 @@ int main(int argc, char *argv[]) {
 
     while ((pid = find_pid("NayePlmTools")) > 0) { /* [CN-FORK] 用不含 .elf 的安全前缀匹配旧进程 */
         if (kill(pid, SIGKILL)) {
-            pldmgr_log("[PLDMGR] kill failed\n");
-            return EXIT_FAILURE;
+            pldmgr_log("[PLDMGR] kill failed for pid %d\n", pid);
+            break;
         }
         sleep(1);
     }
@@ -151,13 +171,21 @@ int main(int argc, char *argv[]) {
     pldmgr_log("[PLDMGR] Starting NayePlmTools v%s on port %d...\n",
                pldmgr_version_sig + 11, port);
 
-    /* Check for Self-Update */
-    char new_payload_path[512];
-    if (repository_check_self_update(new_payload_path, sizeof(new_payload_path)) == 0) {
-        pldmgr_log("[PLDMGR] Found updated payload manager at %s. Launching...\n",
-                    new_payload_path);
-        ps5_launch_elf(new_payload_path);
-        return 0;
+    if (slot_storage_recover() != 0) {
+        pldmgr_log("[PLDMGR] Storage recovery failed; startup stopped to preserve payloads.\n");
+        return 1;
+    }
+
+    /* Run one-time migration to layout v2 if needed */
+    slot_migrate_legacy();
+
+    /* The loader transfer may encounter a closed socket before services start. */
+    signal(SIGPIPE, SIG_IGN);
+    char update_path[1024], update_version[64];
+    if (repository_check_self_update(update_path, sizeof(update_path), update_version, sizeof(update_version))) {
+        pldmgr_log("[PLDMGR] Handing off to self-update %s\n", update_version);
+        if (ps5_launch_self_update(update_path) == 0) return 0;
+        pldmgr_log("[PLDMGR] Self-update handoff failed; continuing startup.\n");
     }
 
     /* Initialize PS5 System Services */
@@ -217,19 +245,14 @@ int main(int argc, char *argv[]) {
         pldmgr_install_app_if_needed();
     }
 
-    /* Kill Disc Player if running (BD-JB host) and enabled in config */
-    if (cfg.kill_disc_player) {
-        ps5_kill_disc_player();
-    }
-
     /* Signal Resilience */
     signal(SIGPIPE, SIG_IGN);
     signal(SIGHUP, SIG_IGN);
     signal(SIGTERM, SIG_IGN);
+    signal(SIGALRM, SIG_IGN);
     signal(SIGCONT, handle_sigcont);
 
-    /* Start the MHD daemon */
-    daemon = http_daemon_start(port);
+    daemon = start_http_daemon(port);
 
     if (NULL == daemon) {
         pldmgr_log("[PLDMGR] Failed to start HTTP daemon!\n");
@@ -299,11 +322,11 @@ int main(int argc, char *argv[]) {
 
             /* Force full server restart — the old socket is likely dead */
             if (daemon)
-                MHD_stop_daemon(daemon);
+                stop_http_daemon(daemon);
 
             usleep(1000000); /* 1s for network stack to stabilize */
 
-            daemon = http_daemon_start(port);
+            daemon = start_http_daemon(port);
 
             if (daemon) {
                 /* Re-read current IP */
@@ -333,11 +356,11 @@ int main(int argc, char *argv[]) {
                            "server...\n",
                            current_ip, new_ip);
                 if (daemon)
-                    MHD_stop_daemon(daemon);
+                    stop_http_daemon(daemon);
 
                 usleep(800000);
 
-                daemon = http_daemon_start(port);
+                daemon = start_http_daemon(port);
 
                 if (daemon) {
                     strcpy(current_ip, new_ip);
@@ -353,11 +376,11 @@ int main(int argc, char *argv[]) {
 
                 /* Restart daemon to ensure clean socket for loopback */
                 if (daemon)
-                    MHD_stop_daemon(daemon);
+                    stop_http_daemon(daemon);
 
                 usleep(300000);
 
-                daemon = http_daemon_start(port);
+                daemon = start_http_daemon(port);
 
                 if (daemon) {
                     pldmgr_log("[PLDMGR] Server restarted after network loss "
@@ -372,8 +395,10 @@ int main(int argc, char *argv[]) {
     }
 
     pldmgr_log("[PLDMGR] Shutting down...\n");
+    pldmgr_autoload_stop();
+
     if (daemon)
-        MHD_stop_daemon(daemon);
+        stop_http_daemon(daemon);
 
     /* [CN-FORK] v0.5.2.99 收尾远程游玩会话：必须停在 MHD_stop_daemon 之后，
      * 否则还能收到 /api/remoteplay/pin。带着已初始化的 libSceRemoteplay 会话

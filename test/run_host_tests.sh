@@ -400,12 +400,15 @@ run_one game_prefs src/game_prefs.c \
 #
 # 不用 run_one：这个测试用 #include 把 game_title.c / json_helpers.c 拉进同一翻译单元
 # （这样才能碰到 static 的 tt_param_rename），并且运行时要收一个夹具目录参数。
+# [CN-FORK] 上游 v0.6.0 重写 json_helpers.c 后新增的 json_escape_checked() 会调
+# pldmgr_json_escape()（定义在 src/utils.c），所以链接清单必须带 src/utils.c ——
+# 与上面所有引用 json_helpers.c 的规则保持一致。
 PARAM_FIXTURE_DIR="${PARAM_FIXTURE_DIR:-$PWD/../_ftp_probe/evidence/recon}"
 echo "=== param_rename ==="
 if ls "$PARAM_FIXTURE_DIR"/*.json >/dev/null 2>&1; then
     if ! clang -Wall -Wextra -O0 -Iinclude -Isrc -Isrc/psaccounts \
         -Isrc/psaccounts/third_party -Itest \
-        test/param_rename_test.c src/psaccounts/third_party/cJSON.c \
+        test/param_rename_test.c src/psaccounts/third_party/cJSON.c src/utils.c \
         -o /tmp/param_rename_test -lm; then
         echo "  BUILD FAILED"; fail=1
     else

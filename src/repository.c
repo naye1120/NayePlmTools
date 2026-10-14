@@ -4,154 +4,249 @@
 #include <strings.h>
 #include <ctype.h>
 #include <time.h>
-#include <dirent.h>
 #include <unistd.h>
-#include <sys/stat.h>
 #include <curl/curl.h>
+#include <stdint.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include "sha256.h"
+#include "utils.h"
 
 #include "repository.h"
-#include "sha256.h"
+#include "collection_helpers.h"
+#include "sources.h"
+#include "slot.h"
 #include "json_helpers.h"
-#include "config.h"
 #include "pldmgr.h"
-#include "payload_mgr.h"
+#include "config.h" /* [CN-FORK] repository_ensure_fresh 的 DEFAULT_REPO_ENABLED 开关 */
 #include "assets_cacert_pem.h"
 
 /* ── cURL download helper ──────────────────────────────────── */
 
-static size_t write_data(void *ptr, size_t size, size_t nmemb, FILE *stream) {
-    return fwrite(ptr, size, nmemb, stream);
+typedef struct { FILE *file; size_t bytes, limit; } DownloadOutput;
+static size_t write_data(void *ptr, size_t size, size_t nmemb, void *context) {
+    DownloadOutput *out = context;
+    if (size && nmemb > SIZE_MAX / size) return 0;
+    size_t bytes = size * nmemb;
+    if (bytes > out->limit - out->bytes) return 0;
+    size_t written = fwrite(ptr, 1, bytes, out->file);
+    out->bytes += written;
+    return written;
+}
+
+int download_to_file_limited(const char *url, const char *out_path, size_t limit) {
+    if (!url || !out_path || !limit ||
+        (strncasecmp(url, "https://", 8) && strncasecmp(url, "http://", 7))) return -1;
+    FILE *fp = fopen(out_path, "wb");
+    if (!fp) return -1;
+    CURL *curl = curl_easy_init();
+    CURLcode res = CURLE_FAILED_INIT;
+    DownloadOutput output = { fp, 0, limit };
+    if (curl) {
+#define SET_OPTION(option, value) do { res = curl_easy_setopt(curl, option, value); if (res != CURLE_OK) goto finished; } while (0)
+        SET_OPTION(CURLOPT_URL, url);
+        SET_OPTION(CURLOPT_NOSIGNAL, 1L);
+        SET_OPTION(CURLOPT_CONNECTTIMEOUT, strcmp(url, REPOSITORY_SOURCE_URL) ? 10L : 3L);
+        SET_OPTION(CURLOPT_TIMEOUT, strcmp(url, REPOSITORY_SOURCE_URL) ? 60L : 5L);
+        SET_OPTION(CURLOPT_WRITEFUNCTION, write_data);
+        SET_OPTION(CURLOPT_WRITEDATA, &output);
+        SET_OPTION(CURLOPT_USERAGENT, "pldmgr/1.0");
+        struct curl_blob blob = { (void *)assets_cacert_pem, assets_cacert_pem_len, CURL_BLOB_COPY };
+        SET_OPTION(CURLOPT_CAINFO_BLOB, &blob);
+        SET_OPTION(CURLOPT_SSL_VERIFYPEER, 1L);
+        SET_OPTION(CURLOPT_SSL_VERIFYHOST, 2L);
+        SET_OPTION(CURLOPT_FOLLOWLOCATION, 1L);
+        SET_OPTION(CURLOPT_MAXREDIRS, 5L);
+        SET_OPTION(CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)limit);
+#if LIBCURL_VERSION_NUM >= 0x075500
+        SET_OPTION(CURLOPT_PROTOCOLS_STR, "http,https");
+        SET_OPTION(CURLOPT_REDIR_PROTOCOLS_STR, strncasecmp(url, "https://", 8) ? "http,https" : "https");
+#else
+        SET_OPTION(CURLOPT_PROTOCOLS, (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS));
+        SET_OPTION(CURLOPT_REDIR_PROTOCOLS, strncasecmp(url, "https://", 8) ? (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS) : (long)CURLPROTO_HTTPS);
+#endif
+        res = curl_easy_perform(curl);
+        long status = 0;
+        if (res == CURLE_OK && (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK || status != 200))
+            res = CURLE_HTTP_RETURNED_ERROR;
+finished:
+        if (res != CURLE_OK) pldmgr_log("[PLDMGR] Verified download failed: %s (%s)\n", url, curl_easy_strerror(res));
+        curl_easy_cleanup(curl);
+#undef SET_OPTION
+    }
+    int failed = res != CURLE_OK || ferror(fp);
+    if (fflush(fp)) failed = 1;
+    if (!failed && fsync(fileno(fp))) failed = 1;
+    if (fclose(fp)) failed = 1;
+    if (failed) { remove(out_path); return -1; }
+    return 0;
 }
 
 int download_to_file(const char *url, const char *out_path) {
-    CURL *curl;
-    FILE *fp;
-    CURLcode res = CURLE_FAILED_INIT;
+    return download_to_file_limited(url, out_path, PLDMGR_PAYLOAD_DOWNLOAD_LIMIT);
+}
 
-    if (!url || !out_path) {
-        pldmgr_log("[PLDMGR] download_to_file: missing url or path\n");
-        return -1;
-    }
-
-    fp = fopen(out_path, "wb");
-    if (!fp) {
-        pldmgr_log("[PLDMGR] download_to_file: failed to open %s\n", out_path);
-        return -1;
-    }
-
-    curl = curl_easy_init();
-    if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-
-        /* User agent */
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "pldmgr/1.0");
-
-        /* Securely verify SSL against embedded CA bundle */
-        /* Older curl versions with mbedTLS require the PEM buffer to be NUL-terminated,
-           and the length to include the NUL terminator. */
-        char *ca_bundle = malloc(assets_cacert_pem_len + 1);
-        if (ca_bundle) {
-            memcpy(ca_bundle, assets_cacert_pem, assets_cacert_pem_len);
-            ca_bundle[assets_cacert_pem_len] = '\0';
-        }
-
-        struct curl_blob blob;
-        blob.data = ca_bundle ? ca_bundle : (void *)assets_cacert_pem;
-        blob.len = ca_bundle ? (assets_cacert_pem_len + 1) : assets_cacert_pem_len;
-        blob.flags = CURL_BLOB_COPY;
-
-        curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &blob);
-
-        if (ca_bundle) {
-            free(ca_bundle);
-        }
-
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-
-        /* Allow redirection */
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        res = curl_easy_perform(curl);
-
-        /* If SSL verification fails (e.g., due to mbedTLS Quirks with Let's Encrypt / Sectigo
-           cross-signed roots, or user's time drift), fallback to insecure download.
-           We verify checksums later anyway for ELFs! */
-        if (res == CURLE_PEER_FAILED_VERIFICATION) {
-            pldmgr_log("[PLDMGR] SSL verification failed. Retrying insecurely: %s\n", url);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-            res = curl_easy_perform(curl);
-        }
-
-        long http_code = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-
-        curl_easy_cleanup(curl);
-
-        if (res != CURLE_OK) {
-            pldmgr_log("[PLDMGR] curl_easy_perform failed: %s url=%s\n",
-                       curl_easy_strerror(res), url);
-        } else if (http_code != 200) {
-            pldmgr_log("[PLDMGR] HTTP status %ld for %s\n", http_code, url);
-            res = CURLE_HTTP_RETURNED_ERROR;
-        }
-    }
-
-    fclose(fp);
-
-    if (res != CURLE_OK) {
-        remove(out_path);
-        return -1;
-    }
-
-    return 0;
+int repository_checksum_valid(const char *checksum) {
+    if (!checksum) return 0;
+    if (!checksum[0]) return 1; /* Missing/empty remains optional. */
+    if (strlen(checksum) != 64) return 0;
+    for (size_t i = 0; i < 64; i++)
+        if (!((checksum[i] >= '0' && checksum[i] <= '9') ||
+              (checksum[i] >= 'a' && checksum[i] <= 'f') ||
+              (checksum[i] >= 'A' && checksum[i] <= 'F'))) return 0;
+    return 1;
+}
+int repository_entry_valid(const RepoPayload *entry) {
+    if (!entry || !entry->filename[0] || entry->filename[0] == '.' ||
+        strchr(entry->filename, '/') || strstr(entry->filename, "..") ||
+        is_pldmgr_name(entry->id) || is_pldmgr_name(entry->name) || is_pldmgr_name(entry->filename) ||
+        !repository_checksum_valid(entry->checksum)) return 0;
+    const char *ext = strrchr(entry->filename, '.');
+    return ext && (!strcasecmp(ext, ".elf") || !strcasecmp(ext, ".bin"));
 }
 
 /* ── JSON parsing ──────────────────────────────────────────── */
 
-int parse_repository_payloads(const char *json, RepoPayload **out_items, size_t *out_count) {
+static const char *skip_top_level_wrapper(const char *json) {
     const char *p = json;
-    RepoPayload *items = NULL;
-    size_t count = 0;
+    int in_string = 0, escaped = 0;
 
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p != '{') return json;
+
+    const char *q = p + 1;
+    int depth = 1, is_wrapper = 0;
+
+    while (*q && depth > 0) {
+        if (in_string) {
+            if (escaped) escaped = 0;
+            else if (*q == '\\') escaped = 1;
+            else if (*q == '"') in_string = 0;
+        } else {
+            if (*q == '"') {
+                in_string = 1;
+                if (depth == 1 && strncmp(q, "\"payloads\"", 10) == 0) {
+                    is_wrapper = 1;
+                    break;
+                }
+            } else if (*q == '{') depth++;
+            else if (*q == '}' && --depth == 0) break;
+        }
+        q++;
+    }
+
+    if (is_wrapper) return p + 1;
+    return json;
+}
+
+static const char *find_next_object_start(const char *p) {
+    int in_string = 0, escaped = 0;
+
+    while (*p) {
+        if (in_string) {
+            if (escaped) escaped = 0;
+            else if (*p == '\\') escaped = 1;
+            else if (*p == '"') in_string = 0;
+        } else {
+            if (*p == '"') in_string = 1;
+            else if (*p == '{') return p;
+        }
+        p++;
+    }
+    return NULL;
+}
+
+int parse_repository_payloads(const char *json, RepoPayload **out_items, size_t *out_count) {
+    const char *p;
+    RepoPayload *items = NULL;
+    size_t count = 0, capacity = 0;
+
+    if (!out_items || !out_count) return -1;
     *out_items = NULL;
     *out_count = 0;
 
-    while ((p = strchr(p, '{')) != NULL) {
-        const char *end = strchr(p, '}');
-        RepoPayload item;
-        RepoPayload *tmp;
-        if (!end)
-            break;
+    if (!json || strnlen(json, 16 * 1024 * 1024 + 1) > 16 * 1024 * 1024) return -1;
+    p = skip_top_level_wrapper(json);
+    if (!p) return 0;
 
-        memset(&item, 0, sizeof(item));
-        if (json_extract_string(p, end, "name", item.name, sizeof(item.name)) != 0 ||
-            json_extract_string(p, end, "filename", item.filename, sizeof(item.filename)) != 0 ||
-            json_extract_string(p, end, "url", item.url, sizeof(item.url)) != 0) {
+    while ((p = find_next_object_start(p)) != NULL) {
+        const char *end = p + 1;
+        int depth = 1, in_string = 0, escaped = 0;
+
+        while (*end && depth > 0) {
+            if (in_string) {
+                if (escaped) escaped = 0;
+                else if (*end == '\\') escaped = 1;
+                else if (*end == '"') in_string = 0;
+            } else {
+                if (*end == '"') in_string = 1;
+                else if (*end == '{') depth++;
+                else if (*end == '}') depth--;
+            }
+            if (depth > 0) end++;
+        }
+
+        if (!*end && depth > 0) { free(items); return -1; }
+
+        RepoPayload entry;
+        RepoPayload *item = &entry;
+
+        memset(item, 0, sizeof(*item));
+        if (json_extract_string(p, end + 1, "name", item->name, sizeof(item->name)) != 0 ||
+            json_extract_string(p, end + 1, "filename", item->filename, sizeof(item->filename)) != 0 ||
+            json_extract_string(p, end + 1, "url", item->url, sizeof(item->url)) != 0) {
             p = end + 1;
             continue;
         }
 
-        json_extract_string(p, end, "source", item.source, sizeof(item.source));
-        json_extract_string(p, end, "source_direct", item.source_direct, sizeof(item.source_direct));
-        json_extract_string(p, end, "description", item.description, sizeof(item.description));
-        json_extract_string(p, end, "last_update", item.last_update, sizeof(item.last_update));
-        json_extract_string(p, end, "version", item.version, sizeof(item.version));
-        json_extract_string(p, end, "checksum", item.checksum, sizeof(item.checksum));
-        
-        if (json_extract_string(p, end, "category", item.category, sizeof(item.category)) != 0 || strlen(item.category) == 0) {
-            strncpy(item.category, "Uncategorized", sizeof(item.category) - 1);
+        /* Extract id or fallback to slug(name) */
+        json_extract_string(p, end + 1, "id", item->id, sizeof(item->id));
+        if (item->id[0] == '\0') {
+            slot_slug(item->name, item->id, sizeof(item->id));
         }
 
-        tmp = (RepoPayload *)realloc(items, (count + 1) * sizeof(RepoPayload));
+        json_extract_string(p, end + 1, "source", item->source, sizeof(item->source));
+        json_extract_string(p, end + 1, "source_direct", item->source_direct, sizeof(item->source_direct));
+        json_extract_string_prefix(p, end + 1, "description", item->description, sizeof(item->description));
+        json_extract_string(p, end + 1, "last_update", item->last_update, sizeof(item->last_update));
+        json_extract_string(p, end + 1, "version", item->version, sizeof(item->version));
+        int checksum_result = json_extract_string(p, end + 1, "checksum", item->checksum, sizeof(item->checksum));
+        /* A supplied oversized/non-string hash must not turn into an absent,
+         * optional checksum after extraction fails. Hex validation is separate. */
+        if ((checksum_result != JSON_STRING_OK && checksum_result != JSON_STRING_MISSING) ||
+            !repository_checksum_valid(item->checksum)) {
+            p = end + 1;
+            continue;
+        }
+        json_extract_string(p, end + 1, "author", item->author, sizeof(item->author));
+        json_extract_string(p, end + 1, "details_url", item->details_url, sizeof(item->details_url));
+
+        int notes_result = json_extract_string_prefix(p, end + 1, "release_notes",
+                                                     item->release_notes, sizeof(item->release_notes));
+        if (notes_result == JSON_STRING_TRUNCATED) {
+            size_t length = strlen(item->release_notes);
+            if (length > sizeof(item->release_notes) - 4) length = sizeof(item->release_notes) - 4;
+            while (length && ((unsigned char)item->release_notes[length] & 0xc0) == 0x80) length--;
+            strcpy(item->release_notes + length, "...");
+        }
+
+        json_extract_string(p, end + 1, "icon_key", item->icon_key, sizeof(item->icon_key));
+
+        if (json_extract_string(p, end + 1, "category", item->category, sizeof(item->category)) != 0 ||
+            strlen(item->category) == 0) {
+            strncpy(item->category, "Uncategorized", sizeof(item->category) - 1);
+        }
+
+        RepoPayload *tmp = (RepoPayload *)collection_reserve(items, &capacity, count + 1, sizeof(RepoPayload));
         if (!tmp) {
             free(items);
             return -1;
         }
         items = tmp;
-        items[count] = item;
+        items[count] = *item;
         count++;
         p = end + 1;
     }
@@ -161,566 +256,173 @@ int parse_repository_payloads(const char *json, RepoPayload **out_items, size_t 
     return 0;
 }
 
-static int load_cached_repository(RepoPayload **out_items, size_t *out_count) {
-    char *json = NULL;
-    size_t size = 0;
-    int ret;
-
-    if (read_file_text(REPOSITORY_CACHE_PATH, &json, &size) != 0 || !json || size == 0) {
-        if (json)
-            free(json);
-        return -1;
-    }
-
-    ret = parse_repository_payloads(json, out_items, out_count);
-    free(json);
-    return ret;
-}
-
-/* ── Payload metadata sidecar ──────────────────────────────── */
-
-int write_payload_details_json(const RepoPayload *item, const char *details_path,
-                               const char *install_source, const char *install_source_detail) {
-    char name[256], filename[384], url[1400], source[1400], source_direct[1400];
-    char description[1400], last_update[128], version[128], checksum[128], category[256];
-    char downloaded_at[64], i_src[256], i_detail[1400], i_src_name[256];
-    char json_buf[8192];
-    time_t now = time(NULL);
-    struct tm tmv;
-
-    memset(&tmv, 0, sizeof(tmv));
-    localtime_r(&now, &tmv);
-    strftime(downloaded_at, sizeof(downloaded_at), "%Y-%m-%dT%H:%M:%S%z", &tmv);
-
-    pldmgr_json_escape(item->name, name, sizeof(name));
-    pldmgr_json_escape(item->filename, filename, sizeof(filename));
-    pldmgr_json_escape(item->url, url, sizeof(url));
-    pldmgr_json_escape(item->source, source, sizeof(source));
-    pldmgr_json_escape(item->source_direct, source_direct, sizeof(source_direct));
-    pldmgr_json_escape(item->description, description, sizeof(description));
-    pldmgr_json_escape(item->last_update, last_update, sizeof(last_update));
-    pldmgr_json_escape(item->version, version, sizeof(version));
-    pldmgr_json_escape(item->checksum, checksum, sizeof(checksum));
-    pldmgr_json_escape(item->category, category, sizeof(category));
-    pldmgr_json_escape(install_source ? install_source : "unknown", i_src, sizeof(i_src));
-    pldmgr_json_escape(install_source_detail ? install_source_detail : "", i_detail, sizeof(i_detail));
-    pldmgr_json_escape(item->source_name[0] ? item->source_name : "", i_src_name, sizeof(i_src_name));
-
-    snprintf(json_buf, sizeof(json_buf),
-             "{\n"
-             "  \"name\": \"%s\",\n"
-             "  \"filename\": \"%s\",\n"
-             "  \"url\": \"%s\",\n"
-             "  \"source\": \"%s\",\n"
-             "  \"source_direct\": \"%s\",\n"
-             "  \"description\": \"%s\",\n"
-             "  \"last_update\": \"%s\",\n"
-             "  \"version\": \"%s\",\n"
-             "  \"checksum\": \"%s\",\n"
-             "  \"category\": \"%s\",\n"
-             "  \"downloaded_at\": \"%s\",\n"
-             "  \"install_source\": \"%s\",\n"
-             "  \"install_source_detail\": \"%s\",\n"
-             "  \"source_name\": \"%s\"\n"
-             "}\n",
-             name, filename, url, source, source_direct, description,
-             last_update, version, checksum, category, downloaded_at, i_src, i_detail,
-             i_src_name);
-
-    FILE *f = fopen(details_path, "w");
-    if (!f) return -1;
-    fwrite(json_buf, 1, strlen(json_buf), f);
-    fclose(f);
-    return 0;
-}
-
-int write_simple_payload_details_json(const char *filename, const char *details_path,
-                                      const char *install_source, const char *install_source_detail) {
-    RepoPayload item;
-    memset(&item, 0, sizeof(item));
-    strncpy(item.name, filename, sizeof(item.name) - 1);
-    strncpy(item.filename, filename, sizeof(item.filename) - 1);
-    return write_payload_details_json(&item, details_path, install_source, install_source_detail);
-}
-
-/* ── Repository cache management ───────────────────────────── */
-
-int repository_push_json(const char *json, size_t len) {
-    RepoPayload *items = NULL;
-    size_t count = 0;
-    char tmp_path[512];
-    time_t now = time(NULL);
-
-    if (!json || len == 0) {
-        pldmgr_log("[PLDMGR] !!! repository_push: empty body\n");
-        return -1;
-    }
-
-    if (parse_repository_payloads(json, &items, &count) != 0 || count == 0) {
-        pldmgr_log("[PLDMGR] !!! repository_push: JSON parse failed or 0 entries\n");
-        if (items) free(items);
-        return -1;
-    }
-    free(items);
-
-    ensure_dir_recursive(BASE_DATA_DIR);
-    ensure_dir_recursive(PAYLOADS_STORAGE_DIR);
-
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", REPOSITORY_CACHE_PATH);
-    if (write_file_text(tmp_path, json, len) != 0) {
-        remove(tmp_path);
-        return -1;
-    }
-    if (rename(tmp_path, REPOSITORY_CACHE_PATH) != 0) {
-        remove(tmp_path);
-        return -1;
-    }
-
-    config_write_last_update((long)now);
-    pldmgr_log("[PLDMGR] Repository cache updated via browser push (%zu entries)\n", count);
-    return 0;
-}
-
 int repository_ensure_fresh(int force_refresh) {
-    long last_update = 0;
-    time_t now = time(NULL);
-    char tmp_path[512];
-    char *json = NULL;
-    size_t json_size = 0;
-    RepoPayload *items = NULL;
-    size_t count = 0;
-
-    /* [CN-FORK] v0.5.1.65 默认云端仓库总开关：关掉后本函数不再向 REPOSITORY_SOURCE_URL 发任何请求
-     * （开机预取 / 手动刷新 / 安装前补缓存三条路径都走这里）。磁盘上的旧缓存保持不动，
-     * 重新打开可立即复用。v0.5.2.67 缺键时默认按“关”处理（与 config_read 默认值一致）。 */
+    /* [CN-FORK] v0.5.1.65 内置官方源总开关：关掉后本函数不再向 REPOSITORY_SOURCE_URL
+     * 发任何请求（开机预取 / 手动刷新 / 安装前补缓存三条路径都走这里）。磁盘上的旧缓存
+     * 保持不动，重新打开可立即复用。v0.5.2.67 缺键时默认按「关」处理（与 config_read
+     * 默认值一致）。
+     *
+     * 上游 v0.6.0 把缓存逻辑整体搬进了 sources.c（按 URL 分源缓存），所以这里只留
+     * 开关判断 + 转调。用户自建来源不受本开关影响 —— 那条路走 sources_multi_* 。 */
     if (!config_read_bool("DEFAULT_REPO_ENABLED", 0))
         return 0;
-
-    ensure_dir_recursive(BASE_DATA_DIR);
-    ensure_dir_recursive(PAYLOADS_STORAGE_DIR);
-
-    config_read_last_update(&last_update);
-
-    /* [CN-FORK] 启动预取（force_refresh=0）TTL 判断修正（二次）：
-     * 实测：开机时 PS5 时钟常未同步/回退，now < last_update 使 delta < 0。
-     * 上一版把 delta < 0 当成「保守复用缓存、不联网」，结果每次开机都不自动刷新、必须手动点。
-     * 现纠正为：只有「时间可信且确实在 60 秒内刚刷新过」（0 <= delta < 60）才复用磁盘缓存；
-     * 其余情况——delta < 0（时钟异常）、delta >= 60（真正超期）、缓存文件缺失——启动一律联网刷新。
-     * 手动刷新（/repository_payloads?refresh=1 → force_refresh=1）不进这里，仍无条件重下。 */
-    if (!force_refresh && access(REPOSITORY_CACHE_PATH, F_OK) == 0) {
-        long delta = (long)now - last_update;
-        if (delta >= 0 && delta < 60) {
-            return 0;
-        }
-    }
-
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", REPOSITORY_CACHE_PATH);
-    if (download_to_file(REPOSITORY_SOURCE_URL, tmp_path) != 0) {
-        return -1;
-    }
-
-    if (read_file_text(tmp_path, &json, &json_size) != 0 || json_size == 0) {
-        remove(tmp_path);
-        if (json)
-            free(json);
-        return -1;
-    }
-
-    if (parse_repository_payloads(json, &items, &count) != 0 || count == 0) {
-        pldmgr_log("[PLDMGR] !!! Repository payload JSON parse failed\n");
-        free(items);
-        free(json);
-        remove(tmp_path);
-        return -1;
-    }
-
-    free(items);
-    free(json);
-
-    if (rename(tmp_path, REPOSITORY_CACHE_PATH) != 0) {
-        remove(tmp_path);
-        return -1;
-    }
-
-    config_write_last_update((long)now);
-    pldmgr_log("[PLDMGR] Repository cache refreshed (%ld entries timestamp)\n", (long)count);
-    return 0;
+    return sources_ensure_fresh(REPOSITORY_SOURCE_URL, force_refresh);
 }
 
 size_t repository_list_json(char *json_buf, size_t buf_size, int force_refresh) {
-    char *cached = NULL;
-    size_t cached_size = 0;
-    long last_update = 0;
-    size_t pos = 0;
-
-    /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：回空清单（cache_status=disabled），既不联网也不读旧缓存，
-     * 前端据此显示「云端仓库已关闭」而不是「仓库为空 / 连接失败」。v0.5.2.67 缺键时默认按“关”处理。 */
-    if (!config_read_bool("DEFAULT_REPO_ENABLED", 0)) {
-        config_read_last_update(&last_update);
-        snprintf(json_buf, buf_size,
-                 "{\"payloads\":[],\"last_update\":%ld,\"cache_status\":\"disabled\"}",
-                 last_update);
-        return strlen(json_buf);
-    }
-
-    if (force_refresh) {
-        if (repository_ensure_fresh(1) != 0) {
-            config_read_last_update(&last_update);
-            snprintf(json_buf, buf_size,
-                     "{\"payloads\":[],\"last_update\":%ld,\"cache_status\":\"error\"}",
-                     last_update);
-            return strlen(json_buf);
-        }
-    }
-
-    config_read_last_update(&last_update);
-
-    if (read_file_text(REPOSITORY_CACHE_PATH, &cached, &cached_size) != 0 || cached_size == 0) {
-        if (cached)
-            free(cached);
-        snprintf(json_buf, buf_size,
-                 "{\"payloads\":[],\"last_update\":%ld,\"cache_status\":\"missing\"}",
-                 last_update);
-        return strlen(json_buf);
-    }
-
-    pos += (size_t)snprintf(json_buf + pos, buf_size - pos, "{\"payloads\":");
-    if (pos >= buf_size || buf_size - pos <= 64 || cached_size > (buf_size - pos - 64)) {
-        snprintf(json_buf, buf_size,
-                 "{\"payloads\":[],\"last_update\":%ld,\"cache_status\":\"truncated\"}",
-                 last_update);
-        free(cached);
-        return strlen(json_buf);
-    }
-    if (pos < buf_size) {
-        size_t copy_len = cached_size;
-        memcpy(json_buf + pos, cached, copy_len);
-        pos += copy_len;
-    }
-
-    pos += (size_t)snprintf(json_buf + pos, buf_size - pos,
-                            ",\"last_update\":%ld,\"cache_status\":\"ok\",\"repo_url\":\"%s\"}",
-                            last_update, REPOSITORY_SOURCE_URL);
-
-    free(cached);
-    return pos;
+    return sources_multi_repository_list_json(json_buf, buf_size, force_refresh);
 }
 
-/* ── Install from repository ───────────────────────────────── */
 
-int repository_install_download(const char *filename, const char *install_source_detail,
-                                char *msg_buf, size_t msg_buf_size) {
-    RepoPayload *items = NULL;
-    size_t count = 0;
-    int found = -1;
-    char tmp_path[512];
+/* Self-updates deliberately retain the pre-slot layout: old launchers scan it. */
+static pthread_mutex_t self_update_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-    if (msg_buf && msg_buf_size > 0)
-        msg_buf[0] = '\0';
-
-    if (!filename || strlen(filename) == 0 || strstr(filename, "/") || strstr(filename, "..")) {
-        snprintf(msg_buf, msg_buf_size, "Invalid filename");
-        return -1;
+static int self_version_valid(const char *version) {
+    const char *p = version;
+    if (!p) return 0;
+    if (*p == 'v' || *p == 'V') p++;
+    /* Stable major.minor.patch releases are understood by every old launcher. */
+    for (int part = 0; part < 3; part++) {
+        int digits = 0;
+        while (*p >= '0' && *p <= '9') { p++; if (++digits > 9) return 0; }
+        if (!digits) return 0;
+        if (part < 2 && *p++ != '.') return 0;
     }
-
-    if (load_cached_repository(&items, &count) != 0 || count == 0) {
-        if (repository_ensure_fresh(1) == 0) {
-            if (load_cached_repository(&items, &count) != 0 || count == 0) {
-                snprintf(msg_buf, msg_buf_size, "Repository cache missing or invalid");
-                if (items) free(items);
-                return -1;
-            }
-        } else {
-            snprintf(msg_buf, msg_buf_size, "Repository cache missing or invalid");
-            if (items) free(items);
-            return -1;
-        }
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        if (strcmp(items[i].filename, filename) == 0) {
-            found = (int)i;
-            break;
-        }
-    }
-
-    if (found < 0) {
-        free(items);
-        snprintf(msg_buf, msg_buf_size, "Payload not found in repository");
-        return -1;
-    }
-
-    ensure_dir_recursive(PAYLOADS_STORAGE_DIR);
-    snprintf(tmp_path, sizeof(tmp_path), "%s/%s.part", PAYLOADS_STORAGE_DIR, items[found].filename);
-
-    if (download_to_file(items[found].url, tmp_path) != 0) {
-        free(items);
-        snprintf(msg_buf, msg_buf_size, "Download failed");
-        remove(tmp_path);
-        return -1;
-    }
-
-    const char *detail = (install_source_detail && install_source_detail[0])
-                             ? install_source_detail
-                             : REPOSITORY_SOURCE_URL;
-
-    if (repository_install_commit(items[found].filename, tmp_path,
-                                  "repository", detail,
-                                  msg_buf, msg_buf_size) != 0) {
-        free(items);
-        return -1;
-    }
-
-    free(items);
-    return 0;
+    return *p == '\0';
 }
 
-int repository_install_commit(const char *filename, const char *uploaded_temp_path,
-                              const char *install_source, const char *install_source_detail,
-                              char *msg_buf, size_t msg_buf_size) {
-    RepoPayload *items = NULL;
-    size_t count = 0;
-    int found = -1;
-    char payload_dir[512];
-    char final_path[640];
-    char details_path[700];
-
-    if (!filename || strlen(filename) == 0 || strstr(filename, "/") || strstr(filename, "..")) {
-        snprintf(msg_buf, msg_buf_size, "Invalid filename");
-        return -1;
-    }
-
-    if (load_cached_repository(&items, &count) != 0 || count == 0) {
-        if (repository_ensure_fresh(1) == 0) {
-            if (load_cached_repository(&items, &count) != 0 || count == 0) {
-                snprintf(msg_buf, msg_buf_size, "Repository cache missing or invalid");
-                if (items) free(items);
-                return -1;
-            }
-        } else {
-            snprintf(msg_buf, msg_buf_size, "Repository cache missing or invalid");
-            if (items) free(items);
-            return -1;
-        }
-    }
-
-    if (count == 0) {
-        snprintf(msg_buf, msg_buf_size, "Repository cache missing or invalid");
-        if (items) free(items);
-        return -1;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        if (strcmp(items[i].filename, filename) == 0) {
-            found = (int)i;
-            break;
-        }
-    }
-
-    if (found < 0) {
-        free(items);
-        snprintf(msg_buf, msg_buf_size, "Payload not found in repository");
-        return -1;
-    }
-
-    char folder_name[128];
-    pldmgr_utils_get_payload_folder_name(items[found].filename, folder_name, sizeof(folder_name));
-    snprintf(payload_dir, sizeof(payload_dir), "%s/%s", PAYLOADS_STORAGE_DIR, folder_name);
-    if (ensure_dir_recursive(payload_dir) != 0) {
-        free(items);
-        snprintf(msg_buf, msg_buf_size, "Failed to create payload directory");
-        return -1;
-    }
-
-    snprintf(final_path, sizeof(final_path), "%s/%s", payload_dir, items[found].filename);
-    snprintf(details_path, sizeof(details_path), "%s/%s.json", payload_dir, items[found].filename);
-
-    if (strlen(items[found].checksum) == 64) {
-        char calculated[65];
-        if (compute_sha256_file(uploaded_temp_path, calculated) != 0) {
-            free(items);
-            remove(uploaded_temp_path);
-            snprintf(msg_buf, msg_buf_size, "Checksum computation failed");
-            return -1;
-        }
-        if (strcasecmp(calculated, items[found].checksum) != 0) {
-            pldmgr_log("[PLDMGR] !!! Checksum mismatch for %s\n", items[found].filename);
-            free(items);
-            remove(uploaded_temp_path);
-            snprintf(msg_buf, msg_buf_size, "Checksum mismatch");
-            return -1;
-        }
-    }
-
-    /* Verify succeeded, now clear previous payload and metadata. */
-    payload_mgr_remove_old_files(payload_dir, items[found].filename);
-
-    if (rename(uploaded_temp_path, final_path) != 0) {
-        free(items);
-        remove(uploaded_temp_path);
-        snprintf(msg_buf, msg_buf_size, "Failed to finalize payload file");
-        return -1;
-    }
-
-    if (write_payload_details_json(&items[found], details_path, install_source, install_source_detail) != 0) {
-        free(items);
-        remove(final_path);
-        snprintf(msg_buf, msg_buf_size, "Failed to write payload metadata");
-        return -1;
-    }
-
-    pldmgr_log("[PLDMGR] Repository payload installed: %s -> %s\n", items[found].filename, final_path);
-    snprintf(msg_buf, msg_buf_size, "Installed %s", items[found].filename);
-    free(items);
-    return 0;
+int repository_self_update_entry_valid(const RepoPayload *entry, const char *source_url) {
+    if (!entry || !is_pldmgr_official_source(source_url) || strcmp(entry->id, "pldmgr") ||
+        !is_pldmgr_name(entry->filename) || strchr(entry->filename, '/') ||
+        strchr(entry->filename, '\\') || strstr(entry->filename, "..") ||
+        !self_version_valid(entry->version) || !entry->checksum[0] ||
+        !repository_checksum_valid(entry->checksum)) return 0;
+    const char *ext = strrchr(entry->filename, '.');
+    return ext && (!strcasecmp(ext, ".elf") || !strcasecmp(ext, ".bin"));
 }
 
-/* ── Self-update ───────────────────────────────────────────── */
-
-int get_elf_pldmgr_version(const char *path, char *out_version, size_t out_size) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return -1;
-
-    char sig[16];
-    sig[0] = 'P'; sig[1] = 'L'; sig[2] = 'D'; sig[3] = 'M'; sig[4] = 'G';
-    sig[5] = 'R'; sig[6] = '_'; sig[7] = 'V'; sig[8] = 'E'; sig[9] = 'R'; sig[10] = ':'; sig[11] = '\0';
-    size_t sig_len = 11;
-
-    char buffer[8192];
-    size_t bytes_read;
-    int match_idx = 0;
-
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), f)) > 0) {
-        for (size_t i = 0; i < bytes_read; i++) {
-            if (buffer[i] == sig[match_idx]) {
-                match_idx++;
-                if (match_idx == (int)sig_len) {
-                    size_t v_idx = 0;
-                    i++;
-                    while (i < bytes_read && buffer[i] != '\0' && v_idx < out_size - 1) {
-                        out_version[v_idx++] = buffer[i++];
-                    }
-                    if (i < bytes_read && buffer[i] == '\0') {
-                        if (v_idx > 0) {
-                            out_version[v_idx] = '\0';
-                            fclose(f);
-                            return 0;
-                        } else {
-                            match_idx = 0;
-                            continue;
-                        }
-                    } else {
-                        while (v_idx < out_size - 1) {
-                            int c = fgetc(f);
-                            if (c == EOF || c == '\0') break;
-                            out_version[v_idx++] = (char)c;
-                        }
-                        out_version[v_idx] = '\0';
-                        if (v_idx > 0) {
-                            fclose(f);
-                            return 0;
-                        } else {
-                            match_idx = 0;
-                            continue;
-                        }
-                    }
-                }
-            } else {
-                match_idx = 0;
-                if (buffer[i] == sig[0]) match_idx = 1;
-            }
+int repository_self_update_version_fd(int fd, char *version, size_t size) {
+    struct stat st;
+    unsigned char magic[4];
+    if (!version || !size) return -1;
+    version[0] = 0;
+    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_size <= 0 ||
+        (uint64_t)st.st_size > PLDMGR_PAYLOAD_DOWNLOAD_LIMIT ||
+        pread(fd, magic, 4, 0) != 4 || memcmp(magic, "\177ELF", 4)) return -1;
+    /* Overlap covers a marker and its complete, bounded version across chunks. */
+    char buffer[8192 + 74];
+    size_t carry = 0;
+    off_t offset = 0;
+    while (offset < st.st_size) {
+        ssize_t n = pread(fd, buffer + carry, 8192, offset);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        size_t used = carry + (size_t)n;
+        for (size_t i = 0; i + 11 < used; i++) {
+            if (memcmp(buffer + i, "PLDMGR_VER:", 11)) continue;
+            const char *v = buffer + i + 11;
+            size_t available = used - i - 11;
+            const char *end = memchr(v, 0, available < 64 ? available : 64);
+            if (!end || (size_t)(end - v) >= size || *v < '0' || *v > '9' || !self_version_valid(v)) continue;
+            strcpy(version, v);
+            return 0;
         }
+        offset += n;
+        carry = used < 74 ? used : 74;
+        memmove(buffer, buffer + used - carry, carry);
     }
-    fclose(f);
     return -1;
 }
 
-static int parse_version_part(const char **p) {
-    int val = 0;
-    while (**p >= '0' && **p <= '9') {
-        val = val * 10 + (**p - '0');
-        (*p)++;
-    }
-    if (**p == '.') (*p)++;
-    return val;
-}
-
-static int compare_versions(const char *v1, const char *v2) {
-    const char *p1 = v1;
-    const char *p2 = v2;
-
-    int maj1 = parse_version_part(&p1);
-    int maj2 = parse_version_part(&p2);
-    if (maj1 != maj2) return maj1 - maj2;
-
-    int min1 = parse_version_part(&p1);
-    int min2 = parse_version_part(&p2);
-    if (min1 != min2) return min1 - min2;
-
-    int pat1 = parse_version_part(&p1);
-    int pat2 = parse_version_part(&p2);
-
-    int res = pat1 - pat2;
-    pldmgr_log("[PLDMGR] Comparing versions: %s vs %s -> %d\n", v1, v2, res);
-    return res;
-}
-
-int repository_check_self_update(char *out_path, size_t out_size) {
-    DIR *dir = opendir(PAYLOADS_STORAGE_DIR);
-    if (!dir) return -1;
-
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
-
-        /* Check for pldmgr or payload-manager directory (case-insensitive) */
-        if (strcasecmp(entry->d_name, "pldmgr") == 0 || strcasecmp(entry->d_name, "payload-manager") == 0) {
-            char subdir_path[512];
-            snprintf(subdir_path, sizeof(subdir_path), "%s/%s", PAYLOADS_STORAGE_DIR, entry->d_name);
-
-            struct stat st;
-            if (stat(subdir_path, &st) == 0 && S_ISDIR(st.st_mode)) {
-                DIR *sdir = opendir(subdir_path);
-                if (sdir) {
-                    struct dirent *sentry;
-                    while ((sentry = readdir(sdir)) != NULL) {
-                        if (sentry->d_name[0] == '.') continue;
-
-                        /* Look for .elf or .bin files that match our name */
-                        if (strstr(sentry->d_name, ".elf") || strstr(sentry->d_name, ".bin")) {
-                            if (strcasestr(sentry->d_name, "pldmgr") || strcasestr(sentry->d_name, "payload-manager") || strcasestr(sentry->d_name, "nayeplmtools")) {
-                                char full_path[512];
-                                snprintf(full_path, sizeof(full_path), "%s/%s", subdir_path, sentry->d_name);
-
-                                /* Verify ELF Magic */
-                                unsigned char magic[4];
-                                FILE *ef = fopen(full_path, "rb");
-                                if (ef) {
-                                    if (fread(magic, 1, 4, ef) == 4 && magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F') {
-                                        fclose(ef);
-                                        char version[64];
-                                        if (get_elf_pldmgr_version(full_path, version, sizeof(version)) == 0) {
-                                            pldmgr_log("[PLDMGR] Found potential update: %s (v%s)\n", full_path, version);
-                                            if (compare_versions(version, MENU_VERSION) > 0) {
-                                                strncpy(out_path, full_path, out_size);
-                                                closedir(sdir);
-                                                closedir(dir);
-                                                return 0;
-                                            }
-                                        }
-                                    } else {
-                                        fclose(ef);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    closedir(sdir);
-                }
+static int check_self_update(char *out_path, size_t size, char *version, size_t version_size) {
+    if (!out_path || !size || !version || version_size < 64) return 0;
+    out_path[0] = 0;
+    snprintf(version, version_size, "%s", MENU_VERSION);
+    DIR *root = opendir(PAYLOADS_STORAGE_DIR);
+    if (!root) return 0;
+    struct dirent *dir;
+    while ((dir = readdir(root))) {
+        if (strcasecmp(dir->d_name, "pldmgr") && strcasecmp(dir->d_name, "payload-manager")) continue;
+        char folder[768];
+        snprintf(folder, sizeof(folder), "%s/%s", PAYLOADS_STORAGE_DIR, dir->d_name);
+        DIR *d = opendir(folder);
+        if (!d) continue;
+        struct dirent *file;
+        while ((file = readdir(d))) {
+            char path[1024], candidate[64];
+            snprintf(path, sizeof(path), "%s/%s", folder, file->d_name);
+            int fd = slot_open_self_update(path);
+            if (fd < 0) continue;
+            int valid = repository_self_update_version_fd(fd, candidate, sizeof(candidate));
+            close(fd);
+            if (!valid && slot_version_compare(candidate, version) > 0 && strlen(path) < size) {
+                strcpy(version, candidate);
+                strcpy(out_path, path);
             }
         }
+        closedir(d);
     }
+    closedir(root);
+    return out_path[0] != 0;
+}
 
-    closedir(dir);
-    return -1;
+int repository_check_self_update(char *out_path, size_t size, char *version, size_t version_size) {
+    pthread_mutex_lock(&self_update_mutex);
+    int found = check_self_update(out_path, size, version, version_size);
+    pthread_mutex_unlock(&self_update_mutex);
+    return found;
+}
+
+int repository_install_self_update(const RepoPayload *entry, const char *source_url, const char *part_path) {
+    if (!repository_self_update_entry_valid(entry, source_url)) return -1;
+    int fd = open(part_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) return -1;
+    char version[64], hash[65];
+    int invalid = repository_self_update_version_fd(fd, version, sizeof(version)) ||
+        slot_version_compare(version, entry->version) ||
+        slot_version_compare(version, MENU_VERSION) <= 0 ||
+        compute_sha256_file(part_path, hash) || strcasecmp(hash, entry->checksum) || fsync(fd);
+    close(fd);
+    if (invalid) return -1;
+    pthread_mutex_lock(&self_update_mutex);
+    char previous[1024], pending[64];
+    check_self_update(previous, sizeof(previous), pending, sizeof(pending));
+    int result = -1;
+    if (slot_version_compare(version, pending) <= 0) goto done;
+    const char *folder = PAYLOADS_STORAGE_DIR "/pldmgr";
+    if (mkdir(folder, 0755) && errno != EEXIST) goto done;
+    int parent_fd = open(PAYLOADS_STORAGE_DIR, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (parent_fd < 0) goto done;
+    int parent_sync = fsync(parent_fd);
+    close(parent_fd);
+    if (parent_sync) goto done;
+    int dir_fd = open(folder, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (dir_fd < 0) goto done;
+    const char *v = version + (version[0] == 'v' || version[0] == 'V');
+    char filename[128];
+    snprintf(filename, sizeof(filename), "pldmgr_v%s.elf", v);
+    if (renameat(AT_FDCWD, part_path, dir_fd, filename)) { close(dir_fd); goto done; }
+    result = 0; /* Publication succeeded. Retain previous files if syncing fails. */
+    if (fsync(dir_fd)) {
+        pldmgr_log("[PLDMGR] Self-update published; directory sync failed.\n");
+    } else {
+        int scan_fd = dup(dir_fd);
+        DIR *d = scan_fd >= 0 ? fdopendir(scan_fd) : NULL;
+        if (!d && scan_fd >= 0) close(scan_fd);
+        struct dirent *file;
+        while (d && (file = readdir(d))) {
+            const char *ext = strrchr(file->d_name, '.');
+            if (strcmp(file->d_name, filename) && is_pldmgr_name(file->d_name) && ext &&
+                (!strcasecmp(ext, ".elf") || !strcasecmp(ext, ".bin"))) {
+                if (unlinkat(dir_fd, file->d_name, 0))
+                    pldmgr_log("[PLDMGR] Could not remove previous self-update: %s\n", file->d_name);
+            }
+        }
+        if (d) closedir(d);
+        if (fsync(dir_fd)) pldmgr_log("[PLDMGR] Self-update cleanup sync failed.\n");
+    }
+    close(dir_fd);
+done:
+    pthread_mutex_unlock(&self_update_mutex);
+    return result;
 }

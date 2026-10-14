@@ -3,18 +3,21 @@
 
 #include <microhttpd.h>
 
+/* Bound accumulated JSON and streamed payloads independently. */
+#define HTTP_POST_BODY_LIMIT ((size_t)1024 * 1024)
+#define HTTP_UPLOAD_BODY_LIMIT ((size_t)512 * 1024 * 1024)
+
 /* MHD request handler callback — dispatches all routes. */
 enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                 const char *url, const char *method,
                                 const char *version, const char *upload_data,
                                 size_t *upload_data_size, void **con_cls);
 
-/* [CN-FORK] v0.5.2.99 MHD_OPTION_NOTIFY_COMPLETED 回调，main.c 的 4 个
- * MHD_start_daemon 站点全部经 http_daemon_start() 挂上它。
- * 本工程的 UploadStatus/PostStatus 在路由内部就 free 并把 *con_cls 置 NULL，
- * 所以这里只服务账号板块的流式头像上传：浏览器中途关页面时回收其状态。
- * 幂等 —— 见 src/psaccounts/api.c 的 magic 标记。 */
-void http_on_request_completed(void *cls, struct MHD_Connection *conn,
-                               void **con_cls, enum MHD_RequestTerminationCode toe);
+/* Registered with MHD_OPTION_NOTIFY_COMPLETED for every daemon instance.
+ * [CN-FORK] v0.6.0.176 本回调由上游 v0.6.0 的 http_request_completed 与 fork
+ * v0.5.2.99 的 http_on_request_completed 合并而来：先按上游清理 RequestContext
+ * （上传临时文件 / POST 缓冲），再转发给账号板块回收流式头像上传状态。 */
+void http_request_completed(void *cls, struct MHD_Connection *conn,
+                            void **con_cls, enum MHD_RequestTerminationCode reason);
 
 #endif

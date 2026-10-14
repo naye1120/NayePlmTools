@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>   /* [UPSTREAM] v0.6.0 isxdigit/tolower（url_decode_in_place） */
 #include <errno.h>   /* [CN-FORK] v0.5.2.116 mkdir 的 EEXIST（存档下载临时目录） */
 #include <time.h>    /* [CN-FORK] v0.5.2.116 存档下载临时包名里的毫秒级唯一因子 */
 #include <fcntl.h>  /* [CN-FORK] open() for /game_icon */
@@ -52,38 +53,47 @@
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入主 ELF：账号/头像/安全还原/远程游玩
  * 配对接口认领 /api/ 前缀，其余路由仍全部归本文件 */
 #include "psaccounts/api.h"
+#include "slot.h"        /* [UPSTREAM] v0.6.0 槽位化存储 */
+#include "json_helpers.h" /* [UPSTREAM] v0.6.0 JSON 构建器（json_append / JsonListBuilder） */
 
 #include "assets_index_html.h"
 #include "assets_cache_appcache.h"
 #include "assets_favicon_svg.h"
 #include "assets_icon_png.h"
 
-#define RESPONSE_BUFFER_SIZE 1048576
-#define CORS_ORIGIN "*"
+#define RESPONSE_BUFFER_SIZE 4194304
+#define SMALL_RESPONSE_BUFFER_SIZE 65536
+#define SOURCES_RESPONSE_BUFFER_SIZE 524288
+#define LOG_RESPONSE_BUFFER_SIZE (MAX_LOG_LINES * (6 * MAX_LOG_LINE_LEN + 4) + 32)
 
 /* Shared flag — set from main() shutdown route, read by main loop */
 volatile int http_keep_running = 1;
 
+/* [CN-FORK] 面板自带前端由主机同源提供，fork 自有路由沿用宽松 CORS 值 */
+#define CORS_ORIGIN "*"
+
 /* ── Helpers ───────────────────────────────────────────────── */
 
-static void add_cors_headers(struct MHD_Response *resp) {
-    MHD_add_response_header(resp, "Access-Control-Allow-Origin", CORS_ORIGIN);
-}
-
-static struct MHD_Response *alloc_response_buffer(char **out) {
-    *out = malloc(RESPONSE_BUFFER_SIZE);
-    if (*out)
-        return NULL;
-    static const char oom[] = "{\"error\":\"Out of memory\"}";
-    struct MHD_Response *resp = MHD_create_response_from_buffer(
-        sizeof(oom) - 1, (void *)oom, MHD_RESPMEM_PERSISTENT);
-    MHD_add_response_header(resp, "Content-Type", "application/json");
-    add_cors_headers(resp);
+/* A failed response creation leaves MUST_FREE buffers owned by us. */
+static struct MHD_Response *create_buffer_response(size_t size, void *buffer,
+                                                  enum MHD_ResponseMemoryMode mode) {
+    struct MHD_Response *resp = MHD_create_response_from_buffer(size, buffer, mode);
+    if (!resp && mode == MHD_RESPMEM_MUST_FREE)
+        free(buffer);
     return resp;
 }
 
 /* [CN-FORK] v0.5.2.115 小 JSON 直接按栈上内容回（MUST_COPY 会先拷再交给 MHD，
- * 所以传局部数组是安全的）。统一加 Content-Type + CORS，免得每条路由各写一遍漏掉一个。 */
+ * 所以传局部数组是安全的）。统一加 Content-Type + CORS，免得每条路由各写一遍漏掉一个。
+ *
+ * ⚠ v0.6.0 合并说明：上游改成了「CORS 只有一个所有者」的模型 —— 由 send_response()
+ * 统一发 `Vary: Origin` 并**只**在同源时回显 Origin。fork 侧自有的 ~40 条路由仍走
+ * 这套 add_cors_headers（`Access-Control-Allow-Origin: *`），两套机制作用在互不相交
+ * 的路由集合上，不会重复下发头部。上游路由一律走 send_response()。 */
+static void add_cors_headers(struct MHD_Response *resp) {
+    if (resp) MHD_add_response_header(resp, "Access-Control-Allow-Origin", CORS_ORIGIN);
+}
+
 static enum MHD_Result queue_json(struct MHD_Connection *conn, int status,
                                   const char *json, size_t len) {
     struct MHD_Response *resp = MHD_create_response_from_buffer(
@@ -91,6 +101,83 @@ static enum MHD_Result queue_json(struct MHD_Connection *conn, int status,
     MHD_add_response_header(resp, "Content-Type", "application/json");
     add_cors_headers(resp);
     enum MHD_Result ret = MHD_queue_response(conn, status, resp);
+    MHD_destroy_response(resp);
+    return ret;
+}
+
+/* ── [UPSTREAM] v0.6.0 CSRF / 同源安全层 ─────────────────────
+ * 这是 v0.6.0 的**核心安全改动**：所有「写」路由（POST/GET 变更类）在分配请求状态、
+ * 打开上传、触发浏览器/自动加载、消费请求体之前，先校验 Origin/Referer/Sec-Fetch-Site
+ * 与 X-PLDMGR-Request 标记 —— 挡住用户浏览恶意网页时被跨站发起的变更请求。 */
+static enum MHD_Result add_response_header(struct MHD_Response *resp,
+                                           const char *name, const char *value) {
+    return resp ? MHD_add_response_header(resp, name, value) : MHD_NO;
+}
+
+/* Explicit actions use POST. Automatic cache refresh on a read remains a read;
+ * repository_refresh is the explicit forced-refresh action. */
+static int is_mutation_route(const char *url) {
+    const char *routes[] = { ROUTE_UPLOAD, ROUTE_DELETE, ROUTE_SHUTDOWN,
+        ROUTE_SET_CONFIG, ROUTE_ABORT, ROUTE_AUTOLOAD_CLEAR, ROUTE_REPO_REFRESH,
+        ROUTE_REPO_INSTALL, ROUTE_SOURCES_SET, ROUTE_SOURCES_ADD,
+        ROUTE_SOURCES_REMOVE, ROUTE_REPO_CACHE_CLEAR, ROUTE_USB_MOVE_PERFORM, ROUTE_PROCESS_KILL };
+    for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++)
+        if (!strcmp(url, routes[i])) return 1;
+    return !strncmp(url, ROUTE_LOAD_PAYLOAD, strlen(ROUTE_LOAD_PAYLOAD));
+}
+/* HTTP daemon only. Compare the complete authority, including the port; never
+ * accept suffix/prefix matches, null/file origins, userinfo, or multiple origins.
+ * Host matching is CSRF protection, not authentication or DNS-rebinding defense. */
+static int same_origin(const char *value, const char *host, int referer) {
+    if (!value || !host || !host[0] || strncmp(value, "http://", 7)) return 0;
+    for (const unsigned char *p = (const unsigned char *)host; *p; p++)
+        if (!isalnum(*p) && *p != '.' && *p != '-' && *p != ':' && *p != '[' && *p != ']') return 0;
+    const char *authority = value + 7;
+    size_t n = strcspn(authority, "/?#");
+    if (strlen(host) != n || strncasecmp(authority, host, n)) return 0;
+    return referer ? (!authority[n] || authority[n] == '/') : authority[n] == 0;
+}
+static int mutation_authorized(struct MHD_Connection *conn) {
+    const char *host = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Host");
+    const char *origin = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Origin");
+    const char *referer = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Referer");
+    const char *site = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Sec-Fetch-Site");
+    if (site && !strcmp(site, "cross-site")) return 0;
+    if (origin) return same_origin(origin, host, 0);
+    if (referer) return same_origin(referer, host, 1);
+    const char *marker = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "X-PLDMGR-Request");
+    return marker && !strcmp(marker, "1");
+}
+static int preflight_headers_valid(const char *headers) {
+    if (!headers || !headers[0]) return 1;
+    const char *p = headers;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        const char *start = p;
+        while (*p && *p != ',') p++;
+        const char *end = p;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        size_t n = (size_t)(end-start);
+        if (!((n == 12 && !strncasecmp(start, "Content-Type", n)) ||
+              (n == 16 && !strncasecmp(start, "X-PLDMGR-Request", n)))) return 0;
+        if (*p && !*++p) return 0;
+    }
+    return 1;
+}
+
+/* MHD retains its own reference on a successful queue. Always release ours,
+ * including when queueing fails. CORS headers have exactly one owner. */
+static enum MHD_Result send_response(struct MHD_Connection *conn,
+                                     unsigned int status, struct MHD_Response *resp) {
+    if (!resp)
+        return MHD_NO;
+    enum MHD_Result ret = MHD_NO;
+    const char *origin = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Origin");
+    const char *host = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Host");
+    int headers_ok = add_response_header(resp, "Vary", "Origin") == MHD_YES;
+    if (origin && same_origin(origin, host, 0))
+        headers_ok = headers_ok && add_response_header(resp, "Access-Control-Allow-Origin", origin) == MHD_YES;
+    if (headers_ok) ret = MHD_queue_response(conn, status, resp);
     MHD_destroy_response(resp);
     return ret;
 }
@@ -834,10 +921,46 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
     return gr_json_err(out, size, code, MHD_HTTP_NOT_FOUND, "ENOENT", "没有这条路由");
 }
 
-static int has_supported_extension(const char *path) {
-    const char *ext = strrchr(path, '.');
-    if (!ext) return 0;
-    return strcasecmp(ext, ".elf") == 0 || strcasecmp(ext, ".bin") == 0;
+/* ── [UPSTREAM] v0.6.0 统一的响应 / 错误回包助手 ───────────── */
+static enum MHD_Result send_out_of_memory(struct MHD_Connection *conn) {
+    static const char oom[] = "{\"error\":\"Out of memory\"}";
+    struct MHD_Response *resp = create_buffer_response(
+        sizeof(oom) - 1, (void *)oom, MHD_RESPMEM_PERSISTENT);
+    add_response_header(resp, "Content-Type", "application/json");
+    return send_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+}
+
+/* Messages passed here are fixed application strings, not user input. */
+static enum MHD_Result send_request_error(struct MHD_Connection *conn,
+                                          unsigned int status, const char *message) {
+    char json[256];
+    snprintf(json, sizeof(json), "{\"error\":\"%s\"}", message);
+    struct MHD_Response *resp = create_buffer_response(
+        strlen(json), json, MHD_RESPMEM_MUST_COPY);
+    add_response_header(resp, "Content-Type", "application/json");
+    return send_response(conn, status, resp);
+}
+
+static enum MHD_Result send_serialization_error(struct MHD_Connection *conn, char *buffer) {
+    free(buffer);
+    return send_request_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                              "JSON serialization failed or exceeds the size limit");
+}
+
+/* Success is separate from response creation: a failed OOM response must not
+ * be mistaken for a successful buffer allocation. */
+static int alloc_response_buffer_sized(char **out, size_t size) {
+    *out = malloc(size);
+    if (*out && size) (*out)[0] = '\0';
+    return *out != NULL;
+}
+
+static int alloc_response_buffer(char **out) {
+    return alloc_response_buffer_sized(out, RESPONSE_BUFFER_SIZE);
+}
+
+static int alloc_response_buffer_small(char **out) {
+    return alloc_response_buffer_sized(out, SMALL_RESPONSE_BUFFER_SIZE);
 }
 
 static int is_safe_filename(const char *name) {
@@ -846,29 +969,24 @@ static int is_safe_filename(const char *name) {
     return 1;
 }
 
-static int is_allowed_payload_path(const char *path) {
-    if (!path || path[0] == '\0') return 0;
-    if (strstr(path, "..")) return 0;
-    if (!has_supported_extension(path)) return 0;
-
-    for (int i = 0; i < SCAN_DIRS_COUNT; i++) {
-        size_t len = strlen(SCAN_DIRS[i]);
-        if (strncmp(path, SCAN_DIRS[i], len) == 0 &&
-            (path[len] == '/' || path[len] == '\0')) {
-            return 1;
+static void url_decode_in_place(char *str) {
+    char *src = str, *dst = str;
+    while (*src) {
+        if (*src == '%' && src[1] && src[2] && isxdigit((unsigned char)src[1]) && isxdigit((unsigned char)src[2])) {
+            int h1 = tolower((unsigned char)src[1]);
+            int h2 = tolower((unsigned char)src[2]);
+            int v1 = isdigit(h1) ? (h1 - '0') : (h1 - 'a' + 10);
+            int v2 = isdigit(h2) ? (h2 - '0') : (h2 - 'a' + 10);
+            *dst++ = (char)((v1 << 4) | v2);
+            src += 3;
+        } else if (*src == '+') {
+            *dst++ = ' ';
+            src++;
+        } else {
+            *dst++ = *src++;
         }
     }
-
-    /* Allow USB root payloads if SCAN_USB_PAYLOADS is enabled in config */
-    if (strncmp(path, "/mnt/usb", 8) == 0 &&
-        path[8] >= '0' && path[8] <= '7' &&
-        path[9] == '/') {
-        if (config_read_bool("SCAN_USB_PAYLOADS", 0)) {
-            return 1;
-        }
-    }
-
-    return 0;
+    *dst = '\0';
 }
 
 /* ── POST request state ────────────────────────────────────── */
@@ -876,17 +994,259 @@ static int is_allowed_payload_path(const char *path) {
 struct PostStatus {
     char *data;
     size_t size;
-    int error;
+    size_t capacity;
+    unsigned int error;
 };
 
 struct UploadStatus {
     FILE *fp;
     size_t total_size;
-    int error;
+    unsigned int error;
     char filename[256];
     char temp_path[512];
-    char repo_url[512];
+    char mode[32];
 };
+
+/* [CN-FORK] v0.6.0 合并：在上游 4 种 kind 基础上补两种 fork 需要的行为 ——
+ *   REQUEST_BODY       —— 收完请求体后**继续往下走**路由链（fork 的游戏管理系列
+ *                         POST 端点自己解析 body，语义在收完之后才分岔）；
+ *   REQUEST_PKG_UPLOAD —— 流式写 PKGMGR_TMP_PATH 后交给 pkgmanager_commit_upload，
+ *                         与 /manage:upload（mkstemp → payload_mgr_import_to_storage_mode）
+ *                         落点不同，不能共用 REQUEST_UPLOAD。 */
+enum RequestKind { REQUEST_CONFIG, REQUEST_SOURCES, REQUEST_UPLOAD, REQUEST_ACTION,
+                   REQUEST_BODY, REQUEST_PKG_UPLOAD };
+
+/* [CN-FORK] 本结构自己的 magic：连接结束时回调要同时接待三种 *con_cls ——
+ * 本结构、psaccounts 的 acct_conn_t（magic "ACTO"）、以及 REQUEST_MARKER 占位。
+ * 先比 magic 再决定谁来回收，避免把对方的结构当自己人 free。 */
+#define REQUEST_CONTEXT_MAGIC 0x52455143u /* "REQC" */
+
+struct RequestContext {
+    uint32_t magic;
+    enum RequestKind kind;
+    int finished;
+    /* [CN-FORK] REQUEST_BODY 的路由各自有体量上限（存档上传 512MB、JSON 1MB…），
+     * 由 gr_post_limit() 在注册时定下，收体时按它设闸。 */
+    size_t body_limit;
+    union {
+        struct PostStatus post;
+        struct UploadStatus upload;
+    } state;
+};
+
+/* Read-only requests need no allocation. This marker is never dereferenced. */
+#define REQUEST_MARKER ((void *)1)
+
+void http_request_completed(void *cls, struct MHD_Connection *conn,
+                            void **con_cls, enum MHD_RequestTerminationCode reason) {
+    (void)cls;
+    (void)conn;
+    (void)reason;
+    if (!con_cls || !*con_cls)
+        return;
+    void *context = *con_cls;
+    *con_cls = NULL;
+    if (context == REQUEST_MARKER)
+        return;
+
+    /* [CN-FORK] 不是本结构的就是 psaccounts 的流式状态（它自己再认一遍 magic）。 */
+    if (*(const uint32_t *)context != REQUEST_CONTEXT_MAGIC) {
+        psaccounts_conn_completed(context);
+        return;
+    }
+
+    struct RequestContext *request = context;
+    if (request->kind == REQUEST_UPLOAD || request->kind == REQUEST_PKG_UPLOAD) {
+        struct UploadStatus *upload = &request->state.upload;
+        if (upload->fp && fclose(upload->fp) != 0)
+            pldmgr_log("[PLDMGR] Warning: Failed to close upload during cleanup\n");
+        /* Each request owns a unique path. A committed file was renamed out
+         * of this path; remove any uncommitted remainder on every exit. */
+        if (upload->temp_path[0] && remove(upload->temp_path) != 0 && errno != ENOENT)
+            pldmgr_log("[PLDMGR] Warning: Failed to remove upload temp file: %s\n",
+                       upload->temp_path);
+    } else {
+        free(request->state.post.data);
+    }
+    free(request);
+}
+
+static unsigned int check_body_length(struct MHD_Connection *conn, size_t limit) {
+    const char *value = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Content-Length");
+    if (!value)
+        return 0; /* Chunked/unknown length is checked while receiving data. */
+    if (!isdigit((unsigned char)*value))
+        return MHD_HTTP_BAD_REQUEST;
+    errno = 0;
+    char *end;
+    unsigned long long length = strtoull(value, &end, 10);
+    if (errno == ERANGE || *end)
+        return MHD_HTTP_BAD_REQUEST;
+    return length > limit ? MHD_HTTP_CONTENT_TOO_LARGE : 0;
+}
+
+/* [CN-FORK] 带显式上限的版本：fork 的 REQUEST_BODY 路由体量上限各不相同
+ * （见 gr_post_limit），不能再写死 HTTP_POST_BODY_LIMIT。 */
+static void append_post_data_limit(struct PostStatus *post, const char *data,
+                                   size_t size, size_t limit) {
+    if (post->error)
+        return;
+    if (size > limit - post->size) {
+        post->error = MHD_HTTP_CONTENT_TOO_LARGE;
+        return;
+    }
+    size_t needed = post->size + size + 1;
+    if (needed > post->capacity) {
+        size_t capacity = post->capacity ? post->capacity : 4096;
+        while (capacity < needed) {
+            capacity = capacity > (limit + 1) / 2 ? limit + 1 : capacity * 2;
+        }
+        char *new_data = realloc(post->data, capacity);
+        if (!new_data) {
+            post->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+            return;
+        }
+        post->data = new_data;
+        post->capacity = capacity;
+    }
+    memcpy(post->data + post->size, data, size);
+    post->size += size;
+    post->data[post->size] = '\0';
+}
+
+static void append_post_data(struct PostStatus *post, const char *data, size_t size) {
+    append_post_data_limit(post, data, size, HTTP_POST_BODY_LIMIT);
+}
+
+static void prepare_upload(struct MHD_Connection *conn, struct UploadStatus *upload) {
+    const char *filename = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
+    const char *mode = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "mode");
+    if (!mode)
+        mode = "new";
+    if (!is_safe_filename(filename) || strlen(filename) >= sizeof(upload->filename) ||
+        strlen(mode) >= sizeof(upload->mode)) {
+        upload->error = MHD_HTTP_BAD_REQUEST;
+        return;
+    }
+    strcpy(upload->filename, filename);
+    strcpy(upload->mode, mode);
+    upload->error = check_body_length(conn, HTTP_UPLOAD_BODY_LIMIT);
+    if (upload->error)
+        return;
+
+    if ((mkdir(BASE_DATA_DIR, 0777) != 0 && errno != EEXIST) ||
+        (mkdir(PAYLOADS_STORAGE_DIR, 0777) != 0 && errno != EEXIST)) {
+        upload->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+        return;
+    }
+    int n = snprintf(upload->temp_path, sizeof(upload->temp_path),
+                     "%s/.upload-XXXXXX", PAYLOADS_STORAGE_DIR);
+    if (n < 0 || (size_t)n >= sizeof(upload->temp_path)) {
+        upload->temp_path[0] = '\0';
+        upload->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+        return;
+    }
+    int fd = mkstemp(upload->temp_path);
+    if (fd < 0) {
+        upload->temp_path[0] = '\0'; /* No file was acquired to clean up. */
+        upload->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+        return;
+    }
+    upload->fp = fdopen(fd, "wb");
+    if (!upload->fp) {
+        close(fd);
+        upload->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+        return;
+    }
+    pldmgr_log("[PLDMGR] Starting upload: %s (mode: %s)\n", filename, mode);
+}
+
+/* [CN-FORK] /pkgmanager_upload：手动上传新版 PKG Manager ELF，裸 body 流式写
+ * PKGMGR_TMP_PATH（固定落点，pkgmanager_commit_upload 按这个路径接手），
+ * filename 只用于猜版本号，取 basename、不参与拼路径。 */
+static unsigned int prepare_pkg_upload(struct MHD_Connection *conn, struct UploadStatus *upload) {
+    const char *pkg_fname = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
+    if (pkg_fname) {
+        const char *base = strrchr(pkg_fname, '/');
+        base = base ? base + 1 : pkg_fname;
+        if (strlen(base) >= sizeof(upload->filename)) return MHD_HTTP_BAD_REQUEST;
+        strncpy(upload->filename, base, sizeof(upload->filename) - 1);
+        upload->filename[sizeof(upload->filename) - 1] = '\0';
+    } else {
+        upload->filename[0] = '\0';
+    }
+    strncpy(upload->temp_path, PKGMGR_TMP_PATH, sizeof(upload->temp_path) - 1);
+    upload->temp_path[sizeof(upload->temp_path) - 1] = '\0';
+    unsigned int error = check_body_length(conn, HTTP_UPLOAD_BODY_LIMIT);
+    if (error) return error;
+    if ((mkdir(BASE_DATA_DIR, 0777) != 0 && errno != EEXIST) ||
+        (mkdir(PKGMGR_DIR, 0777) != 0 && errno != EEXIST))
+        return MHD_HTTP_INTERNAL_SERVER_ERROR;
+    upload->fp = fopen(PKGMGR_TMP_PATH, "wb");
+    if (!upload->fp) {
+        pldmgr_log("[PLDMGR] !!! PKG Manager upload: cannot open %s\n", PKGMGR_TMP_PATH);
+        return MHD_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    pldmgr_log("[PLDMGR] Starting PKG Manager upload to: %s\n", PKGMGR_TMP_PATH);
+    return 0;
+}
+
+static enum MHD_Result finish_request_error(struct MHD_Connection *conn,
+                                           struct RequestContext *request,
+                                           unsigned int status) {
+    request->finished = 1;
+    if (status == MHD_HTTP_CONTENT_TOO_LARGE)
+        return send_request_error(conn, status, "Request body exceeds the size limit");
+    if (status == MHD_HTTP_BAD_REQUEST)
+        return send_request_error(conn, status, "Invalid or empty request");
+    return send_request_error(conn, status, "Failed to receive or save request");
+}
+
+/* Build complete CSV entries within the output limit, including lines that
+ * span read chunks. Excess input is reported rather than silently truncated. */
+static int read_autoload_list(char *out, size_t size, int include_delays) {
+    if (!size)
+        return -1;
+    out[0] = '\0';
+    FILE *file = fopen(AUTOLOAD_CONFIG_PATH, "r");
+    if (!file)
+        return errno == ENOENT ? 0 : -1;
+    size_t pos = 0;
+    int line_start = 1, has_data = 0, skip = 0, result = 0;
+    int c;
+    while ((c = fgetc(file)) != EOF) {
+        if (c == '\0') {
+            result = -1;
+            break;
+        }
+        if (c == '\n') {
+            line_start = 1; has_data = 0; skip = 0;
+            continue;
+        }
+        if (line_start) {
+            skip = !include_delays && c == '!';
+            line_start = 0;
+        }
+        if (c == '\r')
+            skip = 1;
+        if (skip)
+            continue;
+        size_t needed = (!has_data && pos ? 1 : 0) + 1;
+        if (needed >= size - pos) {
+            result = -1;
+            break;
+        }
+        if (!has_data && pos)
+            out[pos++] = ',';
+        out[pos++] = (char)c;
+        has_data = 1;
+    }
+    out[pos] = '\0';
+    if (ferror(file))
+        result = -1;
+    fclose(file);
+    return result;
+}
 
 /* ── Helper: Noisy routes ──────────────────────────────────── */
 
@@ -938,6 +1298,7 @@ static int is_noisy_route(const char *url) {
      * 就是为了让「排队重试 → 重试成功」这条链能被看着发生。降噪是必须的。 */
     if (strcmp(url, ROUTE_GAME_SAVE_SNAP_LOG) == 0) return 1;
     if (strcmp(url, ROUTE_SMP_STATUS) == 0) return 1; /* [CN-FORK] v0.5.2.131 SMP 探活，拉起期间轮询，降噪 */
+    if (strcmp(url, ROUTE_UPDATE_CHECK) == 0) return 1; /* [UPSTREAM] v0.6.0 更新检查轮询 */
     if (strcmp(url, "/events") == 0) return 1;
     /* [CN-FORK] v0.5.2.99 远程游玩配对的进度查询，界面每 1 秒问一次，降噪；
      * 出码/配对成功/失败/超时那几条仍会记日志（是别的 URL）。 */
@@ -951,27 +1312,40 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                 const char *url, const char *method,
                                 const char *version, const char *upload_data,
                                 size_t *upload_data_size, void **con_cls) {
+    (void)cls;
+    (void)version;
 
-    /* Handle CORS Preflight (OPTIONS) */
-    if (strcmp(method, "OPTIONS") == 0) {
-        struct MHD_Response *resp =
-            MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_PERSISTENT);
-        add_cors_headers(resp);
-        MHD_add_response_header(resp, "Access-Control-Allow-Methods",
-                                "GET, POST, OPTIONS");
-        MHD_add_response_header(resp, "Access-Control-Allow-Headers",
-                                "Content-Type");
-        enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
-        MHD_destroy_response(resp);
-        return ret;
+    int mutation = is_mutation_route(url);
+    if (!strcmp(method, "OPTIONS")) {
+        const char *origin = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Origin");
+        const char *host = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Host");
+        const char *requested_method = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Access-Control-Request-Method");
+        const char *headers = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Access-Control-Request-Headers");
+        const char *allowed_method = mutation ? "POST" : "GET";
+        if (!same_origin(origin, host, 0) || !preflight_headers_valid(headers) ||
+            (requested_method && strcmp(requested_method, allowed_method)))
+            return send_request_error(conn, MHD_HTTP_FORBIDDEN, "Preflight rejected");
+        struct MHD_Response *resp = create_buffer_response(0, NULL, MHD_RESPMEM_PERSISTENT);
+        add_response_header(resp, "Access-Control-Allow-Methods", allowed_method);
+        add_response_header(resp, "Access-Control-Allow-Headers", "Content-Type, X-PLDMGR-Request");
+        return send_response(conn, MHD_HTTP_OK, resp);
     }
+    if (strcmp(method, mutation ? "POST" : "GET")) {
+        struct MHD_Response *resp = create_buffer_response(0, NULL, MHD_RESPMEM_PERSISTENT);
+        add_response_header(resp, "Allow", mutation ? "POST, OPTIONS" : "GET, OPTIONS");
+        return send_response(conn, MHD_HTTP_METHOD_NOT_ALLOWED, resp);
+    }
+    /* Reject before allocating request state, opening an upload, activating
+     * browser/autoload state, consuming a body, or calling any backend action. */
+    if (mutation && !mutation_authorized(conn))
+        return send_request_error(conn, MHD_HTTP_FORBIDDEN, "Mutation origin or request marker rejected");
 
     /* Set flag that we received a request (meaning browser is open) */
-    log_server_set_active();
+    if (mutation_authorized(conn)) log_server_set_active();
 
     /* ── [CN-FORK] v0.5.2.99 账号板块接口：整段认领给 psaccounts，路径 /api/… ──
      * 必须放在下面的 *con_cls == NULL 注册块之前：那个块末尾会给所有其它请求
-     * 打 *con_cls = (void *)1 的占位标记，而 psaccounts 把 *con_cls 当作自己的
+     * 打 *con_cls = REQUEST_MARKER 的占位标记，而 psaccounts 把 *con_cls 当作自己的
      * 状态结构解引用 —— 一旦被打了标记，这里读 magic 就是访问地址 1，直接崩。
      * 认领之后本请求不再走下面任何链，*con_cls 由 psaccounts 自己分配/回收。 */
     if (psaccounts_wants(url)) {
@@ -982,403 +1356,284 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                  upload_data_size, con_cls);
     }
 
-    /* ── Initial call for a new request ────────────────────── */
+    /* The completion callback owns request state on success, error, disconnect,
+     * and daemon stop. Keep it alive until MHD finishes the request.
+     * ── Initial call for a new request ────────────────────── */
     if (*con_cls == NULL) {
-        if (strncmp(url, ROUTE_UPLOAD, strlen(ROUTE_UPLOAD)) == 0) {
-            struct UploadStatus *status = malloc(sizeof(struct UploadStatus));
-            status->fp = NULL;
-            status->total_size = 0;
-            status->error = 0;
-
-            const char *filename =
-                MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
-            if (filename && !strstr(filename, "/") && !strstr(filename, "..")) {
-                char path[512];
-                mkdir(BASE_DATA_DIR, 0777);
-                mkdir(PAYLOADS_STORAGE_DIR, 0777);
-                snprintf(path, sizeof(path), "%s/%s.tmp", PAYLOADS_STORAGE_DIR, filename);
-
-                strncpy(status->filename, filename, sizeof(status->filename) - 1);
-                status->filename[sizeof(status->filename) - 1] = '\0';
-                strncpy(status->temp_path, path, sizeof(status->temp_path) - 1);
-                status->temp_path[sizeof(status->temp_path) - 1] = '\0';
-
-                status->fp = fopen(path, "wb");
-                if (!status->fp) {
-                    pldmgr_log("[PLDMGR] !!! FAILED to open temp file: %s\n", path);
-                    status->error = 1;
-                } else {
-                    pldmgr_log("[PLDMGR] Starting upload to temp: %s\n", path);
-                }
-            } else {
-                pldmgr_log("[PLDMGR] !!! Upload failed: Missing filename parameter\n");
-                status->error = 1;
+        int upload = strcmp(url, ROUTE_UPLOAD) == 0;
+        int config = strcmp(url, ROUTE_SET_CONFIG) == 0 && strcmp(method, "POST") == 0;
+        int sources = strcmp(url, ROUTE_SOURCES_SET) == 0 && strcmp(method, "POST") == 0;
+        /* [CN-FORK] /pkgmanager_upload：裸 body 流式写 PKGMGR_TMP_PATH */
+        int pkg_upload = strcmp(method, "POST") == 0 &&
+                         strncmp(url, ROUTE_PKG_UPLOAD, strlen(ROUTE_PKG_UPLOAD)) == 0;
+        /* [CN-FORK] 游戏管理系列 POST 端点：各自体量上限见 gr_post_limit()；
+         * /game_media_pack 是 512KB 的 JSON。这类请求体**收完后**才分岔，见下方
+         * REQUEST_BODY 的处置。 */
+        size_t fork_body_limit = 0;
+        if (strcmp(method, "POST") == 0) {
+            fork_body_limit = gr_post_limit(url);
+            if (!fork_body_limit && strcmp(url, ROUTE_GAME_MEDIA_PACK) == 0)
+                fork_body_limit = (size_t)512 << 10;
+        }
+        int body = fork_body_limit != 0;
+        if (upload || config || sources || pkg_upload || mutation || body) {
+            struct RequestContext *request = malloc(sizeof(*request));
+            if (!request) {
+                *con_cls = REQUEST_MARKER;
+                return send_out_of_memory(conn);
             }
-            *con_cls = status;
-            return MHD_YES;
-        }
-
-        /* [CN-FORK] /pkgmanager_upload：手动上传新版 PKG Manager ELF，裸 body 流式写 .tmp */
-        if (strncmp(url, ROUTE_PKG_UPLOAD, strlen(ROUTE_PKG_UPLOAD)) == 0 &&
-            strcmp(method, "POST") == 0) {
-            struct UploadStatus *status = malloc(sizeof(struct UploadStatus));
-            status->fp = NULL;
-            status->total_size = 0;
-            status->error = 0;
-            status->repo_url[0] = '\0';
-            /* filename 仅用于猜版本号（上传新版时二进制里未必有签名串），取 basename、不参与拼路径 */
-            const char *pkg_fname =
-                MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
-            if (pkg_fname) {
-                const char *base = strrchr(pkg_fname, '/');
-                base = base ? base + 1 : pkg_fname;
-                strncpy(status->filename, base, sizeof(status->filename) - 1);
-                status->filename[sizeof(status->filename) - 1] = '\0';
+            memset(request, 0, sizeof(*request));
+            request->magic = REQUEST_CONTEXT_MAGIC;
+            request->kind = upload ? REQUEST_UPLOAD
+                         : config ? REQUEST_CONFIG
+                         : sources ? REQUEST_SOURCES
+                         : pkg_upload ? REQUEST_PKG_UPLOAD
+                         : body ? REQUEST_BODY
+                         : REQUEST_ACTION;
+            request->body_limit = body ? fork_body_limit : HTTP_POST_BODY_LIMIT;
+            *con_cls = request;
+            unsigned int error;
+            if (upload) {
+                prepare_upload(conn, &request->state.upload);
+                error = request->state.upload.error;
+            } else if (pkg_upload) {
+                error = prepare_pkg_upload(conn, &request->state.upload);
             } else {
-                status->filename[0] = '\0';
+                error = check_body_length(conn, request->body_limit);
+                request->state.post.error = error;
             }
-            strncpy(status->temp_path, PKGMGR_TMP_PATH, sizeof(status->temp_path) - 1);
-            status->temp_path[sizeof(status->temp_path) - 1] = '\0';
-            mkdir(BASE_DATA_DIR, 0777);
-            mkdir(PKGMGR_DIR, 0777);
-            status->fp = fopen(PKGMGR_TMP_PATH, "wb");
-            if (!status->fp) {
-                pldmgr_log("[PLDMGR] !!! PKG Manager upload: cannot open %s\n", PKGMGR_TMP_PATH);
-                status->error = 1;
-            } else {
-                pldmgr_log("[PLDMGR] Starting PKG Manager upload to: %s\n", PKGMGR_TMP_PATH);
-            }
-            *con_cls = status;
-            return MHD_YES;
+            if (error)
+                return finish_request_error(conn, request, error);
+        } else {
+            *con_cls = REQUEST_MARKER;
         }
-
-        if (strcmp(url, ROUTE_SET_CONFIG) == 0 && strcmp(method, "POST") == 0) {
-            struct PostStatus *status = malloc(sizeof(struct PostStatus));
-            status->data = NULL;
-            status->size = 0;
-            status->error = 0;
-            *con_cls = status;
-            return MHD_YES;
-        }
-
-        if (strcmp(url, ROUTE_REPO_PUSH) == 0 && strcmp(method, "POST") == 0) {
-            struct PostStatus *status = malloc(sizeof(struct PostStatus));
-            status->data = NULL;
-            status->size = 0;
-            status->error = 0;
-            *con_cls = status;
-            return MHD_YES;
-        }
-
-        if (strcmp(url, ROUTE_SOURCES_SET) == 0 && strcmp(method, "POST") == 0) {
-            struct PostStatus *status = malloc(sizeof(struct PostStatus));
-            status->data = NULL;
-            status->size = 0;
-            status->error = 0;
-            *con_cls = status;
-            return MHD_YES;
-        }
-
-        /* [CN-FORK] v0.5.2.115 打包任务：{tid, ids:[…]|null} 的 JSON 体 */
-        if (strcmp(url, ROUTE_GAME_MEDIA_PACK) == 0 && strcmp(method, "POST") == 0) {
-            struct PostStatus *status = malloc(sizeof(struct PostStatus));
-            if (!status) return MHD_NO;
-            status->data = NULL;
-            status->size = 0;
-            status->error = 0;
-            *con_cls = status;
-            return MHD_YES;
-        }
-
-        /* [CN-FORK] v0.5.2.116 游戏管理的 POST 请求体：八条 JSON + 两条裸字节
-         * （磁贴 PNG、存档包）共用同一个 PostStatus 累加器。三条 JSON 的语义
-         * 在**收完之后**才分岔（见下方 gr_dispatch_post），所以这里只认路由不认内容。 */
-        if (strcmp(method, "POST") == 0 && gr_post_limit(url) != 0) {
-            struct PostStatus *status = malloc(sizeof(struct PostStatus));
-            if (!status) return MHD_NO;
-            status->data = NULL;
-            status->size = 0;
-            status->error = 0;
-            *con_cls = status;
-            return MHD_YES;
-        }
-
-        if (strncmp(url, ROUTE_REPO_INSTALL_PUSH,
-                    strlen(ROUTE_REPO_INSTALL_PUSH)) == 0 &&
-            strcmp(method, "POST") == 0) {
-            struct UploadStatus *status = malloc(sizeof(struct UploadStatus));
-            status->fp = NULL;
-            status->total_size = 0;
-            status->error = 0;
-            const char *filename =
-                MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
-            if (filename && !strstr(filename, "/") && !strstr(filename, "..")) {
-                char path[512];
-                mkdir(BASE_DATA_DIR, 0777);
-                mkdir(PAYLOADS_STORAGE_DIR, 0777);
-                snprintf(path, sizeof(path), "%s/%s.part", PAYLOADS_STORAGE_DIR, filename);
-                strncpy(status->filename, filename, sizeof(status->filename) - 1);
-                status->filename[sizeof(status->filename) - 1] = '\0';
-                strncpy(status->temp_path, path, sizeof(status->temp_path) - 1);
-                status->temp_path[sizeof(status->temp_path) - 1] = '\0';
-
-                const char *repo_url = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "repo_url");
-                if (repo_url) {
-                    strncpy(status->repo_url, repo_url, sizeof(status->repo_url) - 1);
-                    status->repo_url[sizeof(status->repo_url) - 1] = '\0';
-                } else {
-                    strncpy(status->repo_url, REPOSITORY_SOURCE_URL, sizeof(status->repo_url) - 1);
-                    status->repo_url[sizeof(status->repo_url) - 1] = '\0';
-                }
-
-                status->fp = fopen(path, "wb");
-                if (!status->fp) {
-                    pldmgr_log("[PLDMGR] !!! Failed to open for install: %s\n", path);
-                    status->error = 1;
-                } else {
-                    pldmgr_log("[PLDMGR] Installing payload: %s\n", path);
-                }
-            } else {
-                pldmgr_log("[PLDMGR] !!! install_push: invalid filename\n");
-                status->error = 1;
-            }
-            *con_cls = status;
-            return MHD_YES;
-        }
-
-        *con_cls = (void *)1;
         return MHD_YES;
     }
 
-    /* ── Handle POST data for /set_config ──────────────────── */
-    if (strcmp(url, ROUTE_SET_CONFIG) == 0 && strcmp(method, "POST") == 0) {
-        struct PostStatus *status = (struct PostStatus *)*con_cls;
-        if (*upload_data_size != 0) {
-            char *new_data = realloc(status->data, status->size + *upload_data_size + 1);
-            if (!new_data) {
-                status->error = 1;
-            } else {
-                status->data = new_data;
-                memcpy(status->data + status->size, upload_data, *upload_data_size);
-                status->size += *upload_data_size;
-                status->data[status->size] = '\0';
-            }
+    if (*con_cls != REQUEST_MARKER) {
+        struct RequestContext *request = *con_cls;
+        if (request->finished) {
             *upload_data_size = 0;
             return MHD_YES;
-        } else {
-            /* Finished receiving JSON */
-            pldmgr_log("[PLDMGR] Received config update: %s\n",
-                       status->data ? status->data : "(null)");
-
-            if (status->data && !status->error) {
-                config_handle_set_json(status->data);
-            }
-
-            if (status->data)
-                free(status->data);
-            free(status);
-            *con_cls = NULL;
-
-            struct MHD_Response *resp = MHD_create_response_from_buffer(
-                strlen(MSG_OK), (void *)MSG_OK, MHD_RESPMEM_MUST_COPY);
-            add_cors_headers(resp);
-            enum MHD_Result ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
-            MHD_destroy_response(resp);
-            return ret;
         }
-    }
-
-    /* ── Handle POST data for /repository_push ─────────────── */
-    if (strcmp(url, ROUTE_REPO_PUSH) == 0 && strcmp(method, "POST") == 0) {
-        struct PostStatus *status = (struct PostStatus *)*con_cls;
-        if (*upload_data_size != 0) {
-            char *nd = realloc(status->data, status->size + *upload_data_size + 1);
-            if (!nd) {
-                status->error = 1;
-            } else {
-                status->data = nd;
-                memcpy(status->data + status->size, upload_data, *upload_data_size);
-                status->size += *upload_data_size;
-                status->data[status->size] = '\0';
-            }
-            *upload_data_size = 0;
-            return MHD_YES;
-        } else {
-            int ok = -1;
-            if (status->data && !status->error)
-                ok = repository_push_json(status->data, status->size);
-            if (status->data)
-                free(status->data);
-            free(status);
-            *con_cls = NULL;
-
-            /* Return the current list JSON so the frontend refreshes in one trip */
-            char *resp_buf;
-            struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-            if (oom_resp) {
-                enum MHD_Result ret2 = MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-                MHD_destroy_response(oom_resp);
-                return ret2;
-            }
-
-            size_t len = repository_list_json(resp_buf, RESPONSE_BUFFER_SIZE, 0);
-            struct MHD_Response *resp = MHD_create_response_from_buffer(
-                len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            enum MHD_Result ret2 = MHD_queue_response(
-                conn, ok == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
-            MHD_destroy_response(resp);
-            return ret2;
-        }
-    }
-
-    /* ── Handle POST data for /sources_set ─────────────────── */
-    if (strcmp(url, ROUTE_SOURCES_SET) == 0 && strcmp(method, "POST") == 0) {
-        struct PostStatus *status = (struct PostStatus *)*con_cls;
-        if (*upload_data_size != 0) {
-            char *nd = realloc(status->data, status->size + *upload_data_size + 1);
-            if (!nd) {
-                status->error = 1;
-            } else {
-                status->data = nd;
-                memcpy(status->data + status->size, upload_data, *upload_data_size);
-                status->size += *upload_data_size;
-                status->data[status->size] = '\0';
-            }
-            *upload_data_size = 0;
-            return MHD_YES;
-        } else {
-            int ok = -1;
-            if (status->data && !status->error)
-                ok = sources_save(status->data, status->size);
-            if (status->data)
-                free(status->data);
-            free(status);
-            *con_cls = NULL;
-
-            const char *msg = ok == 0 ? MSG_OK : "Failed to save sources";
-            struct MHD_Response *resp_ss = MHD_create_response_from_buffer(
-                strlen(msg), (void *)msg, MHD_RESPMEM_MUST_COPY);
-            add_cors_headers(resp_ss);
-            enum MHD_Result ret_ss = MHD_queue_response(
-                conn, ok == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR, resp_ss);
-            MHD_destroy_response(resp_ss);
-            return ret_ss;
-        }
-    }
-
-    /* ── [CN-FORK] v0.5.2.115 Handle POST data for /game_media_pack ──
-     * 请求体 {tid, ids:[…]|null} → 202 语义上的 {job_id}。前端随后 1s 一次打
-     * /game_job_status?job= 拿进度，跑完再 GET /game_media_pack_get?job= 取成品。 */
-    if (strcmp(url, ROUTE_GAME_MEDIA_PACK) == 0 && strcmp(method, "POST") == 0) {
-        struct PostStatus *status = (struct PostStatus *)*con_cls;
-        if (*upload_data_size != 0) {
-            /* 请求体最多 512KB：每个 id 约 60 字节，够写 8000 个了 */
-            if (status->size + *upload_data_size > (512u << 10)) {
-                status->error = 1;
-            } else {
-                char *nd = realloc(status->data, status->size + *upload_data_size + 1);
-                if (!nd) {
-                    status->error = 1;
-                } else {
-                    status->data = nd;
-                    memcpy(status->data + status->size, upload_data, *upload_data_size);
-                    status->size += *upload_data_size;
-                    status->data[status->size] = '\0';
+        if (request->kind == REQUEST_ACTION) {
+            struct PostStatus *post = &request->state.post;
+            if (*upload_data_size) {
+                if (*upload_data_size > HTTP_POST_BODY_LIMIT - post->size) {
+                    *upload_data_size = 0;
+                    return finish_request_error(conn, request, MHD_HTTP_CONTENT_TOO_LARGE);
                 }
-            }
-            *upload_data_size = 0;
-            return MHD_YES;
-        } else {
-            long long job_id = 0;
-            char msg[192];
-            int rc = -2;
-            msg[0] = 0;
-            if (status->error) {
-                snprintf(msg, sizeof(msg), "请求体过大或内存不足");
-            } else if (status->data) {
-                rc = game_media_pack_start_json(status->data, status->size, &job_id,
-                                                msg, sizeof(msg));
-            } else {
-                snprintf(msg, sizeof(msg), "请求体为空");
-            }
-            if (status->data) free(status->data);
-            free(status);
-            *con_cls = NULL;
-
-            char emsg[400];
-            pldmgr_json_escape(msg, emsg, sizeof(emsg));
-            char out[600];
-            int on = snprintf(out, sizeof(out), "{\"job_id\":%lld,\"error\":\"%s\","
-                               "\"message\":\"%s\"}",
-                               job_id, rc == 0 ? "" : (rc == -1 ? "EBUSY" : "EBAD"), emsg);
-            if (on < 0 || (size_t)on >= sizeof(out)) on = 0;
-
-            struct MHD_Response *resp = MHD_create_response_from_buffer(
-                (size_t)on, (void *)out, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            enum MHD_Result ret = MHD_queue_response(
-                conn,
-                rc == 0 ? MHD_HTTP_OK : (rc == -1 ? MHD_HTTP_CONFLICT : MHD_HTTP_BAD_REQUEST),
-                resp);
-            MHD_destroy_response(resp);
-            return ret;
-        }
-    }
-
-    /* ── [CN-FORK] v0.5.2.116 Handle POST data for /game_* ──
-     * 九条端点（删源 / 存档自动与连通性 / 存档上传 / 改名 / 磁贴两层图 / 挂载 /
-     * 卸载挂载 / 卸载安装）共用同一个累加器，**收完才分发**。
-     * 与 /game_media_pack 那条刻意保持同一套结构：MHD 是把请求体切成若干块
-     * 送进来的，只有 upload_data_size==0 那一发才代表「体收完了」，
-     * 在那之前动手会拿到半截 JSON 或半张 PNG。 */
-    {
-        size_t grcap = gr_post_limit(url);
-        if (grcap != 0 && strcmp(method, "POST") == 0) {
-            struct PostStatus *status = (struct PostStatus *)*con_cls;
-            if (*upload_data_size != 0) {
-                if (status->size + *upload_data_size > grcap) {
-                    status->error = 1; /* 超限后只排水不收数，仍要一路 drain 到收完 */
-                } else {
-                    char *nd = realloc(status->data, status->size + *upload_data_size + 1);
-                    if (!nd) {
-                        status->error = 1;
-                    } else {
-                        status->data = nd;
-                        memcpy(status->data + status->size, upload_data, *upload_data_size);
-                        status->size += *upload_data_size;
-                        status->data[status->size] = '\0';
-                    }
-                }
+                post->size += *upload_data_size;
                 *upload_data_size = 0;
                 return MHD_YES;
             }
+            request->finished = 1;
+        } else if (request->kind == REQUEST_BODY) {
+            /* [CN-FORK] 收完体后**不**在这里分岔：置 finished 后继续往下走，
+             * 由路由链里的游戏管理 POST 处理器读 request->state.post 自己分发。 */
+            struct PostStatus *post = &request->state.post;
+            if (*upload_data_size) {
+                append_post_data_limit(post, upload_data, *upload_data_size,
+                                       request->body_limit);
+                *upload_data_size = 0;
+                if (post->error)
+                    return finish_request_error(conn, request, post->error);
+                return MHD_YES;
+            }
+            request->finished = 1;
+        } else if (request->kind != REQUEST_UPLOAD && request->kind != REQUEST_PKG_UPLOAD) {
+            struct PostStatus *post = &request->state.post;
+            if (*upload_data_size) {
+                append_post_data(post, upload_data, *upload_data_size);
+                *upload_data_size = 0;
+                if (post->error)
+                    return finish_request_error(conn, request, post->error);
+                return MHD_YES;
+            }
+            if (!post->size)
+                return finish_request_error(conn, request, MHD_HTTP_BAD_REQUEST);
+            int rc = request->kind == REQUEST_CONFIG
+                ? config_handle_set_json(post->data) : sources_save(post->data, post->size);
+            if (rc != 0)
+                return finish_request_error(conn, request, rc == CONFIG_INVALID ? MHD_HTTP_BAD_REQUEST : MHD_HTTP_INTERNAL_SERVER_ERROR);
+            request->finished = 1;
+            struct MHD_Response *resp = create_buffer_response(
+                strlen(MSG_OK), (void *)MSG_OK, MHD_RESPMEM_PERSISTENT);
+            add_response_header(resp, "Content-Type", "text/plain");
+            return send_response(conn, MHD_HTTP_OK, resp);
+        }
 
-            char out[4096];
+        if (request->kind == REQUEST_UPLOAD) {
+            struct UploadStatus *status = &request->state.upload;
+            if (*upload_data_size) {
+                if (*upload_data_size > HTTP_UPLOAD_BODY_LIMIT - status->total_size) {
+                    status->error = MHD_HTTP_CONTENT_TOO_LARGE;
+                } else {
+                    size_t written = fwrite(upload_data, 1, *upload_data_size, status->fp);
+                    status->total_size += written;
+                    if (written != *upload_data_size)
+                        status->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+                }
+                *upload_data_size = 0;
+                if (status->error)
+                    return finish_request_error(conn, request, status->error);
+                return MHD_YES;
+            }
+
+            /* Both operations must run: a failed flush must not skip fclose. */
+            if (fflush(status->fp) != 0)
+                status->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+            if (fclose(status->fp) != 0)
+                status->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+            status->fp = NULL;
+            if (!status->total_size && !status->error)
+                status->error = MHD_HTTP_BAD_REQUEST;
+            if (!status->error) {
+                char msg[256] = "";
+                char out_slot[128];
+                if (payload_mgr_import_to_storage_mode(status->filename, status->temp_path,
+                                                      status->mode, "web_upload", "",
+                                                      msg, sizeof(msg), out_slot, sizeof(out_slot)) != 0) {
+                    pldmgr_log("[PLDMGR] !!! Failed to commit upload: %s\n", msg);
+                    status->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+                } else {
+                    /* Import consumed the temp file. Relinquish its pathname so
+                     * completion cannot unlink a later owner of the same name. */
+                    status->temp_path[0] = '\0';
+                }
+            }
+            pldmgr_log("[PLDMGR] Upload finished. Total bytes: %zu, Error: %u\n",
+                       status->total_size, status->error);
+            if (status->error)
+                return finish_request_error(conn, request, status->error);
+            request->finished = 1;
+            struct MHD_Response *resp = create_buffer_response(
+                strlen(MSG_OK), (void *)MSG_OK, MHD_RESPMEM_PERSISTENT);
+            add_response_header(resp, "Content-Type", "text/plain");
+            return send_response(conn, MHD_HTTP_OK, resp);
+        }
+
+        if (request->kind == REQUEST_PKG_UPLOAD) {
+            /* [CN-FORK] 流式写 PKGMGR_TMP_PATH → pkgmanager_commit_upload */
+            struct UploadStatus *status = &request->state.upload;
+            if (*upload_data_size) {
+                if (*upload_data_size > HTTP_UPLOAD_BODY_LIMIT - status->total_size) {
+                    status->error = MHD_HTTP_CONTENT_TOO_LARGE;
+                } else {
+                    size_t written = fwrite(upload_data, 1, *upload_data_size, status->fp);
+                    status->total_size += written;
+                    if (written != *upload_data_size)
+                        status->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+                }
+                *upload_data_size = 0;
+                if (status->error)
+                    return finish_request_error(conn, request, status->error);
+                return MHD_YES;
+            }
+            if (status->fp) {
+                if (fflush(status->fp) != 0) status->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+                if (fclose(status->fp) != 0) status->error = MHD_HTTP_INTERNAL_SERVER_ERROR;
+                status->fp = NULL;
+            }
+            int err = status->error;
+            /* [CN-FORK] 栈闸门（32KB/函数）：本分支三块缓冲改堆分配，
+             * 否则会被 clang 累加进 http_on_request 的巨型栈帧。 */
+            char *buf = malloc(256 + 640 + 512);
+            if (!buf) return send_out_of_memory(conn);
+            char *result = buf;       /* 256 */
+            char *json = buf + 256;   /* 640 */
+            char *esc = buf + 896;    /* 512 */
+            result[0] = '\0';
+            if (!err) {
+                if (pkgmanager_commit_upload(status->temp_path, status->filename,
+                                             result, 256) != 0)
+                    err = MHD_HTTP_BAD_REQUEST;
+                else
+                    status->temp_path[0] = '\0'; /* commit 已接手，别再删 */
+            } else {
+                remove(status->temp_path);
+                status->temp_path[0] = '\0';
+                snprintf(result, 256, "write error during upload");
+            }
+            pldmgr_log("[PLDMGR] PKG Manager upload finished: %zu bytes, err=%d\n",
+                       status->total_size, err);
+            request->finished = 1;
+            pldmgr_json_escape(result, esc, 512);
+            if (err)
+                snprintf(json, 640, "{\"ok\":false,\"message\":\"%s\"}", esc);
+            else
+                snprintf(json, 640, "{\"ok\":true,\"version\":\"%s\"}", esc);
+            struct MHD_Response *resp = create_buffer_response(
+                strlen(json), (void *)json, MHD_RESPMEM_MUST_COPY);
+            free(buf);
+            add_response_header(resp, "Content-Type", "application/json");
+            return send_response(conn, err ? MHD_HTTP_BAD_REQUEST : MHD_HTTP_OK, resp);
+        }
+    }
+
+    /* ── [CN-FORK] 游戏管理系列 POST 端点：请求体已由 REQUEST_BODY 收好 ──
+     * 九条端点（删源 / 存档自动与连通性 / 存档上传 / 改名 / 磁贴两层图 / 挂载 /
+     * 卸载挂载 / 卸载安装）共用同一个累加器，**收完才分发**。与 /game_media_pack
+     * 那条刻意保持同一套结构：MHD 是把请求体切成若干块送进来的，只有
+     * upload_data_size==0 那一发才代表「体收完了」。 */
+    if (strcmp(method, "POST") == 0 && *con_cls != NULL && *con_cls != REQUEST_MARKER) {
+        struct RequestContext *request = *con_cls;
+        if (request->kind == REQUEST_BODY) {
+            struct PostStatus *status = &request->state.post;
+
+            if (strcmp(url, ROUTE_GAME_MEDIA_PACK) == 0) {
+                long long job_id = 0;
+                char msg[192];
+                int rc = -2;
+                msg[0] = 0;
+                if (status->error) {
+                    snprintf(msg, sizeof(msg), "请求体过大或内存不足");
+                } else if (status->data) {
+                    rc = game_media_pack_start_json(status->data, status->size, &job_id,
+                                                    msg, sizeof(msg));
+                } else {
+                    snprintf(msg, sizeof(msg), "请求体为空");
+                }
+                request->finished = 1;
+                char emsg[400];
+                pldmgr_json_escape(msg, emsg, sizeof(emsg));
+                char out[600];
+                int on = snprintf(out, sizeof(out), "{\"job_id\":%lld,\"error\":\"%s\","
+                                   "\"message\":\"%s\"}",
+                                   job_id, rc == 0 ? "" : (rc == -1 ? "EBUSY" : "EBAD"), emsg);
+                if (on < 0 || (size_t)on >= sizeof(out)) on = 0;
+                return queue_json(conn,
+                                  rc == 0 ? MHD_HTTP_OK
+                                          : (rc == -1 ? MHD_HTTP_CONFLICT : MHD_HTTP_BAD_REQUEST),
+                                  out, (size_t)on);
+            }
+
+            /* [CN-FORK] 4KB 响应缓冲走堆：本函数是巨型 if/else 链，clang 会把所有
+             * 分支的局部数组算进同一个栈帧（见 /get_config 处的说明）。 */
+            char *out = malloc(4096);
+            if (!out) {
+                request->finished = 1;
+                return send_out_of_memory(conn);
+            }
             int code = MHD_HTTP_INTERNAL_SERVER_ERROR;
             int on;
             out[0] = '\0';
             if (status->error) {
-                on = snprintf(out, sizeof(out),
+                on = snprintf(out, 4096,
                               "{\"error\":\"EBAD\",\"message\":\"请求体过大或内存不足\"}");
                 code = MHD_HTTP_CONTENT_TOO_LARGE;
             } else {
                 on = gr_dispatch_post(conn, url, status->data, status->size,
-                                      out, sizeof(out), &code);
+                                      out, 4096, &code);
             }
-            if (status->data) free(status->data);
-            free(status);
-            *con_cls = NULL;
-            if (on < 0 || (size_t)on >= sizeof(out)) {
+            request->finished = 1;
+            if (on < 0 || (size_t)on >= 4096) {
                 /* 走到这里说明上面某个 snprintf 被截断了 —— 半截 JSON 比一条
                  * 通用错误严重得多：前端 .json() 直接抛，用户看到的是白屏式失败。 */
-                on = snprintf(out, sizeof(out),
+                on = snprintf(out, 4096,
                               "{\"error\":\"EIO\",\"message\":\"响应过长\"}");
                 code = MHD_HTTP_INTERNAL_SERVER_ERROR;
             }
-
             struct MHD_Response *r = MHD_create_response_from_buffer(
                 (size_t)on, (void *)out, MHD_RESPMEM_MUST_COPY);
             MHD_add_response_header(r, "Content-Type", "application/json");
@@ -1386,155 +1641,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             add_cors_headers(r);
             enum MHD_Result gr = MHD_queue_response(conn, code, r);
             MHD_destroy_response(r);
+            free(out);
             return gr;
-        }
-    }
-
-    /* ── Chunked upload for /manage:upload ─────────────────── */
-    if (strncmp(url, ROUTE_UPLOAD, strlen(ROUTE_UPLOAD)) == 0) {
-        struct UploadStatus *status = (struct UploadStatus *)*con_cls;
-        if (*upload_data_size != 0) {
-            if (status->fp && !status->error) {
-                size_t written = fwrite(upload_data, 1, *upload_data_size, status->fp);
-                if (written != *upload_data_size) {
-                    pldmgr_log("[PLDMGR] !!! Write error: expected %zu, got %zu\n",
-                               *upload_data_size, written);
-                    status->error = 1;
-                }
-                status->total_size += written;
-            }
-            *upload_data_size = 0;
-            return MHD_YES;
-        } else {
-            /* Upload finished */
-            if (status->fp) {
-                fflush(status->fp);
-                fclose(status->fp);
-                status->fp = NULL;
-
-                if (!status->error) {
-                    char msg[256];
-                    if (payload_mgr_import_to_storage(status->filename, status->temp_path, "web_upload", "", msg, sizeof(msg)) != 0) {
-                        pldmgr_log("[PLDMGR] !!! Failed to commit upload: %s\n", msg);
-                        status->error = 1;
-                    }
-                }
-            }
-            pldmgr_log("[PLDMGR] Upload finished. Total bytes: %zu, Error: %d\n",
-                       status->total_size, status->error);
-
-            int err = status->error;
-            free(status);
-            *con_cls = NULL;
-
-            const char *msg = err ? "Error during upload\n" : MSG_OK;
-            struct MHD_Response *resp = MHD_create_response_from_buffer(
-                strlen(msg), (void *)msg, MHD_RESPMEM_MUST_COPY);
-            add_cors_headers(resp);
-            enum MHD_Result ret = MHD_queue_response(
-                conn, err ? MHD_HTTP_INTERNAL_SERVER_ERROR : MHD_HTTP_OK, resp);
-            MHD_destroy_response(resp);
-            return ret;
-        }
-    }
-
-    /* ── [CN-FORK] Chunked upload for /pkgmanager_upload ─────── */
-    if (strncmp(url, ROUTE_PKG_UPLOAD, strlen(ROUTE_PKG_UPLOAD)) == 0 && *con_cls != NULL) {
-        struct UploadStatus *status = (struct UploadStatus *)*con_cls;
-        if (*upload_data_size != 0) {
-            if (status->fp && !status->error) {
-                size_t written = fwrite(upload_data, 1, *upload_data_size, status->fp);
-                if (written != *upload_data_size)
-                    status->error = 1;
-                status->total_size += written;
-            }
-            *upload_data_size = 0;
-            return MHD_YES;
-        } else {
-            if (status->fp) {
-                fflush(status->fp);
-                fclose(status->fp);
-                status->fp = NULL;
-            }
-            int err = status->error;
-            char result[256] = "";
-            if (!err) {
-                if (pkgmanager_commit_upload(status->temp_path, status->filename, result, sizeof(result)) != 0)
-                    err = 1;
-            } else {
-                remove(status->temp_path);
-                snprintf(result, sizeof(result), "write error during upload");
-            }
-            pldmgr_log("[PLDMGR] PKG Manager upload finished: %zu bytes, err=%d\n",
-                       status->total_size, err);
-            free(status);
-            *con_cls = NULL;
-
-            char json[640];
-            char esc[512];
-            pldmgr_json_escape(result, esc, sizeof(esc));
-            if (err)
-                snprintf(json, sizeof(json), "{\"ok\":false,\"message\":\"%s\"}", esc);
-            else
-                snprintf(json, sizeof(json), "{\"ok\":true,\"version\":\"%s\"}", esc);
-            struct MHD_Response *resp_up = MHD_create_response_from_buffer(
-                strlen(json), (void *)json, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp_up, "Content-Type", "application/json");
-            add_cors_headers(resp_up);
-            enum MHD_Result ret_up = MHD_queue_response(
-                conn, err ? MHD_HTTP_BAD_REQUEST : MHD_HTTP_OK, resp_up);
-            MHD_destroy_response(resp_up);
-            return ret_up;
-        }
-    }
-
-    /* ── Chunked upload for /repository_install_push ────────── */
-    if (strncmp(url, ROUTE_REPO_INSTALL_PUSH, strlen(ROUTE_REPO_INSTALL_PUSH)) == 0) {
-        struct UploadStatus *status = (struct UploadStatus *)*con_cls;
-        if (*upload_data_size != 0) {
-            if (status->fp && !status->error) {
-                size_t written = fwrite(upload_data, 1, *upload_data_size, status->fp);
-                if (written != *upload_data_size) {
-                    status->error = 1;
-                }
-                status->total_size += written;
-            }
-            *upload_data_size = 0;
-            return MHD_YES;
-        } else {
-            if (status->fp) {
-                fflush(status->fp);
-                fclose(status->fp);
-            }
-            int err = status->error;
-
-            char msg_buf[1024] = "";
-            if (!err) {
-                if (repository_install_commit(
-                        status->filename, status->temp_path, "repository", status->repo_url, msg_buf,
-                        sizeof(msg_buf)) != 0) {
-                    err = 1;
-                }
-            }
-
-            pldmgr_log("[PLDMGR] Payload install %s (%zu bytes)\n",
-                       err ? "FAILED" : "complete", status->total_size);
-            free(status);
-            *con_cls = NULL;
-            if (err && msg_buf[0] == '\0') {
-                snprintf(msg_buf, sizeof(msg_buf), "Write error");
-            }
-            char json_resp[1024];
-            snprintf(json_resp, sizeof(json_resp), "{\"ok\":%s,\"message\":\"%s\"}",
-                     err ? "false" : "true", err ? msg_buf : "Installed");
-            struct MHD_Response *resp2 = MHD_create_response_from_buffer(
-                strlen(json_resp), (void *)json_resp, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp2, "Content-Type", "application/json");
-            add_cors_headers(resp2);
-            enum MHD_Result ret2 = MHD_queue_response(
-                conn, err ? MHD_HTTP_INTERNAL_SERVER_ERROR : MHD_HTTP_OK, resp2);
-            MHD_destroy_response(resp2);
-            return ret2;
         }
     }
 
@@ -1544,7 +1652,6 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     }
 
     struct MHD_Response *resp = NULL;
-    enum MHD_Result ret;
     int http_status = MHD_HTTP_OK;
 
     /* ── USB routes ────────────────────────────────────────── */
@@ -1552,171 +1659,183 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         const char *path = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "path");
         if (path) {
             char *resp_buf;
-            struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-            if (oom_resp) {
-                ret = MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-                MHD_destroy_response(oom_resp);
-                return ret;
-            }
-            int rc = payload_mgr_usb_check(path, resp_buf, RESPONSE_BUFFER_SIZE);
-            resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            ret = MHD_queue_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
-            MHD_destroy_response(resp);
-            return ret;
+            if (!alloc_response_buffer_small(&resp_buf))
+                return send_out_of_memory(conn);
+            int rc = payload_mgr_usb_check(path, resp_buf, SMALL_RESPONSE_BUFFER_SIZE);
+            if (!resp_buf[0]) return send_serialization_error(conn, resp_buf);
+            resp = create_buffer_response(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+            add_response_header(resp, "Content-Type", "application/json");
+
+            return send_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
         } else {
             const char *err = "{\"error\":\"Missing path\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
+            add_response_header(resp, "Content-Type", "application/json");
         }
-        add_cors_headers(resp);
-        ret = MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
-        MHD_destroy_response(resp);
-        return ret;
+
+        return send_response(conn, MHD_HTTP_BAD_REQUEST, resp);
     }
 
     if (strcmp(url, ROUTE_USB_MOVE_PERFORM) == 0) {
         const char *path = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "path");
+        const char *mode = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "mode");
         const char *overwrite_str = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "overwrite");
-        int overwrite = (overwrite_str && strcmp(overwrite_str, "true") == 0) ? 1 : 0;
+        if (!mode) {
+            int overwrite = (overwrite_str && strcmp(overwrite_str, "true") == 0) ? 1 : 0;
+            mode = overwrite ? "replace" : "new";
+        }
         const char *keep_original_str = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "keep_original");
         int keep_original = (keep_original_str && strcmp(keep_original_str, "true") == 0) ? 1 : 0;
         if (path) {
             char *resp_buf;
-            struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-            if (oom_resp) {
-                ret = MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-                MHD_destroy_response(oom_resp);
-                return ret;
-            }
-            int rc = payload_mgr_usb_move(path, overwrite, keep_original, resp_buf, RESPONSE_BUFFER_SIZE);
-            resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            ret = MHD_queue_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
-            MHD_destroy_response(resp);
-            return ret;
+            if (!alloc_response_buffer_small(&resp_buf))
+                return send_out_of_memory(conn);
+            int rc = payload_mgr_usb_move(path, mode, keep_original, resp_buf, SMALL_RESPONSE_BUFFER_SIZE);
+            if (!resp_buf[0]) return send_serialization_error(conn, resp_buf);
+            resp = create_buffer_response(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+            add_response_header(resp, "Content-Type", "application/json");
+
+            return send_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
         } else {
             const char *err = "{\"error\":\"Missing path\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
+            add_response_header(resp, "Content-Type", "application/json");
         }
-        add_cors_headers(resp);
-        ret = MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
-        MHD_destroy_response(resp);
-        return ret;
+
+        return send_response(conn, MHD_HTTP_BAD_REQUEST, resp);
     }
 
     /* ── Static assets ─────────────────────────────────────── */
     if (strcmp(url, ROUTE_INDEX) == 0 || strcmp(url, ROUTE_INDEX_HTML) == 0) {
-        resp = MHD_create_response_from_buffer(assets_index_html_len,
+        resp = create_buffer_response(assets_index_html_len,
                                                (void *)assets_index_html,
                                                MHD_RESPMEM_PERSISTENT);
-        MHD_add_response_header(resp, "Content-Type", "text/html");
-        MHD_add_response_header(resp, "Cache-Control", "no-cache, must-revalidate");
+        add_response_header(resp, "Content-Type", "text/html");
+        add_response_header(resp, "Cache-Control", "no-cache, must-revalidate");
     } else if (strcmp(url, ROUTE_CACHE_MANIFEST) == 0) {
-        resp = MHD_create_response_from_buffer(assets_cache_appcache_len,
+        resp = create_buffer_response(assets_cache_appcache_len,
                                                (void *)assets_cache_appcache,
                                                MHD_RESPMEM_PERSISTENT);
-        MHD_add_response_header(resp, "Content-Type", "text/cache-manifest");
-        MHD_add_response_header(resp, "Cache-Control", "no-cache, must-revalidate");
+        add_response_header(resp, "Content-Type", "text/cache-manifest");
+        add_response_header(resp, "Cache-Control", "no-cache, must-revalidate");
     } else if (strcmp(url, "/favicon.svg") == 0) {
-        resp = MHD_create_response_from_buffer(assets_favicon_svg_len,
+        resp = create_buffer_response(assets_favicon_svg_len,
                                                (void *)assets_favicon_svg,
                                                MHD_RESPMEM_PERSISTENT);
         MHD_add_response_header(resp, "Content-Type", "image/svg+xml");
         MHD_add_response_header(resp, "Cache-Control", "no-cache, must-revalidate"); /* [CN-FORK] 图标随版本即时刷新，不吃 7 天缓存 */
     } else if (strcmp(url, "/icon.png") == 0) {
-        resp = MHD_create_response_from_buffer(assets_icon_png_len,
+        resp = create_buffer_response(assets_icon_png_len,
                                                (void *)assets_icon_png,
                                                MHD_RESPMEM_PERSISTENT);
         MHD_add_response_header(resp, "Content-Type", "image/png");
         MHD_add_response_header(resp, "Cache-Control", "no-cache, must-revalidate"); /* [CN-FORK] 图标随版本即时刷新，不吃 7 天缓存 */
 
     /* ── API routes ────────────────────────────────────────── */
+    } else if (strcmp(url, ROUTE_UPDATE_CHECK) == 0) {
+        const char *resp_buf = "{\"status\":\"none\"}";
+        resp = create_buffer_response(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_PERSISTENT);
+        add_response_header(resp, "Content-Type", "application/json");
+
+        return send_response(conn, MHD_HTTP_OK, resp);
     } else if (strcmp(url, ROUTE_CHECK) == 0) {
         const char *filename = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
         if (!filename) {
             const char *err = "{\"error\":\"Missing filename\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
+            add_response_header(resp, "Content-Type", "application/json");
+
+            return send_response(conn, MHD_HTTP_BAD_REQUEST, resp);
         }
         if (!is_safe_filename(filename)) {
             const char *err = "{\"error\":\"Invalid filename\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
+            add_response_header(resp, "Content-Type", "application/json");
+
+            return send_response(conn, MHD_HTTP_BAD_REQUEST, resp);
         }
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-        payload_mgr_check_existing(filename, resp_buf, RESPONSE_BUFFER_SIZE);
-        resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
-        add_cors_headers(resp);
-        return MHD_queue_response(conn, MHD_HTTP_OK, resp);
+        if (!alloc_response_buffer_small(&resp_buf))
+            return send_out_of_memory(conn);
+        payload_mgr_check_existing(filename, resp_buf, SMALL_RESPONSE_BUFFER_SIZE);
+        if (!resp_buf[0]) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
+
+        return send_response(conn, MHD_HTTP_OK, resp);
     } else if (strcmp(url, ROUTE_LIST_PAYLOADS) == 0) {
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         size_t len = payload_mgr_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
-        resp = MHD_create_response_from_buffer(len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
+        if (!len || len >= RESPONSE_BUFFER_SIZE) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_PROCESSES_LIST) == 0) {
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-        size_t len = process_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
-        resp = MHD_create_response_from_buffer(len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
+        if (!alloc_response_buffer_small(&resp_buf))
+            return send_out_of_memory(conn);
+        size_t len = process_list_json(resp_buf, SMALL_RESPONSE_BUFFER_SIZE);
+        if (!len || len >= SMALL_RESPONSE_BUFFER_SIZE) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_HISTORY_LIST) == 0) {
-        char *json = malloc(8192);
+        char *json = malloc(SMALL_RESPONSE_BUFFER_SIZE);
         if (json) {
-            size_t len = history_mgr_to_json(json, 8192);
-            resp = MHD_create_response_from_buffer(len, (void *)json, MHD_RESPMEM_MUST_FREE);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_OK, resp);
+            size_t len = history_mgr_to_json(json, SMALL_RESPONSE_BUFFER_SIZE);
+            if (!len) return send_serialization_error(conn, json);
+            resp = create_buffer_response(len, (void *)json, MHD_RESPMEM_MUST_FREE);
+            add_response_header(resp, "Content-Type", "application/json");
+
+            return send_response(conn, MHD_HTTP_OK, resp);
         } else {
-            const char *err = "{\"error\":\"Memory allocation failed\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+            return send_out_of_memory(conn);
         }
     } else if (strcmp(url, ROUTE_PROCESS_KILL) == 0) {
         const char *pid_str = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "pid");
         if (!pid_str) {
             const char *err = "{\"ok\":false,\"message\":\"Missing pid\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
+            add_response_header(resp, "Content-Type", "application/json");
+
+            return send_response(conn, MHD_HTTP_BAD_REQUEST, resp);
         }
         int pid = atoi(pid_str);
         int rc = process_kill(pid);
-        
+
         pldmgr_log("[PLDMGR] Process kill requested for PID %d: %s\n", pid, rc == 0 ? "SUCCESS" : "FAILED");
-        
+
         char json_resp[256];
         snprintf(json_resp, sizeof(json_resp), "{\"ok\":%s,\"message\":\"%s\"}",
                  rc == 0 ? "true" : "false", rc == 0 ? "Killed" : "Failed to kill");
-        resp = MHD_create_response_from_buffer(strlen(json_resp), (void *)json_resp, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
-        add_cors_headers(resp);
-        return MHD_queue_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+        resp = create_buffer_response(strlen(json_resp), (void *)json_resp, MHD_RESPMEM_MUST_COPY);
+        add_response_header(resp, "Content-Type", "application/json");
+
+        return send_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+    } else if (strcmp(url, ROUTE_REPO_CACHE_CLEAR) == 0) {
+        int result = sources_clear_cache();
+        const char *body = result ? "{\"ok\":false}" : "{\"ok\":true}";
+        resp = create_buffer_response(strlen(body), (void *)body, MHD_RESPMEM_PERSISTENT);
+        add_response_header(resp, "Content-Type", "application/json");
+        return send_response(conn, result ? MHD_HTTP_INTERNAL_SERVER_ERROR : MHD_HTTP_OK, resp);
+    } else if (strcmp(url, ROUTE_REPO_ICONS) == 0) {
+        const char *source = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "source");
+        char *buffer;
+        if (!alloc_response_buffer(&buffer)) return send_out_of_memory(conn);
+        size_t length = sources_icons_json(source, buffer, RESPONSE_BUFFER_SIZE);
+        if (!length) {
+            free(buffer);
+            resp = create_buffer_response(strlen("{\"icons\":{}}"), (void *)"{\"icons\":{}}", MHD_RESPMEM_PERSISTENT);
+            add_response_header(resp, "Content-Type", "application/json");
+            return send_response(conn, MHD_HTTP_NOT_FOUND, resp);
+        }
+        resp = create_buffer_response(length, buffer, MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
+        add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, ROUTE_REPO_LIST) == 0) {
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         PldmgrConfig cfg;
         config_read(&cfg);
         size_t len;
@@ -1724,13 +1843,13 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             len = sources_multi_repository_list_json(resp_buf, RESPONSE_BUFFER_SIZE, 0);
         else
             len = repository_list_json(resp_buf, RESPONSE_BUFFER_SIZE, 0);
-        resp = MHD_create_response_from_buffer(len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
+        if (!len || len >= RESPONSE_BUFFER_SIZE) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(len, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_REPO_REFRESH) == 0) {
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         PldmgrConfig cfg;
         config_read(&cfg);
         size_t len2;
@@ -1738,243 +1857,247 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             len2 = sources_multi_repository_list_json(resp_buf, RESPONSE_BUFFER_SIZE, 1);
         else
             len2 = repository_list_json(resp_buf, RESPONSE_BUFFER_SIZE, 1);
-        resp = MHD_create_response_from_buffer(len2, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
+        if (!len2 || len2 >= RESPONSE_BUFFER_SIZE) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(len2, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_REPO_INSTALL) == 0) {
+        const char *id = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "id");
         const char *filename = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
-        const char *repo_url = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "repo_url");
-        const char *source_id = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "source_id");
-        if (!filename) {
-            const char *err = "{\"ok\":false,\"message\":\"Missing filename\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
+        const char *source_url = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "source_url");
+        if (!source_url) {
+            source_url = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "repo_url");
         }
-        if (!is_safe_filename(filename)) {
-            const char *err = "{\"ok\":false,\"message\":\"Invalid filename\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
+        const char *mode = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "mode");
+        const char *replace_slot = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "replace_slot");
+
+        char derived_id[128] = "";
+        if (!id || id[0] == '\0') {
+            if (filename && filename[0]) {
+                slot_local_key(filename, derived_id, sizeof(derived_id));
+                id = derived_id;
+            } else {
+                const char *err = "{\"ok\":false,\"message\":\"Missing id parameter\"}";
+                resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
+                add_response_header(resp, "Content-Type", "application/json");
+
+                return send_response(conn, MHD_HTTP_BAD_REQUEST, resp);
+            }
         }
 
-        char msg_buf[1024] = "";
-        int rc;
-        if (source_id && source_id[0]) {
-            rc = sources_multi_repository_install(filename, source_id,
-                                                  repo_url ? repo_url : "",
-                                                  msg_buf, sizeof(msg_buf));
-        } else {
-            const char *detail = (repo_url && repo_url[0]) ? repo_url : REPOSITORY_SOURCE_URL;
-            rc = repository_install_download(filename, detail, msg_buf, sizeof(msg_buf));
-        }
-        if (msg_buf[0] == '\0') {
-            snprintf(msg_buf, sizeof(msg_buf), rc == 0 ? "Installed" : "Install failed");
-        }
+        char *resp_buf;
+        if (!alloc_response_buffer_small(&resp_buf))
+            return send_out_of_memory(conn);
 
-        char json_resp[1024];
-        snprintf(json_resp, sizeof(json_resp), "{\"ok\":%s,\"message\":\"%s\"}",
-                 rc == 0 ? "true" : "false", msg_buf);
-        resp = MHD_create_response_from_buffer(strlen(json_resp), (void *)json_resp, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
-        add_cors_headers(resp);
-        return MHD_queue_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+        int rc = sources_repo_install(source_url, id, mode, replace_slot, resp_buf, SMALL_RESPONSE_BUFFER_SIZE);
+        if (!resp_buf[0]) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
+
+        return send_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
     } else if (strcmp(url, ROUTE_SOURCES_LIST) == 0) {
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
-        sources_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
-        resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
+        if (!alloc_response_buffer_sized(&resp_buf, SOURCES_RESPONSE_BUFFER_SIZE))
+            return send_out_of_memory(conn);
+        if (sources_list_json(resp_buf, SOURCES_RESPONSE_BUFFER_SIZE) != 0) resp_buf[0] = '\0';
+        if (!resp_buf[0]) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_SOURCES_ADD) == 0) {
         const char *src_url = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "url");
         if (!src_url || !src_url[0]) {
             const char *err = "{\"ok\":false,\"message\":\"Missing url parameter\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
+            add_response_header(resp, "Content-Type", "application/json");
+
+            return send_response(conn, MHD_HTTP_BAD_REQUEST, resp);
         }
         char msg_buf_src[512] = "";
         int rc_src = sources_add(src_url, msg_buf_src, sizeof(msg_buf_src));
-        char json_resp_src[1024];
+        char json_resp_src[4096];
         if (rc_src == 0) {
-            char name_escaped[512];
+            char name_escaped[6 * 512];
             pldmgr_json_escape(msg_buf_src, name_escaped, sizeof(name_escaped));
-            snprintf(json_resp_src, sizeof(json_resp_src),
+            json_format(json_resp_src, sizeof(json_resp_src),
                      "{\"ok\":true,\"name\":\"%s\"}", name_escaped);
         } else {
-            char msg_escaped[512];
+            char msg_escaped[6 * 512];
             pldmgr_json_escape(msg_buf_src, msg_escaped, sizeof(msg_escaped));
-            snprintf(json_resp_src, sizeof(json_resp_src),
+            json_format(json_resp_src, sizeof(json_resp_src),
                      "{\"ok\":false,\"message\":\"%s\"}", msg_escaped);
         }
-        resp = MHD_create_response_from_buffer(strlen(json_resp_src), (void *)json_resp_src, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
-        add_cors_headers(resp);
-        return MHD_queue_response(conn, rc_src == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
+        if (!json_resp_src[0]) return send_request_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "JSON serialization failed or exceeds the size limit");
+        resp = create_buffer_response(strlen(json_resp_src), (void *)json_resp_src, MHD_RESPMEM_MUST_COPY);
+        add_response_header(resp, "Content-Type", "application/json");
+
+        return send_response(conn, rc_src == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
     } else if (strcmp(url, ROUTE_SOURCES_REMOVE) == 0) {
         const char *idx_str = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "index");
         if (!idx_str) {
             const char *err = "{\"ok\":false,\"message\":\"Missing index parameter\"}";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-            add_cors_headers(resp);
-            return MHD_queue_response(conn, MHD_HTTP_BAD_REQUEST, resp);
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_MUST_COPY);
+            add_response_header(resp, "Content-Type", "application/json");
+
+            return send_response(conn, MHD_HTTP_BAD_REQUEST, resp);
         }
         int idx = atoi(idx_str);
         char msg_rm[256] = "";
         int rc_rm = sources_remove(idx, msg_rm, sizeof(msg_rm));
         char json_rm[512];
-        char msg_rm_e[256];
+        char msg_rm_e[6 * 512];
         pldmgr_json_escape(msg_rm, msg_rm_e, sizeof(msg_rm_e));
-        snprintf(json_rm, sizeof(json_rm), "{\"ok\":%s,\"message\":\"%s\"}",
+        json_format(json_rm, sizeof(json_rm), "{\"ok\":%s,\"message\":\"%s\"}",
                  rc_rm == 0 ? "true" : "false", msg_rm_e);
-        resp = MHD_create_response_from_buffer(strlen(json_rm), (void *)json_rm, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(resp, "Content-Type", "application/json");
-        add_cors_headers(resp);
-        return MHD_queue_response(conn, rc_rm == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
-    } else if (strncmp(url, ROUTE_LOAD_PAYLOAD, strlen(ROUTE_LOAD_PAYLOAD)) == 0) {
-        const char *path = url + strlen(ROUTE_LOAD_PAYLOAD);
-        const char *final_path = NULL;
-        char resolved_path[512];
-        if (is_allowed_payload_path(path)) {
-            final_path = path;
-        } else {
-            const char *filename = strrchr(path, '/');
-            filename = filename ? filename + 1 : path;
-            if (is_safe_filename(filename) &&
-                payload_mgr_resolve_path(filename, resolved_path,
-                                         sizeof(resolved_path)) == 0) {
-                final_path = resolved_path;
-            }
-        }
+        if (!json_rm[0]) return send_request_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "JSON serialization failed or exceeds the size limit");
+        resp = create_buffer_response(strlen(json_rm), (void *)json_rm, MHD_RESPMEM_MUST_COPY);
+        add_response_header(resp, "Content-Type", "application/json");
 
-        if (!final_path) {
-            pldmgr_log("[PLDMGR] !!! Payload path rejected: %s\n", path);
-            const char *err = "Invalid payload name\n";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err,
-                                                   MHD_RESPMEM_PERSISTENT);
+        return send_response(conn, rc_rm == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
+    } else if (strncmp(url, ROUTE_LOAD_PAYLOAD, strlen(ROUTE_LOAD_PAYLOAD)) == 0) {
+        const char *arg = url + strlen(ROUTE_LOAD_PAYLOAD);
+        char clean_arg[512];
+        strncpy(clean_arg, arg, sizeof(clean_arg) - 1);
+        clean_arg[sizeof(clean_arg) - 1] = '\0';
+        url_decode_in_place(clean_arg);
+
+        char resolved_path[512];
+        if (strlen(arg) >= sizeof(clean_arg) || strstr(arg, "%00")) {
+            const char *err = "Invalid payload path\n";
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
             http_status = MHD_HTTP_BAD_REQUEST;
-        } else if (ps5_launch_elf(final_path) == 0) {
-            resp = MHD_create_response_from_buffer(strlen(MSG_OK), (void *)MSG_OK,
-                                                   MHD_RESPMEM_PERSISTENT);
-        } else {
-            const char *err = "Failed to launch payload\n";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err,
-                                                   MHD_RESPMEM_PERSISTENT);
-            http_status = MHD_HTTP_INTERNAL_SERVER_ERROR;
-        }
-        MHD_add_response_header(resp, "Content-Type", "text/plain");
-    } else if (strncmp(url, ROUTE_DELETE, strlen(ROUTE_DELETE)) == 0) {
-        const char *filename =
-            MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
-        if (filename) {
-            if (strstr(filename, "/") || strstr(filename, "..")) {
-                const char *err = "Invalid filename\n";
-                resp = MHD_create_response_from_buffer(strlen(err), (void *)err,
+        } else if (is_pldmgr_name(clean_arg)) {
+            pldmgr_log("[PLDMGR] Refusing to launch payload manager itself: %s\n", clean_arg);
+            const char *err = "Payload Manager cannot be launched as a payload\n";
+            resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
+            http_status = MHD_HTTP_BAD_REQUEST;
+        } else if (slot_resolve(clean_arg, resolved_path, sizeof(resolved_path)) == 0) {
+            if (is_pldmgr_name(resolved_path)) {
+                pldmgr_log("[PLDMGR] Refusing to launch payload manager itself: %s\n", resolved_path);
+                const char *err = "Payload Manager cannot be launched as a payload\n";
+                resp = create_buffer_response(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
+                http_status = MHD_HTTP_BAD_REQUEST;
+            } else if (ps5_launch_elf(resolved_path) == 0) {
+                resp = create_buffer_response(strlen(MSG_OK), (void *)MSG_OK,
                                                        MHD_RESPMEM_PERSISTENT);
             } else {
-                if (payload_mgr_delete_payload_file(filename) == 0) {
-                    pldmgr_log("[PLDMGR] Deleted payload: %s\n", filename);
-                    resp = MHD_create_response_from_buffer(strlen(MSG_OK), (void *)MSG_OK,
+                const char *err = "Failed to launch payload\n";
+                resp = create_buffer_response(strlen(err), (void *)err,
+                                                       MHD_RESPMEM_PERSISTENT);
+                http_status = MHD_HTTP_INTERNAL_SERVER_ERROR;
+            }
+        } else {
+            pldmgr_log("[PLDMGR] !!! Payload slot/path rejected or not found: %s (raw: %s)\n", clean_arg, arg);
+            const char *err = "Invalid payload name\n";
+            resp = create_buffer_response(strlen(err), (void *)err,
+                                                   MHD_RESPMEM_PERSISTENT);
+            http_status = MHD_HTTP_BAD_REQUEST;
+        }
+        add_response_header(resp, "Content-Type", "text/plain");
+    } else if (strcmp(url, ROUTE_DELETE) == 0) {
+        const char *slot =
+            MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "slot");
+        const char *filename =
+            MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "filename");
+        const char *target = slot ? slot : filename;
+        if (target) {
+            if (strstr(target, "..")) {
+                const char *err = "Invalid payload identifier\n";
+                resp = create_buffer_response(strlen(err), (void *)err,
+                                                       MHD_RESPMEM_PERSISTENT);
+                http_status = MHD_HTTP_BAD_REQUEST;
+            } else {
+                if (payload_mgr_delete_payload(target) == 0) {
+                    pldmgr_log("[PLDMGR] Deleted payload: %s\n", target);
+                    resp = create_buffer_response(strlen(MSG_OK), (void *)MSG_OK,
                                                            MHD_RESPMEM_PERSISTENT);
                 } else {
-                    const char *err = "Failed to delete file\n";
-                    resp = MHD_create_response_from_buffer(strlen(err), (void *)err,
+                    const char *err = "Failed to delete payload\n";
+                    resp = create_buffer_response(strlen(err), (void *)err,
                                                            MHD_RESPMEM_PERSISTENT);
+                    http_status = MHD_HTTP_INTERNAL_SERVER_ERROR;
                 }
             }
         } else {
-            const char *err = "Missing filename\n";
-            resp = MHD_create_response_from_buffer(strlen(err), (void *)err,
+            const char *err = "Missing slot parameter\n";
+            resp = create_buffer_response(strlen(err), (void *)err,
                                                    MHD_RESPMEM_PERSISTENT);
+            http_status = MHD_HTTP_BAD_REQUEST;
         }
-        MHD_add_response_header(resp, "Content-Type", "text/plain");
+        add_response_header(resp, "Content-Type", "text/plain");
     } else if (strcmp(url, ROUTE_SHUTDOWN) == 0) {
         const char *msg = "NayePlmTools Core shutting down...\n"; /* [CN-FORK] 对外名称 */
         pldmgr_log("[PLDMGR] %s", msg);
-        resp = MHD_create_response_from_buffer(strlen(msg), (void *)msg,
+        resp = create_buffer_response(strlen(msg), (void *)msg,
                                                MHD_RESPMEM_PERSISTENT);
-        MHD_add_response_header(resp, "Content-Type", "text/plain");
+        add_response_header(resp, "Content-Type", "text/plain");
         http_keep_running = 0;
     } else if (strcmp(url, ROUTE_LOG) == 0) {
         char *resp_buf;
-        resp = alloc_response_buffer(&resp_buf);
-        if (!resp) {
-            size_t pos = log_build_json(resp_buf, RESPONSE_BUFFER_SIZE);
-            resp = MHD_create_response_from_buffer(pos, (void *)resp_buf,
-                                                   MHD_RESPMEM_MUST_FREE);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
-        }
+        if (!alloc_response_buffer_sized(&resp_buf, LOG_RESPONSE_BUFFER_SIZE))
+            return send_out_of_memory(conn);
+        size_t pos = log_build_json(resp_buf, LOG_RESPONSE_BUFFER_SIZE);
+        if (!pos || pos >= LOG_RESPONSE_BUFFER_SIZE) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(pos, (void *)resp_buf,
+                                               MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_VERSION) == 0) {
-        resp = MHD_create_response_from_buffer(
+        resp = create_buffer_response(
             strlen(MENU_VERSION), (void *)MENU_VERSION, MHD_RESPMEM_PERSISTENT);
-        MHD_add_response_header(resp, "Content-Type", "text/plain");
+        add_response_header(resp, "Content-Type", "text/plain");
     } else if (strcmp(url, ROUTE_GETIP) == 0) {
         char ip[64];
         if (pldmgr_get_local_ip(ip, sizeof(ip)) != 0) {
             strcpy(ip, "0.0.0.0");
         }
-        resp = MHD_create_response_from_buffer(strlen(ip), (void *)ip,
+        resp = create_buffer_response(strlen(ip), (void *)ip,
                                                MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(resp, "Content-Type", "text/plain");
+        add_response_header(resp, "Content-Type", "text/plain");
     } else if (strcmp(url, ROUTE_AUTOLOAD_STATUS) == 0) {
-        int total, done;
-        char current[128];
-        pldmgr_autoload_get_status(&total, &done, current);
-        int remaining = pldmgr_autoload_get_remaining_seconds();
-        long long remaining_ms = pldmgr_autoload_get_remaining_ms();
-
-        char list_buf[4096] = "";
-        FILE *f = fopen(AUTOLOAD_CONFIG_PATH, "r");
-        if (f) {
-            char line[256];
-            int first = 1;
-            while (fgets(line, sizeof(line), f)) {
-                line[strcspn(line, "\r\n")] = 0;
-                if (strlen(line) == 0 || line[0] == '!')
-                    continue;
-                if (!first) strcat(list_buf, ",");
-                strcat(list_buf, line);
-                first = 0;
-            }
-            fclose(f);
+        if (mutation_authorized(conn)) pldmgr_autoload_frontend_ready();
+        AutoloadSnapshot snapshot;
+        pldmgr_autoload_get_snapshot(&snapshot);
+        /* [CN-FORK] 栈闸门（32KB/函数）：这两块转义缓冲（6*128 + 6*4096 = 25344 B）
+         * 与上面的 AutoloadSnapshot（8320 B）落在同一分支里，会把 http_on_request
+         * 的栈帧顶到 33.8KB —— 越过 tools/check_stack_frames.sh 的闸门（真机每条
+         * 连接线程只有 64KB 栈）。改走堆，一次分配、指针切段。 */
+        char *esc = malloc(6 * 128 + 6 * 4096);
+        if (!esc) return send_out_of_memory(conn);
+        char *current_escaped = esc;            /* 6 * 128  */
+        char *list_escaped    = esc + 6 * 128;  /* 6 * 4096 */
+        if (pldmgr_json_escape(snapshot.current, current_escaped, 6 * 128) ||
+            pldmgr_json_escape(snapshot.list, list_escaped, 6 * 4096)) {
+            free(esc);
+            return send_request_error(conn,MHD_HTTP_INTERNAL_SERVER_ERROR,"Invalid autoload snapshot");
         }
-
-        PldmgrConfig cfg;
-        config_read(&cfg);
-
-        char current_escaped[256];
-        char list_escaped[8192];
-        pldmgr_json_escape(current, current_escaped, sizeof(current_escaped));
-        pldmgr_json_escape(list_buf, list_escaped, sizeof(list_escaped));
 
         char *resp_buf;
-        resp = alloc_response_buffer(&resp_buf);
-        if (!resp) {
-            snprintf(resp_buf, RESPONSE_BUFFER_SIZE,
-                     "{\"remaining\":%d,\"remaining_ms\":%lld,\"total\":%d,\"done\":%d,\"current\":\"%s\","
-                     "\"list\":\"%s\",\"delay\":%d,\"KILL_DISC_PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s}",
-                     remaining, remaining_ms, total, done, current_escaped, list_escaped, cfg.autoload_delay,
-                     cfg.kill_disc_player ? "true" : "false", cfg.scan_usb_payloads ? "true" : "false");
-            resp = MHD_create_response_from_buffer(strlen(resp_buf),
-                                                   (void *)resp_buf,
-                                                   MHD_RESPMEM_MUST_FREE);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
+        if (!alloc_response_buffer_small(&resp_buf)) {
+            free(esc);
+            return send_out_of_memory(conn);
         }
+        json_format(resp_buf, SMALL_RESPONSE_BUFFER_SIZE,
+                 "{\"remaining\":%d,\"remaining_ms\":%lld,\"total\":%d,\"done\":%d,\"current\":\"%s\","
+                 "\"list\":\"%s\",\"delay\":%d,\"SCAN_USB_PAYLOADS\":%s,"
+                 "\"state\":\"%s\",\"successful\":%d,\"failed\":%d,\"skipped\":%d,\"outcomes\":\"%s\",\"entry_index\":%d,\"entry_duration_ms\":%d,\"entry_remaining_ms\":%lld}",
+                 snapshot.remaining, snapshot.remaining_ms, snapshot.total, snapshot.done, current_escaped,
+                 list_escaped, snapshot.delay, snapshot.scan_usb_payloads ? "true" : "false",
+                 pldmgr_autoload_state_name(snapshot.state),snapshot.successful,snapshot.failed,snapshot.skipped,snapshot.outcomes,
+                 snapshot.entry_index,snapshot.entry_duration_ms,snapshot.entry_remaining_ms);
+        free(esc);
+        if (!resp_buf[0]) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(strlen(resp_buf),
+                                               (void *)resp_buf,
+                                               MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_AUTOLOAD_CLEAR) == 0) {
         pldmgr_autoload_reset();
         const char *msg = "Autoload status cleared.\n";
-        resp = MHD_create_response_from_buffer(strlen(msg), (void *)msg,
+        resp = create_buffer_response(strlen(msg), (void *)msg,
                                                MHD_RESPMEM_PERSISTENT);
-        MHD_add_response_header(resp, "Content-Type", "text/plain");
+        add_response_header(resp, "Content-Type", "text/plain");
     } else if (strcmp(url, ROUTE_ABORT) == 0) {
         pldmgr_autoload_abort();
         const char *msg = "Autoload sequence aborted.\n";
-        resp = MHD_create_response_from_buffer(strlen(msg), (void *)msg,
+        resp = create_buffer_response(strlen(msg), (void *)msg,
                                                MHD_RESPMEM_PERSISTENT);
         MHD_add_response_header(resp, "Content-Type", "text/plain");
     } else if (strcmp(url, "/autoload_status") == 0) {
@@ -2031,9 +2154,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     } else if (strcmp(url, ROUTE_QUICKLINKS) == 0) {
         /* [CN-FORK] 常用入口：清单 + 逐条 TCP 探活（同步串行，进页面拉一次不轮询） */
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         quicklinks_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
         resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
         MHD_add_response_header(resp, "Content-Type", "application/json");
@@ -2069,9 +2191,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     } else if (strcmp(url, ROUTE_THERMAL) == 0) {
         /* [CN-FORK] 温控只读：CPU/GPU/SSD 温度 + 风扇占空比（safe_mode 短路 + 5s 快照，避免轮询打死内核） */
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         thermal_stats_json(resp_buf, RESPONSE_BUFFER_SIZE);
         resp = MHD_create_response_from_buffer(strlen(resp_buf), (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
         MHD_add_response_header(resp, "Content-Type", "application/json");
@@ -2080,9 +2201,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         /* [CN-FORK] 风扇温控（模型 A + 守护）：?apply=1&target=NN=应用生效（写硬件）；
          * ?set_enabled=0/1=只切开关（不写硬件）；无参=读状态（只读）。safe_mode/设备缺失时 supported:false。 */
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         const char *fapply = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "apply");
         const char *fset   = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "set_enabled");
         const char *ft     = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "target");
@@ -2107,9 +2227,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         const char *gforce = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "force");
         int gl_force = (gforce && gforce[0] == '1') ? 1 : 0;
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         int glen = game_mgr_list_json(resp_buf, RESPONSE_BUFFER_SIZE, gl_force);
         if (glen < 0) glen = 0;
         resp = MHD_create_response_from_buffer((size_t)glen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
@@ -2151,9 +2270,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!mtid)
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
         char *mresp_buf;
-        struct MHD_Response *moom = alloc_response_buffer(&mresp_buf);
-        if (moom)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, moom);
+        if (!alloc_response_buffer(&mresp_buf))
+            return send_out_of_memory(conn);
         int mlen = game_media_list_json(mtid, mresp_buf, RESPONSE_BUFFER_SIZE);
         if (mlen < 0) {
             free(mresp_buf);
@@ -2312,9 +2430,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!xd)
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
         char *xb;
-        struct MHD_Response *xoom = alloc_response_buffer(&xb);
-        if (xoom)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, xoom);
+        if (!alloc_response_buffer(&xb))
+            return send_out_of_memory(conn);
         int xn = game_mgr_detail_json(xd, xb, RESPONSE_BUFFER_SIZE);
         if (xn < 0) {
             free(xb);
@@ -2330,9 +2447,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!xs)
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
         char *sb;
-        struct MHD_Response *soom = alloc_response_buffer(&sb);
-        if (soom)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, soom);
+        if (!alloc_response_buffer(&sb))
+            return send_out_of_memory(conn);
         int sn = game_saves_list_json(xs, sb, RESPONSE_BUFFER_SIZE);
         if (sn < 0) {
             free(sb);
@@ -2349,9 +2465,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!xr || !xrs)
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid 或 save");
         char *rb;
-        struct MHD_Response *room = alloc_response_buffer(&rb);
-        if (room)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, room);
+        if (!alloc_response_buffer(&rb))
+            return send_out_of_memory(conn);
         int rn = game_saves_remote_info(xr, xrs, rb, RESPONSE_BUFFER_SIZE);
         if (rn < 0) {
             free(rb);
@@ -2519,68 +2634,81 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         PldmgrConfig cfg;
         config_read(&cfg);
 
-        /* Get list */
-        char list_buf[4096] = {0};
-        FILE *f = fopen(AUTOLOAD_CONFIG_PATH, "r");
-        if (f) {
-            char line[256];
-            int first = 1;
-            while (fgets(line, sizeof(line), f)) {
-                line[strcspn(line, "\r\n")] = 0;
-                if (strlen(line) == 0)
-                    continue;
-                if (!first)
-                    strncat(list_buf, ",", sizeof(list_buf) - strlen(list_buf) - 1);
-                strncat(list_buf, line, sizeof(list_buf) - strlen(list_buf) - 1);
-                first = 0;
-            }
-            fclose(f);
+        /* [CN-FORK] v0.5.2.145 全局存档配置原文（设置页「存档配置」）+ v0.6.0 收藏列表。
+         * 全局存档配置：单游戏弹窗要求它来判断「远程位置来自全局还是本游戏」，所以
+         * 必须从 /get_config 发出去 —— 不发的话前端每次刷新就丢，用户填的全局配置
+         * 看起来像没保存。没配过时是空串（前端 loadGlobalCfg 会拿它跟 EMPTY_CFG 合并）。
+         *
+         * ⚠ 三份原始缓冲 + 三份 JSON 转义缓冲**一律走堆**（两块连续分配，指针切段）。
+         * 理由：http_on_request 是一条巨型 if/else 链，clang 会把**所有分支**的局部
+         * 数组都算进同一个栈帧（-fstack-usage 实测把这条链推到 35KB），而
+         * tools/check_stack_frames.sh 的闸门是 32KB/函数。 */
+        size_t raw_cap = 4096 + 2048 + 4096;   /* list / archive-global / favorites */
+        char *raw = malloc(raw_cap);
+        char *esc = malloc(6 * raw_cap);
+        if (!raw || !esc) {
+            free(raw); free(esc);
+            return send_out_of_memory(conn);
         }
+        char *list_buf     = raw;                        /* 4096 */
+        char *ag_raw       = raw + 4096;                 /* 2048 */
+        char *fav_buf      = raw + 6144;                 /* 4096 */
+        char *list_escaped = esc;                        /* 6*4096  */
+        char *ag_escaped   = esc + 6 * 4096;             /* 6*2048  */
+        char *fav_escaped  = esc + 6 * 4096 + 6 * 2048;  /* 6*4096  */
+        char *resp_buf = NULL;
 
-        char list_escaped[8192];
-        pldmgr_json_escape(list_buf, list_escaped, sizeof(list_escaped));
-
-        /* [CN-FORK] v0.5.2.145 全局存档配置原文（设置页「存档配置」）。
-         * 单游戏弹窗要求它来判断「远程位置来自全局还是本游戏」，所以必须从 /get_config
-         * 发出去 —— 不发的话前端每次刷新就丢，用户填的全局配置看起来像没保存。
-         * 没配过时是空串（前端 loadGlobalCfg 会拿它跟 EMPTY_CFG 合并，不会崩）。
-         * 两个缓冲都刻意压小：这条请求跑在 64KB 栈的连接线程上（见 check_stack_frames.sh）。 */
-        char ag_raw[2048];
-        if (config_read_archive_global(ag_raw, sizeof(ag_raw)) < 0)
+        if (read_autoload_list(list_buf, 4096, 1) != 0) {
+            free(raw); free(esc);
+            return send_request_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                                      "Autoload list is unreadable or exceeds the size limit");
+        }
+        ag_raw[0] = 0;
+        if (config_read_archive_global(ag_raw, 2048) < 0)
             ag_raw[0] = 0;
-        char ag_escaped[2816];
-        pldmgr_json_escape(ag_raw, ag_escaped, sizeof(ag_escaped));
-
-        char *resp_buf;
-        resp = alloc_response_buffer(&resp_buf);
-        if (!resp) {
-            snprintf(resp_buf, RESPONSE_BUFFER_SIZE,
-                     "{\"AUTOLOAD_ENABLED\":%s,\"AUTOLOAD_LIST\":\"%s\",\"LAST_"
-                     "REPOSITORY_UPDATE\":%ld,"
-                     "\"AUTO_BROWSER_OPEN\":%s,\"AUTOLOAD_DELAY\":%d,"
-                     "\"KILL_DISC_PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s,"
-                     "\"AUTO_INSTALL_APP\":%s,\"MULTI_SOURCES_ENABLED\":%s,"
-                     "\"DEFAULT_REPO_ENABLED\":%s,\"ARCHIVE_GLOBAL_CONFIG\":\"%s\"}",
-                     cfg.autoload_enabled ? "true" : "false", list_escaped, cfg.last_repository_update,
-                     cfg.auto_browser_open ? "true" : "false", cfg.autoload_delay,
-                     cfg.kill_disc_player ? "true" : "false", cfg.scan_usb_payloads ? "true" : "false",
-                     cfg.auto_install_app ? "true" : "false",
-                     cfg.multi_sources_enabled ? "true" : "false",
-                     cfg.default_repo_enabled ? "true" : "false",
-                     ag_escaped);
-            resp = MHD_create_response_from_buffer(strlen(resp_buf),
-                                                   (void *)resp_buf,
-                                                   MHD_RESPMEM_MUST_FREE);
-            MHD_add_response_header(resp, "Content-Type", "application/json");
+        fav_buf[0] = 0;
+        int fav_exists = 0;
+        if (config_get_favorites_csv(fav_buf, 4096, &fav_exists) != 0) {
+            free(raw); free(esc);
+            return send_request_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                                      "Favorites list is unreadable or exceeds the size limit");
         }
+        pldmgr_json_escape(list_buf, list_escaped, 6 * 4096);
+        pldmgr_json_escape(ag_raw, ag_escaped, 6 * 2048);
+        pldmgr_json_escape(fav_buf, fav_escaped, 6 * 4096);
+
+        if (!alloc_response_buffer(&resp_buf)) {
+            free(raw); free(esc);
+            return send_out_of_memory(conn);
+        }
+        json_format(resp_buf, RESPONSE_BUFFER_SIZE,
+                    "{\"AUTOLOAD_ENABLED\":%s,\"AUTOLOAD_LIST\":\"%s\",\"LAST_"
+                    "REPOSITORY_UPDATE\":%ld,"
+                    "\"AUTO_BROWSER_OPEN\":%s,\"AUTOLOAD_DELAY\":%d,"
+                    "\"KILL_DISC_PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s,"
+                    "\"AUTO_INSTALL_APP\":%s,\"MULTI_SOURCES_ENABLED\":%s,"
+                    "\"DEFAULT_REPO_ENABLED\":%s,\"ARCHIVE_GLOBAL_CONFIG\":\"%s\","
+                    "\"FAVORITES\":\"%s\",\"FAVORITES_INITIALIZED\":%s}",
+                    cfg.autoload_enabled ? "true" : "false", list_escaped, cfg.last_repository_update,
+                    cfg.auto_browser_open ? "true" : "false", cfg.autoload_delay,
+                    cfg.kill_disc_player ? "true" : "false", cfg.scan_usb_payloads ? "true" : "false",
+                    cfg.auto_install_app ? "true" : "false",
+                    cfg.multi_sources_enabled ? "true" : "false",
+                    cfg.default_repo_enabled ? "true" : "false",
+                    ag_escaped, fav_escaped, fav_exists ? "true" : "false");
+        free(raw); free(esc);
+        if (!resp_buf[0]) return send_serialization_error(conn, resp_buf);
+        resp = create_buffer_response(strlen(resp_buf),
+                                               (void *)resp_buf,
+                                               MHD_RESPMEM_MUST_FREE);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_SYSTEM_APPS) == 0) {
         /* [CN-FORK] v0.5.2.158 「个性化软件」：主机内置软件 + 每个账号累积出来的显隐状态。
          * 一次弹窗拉一遍，不轮询；库打不开时 error 非空、apps 为空数组，
          * 前端据此把「没有软件」和「读不到」分开显示。 */
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         int alen = app_vis_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
         if (alen < 0) alen = 0;
         resp = MHD_create_response_from_buffer((size_t)alen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
@@ -2591,9 +2719,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
          * 前端进游戏页时拉一次，与 /game_list 合并后排序；no-store 是因为它会被
          * /game_prefs_set 立刻改掉，缓存一份只会让「点了收藏但列表没动」变成幽灵问题。 */
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         int plen = game_prefs_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
         if (plen < 0) plen = 0;
         resp = MHD_create_response_from_buffer((size_t)plen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
@@ -2605,9 +2732,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
          * 这一份给「置顶」的**真身**（以前那份 pin 只写在我们的 JSON 里，主机不知道）。
          * no-store 同上：拨一次置顶它就变了。 */
         char *resp_buf;
-        struct MHD_Response *oom_resp = alloc_response_buffer(&resp_buf);
-        if (oom_resp)
-            return MHD_queue_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, oom_resp);
+        if (!alloc_response_buffer(&resp_buf))
+            return send_out_of_memory(conn);
         int tlen = tile_group_list_json(resp_buf, RESPONSE_BUFFER_SIZE);
         if (tlen < 0) tlen = 0;
         resp = MHD_create_response_from_buffer((size_t)tlen, (void *)resp_buf, MHD_RESPMEM_MUST_FREE);
@@ -2615,44 +2741,29 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         MHD_add_response_header(resp, "Cache-Control", "no-store");
     } else if (strcmp(url, "/events") == 0) {
         struct LogSSEConnection *sse = malloc(sizeof(struct LogSSEConnection));
-        sse->last_log_version = 0;
-        sse->sent_initial = 0;
+        if (!sse)
+            return MHD_NO;
+        log_stream_init(sse, MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Last-Event-ID"));
 
         resp = MHD_create_response_from_callback(
             MHD_SIZE_UNKNOWN, 1024, &log_stream_callback, sse, &log_stream_cleanup);
-        MHD_add_response_header(resp, "Content-Type", "text/event-stream");
-        MHD_add_response_header(resp, "Cache-Control", "no-cache");
-        MHD_add_response_header(resp, "Connection", "keep-alive");
+        if (!resp) {
+            log_stream_cleanup(sse);
+            return MHD_NO;
+        }
+        add_response_header(resp, "Content-Type", "text/event-stream");
+        add_response_header(resp, "Cache-Control", "no-cache");
+        add_response_header(resp, "Connection", "keep-alive");
     } else {
         /* Default: 404 */
         const char *not_found = "404 Not Found\n";
-        resp = MHD_create_response_from_buffer(strlen(not_found), (void *)not_found,
+        resp = create_buffer_response(strlen(not_found), (void *)not_found,
                                                MHD_RESPMEM_PERSISTENT);
-        MHD_add_response_header(resp, "Content-Type", "text/plain");
+        add_response_header(resp, "Content-Type", "text/plain");
     }
 
     if (!resp)
         return MHD_NO;
 
-    add_cors_headers(resp);
-    ret = MHD_queue_response(conn, http_status, resp);
-    MHD_destroy_response(resp);
-
-    return ret;
-}
-
-/* [CN-FORK] v0.5.2.99 账号板块的流式头像上传需要在请求结束时回收状态（浏览器
- * 传到一半关页面/断网）。本工程原有的 UploadStatus/PostStatus 都在各链末尾
- * 自行 free 并把 *con_cls 置 NULL，所以这里只需要转发给 psaccounts；它自己再用
- * magic 头认一遍，不是它的状态一律不动。
- * (void *)1 是上面注册块给普通请求打的占位标记，不是指针，绝不能解引用。 */
-void http_on_request_completed(void *cls, struct MHD_Connection *conn,
-                               void **con_cls,
-                               enum MHD_RequestTerminationCode toe) {
-    (void)cls;
-    (void)conn;
-    (void)toe;
-
-    if (con_cls == NULL || *con_cls == NULL || *con_cls == (void *)1) return;
-    psaccounts_conn_completed(*con_cls);
+    return send_response(conn, http_status, resp);
 }

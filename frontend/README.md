@@ -1,16 +1,36 @@
-# React + Vite
+# Payload Manager frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The React dashboard is bundled into a single HTML file embedded in the native
+PS5 daemon. Vite targets `es2015` and Safari 11. Build/deployment and the HTTP
+security contract are documented in [DEVELOPMENT.md](../DEVELOPMENT.md).
 
-Currently, two official plugins are available:
+Run these commands from `frontend/`:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm ci
+npm run dev:mock
+```
 
-## React Compiler
+The mock API listens on loopback port 8081; Vite prints the UI address (normally
+5173). `npm run dev` alone expects an API on 8081 via Vite's proxy. The native
+PS5 dashboard uses port 8084. Mock process/storage/loader responses are fixtures;
+they do not prove that hardware services work.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+npm run build
+npm run test:browser
+```
 
-## Expanding the ESLint configuration
+`build` runs zero-warning lint and Node tests before Vite, then verifies the
+production emoji PNG is embedded exactly once, attribution remains, and the old
+CDN dependency is absent. `test:browser` requires local Chrome (`CHROME_BIN` may
+override its path) and exercises actual editor reloads, StrictMode/save queues,
+markdown DOM sanitization, offline rendering and language selection. The separate
+mutation-browser/native-fixture checks and host sanitizers run in CI; see the
+root development guide for their commands and limits.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Localization instructions are in [TRANSLATIONS.md](../TRANSLATIONS.md).
+Markdown uses bundled PNG sprites because native emoji fonts failed on PS5.
+Sprite position rules are added only when needed, and both sanitizer passes
+exclude arbitrary remote media. Asset regeneration is optional; ordinary builds
+use the bundled files and need no graphics download or Pillow.

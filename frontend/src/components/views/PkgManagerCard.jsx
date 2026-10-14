@@ -32,6 +32,9 @@ export default function PkgManagerCard() {
     } catch { /* 服务未响应时保留上次状态 */ }
   }, [])
 
+  /* [CN-FORK] v0.6.0.176 挂载即探活一次是刻意为之（load 内部先 await 再 setState，
+   * 不是同步 setState）；上游新 eslint 规则 react-hooks/set-state-in-effect 对此偏保守。 */
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load() }, [load])
 
   const launch = async () => {

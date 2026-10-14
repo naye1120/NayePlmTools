@@ -11,7 +11,14 @@
 
 #include <stddef.h>
 
-#include "pldmgr.h"
+/* [CN-FORK] v0.6.0.176 用尖括号而非引号：引号 include 会相对本文件所在目录
+ * (include/) 解析，从而绕过 -I 搜索顺序。上游 tests 下的宿主 runner 把 pldmgr.h
+ * 打补丁后写进 build 目录并以 -I<build> 先于 -Iinclude 传入（把 /data 路径重定向
+ * 到临时目录）。若此处用引号，则 http_server.c 拿到 build/pldmgr.h 而本头拿到
+ * include/pldmgr.h，同一 TU 载入两份，#pragma once 按路径去重失效 → SCAN_DIRS 等
+ * 重定义。尖括号让它与调用方走同一条 -I 搜索链，收敛到同一文件。
+ * 生产构建 (-Iinclude) 与 fork 宿主测试 (test/run_host_tests.sh) 仍解析到 include/pldmgr.h。 */
+#include <pldmgr.h>
 
 #define PKGMGR_DIR            BASE_DATA_DIR "/pkgmanager"
 #define PKGMGR_ELF_PATH       PKGMGR_DIR "/pkg-manager.elf"

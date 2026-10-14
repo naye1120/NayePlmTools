@@ -21,11 +21,12 @@
 #define ROUTE_ABORT "/abort"
 #define ROUTE_AUTOLOAD_STATUS "/autoload_status"
 #define ROUTE_AUTOLOAD_CLEAR "/autoload_clear"
+#define ROUTE_REPO_ICONS "/repository_icons"
+#define ROUTE_REPO_CACHE_CLEAR "/repository_cache_clear"
 #define ROUTE_REPO_LIST "/repository_payloads"
 #define ROUTE_REPO_REFRESH "/repository_refresh"
 #define ROUTE_REPO_INSTALL "/repository_install"
-#define ROUTE_REPO_PUSH "/repository_push"
-#define ROUTE_REPO_INSTALL_PUSH "/repository_install_push"
+#define ROUTE_UPDATE_CHECK "/update_check"
 #define ROUTE_SOURCES_LIST "/sources_list"
 #define ROUTE_SOURCES_SET "/sources_set"
 #define ROUTE_SOURCES_ADD "/sources_add"
@@ -156,7 +157,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.5.2.175" /* [CN-FORK] 本 fork 版本：上游基线 0.5.2（已合并 upstream/main）+ 构建序号（.175，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.6.0.176" /* [CN-FORK] 本 fork 版本：上游基线 0.6.0（已合并 upstream/main，merge 见 HANDOVER.md §0）+ 构建序号（.176，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，
@@ -175,17 +176,27 @@
 #ifndef ARCHIVE_GLOBAL_PATH
 #define ARCHIVE_GLOBAL_PATH "/data/nayeplmtools/archive_global.json"
 #endif
+/* [CN-FORK] 上游 v0.6.0 新增「收藏」列表（payload 槽位级，见 src/slot.c）。
+ * 与 .164 的 game_prefs.json（游戏磁贴收藏）是两件事：那份管游戏列表排序，
+ * 这份管 payload 槽位的收藏标记。路径按本 fork 约定落在 nayeplmtools 下。 */
+#define FAVORITES_CONFIG_PATH "/data/nayeplmtools/favorites.txt"
 #define REPOSITORY_CACHE_PATH "/data/nayeplmtools/repository_cache.json"
 /* [CN-FORK] 安全模式哨兵文件：存在（内容无所谓）即在下次启动跳过全部引导期高危动作。
  * v0.5.1.64 起硬件探测已整体删除，本哨兵只负责跳过装机/杀光盘/开浏览器/自启序列。 */
 #define PLDMGR_SAFE_MODE_FLAG "/data/nayeplmtools/safe_mode"
 #define PAYLOADS_STORAGE_DIR "/data/nayeplmtools/payloads"
+/* [CN-FORK] v0.6.0.176 U 盘上本工具的库目录名。上游用 "pldmgr"；本 fork 的数据目录
+ * 整体叫 nayeplmtools（见 BASE_DATA_DIR 与 SCAN_DIRS），U 盘上保持一致。
+ * 旧名 pldmgr / payload-manager 仍被当作 legacy 识别（见 src/slot.c 的迁移判定）。 */
+#define PLDMGR_USB_LIB_NAME "nayeplmtools"
 /* [CN-FORK] 越狱引导器的自动加载目录，安装 payload 后若同名工具在此则同步更新 */
 #define PS5_AUTOLOADER_DIR    "/data/ps5_autoloader"
 #define PS5_AUTOLOADER_CONFIG PS5_AUTOLOADER_DIR "/autoload.txt"
 #define REPOSITORY_SOURCE_URL                                                  \
+  "https://itsplk.github.io/ps5-payloads-mirror/payloads_v2.json"
+#define LEGACY_REPOSITORY_SOURCE_URL                                           \
   "https://itsplk.github.io/ps5-payloads-mirror/payloads.json"
-#define REPOSITORY_REFRESH_INTERVAL_SEC 86400
+#define REPOSITORY_REFRESH_INTERVAL_SEC 10800
 
 /* Logging (implementation in log_server.c) */
 void pldmgr_log(const char *fmt, ...);

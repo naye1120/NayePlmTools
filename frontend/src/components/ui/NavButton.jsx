@@ -3,8 +3,11 @@ import { cn } from '../../utils/helpers'
 
 /* [CN-FORK] v0.5.2.85 侧栏选中态改「藏蓝底 + 左侧动作色竖条」：底色与文字走 index.css 的
  * .nav-item / .is-active（CSS 变量驱动，浅色主题在 light-theme.css 翻变量即可整组跟随），
- * 不再用整块实心主色——主色亮橙只留给竖条和页面上的主操作按钮。 */
-const NavButton = ({ active, onClick, icon: Icon, label, mobileLabel, className, sidebar, sidebarExpanded, isDonate }) => (
+ * 不再用整块实心主色——主色亮橙只留给竖条和页面上的主操作按钮。
+ * v0.6.0 上游把这颗按钮改成了「横向滚动 + showSeparator 分隔线 + isPS5 横排」的桌面条形态，
+ * 那是给它新侧栏（5 颗硬编码 NavButton）配套的；fork 保留 v0.5.2.96 之后的等宽格子底部栏
+ * 与 .nav-item 选中态 → 取 fork 侧，showSeparator 无人传（调用点只有 App.jsx 三处）。 */
+const NavButton = ({ active, onClick, icon: _Icon, label, mobileLabel, className, sidebar, sidebarExpanded, isDonate }) => (
   /* [CN-FORK] v0.5.2.99 手机底部栏：等宽格子保留（七项全可见是对的），但把「每格一个圆角框」去掉。
    * 公共类串里带着上游的 border，旧写法在移动分支补了 border-none 抵消，.96 重写时把这半句丢了，
    * 于是 7 个入口各画一圈 1px 亮边框，看起来像一排卡片而不是一条导航栏。
@@ -26,7 +29,7 @@ const NavButton = ({ active, onClick, icon: Icon, label, mobileLabel, className,
         className
       )}
     >
-      <Icon className={cn(
+      <_Icon className={cn(
         "w-6 h-6 shrink-0 group-hover:scale-110 transition-transform",
         active ? (sidebar ? "text-current" : (isDonate ? "text-red-500" : "text-ps-blue")) : (isDonate ? "text-red-500" : "")
       )} />

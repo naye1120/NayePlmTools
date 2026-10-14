@@ -153,7 +153,9 @@ int compute_sha256_file(const char *path, char out_hex[65]) {
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
         sha256_update(&ctx, buf, n);
     }
-    fclose(f);
+    int failed = ferror(f);
+    if (fclose(f)) failed = 1;
+    if (failed) { out_hex[0] = 0; return -1; }
 
     sha256_final(&ctx, hash);
     for (int i = 0; i < 32; i++) {

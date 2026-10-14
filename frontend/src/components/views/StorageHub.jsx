@@ -1,232 +1,440 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useLayoutEffect, useRef, useCallback } from 'react'
 import { CloudDownload, CloudOff, Upload, Package, Database, RefreshCw, Trash2, Loader2, AlertTriangle, HardDrive, Usb, ChevronDown, Globe, Search, Play } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { QRCodeSVG } from 'qrcode.react'
-import { cn, isPS5, isIOS, parsePayloadName } from '../../utils/helpers'
+import { cn, isPS5, isIOS, getBaseName, parsePayloadName } from '../../utils/helpers'
+import { getPayloadStatus, resolveSourceDisplayName, isRepositoryPayloadVisible } from '../../utils/payloadStatus'
+import { slug } from '../../utils/versions'
+import { formatSyncTime } from '../../utils/syncTime'
 import PayloadName from '../ui/PayloadName'
-// [CN-FORK] v0.5.2.94 骨架归一：页头/板块/空态/加载态改用共用部件，不再在本页手写
+import Modal from '../ui/Modal'
+import { useRepository } from '../../contexts/RepositoryContext'
+import PayloadCard from '../ui/PayloadCard'
+import PayloadDetailPanel from '../ui/PayloadDetailPanel'
+// [CN-FORK] v0.6.0 合入：本页页头/板块/空态/载入态/互斥档全部走共用部件，不再各页手写
 import PageHead from '../ui/PageHead'
 import Section from '../ui/Section'
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥档位统一 */
 
-const PayloadItem = ({ p, multiSources, isPS5, onInstall, srcId, srcUrl }) => {
-  const { t } = useTranslation()
-  return (
-  <div
-    className={cn(
-      /* [CN-FORK] 风格统一：列表行紧凑内边距，与全局 text-sm 尺度对齐 */
-      "flex flex-col md:flex-row justify-between p-4 transition-all",
-      multiSources
-        ? "hover:bg-white/[0.03]"
-        : "bg-white/[0.02] border border-white/10 rounded-xl hover:border-ps-blue/40",
-      isPS5 ? "flex-row items-center" : "items-start md:items-center"
-    )}
-  >
-    <div className="space-y-1 min-w-0">
-      <PayloadName path={p.filename} version={p.version} className="text-white font-semibold" stacked lastUpdate={p.last_update} />
-      {p.description && (
-        <p className="text-xs md:text-sm text-zinc-400 font-medium leading-relaxed">{p.description}</p>
-      )}
-    </div>
-    <button
-      onClick={() => onInstall(p, srcId === 'legacy-repo' ? null : srcId, srcUrl)}
-      /* [CN-FORK] v0.5.2.92 安装/更新按钮收进 .btn 体系：命中高度由 --ctl-h 决定
-       *（PC 44px、电视 68px），不再靠 px/py 撑出 32px 的小条；间距改用 .btn 的 * + * 外边距
-       *（老内核不认 flex gap，原来的 gap-2 在 PS5 上本来就没生效）。 */
-      className={cn(
-        "btn",
-        isPS5 ? "px-8 ml-6" : "w-full md:w-auto mt-3 md:mt-0 md:ml-6",
-        /* [CN-FORK] v0.5.2.103 收敛档：更新原先是手写实心 emerald（骨架层漏网块），改走 .btn-ok。
-         * 安装仍是本页主操作 → .btn-primary（全站唯一的上色按钮）。 */
-        p.isUpdate ? "btn-ok" : "btn-primary"
-      )}
-    >
-      <CloudDownload className="w-4 h-4" />
-      <span>{p.isUpdate ? t("storage_hub.update_btn", "Update") : t("storage_hub.install_btn", "Install")}</span>
-    </button>
-  </div>
-)
-}
-
-const CategoryGroup = ({ category, payloads, multiSources, isPS5, onInstall, srcId, srcUrl, defaultExpanded = false }) => {
-  const [expanded, setExpanded] = useState(defaultExpanded)
-  return (
-    <div className="border-b border-white/5 last:border-0">
-      <button 
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-        className="w-full flex items-center justify-between px-4 min-h-[var(--ctl-h)] hover:bg-white/5 transition-colors"
-      >
-        {/* [CN-FORK] 分类组头改用主题变量色：原 text-white/90 在 light-theme 重映射层无规则，浅色下白字不可读 */}
-        <span className="font-semibold text-ps-text text-sm">{category} <span className="text-zinc-500">({payloads.length})</span></span>
-        <ChevronDown className={cn("w-5 h-5 text-zinc-500 transition-transform", expanded && "rotate-180")} />
-      </button>
-      {expanded && (
-        <div className={cn(
-          multiSources ? "divide-y divide-white/5 bg-black/20" : "grid grid-cols-1 gap-2 p-3",
-          "border-t border-white/5"
-        )}>
-          {payloads.map(p => (
-            <PayloadItem 
-              key={p.filename} 
-              p={p} 
-              multiSources={multiSources} 
-              isPS5={isPS5} 
-              onInstall={onInstall} 
-              srcId={srcId} 
-              srcUrl={srcUrl} 
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, onUpload, onImportFromUsb, config, ip, scrollTarget, onClearScrollTarget }) => {
+const StorageHub = ({
+  items = [],
+  self = null,
+  payloads = [],
+  /* [CN-FORK] /list_payloads 的 meta 表（filename -> {source_name, install_source_detail}）
+   * 与「启动这个 payload」的入口：管理 Payload 一页统管就靠这两个 prop。 */
+  payloadMeta,
+  loadPayload,
+  onInstall,
+  onDelete,
+  onUpload,
+  onImportFromUsb,
+  config,
+  ip,
+  scrollTarget,
+  onClearScrollTarget,
+  selectedPayload: selectedPayloadProp,
+  onSelectPayload,
+  onClosePayload,
+  conflictPrompt: externalConflictPrompt,
+  setConflictPrompt: externalSetConflictPrompt,
+  externalLinkUrl,
+  setExternalLinkUrl,
+  installingPayloadId = null,
+}) => {
   const { t, i18n } = useTranslation()
+  /* [CN-FORK] 多来源缺省开（上游是 === true，缺省关）：本 fork 的口径是
+   * 「装上就能同时看到官方源和用户自己加的源」，只有用户显式关掉才收成单来源。 */
   const multiSources = config?.MULTI_SOURCES_ENABLED !== false
   /* [CN-FORK] v0.5.2.67 默认云端仓库总开关：本版默认关（后端缺键时按关处理）；
    * 关掉后预置的 repo.630810.xyz 靠多来源模式仍会列出，所以不再受单来源限制 */
   const defaultRepoOn = config?.DEFAULT_REPO_ENABLED === true
   const cloudDisabled = !multiSources && !defaultRepoOn
 
-  const [repoData, setRepoData] = useState(null)   // null = not loaded yet
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(false)
-  const [expandedSource, setExpandedSource] = useState(null) // id of expanded catalog
-  const [search, setSearch] = useState('')
-  const [sortMode, setSortMode] = useState(() => {
-    return localStorage.getItem('repoSortMode') || 'category'
-  })
+  const { sources, repoData, loading, error, fetchRemote } = useRepository()
 
-  const handleSortChange = (mode) => {
-    setSortMode(mode)
-    localStorage.setItem('repoSortMode', mode)
-  }
-
-  /* [CN-FORK] v0.5.2.125 必须是函数声明：函数体内第 138 行有 `await fetchRemote(true)` 自引用，
-   * 写成 `const fetchRemote = async () => {…}` 会被 Babel 的 async 降级搞坏（自引用不重写，
-   * 变成悬空标识符）。详见 utils/gameApi.js 里 watchJob 的 tick 注释与 HANDOVER §6。 */
-  async function fetchRemote(force = false) {
-    /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：不发请求，后端也不会给东西 */
-    if (cloudDisabled) {
-      setRepoData(null)
-      setLoading(false)
-      setError(false)
-      return
-    }
-    setLoading(true)
-    setError(false)
-    try {
-      const endpoint = force ? '/repository_refresh' : '/repository_payloads'
-      const res = await fetch(endpoint)
-      if (!res.ok) throw new Error()
-      const data = await res.json()
-      setRepoData(data)
-
-      // For multi-source: auto-expand first source with payloads
-      if (data?.sources?.length > 0 && expandedSource === null) {
-        const first = data.sources.find(s => s.payloads?.length > 0)
-        if (first) setExpandedSource(first.id)
-      }
-
-      // Legacy single-source: auto-refresh if older than 24h
-      if (!force && data?.last_update) {
-        // eslint-disable-next-line react-hooks/purity
-        const now = Math.floor(Date.now() / 1000)
-        if (now - Number(data.last_update) > 24 * 60 * 60) {
-          await fetchRemote(true)
-          return
-        }
-      }
-    } catch {
-      setError(true)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    /* [CN-FORK] v0.5.1.65 开关变化时重跑：关掉时 fetchRemote 自己会清空目录并直接返回（不发请求），
-     * 重新打开则自动拉一次 */
-    fetchRemote()
-  }, [cloudDisabled])
-
-  useEffect(() => {
-    if (scrollTarget) {
-      const timer = setTimeout(() => {
-        const element = document.getElementById(scrollTarget);
-        if (element) element.scrollIntoView({ behavior: 'smooth' });
-        if (onClearScrollTarget) onClearScrollTarget();
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [scrollTarget]);
-
-  const localFilenames = useMemo(() => payloads.map(p => p.split('/').pop()), [payloads])
+  /* [CN-FORK] 已安装的 Payload：payloads 是路径数组，USB 的那批归下面的板块 */
   const internalPayloads = payloads.filter(p => !p.includes('/mnt/usb'))
 
-  const getBaseName = (filename) => {
-    if (!filename) return '';
-    let clean = filename.replace(/\.(elf|bin)$/i, '');
-    const versionMatch = clean.match(/[_-]v?(\d+[\d.a-z-]+)/i);
-    if (versionMatch) clean = clean.replace(versionMatch[0], '');
-    return clean.replace(/[_-]ps[45]$/i, '');
-  }
-
-  /* ---- Derive remote status for a flat list of payloads ---- */
-  const enrichPayloads = (list) =>
-    list.map(p => {
-      const isInstalled = p.filename ? localFilenames.includes(p.filename) : false
-      const baseName = getBaseName(p.filename)
-      const installedVersion = localFilenames.find(f => getBaseName(f) === baseName)
-      const isUpdate = !isInstalled && !!installedVersion
-      return { ...p, isInstalled, isUpdate, installedFilename: installedVersion }
-    }).sort((a, b) => {
-      if (a.isUpdate && !b.isUpdate) return -1
-      if (!a.isUpdate && b.isUpdate) return 1
-      
-      const nameA = (a.name || a.filename || '').toLowerCase()
-      const nameB = (b.name || b.filename || '').toLowerCase()
-      return nameA.localeCompare(nameB)
-    })
-
-  /* ---- Source-grouped data ---- */
-  const enrichedSources = useMemo(() => {
-    if (multiSources && repoData?.sources) {
-      return repoData.sources.map(src => ({
-        ...src,
-        id: src.id || src.url,
-        payloads: enrichPayloads(src.payloads || [])
-      }))
-    } else if (!multiSources && repoData?.payloads) {
-      return [{
-        id: 'legacy-repo',
-        name: t("storage_hub.default_repository", "Default Repository"),
-        url: repoData.repo_url || '',
-        last_update: repoData.last_update || 0,
-        payloads: enrichPayloads(repoData.payloads)
-      }]
+  /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：这一版不发请求、也不列目录。
+   * v0.6.0 把仓库数据搬进 RepositoryContext 后，「mount 即拉取」的行为挪到了 provider
+   * （它拿不到 config，关不掉），这里至少保证 UI 上一行都不渲染，并明确告知是用户自己关的。
+   * fork 默认 multiSources 开，所以实际上是「官方源照常列 + 用户自选关」的口径。 */
+  const stalenessCheckedRef = useRef(false)
+  useEffect(() => {
+    if (cloudDisabled || !repoData || stalenessCheckedRef.current) return
+    stalenessCheckedRef.current = true
+    /* [CN-FORK] 保留 v0.5.2 的「陈旧目录自愈」：单来源模式下后端给的是缓存副本，
+     * 超过 24h 强刷一次（fetchRemote(true) -> /repository_refresh）。
+     * 多来源模式下 repoData 没有顶层 last_update，此处天然空转。 */
+    const last = Number(repoData.last_update) || 0
+    if (last > 0 && Math.floor(Date.now() / 1000) - last > 24 * 60 * 60) {
+      fetchRemote(true)
     }
-    return []
-  }, [repoData, multiSources, localFilenames, t])
+  }, [repoData, cloudDisabled, fetchRemote])
 
-  const legacyRepoUrl = repoData?.repo_url || ''
-
-  /* ---- Source badge helper: look up source name from metadata ---- */
+  /* [CN-FORK] Source badge helper: look up source name from metadata */
   const getSourceBadge = (fileName) => {
     if (!multiSources || !payloadMeta) return null
     const meta = payloadMeta[fileName]
     return meta?.source_name || meta?.install_source_detail || null
   }
 
+  const [expandedSource, setExpandedSource] = useState(null) // id of expanded catalog
+  const [search, setSearch] = useState('')
+  const [sortMode, setSortMode] = useState(() => {
+    return localStorage.getItem('repoSortMode') || 'name'
+  })
+
+  const [localConflictPrompt, setLocalConflictPrompt] = useState(null)
+  const conflictPrompt = externalConflictPrompt !== undefined ? externalConflictPrompt : localConflictPrompt
+  const setConflictPrompt = externalSetConflictPrompt || setLocalConflictPrompt
+
+  const [localSelectedPayload, setLocalSelectedPayload] = useState(null)
+  const selectedPayload = selectedPayloadProp !== undefined ? selectedPayloadProp : localSelectedPayload
+  const setSelectedPayload = onSelectPayload || setLocalSelectedPayload
+  const [savedScroll, setSavedScroll] = useState(0)
+
+  const handlePayloadSelect = (payloadData) => {
+    const mainEl = document.querySelector('main')
+    if (mainEl) setSavedScroll(mainEl.scrollTop)
+    if (onSelectPayload) {
+      onSelectPayload(payloadData)
+    } else {
+      setSelectedPayload(payloadData)
+    }
+  }
+
+  const handleCloseDetail = useCallback(() => {
+    if (onClosePayload) {
+      onClosePayload()
+    } else {
+      setSelectedPayload(null)
+    }
+  }, [onClosePayload, setSelectedPayload])
+
+  const handleSortChange = (mode) => {
+    setSortMode(mode)
+    localStorage.setItem('repoSortMode', mode)
+  }
+
+  useEffect(() => {
+    if (scrollTarget) {
+      const timer = setTimeout(() => {
+        const element = document.getElementById(scrollTarget)
+        if (element) element.scrollIntoView({ behavior: 'smooth' })
+        if (onClearScrollTarget) onClearScrollTarget()
+      }, 300)
+      return () => clearTimeout(timer)
+    }
+  }, [scrollTarget, onClearScrollTarget])
+
+  /* ---- Source-grouped data with statusInfo ---- */
+  const enrichedSources = useMemo(() => {
+    return (sources || []).map((src) => {
+      const rawPayloads = src.payloads || []
+      const filteredPayloads = rawPayloads.filter((p) => isRepositoryPayloadVisible(p, src.url))
+      const enrichedPayloads = filteredPayloads.map((p) => {
+        const statusInfo = getPayloadStatus({
+          payload: p,
+          srcUrl: src.url,
+          items,
+          self,
+          sources,
+          multiSources,
+        })
+        return {
+          ...p,
+          statusInfo,
+          isInstalled: statusInfo.isInstalled,
+          isUpdate: statusInfo.isUpdate,
+        }
+      })
+
+      return {
+        ...src,
+        payloads: enrichedPayloads,
+      }
+    })
+  }, [sources, items, multiSources, self])
+
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
+  const resolvedPayloadData = useMemo(() => {
+    if (!selectedPayload) return null
+
+    const targetPayload =
+      selectedPayload.payload ||
+      (typeof selectedPayload === 'object' && (selectedPayload.name || selectedPayload.id || selectedPayload.filename)
+        ? selectedPayload
+        : null)
+
+    const targetIdentifier =
+      selectedPayload.payload?.id ||
+      selectedPayload.id ||
+      selectedPayload.payload?.filename ||
+      selectedPayload.filename ||
+      (typeof selectedPayload === 'string' ? selectedPayload : null)
+
+    const targetSrcId = selectedPayload.srcId || null
+    const targetSrcUrl = selectedPayload.srcUrl || null
+
+    // Check candidate sources from enrichedSources first so that fresh status is always picked up
+    const candidateSources = targetSrcId
+      ? [
+          enrichedSources.find((s) => s.id === targetSrcId),
+          ...enrichedSources.filter((s) => s.id !== targetSrcId),
+        ].filter(Boolean)
+      : (targetSrcUrl
+          ? [
+              enrichedSources.find((s) => s.url === targetSrcUrl),
+              ...enrichedSources.filter((s) => s.url !== targetSrcUrl),
+            ].filter(Boolean)
+          : enrichedSources)
+
+    for (const src of candidateSources) {
+      const match = src.payloads?.find(
+        (candidate) =>
+          (targetIdentifier && candidate.id === targetIdentifier) ||
+          (targetIdentifier && candidate.filename === targetIdentifier) ||
+          (targetIdentifier && candidate.filename?.toLowerCase() === targetIdentifier.toLowerCase()) ||
+          (targetPayload && (candidate.id === targetPayload.id || candidate.filename === targetPayload.filename))
+      )
+      if (match) {
+        return {
+          payload: match,
+          srcId: src.id,
+          srcUrl: src.url,
+          statusInfo: match.statusInfo,
+          isInstalled: match.isInstalled,
+          isUpdate: match.isUpdate,
+        }
+      }
+    }
+
+    if (targetPayload && (targetPayload.name || targetPayload.id || targetPayload.filename)) {
+      const srcUrl =
+        targetSrcUrl ||
+        (targetSrcId ? enrichedSources.find((s) => s.id === targetSrcId)?.url : enrichedSources[0]?.url) ||
+        ''
+      const statusInfo = getPayloadStatus({
+        payload: targetPayload,
+        srcUrl,
+        items,
+        self,
+        sources,
+        multiSources,
+      })
+      return {
+        ...selectedPayload,
+        payload: targetPayload,
+        srcId: targetSrcId || enrichedSources[0]?.id || '',
+        srcUrl,
+        statusInfo,
+        isInstalled: statusInfo.isInstalled,
+        isUpdate: statusInfo.isUpdate,
+      }
+    }
+
+    return null
+  }, [selectedPayload, enrichedSources, items, sources, multiSources, self])
+
+  const currentDetailId =
+    resolvedPayloadData?.payload?.id ||
+    (resolvedPayloadData?.payload
+      ? slug(resolvedPayloadData.payload.name || resolvedPayloadData.payload.filename)
+      : null)
+  const isDetailInstalling = Boolean(installingPayloadId && currentDetailId === installingPayloadId)
+
+  useLayoutEffect(() => {
+    const mainEl = document.querySelector('main')
+    if (!mainEl) return
+
+    if (resolvedPayloadData) {
+      mainEl.scrollTop = 0
+    } else {
+      mainEl.scrollTop = savedScroll
+    }
+  }, [resolvedPayloadData, savedScroll])
+
+  useEffect(() => {
+    if (selectedPayload && !resolvedPayloadData && !loading && repoData) {
+      handleCloseDetail()
+    }
+  }, [selectedPayload, resolvedPayloadData, loading, repoData, handleCloseDetail])
+
+  const handleInstallClick = (payload, srcId, srcUrl, statusInfo) => {
+    // If there is an install conflict across repositories
+    if (statusInfo?.hasConflict && statusInfo?.conflictSlot) {
+      const srcObj = enrichedSources.find((s) => s.id === srcId || s.url === srcUrl)
+      setConflictPrompt({
+        payload,
+        srcId,
+        srcUrl,
+        conflictSlot: statusInfo.conflictSlot,
+        thisSourceName: srcObj?.name || 'this repository',
+      })
+      return
+    }
+
+    onInstall(payload, srcId, srcUrl)
+  }
+
+  if (selectedPayload && !resolvedPayloadData && (loading || !repoData)) {
+    return (
+      <div className="py-24 flex flex-col items-center justify-center space-y-4">
+        <Loader2 className="w-10 h-10 text-ps-blue animate-spin" />
+        <p className="text-zinc-400 font-medium">{t("storage_hub.loading", "Loading repository...")}</p>
+      </div>
+    )
+  }
+
+  if (resolvedPayloadData) {
+    return (
+      <div className="w-full min-w-0 max-w-full">
+        <PayloadDetailPanel
+          payload={resolvedPayloadData.payload}
+          srcId={resolvedPayloadData.srcId}
+          srcUrl={resolvedPayloadData.srcUrl}
+          statusInfo={resolvedPayloadData.statusInfo}
+          isInstalled={resolvedPayloadData.isInstalled}
+          isUpdate={resolvedPayloadData.isUpdate}
+          isInstalling={isDetailInstalling}
+          onDelete={onDelete}
+          externalLinkUrl={externalLinkUrl}
+          setExternalLinkUrl={setExternalLinkUrl}
+          onClose={handleCloseDetail}
+          onInstall={(p, sid, surl, sInfo) => {
+            handleInstallClick(p, sid, surl, sInfo || resolvedPayloadData.statusInfo)
+          }}
+        />
+
+        {/* Conflict Modal */}
+        <Modal
+          show={Boolean(conflictPrompt)}
+          title={t("storage_hub.conflict_title", "Payload Conflict")}
+          onClose={() => setConflictPrompt(null)}
+          footer={
+            <div className="flex flex-col sm:flex-row w-full gap-3">
+              <button
+                type="button"
+                onClick={() => setConflictPrompt(null)}
+                className="flex-1 py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 text-white font-bold uppercase text-sm transition-all"
+              >
+                {t("common.cancel", "Cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const cp = conflictPrompt
+                  setConflictPrompt(null)
+                  onInstall(cp.payload, cp.srcId, cp.srcUrl, {
+                    mode: 'replace',
+                    replaceSlot: cp.conflictSlot.slot,
+                  })
+                }}
+                className="flex-1 py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black uppercase text-sm transition-all shadow-lg"
+              >
+                {t("storage_hub.conflict_replace", "Replace")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const cp = conflictPrompt
+                  setConflictPrompt(null)
+                  onInstall(cp.payload, cp.srcId, cp.srcUrl, {
+                    mode: 'keep_both',
+                  })
+                }}
+                className="flex-1 py-3 px-4 rounded-xl bg-ps-blue hover:bg-ps-blue/80 text-white font-black uppercase text-sm transition-all shadow-lg"
+              >
+                {t("storage_hub.conflict_keep_both", "Keep both")}
+              </button>
+            </div>
+          }
+        >
+          <p>
+            {conflictPrompt &&
+              t(
+                "storage_hub.conflict_message",
+                "\"{{name}}\" is already installed from {{otherSource}} ({{version}}). Install from {{thisSource}} too?",
+                {
+                  name: conflictPrompt.payload.name || conflictPrompt.payload.id,
+                  otherSource: resolveSourceDisplayName(conflictPrompt.conflictSlot, sources),
+                  version: conflictPrompt.conflictSlot.version || "",
+                  thisSource: conflictPrompt.thisSourceName,
+                }
+              )}
+          </p>
+        </Modal>
+      </div>
+    )
+  }
   return (
     <div className="space-y-6">
-      {/* [CN-FORK] v0.5.2.94 页头改用共用的 <PageHead>：粘顶（实色 rail 底 + 发丝线），
-          列表再长也能看见「这一页是什么、主操作在哪」；上传仍是本页唯一实心主按钮 */}
+      {/* [CN-FORK] v0.6.0 合入：仓库安装撞名时的冲突框（Replace / Keep both）。
+          fork 原有的上传撞名流程（App.jsx 的 uploadConflictModal）不动，这里管的是
+          「同一个 payload 已从别的来源装过」这一路。 */}
+      {/* Conflict Modal */}
+      <Modal
+        show={Boolean(conflictPrompt)}
+        title={t("storage_hub.conflict_title", "Payload Conflict")}
+        onClose={() => setConflictPrompt(null)}
+        footer={
+          <div className="flex flex-col sm:flex-row w-full gap-3">
+            <button
+              type="button"
+              onClick={() => setConflictPrompt(null)}
+              className="flex-1 py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 text-white font-bold uppercase text-sm transition-all"
+            >
+              {t("common.cancel", "Cancel")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const cp = conflictPrompt
+                setConflictPrompt(null)
+                onInstall(cp.payload, cp.srcId, cp.srcUrl, {
+                  mode: 'replace',
+                  replaceSlot: cp.conflictSlot.slot,
+                })
+              }}
+              className="flex-1 py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black uppercase text-sm transition-all shadow-lg"
+            >
+              {t("storage_hub.conflict_replace", "Replace")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const cp = conflictPrompt
+                setConflictPrompt(null)
+                onInstall(cp.payload, cp.srcId, cp.srcUrl, {
+                  mode: 'keep_both',
+                })
+              }}
+              className="flex-1 py-3 px-4 rounded-xl bg-ps-blue hover:bg-ps-blue/80 text-white font-black uppercase text-sm transition-all shadow-lg"
+            >
+              {t("storage_hub.conflict_keep_both", "Keep both")}
+            </button>
+          </div>
+        }
+      >
+        <p>
+          {conflictPrompt &&
+            t(
+              "storage_hub.conflict_message",
+              "\"{{name}}\" is already installed from {{otherSource}} ({{version}}). Install from {{thisSource}} too?",
+              {
+                name: conflictPrompt.payload.name || conflictPrompt.payload.id,
+                otherSource: resolveSourceDisplayName(conflictPrompt.conflictSlot, sources),
+                version: conflictPrompt.conflictSlot.version || "",
+                thisSource: conflictPrompt.thisSourceName,
+              }
+            )}
+        </p>
+      </Modal>
+
+
       <PageHead
         title={<>{t("storage_hub.title_1", "Payload")} <span className="text-ps-blue">{t("storage_hub.title_2", "Management")}</span></>}
         actions={!isPS5 && (
@@ -283,9 +491,24 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
             internalPayloads.map((path) => {
               const fileName = path.split('/').pop()
               const sourceBadge = getSourceBadge(fileName)
-              // Find update in all sources (multi or legacy)
-              const allRemote = enrichedSources.flatMap(s => s.payloads)
-              const remoteMatch = allRemote.find(rp => rp.filename === fileName || rp.installedFilename === fileName)
+              /* [CN-FORK] v0.6.0 合入：上游的 enrichedSources 里 payload 不带 source_id，
+               * 所以这里一边找一边把命中的来源 id/url 记下来，装的时候直接回传。
+               * 判定口径沿用 fork 旧逻辑（基名相同但文件名不同 = 有更新可升）。 */
+              let remoteMatch = null
+              let remoteSrcId = null
+              let remoteSrcUrl = null
+              for (const src of enrichedSources) {
+                const found = (src.payloads || []).find(
+                  (rp) => rp.filename === fileName || getBaseName(rp.filename) === getBaseName(fileName)
+                )
+                if (found) {
+                  remoteMatch = found
+                  remoteSrcId = src.id
+                  remoteSrcUrl = src.url
+                  break
+                }
+              }
+              const hasUpdate = Boolean(remoteMatch && (remoteMatch.isUpdate || remoteMatch.filename !== fileName))
               const remoteVersion = remoteMatch?.version || (remoteMatch?.filename ? parsePayloadName(remoteMatch.filename).version : null)
               return (
                 <div
@@ -339,9 +562,9 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                       </button>
                     </div>
                   </div>
-                  {remoteMatch?.isUpdate && (
+                  {hasUpdate && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); onInstall(remoteMatch, remoteMatch.source_id, legacyRepoUrl) }}
+                      onClick={(e) => { e.stopPropagation(); onInstall(remoteMatch, remoteSrcId, remoteSrcUrl) }}
                       /* [CN-FORK] v0.5.2.103 收敛档：原先是手写的实心 emerald 类（绕过骨架层的漏网实心块），
                           改走 .btn-ok —— 更新属「成功态动作」，语义不变，但形态跟全站一致（淡染底 + 同色字）。 */
                       className="btn btn-ok mt-1 w-full text-xs"
@@ -372,6 +595,7 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
           </button>
         )}
       >
+
         {!cloudDisabled && (
         <div className="flex flex-col md:flex-row">
           {/* [CN-FORK] v0.5.2.92 搜索条改用 .field：命中高度与输入框同档，浅色/深色都由 inset 档驱动 */}
@@ -429,79 +653,85 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
             }
           />
         ) : enrichedSources.length > 0 ? (
-          /* ===== REPOSITORY CATALOGS ===== */
           <div className="space-y-4">
-            {enrichedSources.map(src => {
-              let availablePayloads = src.payloads.filter(p => !p.isInstalled || p.isUpdate)
-              
-              if (search.trim() !== '') {
-                const q = search.toLowerCase()
-                availablePayloads = availablePayloads.filter(p => 
-                  (p.name && p.name.toLowerCase().includes(q)) || 
-                  (p.filename && p.filename.toLowerCase().includes(q)) || 
+            /* ===== REPOSITORY CATALOGS ===== */
+          {enrichedSources.map((src) => {
+            let availablePayloads = [...src.payloads]
+
+            if (search.trim() !== '') {
+              const q = search.toLowerCase()
+              availablePayloads = availablePayloads.filter(
+                (p) =>
+                  (p.name && p.name.toLowerCase().includes(q)) ||
+                  (p.id && p.id.toLowerCase().includes(q)) ||
+                  (p.filename && p.filename.toLowerCase().includes(q)) ||
                   (p.description && p.description.toLowerCase().includes(q))
-                )
-              }
-              
-              // Auto-expand if there's only 1 source, otherwise respect state or active search
-              const isExpanded = (enrichedSources.length === 1) || expandedSource === src.id || search.trim() !== ''
+              )
+            }
 
-              let hasMultipleCategories = false
-              let groupedPayloads = {}
-              let categories = []
+            // Auto-expand if there's only 1 source, otherwise respect state or active search
+            const isExpanded =
+              enrichedSources.length === 1 || expandedSource === src.id || search.trim() !== ''
 
-              if (sortMode === 'category' && search.trim() === '') {
-                groupedPayloads = availablePayloads.reduce((acc, p) => {
-                  // If p.category exists, attempt to translate it using its English name as key.
-                  const catName = p.category ? t(`category.${p.category}`, p.category) : t("storage_hub.uncategorized", "Uncategorized")
-                  if (!acc[catName]) acc[catName] = []
-                  acc[catName].push(p)
-                  return acc
-                }, {})
-                categories = Object.keys(groupedPayloads).sort()
-                hasMultipleCategories = categories.length > 1
-              } else {
-                // sort flat list
-                availablePayloads.sort((a, b) => {
-                  if (sortMode === 'update_time') {
-                    // Descending by last_update
-                    const dateA = a.last_update || ''
-                    const dateB = b.last_update || ''
-                    return dateB.localeCompare(dateA)
-                  } else if (sortMode === 'name') {
-                    const nameA = a.name || a.filename || ''
-                    const nameB = b.name || b.filename || ''
-                    return nameA.localeCompare(nameB)
-                  }
-                  return 0
-                })
-              }
+            let hasMultipleCategories = false
+            let groupedPayloads = {}
+            let categories = []
 
-              return (
-                <div key={src.id} className={cn(
-                  /* [CN-FORK] v0.5.2.91 多来源列表容器原用 bg-ps-card（card 档实色），是 .90 板块并档后漏掉的一块，改走同一条 inset 通道 */
-                  multiSources ? "bg-white/[0.03] border border-ps-border rounded-ps-3xl overflow-hidden" : "flex flex-col space-y-4"
-                )}>
-                  {/* Last Sync for single-source mode */}
-                  {!multiSources && src.last_update > 0 && (
-                    <p className="px-2 text-xs uppercase tracking-widest text-zinc-500">
-                      {t("storage_hub.last_sync", "Last Sync: {{date}}", { date: new Date(src.last_update * 1000).toLocaleString(i18n.resolvedLanguage) })}
-                    </p>
-                  )}
+            if (sortMode === 'category' && search.trim() === '') {
+              groupedPayloads = availablePayloads.reduce((acc, p) => {
+                const catName = p.category ? t(`category.${p.category}`, p.category) : t("storage_hub.uncategorized", "Uncategorized")
+                if (!acc[catName]) acc[catName] = []
+                acc[catName].push(p)
+                return acc
+              }, {})
+              categories = Object.keys(groupedPayloads).sort()
+              hasMultipleCategories = categories.length > 1
+            } else {
+              availablePayloads.sort((a, b) => {
+                if (sortMode === 'update_time') {
+                  const dateA = a.last_update || ''
+                  const dateB = b.last_update || ''
+                  return dateB.localeCompare(dateA)
+                } else if (sortMode === 'name') {
+                  const nameA = a.name || a.filename || ''
+                  const nameB = b.name || b.filename || ''
+                  return nameA.localeCompare(nameB)
+                }
+                return 0
+              })
+            }
 
-                  {/* Catalog header (only for multi-source) */}
-                  {multiSources && (
-                    <button
-                      onClick={() => setExpandedSource(isExpanded ? null : src.id)}
-                      aria-expanded={isExpanded}
-                      className="w-full flex items-center justify-between p-4 md:p-5 min-h-[var(--ctl-h)] hover:bg-white/5 transition-colors"
-                    >
+            return (
+              <div
+                key={src.id}
+                className={cn(
+                  /* [CN-FORK] v0.5.2.91 多来源列表容器原用 bg-ps-card（card 档实色），
+                   * 是 .90 板块并档后漏掉的一块，改走同一条 inset 通道 */
+                  multiSources
+                    ? "bg-white/[0.03] border border-ps-border rounded-ps-3xl overflow-hidden"
+                    : "flex flex-col space-y-4"
+                )}
+              >
+                {!multiSources && src.last_update > 0 && (
+                  <p className="px-3 sm:px-4 text-xs uppercase tracking-widest text-zinc-500">
+                    {t("storage_hub.last_sync", "Last Sync: {{date}}", {
+                      date: formatSyncTime(src.last_update, i18n.resolvedLanguage, isPS5),
+                    })}
+                  </p>
+                )}
+
+                {multiSources && (
+                  <button
+                    onClick={() => setExpandedSource(isExpanded ? null : src.id)}
+                    aria-expanded={isExpanded}
+                    className="w-full flex items-center justify-between p-4 md:p-5 min-h-[var(--ctl-h)] hover:bg-white/5 transition-colors"
+                  >
                     <div className="flex items-center space-x-4">
-                      <div className="p-2.5 rounded-xl">
+                      <div className="p-2.5 bg-ps-blue/10 rounded-xl">
                         <Globe className="w-5 h-5 text-ps-blue" />
                       </div>
                       <div className="text-left">
-                        <p className="font-bold text-white text-base">{src.name}</p>
+                        <p className="font-bold text-white text-lg">{src.name}</p>
                         {src.error && (
                           <p className="text-xs text-red-400 flex items-center space-x-1 mt-0.5">
                             <AlertTriangle className="w-3 h-3" />
@@ -510,64 +740,92 @@ const StorageHub = ({ payloads, payloadMeta, loadPayload, onInstall, onDelete, o
                         )}
                         {src.last_update > 0 && (
                           <p className="text-xs text-zinc-500 uppercase tracking-widest mt-1">
-                            {t("storage_hub.updated_at", "Updated {{date}}", { date: new Date(src.last_update * 1000).toLocaleString(i18n.resolvedLanguage) })}
+                            {t("storage_hub.updated_at", "Updated {{date}}", {
+                              date: formatSyncTime(src.last_update, i18n.resolvedLanguage, isPS5),
+                            })}
                           </p>
                         )}
                       </div>
                     </div>
                     <div className="flex items-center space-x-3">
                       <span className="px-3 py-1 rounded-full bg-white/5 text-zinc-500 text-xs font-bold">
-                        {t("storage_hub.available_count", "{{count}} available", { count: availablePayloads.length })}
+                        {t("storage_hub.payload_count", "{{count}} payloads", { count: availablePayloads.length })}
                       </span>
                       {enrichedSources.length > 1 && (
-                        <ChevronDown className={cn("w-5 h-5 text-zinc-500 transition-transform", isExpanded && "rotate-180")} />
+                        <ChevronDown
+                          className={cn(
+                            "w-5 h-5 text-zinc-500 transition-transform",
+                            isExpanded && "rotate-180"
+                          )}
+                        />
                       )}
                     </div>
                   </button>
-                  )}
+                )}
 
-                  {/* Catalog payload list */}
-                  {isExpanded && (
-                    <div className={cn(
-                      multiSources ? "border-t border-white/5 divide-y divide-white/5" : "grid grid-cols-1 gap-4"
-                    )}>
-                      {src.payloads.length === 0 ? (
-                        <EmptyState dashed={false} title={t("storage_hub.source_empty", "Source is empty")} />
-                      ) : availablePayloads.length === 0 ? (
-                        <EmptyState dashed={false} title={t("storage_hub.all_installed", "All payloads installed")} />
-                      ) : hasMultipleCategories ? (
-                        categories.map(cat => (
-                          <CategoryGroup
-                            key={cat}
-                            category={cat}
-                            payloads={groupedPayloads[cat]}
-                            multiSources={multiSources}
-                            isPS5={isPS5}
-                            onInstall={onInstall}
-                            srcId={src.id}
-                            srcUrl={src.url}
-                            defaultExpanded={availablePayloads.length <= 10}
+                {isExpanded && (
+                  <div className={cn(multiSources ? "border-t border-white/5 p-3 sm:p-4 md:p-4.5" : "")}>
+                    {src.payloads.length === 0 ? (
+                      <EmptyState
+                        dashed={false}
+                        title={t("storage_hub.source_empty", "Source is empty")}
+                      />
+                    ) : hasMultipleCategories ? (
+                      categories.map((cat) => (
+                        <div key={cat} className="space-y-4 mb-8 last:mb-0">
+                          <h4 className="text-white/80 font-bold uppercase tracking-widest text-sm px-2">{cat}</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-4 md:gap-5">
+                            {groupedPayloads[cat].map((p) => (
+                              <PayloadCard
+                                key={p.id || p.filename}
+                                payload={p}
+                                statusInfo={p.statusInfo}
+                                isUpdate={p.isUpdate}
+                                isInstalled={p.isInstalled}
+                                onClick={() =>
+                                  handlePayloadSelect({
+                                    payload: p,
+                                    srcId: src.id,
+                                    srcUrl: src.url,
+                                    statusInfo: p.statusInfo,
+                                    isInstalled: p.isInstalled,
+                                    isUpdate: p.isUpdate,
+                                  })
+                                }
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-4 md:gap-5">
+                        {availablePayloads.map((p) => (
+                          <PayloadCard
+                            key={p.id || p.filename}
+                            payload={p}
+                            statusInfo={p.statusInfo}
+                            isUpdate={p.isUpdate}
+                            isInstalled={p.isInstalled}
+                            onClick={() =>
+                              handlePayloadSelect({
+                                payload: p,
+                                srcId: src.id,
+                                srcUrl: src.url,
+                                statusInfo: p.statusInfo,
+                                isInstalled: p.isInstalled,
+                                isUpdate: p.isUpdate,
+                              })
+                            }
                           />
-                        ))
-                      ) : (
-                        availablePayloads.map(p => (
-                          <PayloadItem 
-                            key={p.filename} 
-                            p={p} 
-                            multiSources={multiSources} 
-                            isPS5={isPS5} 
-                            onInstall={onInstall} 
-                            srcId={src.id} 
-                            srcUrl={src.url} 
-                          />
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
         ) : (
           <EmptyState icon={CloudDownload} title={t("storage_hub.repo_empty", "Repository is empty")} />
         )}

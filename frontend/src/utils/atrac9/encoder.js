@@ -98,7 +98,7 @@ function rint(x) {
   return f % 2 === 0 ? f : f + 1;
 }
 
-function signExtend(value, bits) {
+function _signExtend(value, bits) {
   const sign = 1 << (bits - 1);
   return (value & (sign - 1)) - (value & sign);
 }
@@ -768,7 +768,7 @@ function writeSf(out, sf, coding) {
 // -- per channel-frame analysis ------------------------------------------------
 
 /** Enforce the codebook rules for units 0-11 (see atrac9_encoder._fix_minimum). */
-function fixMinimum(q, xn, units) {
+function fixMinimum(q, xn, _units) {
   // q is (15, N) flat; q[p-1] is precision p (word length p+1).
   for (let p = 1; p <= 3; p++) {
     const need = 1 << (p - 1);
@@ -1033,7 +1033,7 @@ export class Encoder {
     return data;
   }
 
-  _chooseBands(energy, masks, superframes, frames) {
+  _chooseBands(energy, masks, superframes, _frames) {
     const audible = [];
     for (let s = 0; s < superframes; s++) {
       const top = new Int32Array(UNITS);

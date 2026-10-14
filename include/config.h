@@ -9,6 +9,8 @@ typedef struct PldmgrConfig {
     long last_repository_update; /* Default: 0 */
     int  auto_browser_open;      /* Default: 1  (on) */
     int  autoload_delay;         /* Default: 5  (seconds) */
+    /* [CN-FORK] BD-JB 用户开机杀光盘播放器。上游 v0.6.0 已整体删除该功能，
+     * 本 fork 的设置页仍有开关、main.c 仍在用，故保留（见 CHANGELOG .176）。 */
     int  kill_disc_player;       /* Default: 1  (on) */
     int  scan_usb_payloads;      /* Default: 0  (off) */
     int  auto_install_app;       /* Default: 1  (on) */
@@ -34,11 +36,16 @@ int config_write(const PldmgrConfig *cfg);
  * Returns default_val if the key or file is missing. */
 int config_read_bool(const char *key, int default_val);
 
+enum { CONFIG_INVALID = -2 };
+
 /* Apply a JSON config update sent from the frontend /set_config route.
  * Handles AUTOLOAD_ENABLED, AUTO_BROWSER_OPEN, AUTOLOAD_DELAY,
  * KILL_DISC_PLAYER_ON_STARTUP, SCAN_USB_PAYLOADS, AUTO_INSTALL_APP,
  * MULTI_SOURCES_ENABLED, DEFAULT_REPO_ENABLED, and AUTOLOAD_LIST.
- * Returns 0 on success, -1 on error. */
+ * Booleans must be JSON booleans; delay is an integer from 0 to 3600 seconds.
+ * Returns 0, CONFIG_INVALID for bad input, or -1 for persistence failure.
+ * All input is validated first; each file publishes atomically, but a multi-file
+ * I/O failure may retain earlier publications. */
 int config_handle_set_json(const char *json_data);
 
 /* Upsert a single key=value line in the config file.
@@ -46,7 +53,7 @@ int config_handle_set_json(const char *json_data);
 int config_upsert_value(const char *key, const char *value);
 
 /* Read the LAST_REPOSITORY_UPDATE timestamp from the config file.
- * Always succeeds; sets *out_ts to 0 if not found. */
+ * Sets *out_ts to 0 if missing; returns -1 on read failure. */
 int config_read_last_update(long *out_ts);
 
 /* Write the LAST_REPOSITORY_UPDATE timestamp to the config file. */
@@ -63,5 +70,12 @@ int config_write_last_update(long ts);
 int config_write_archive_global(const char *json);
 /* 读全局存档配置原文。成功返回字节数（>0），文件不存在 / 读失败返回 -1。 */
 int config_read_archive_global(char *out, size_t osz);
+/* Serialized, atomic replacement/removal of matching list entries. */
+int config_update_list_entry(const char *path, const char *old_key, const char *new_key);
+
+/* Favorites management */
+int config_get_favorites_csv(char *out_buf, size_t max_size, int *out_file_exists);
+int config_save_favorites_csv(const char *csv);
+int pldmgr_favorites_update_entry(const char *old_key, const char *new_key);
 
 #endif

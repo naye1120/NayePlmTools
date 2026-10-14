@@ -4,8 +4,17 @@
 > 详细历史背景见 `FORK-CN.md` / `DEVELOPMENT.md` / `CUSTOM_REPOSITORIES.md`。
 
 ## 0. 当前定稿状态
-- 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`，已合并上游 v0.5.2，merge 提交 `97bb4dc`）。
-> - 版本：`MENU_VERSION = 0.5.2.175`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+- 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`）。
+  **当前基线 = 上游 v0.6.0（`fe5ca81`）**，2026-10-14 全量合并（分支 `merge-upstream-060`）；
+  上一基线 v0.5.2（merge 提交 `97bb4dc`）。合并详情与「已知欠账」见 `FORK-CN.md` §4.1 与 `CHANGELOG.md` 顶部 `.176` 条。
+> - 版本：`MENU_VERSION = 0.6.0.176`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+>   ⚠ **合并 v0.6.0 后新增两条硬约束**：① 上游 4 个函数栈帧超 32 KB（`slot_write_meta` 111 KB、
+>   `sources_multi_repository_list_json` 66 KB、`payload_mgr_list_json` 53 KB、`slot_migrate_legacy` 42 KB）
+>   已由 fork 堆化修复，**上游 CI 不跑 `tools/check_stack_frames.sh`**，改动相关函数后务必本地跑一次；
+>   ② `include/pkgmanager.h` 的 `#include <pldmgr.h>` **必须是尖括号**（上游宿主 runner 会 overlay
+>   一份补丁 `pldmgr.h`，引号 include 会绕过 `-I` 顺序拿到另一份 → `SCAN_DIRS` 重定义）。
+>   ⚠ 上游把 `npm run build` 变成「先 lint + 单测」（`prebuild` 钩子），fork 既有 lint 债会直接卡构建，
+>   `.176` 已清账（0 错）；前端单测须在 **WSL** 里跑（Windows 宿主 spawn node 会 EBUSY 假失败）。
 >   ⚠ 本「工作树」长段只记到 `.131`；`.137` 之后的沿革见 `CHANGELOG.md` 顶部与
 >   `D:/pldmanager/.workbuddy-ai/memory/`。`.172` = 修「游戏退出不落本地快照」+ 三张存档列表加下载按钮；
 >   `.173` = 删「存档转换」全链路 + 兼容导入搬独立满宽一行 + 导入 = 「改签」（落点只由选择器决定、

@@ -1,10 +1,3 @@
-/*
- * Payload Manager — Local payload storage management.
- *
- * Handles scanning, listing, importing, deleting, and USB transfer
- * of ELF/BIN payload files on the PS5.
- */
-
 #include <ctype.h>
 #include <dirent.h>
 #include <stdio.h>
@@ -16,36 +9,44 @@
 #include <unistd.h>
 
 #include "payload_mgr.h"
+#include "slot.h"
 #include "json_helpers.h"
 #include "sha256.h"
 #include "repository.h"
 #include "config.h"
 #include "utils.h"   /* [CN-FORK] ps5_autoloader_sync 需要 pldmgr_utils_get_payload_folder_name */
 #include "pldmgr.h"
+#include "autoload.h"
+#include "utils.h"
+#include "collection_helpers.h"
+#include <errno.h>
+
+#ifndef PLDMGR_USB_ROOT_FORMAT
+#define PLDMGR_USB_ROOT_FORMAT "/mnt/usb%d"
+#endif
 
 /* ── Extension / path checks ──────────────────────────────── */
 
 static int is_supported_extension(const char *path) {
     const char *ext = strrchr(path, '.');
-    if (!ext)
-        return 0;
+    if (!ext) return 0;
     return (strcasecmp(ext, ".elf") == 0 || strcasecmp(ext, ".bin") == 0);
 }
 
 static int is_allowed_usb_path(const char *path) {
-    if (!path || path[0] == '\0')
-        return 0;
-    if (strstr(path, ".."))
-        return 0;
-    if (!is_supported_extension(path))
-        return 0;
-    if (strncmp(path, "/mnt/usb", 8) == 0 && path[8] >= '0' && path[8] <= '7' &&
-        path[9] == '/')
-        return 1;
+    if (!path || path[0] == '\0') return 0;
+    if (strstr(path, "..")) return 0;
+    if (!is_supported_extension(path)) return 0;
+    for (int i = 0; i < 8; i++) {
+        char root[512];
+        snprintf(root, sizeof(root), PLDMGR_USB_ROOT_FORMAT, i);
+        size_t len = strlen(root);
+        if (!strncmp(path, root, len) && path[len] == '/') return 1;
+    }
     return 0;
 }
 
-/* ── File utilities ────────────────────────────────────────── */
+/* ── USB Scanning (Unmanaged, run-in-place) ─────────────────── */
 
 /* [CN-FORK] 判断一个载荷文件是否「真的能用」：0 字节残包一旦被复制进 ps5_autoloader
  * 并登记到 autoload.txt，越狱引导阶段就会加载一个空文件，表现为 autoloader 静默失效
@@ -384,264 +385,327 @@ void payload_mgr_bootstrap_self_sync(void) {
     pldmgr_log("[AutoloaderSync] bootstrap: registered %s in ps5_autoloader\n", installed_filename);
 }
 
-/* Remove all files in a payload directory EXCEPT the new incoming file.
- * Also updates the autoload config if a file is being replaced. */
-void payload_mgr_remove_old_files(const char *dir_path, const char *new_filename) {
-    DIR *d = opendir(dir_path);
-    if (!d) return;
-
-    struct dirent *entry;
-    while ((entry = readdir(d)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
-        if (strcmp(entry->d_name, new_filename) == 0) continue;
-        /* Skip .json metadata files for the incoming file */
-        {
-            size_t new_len = strlen(new_filename);
-            size_t ent_len = strlen(entry->d_name);
-            if (ent_len == new_len + 5 &&
-                strncmp(entry->d_name, new_filename, new_len) == 0 &&
-                strcmp(entry->d_name + new_len, ".json") == 0)
-                continue;
-        }
-
-        char full_path[640];
-        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
-
-        /* If it's a supported payload, update autoload config */
-        if (is_supported_extension(entry->d_name)) {
-            pldmgr_autoload_update_config_entry(entry->d_name, new_filename);
-        }
-
-        remove(full_path);
-    }
-    closedir(d);
+static int append_usb_path(char ***paths, size_t *count, size_t *capacity, const char *path) {
+    char **grown = collection_reserve(*paths, capacity, *count + 1, sizeof(char *));
+    if (!grown) return -1;
+    *paths = grown;
+    char *copy = strdup(path);
+    if (!copy) return -1;
+    (*paths)[(*count)++] = copy;
+    return 0;
 }
 
-/* ── Recursive scan ────────────────────────────────────────── */
-
-typedef struct {
-    char path[512];
-    char filename[256];
-    int  is_storage;
-    long mtime;
-} PayloadEntry;
-
-static void scan_payloads_recursive(const char *dir_path, int is_storage,
-                                    PayloadEntry **out, int *count, int max, int max_depth) {
-    if (max_depth < 0) return;
-
+static int scan_usb_dir(const char *dir_path, char ***out_paths, size_t *count, size_t *cap) {
     DIR *d = opendir(dir_path);
-    if (!d) return;
+    if (!d) return errno == ENOENT ? 0 : -1;
 
-    struct dirent *entry;
-    while (*count < max && (entry = readdir(d)) != NULL) {
-        if (entry->d_name[0] == '.')
-            continue;
-
-        char full_path[512];
-        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
-
-        struct stat st;
-        if (stat(full_path, &st) != 0)
-            continue;
-
-        if (S_ISDIR(st.st_mode)) {
-            scan_payloads_recursive(full_path, is_storage, out, count, max, max_depth - 1);
-            continue;
-        }
-
-        if (!is_supported_extension(entry->d_name))
-            continue;
-
-        PayloadEntry *tmp = realloc(*out, (*count + 1) * sizeof(PayloadEntry));
-        if (!tmp) break;
-        *out = tmp;
-
-        strncpy((*out)[*count].path, full_path, sizeof((*out)[*count].path) - 1);
-        (*out)[*count].path[sizeof((*out)[*count].path) - 1] = '\0';
-        strncpy((*out)[*count].filename, entry->d_name, sizeof((*out)[*count].filename) - 1);
-        (*out)[*count].filename[sizeof((*out)[*count].filename) - 1] = '\0';
-        (*out)[*count].is_storage = is_storage;
-        (*out)[*count].mtime = (long)st.st_mtime;
-        (*count)++;
-    }
-    closedir(d);
-}
-
-/* ── Recursive resolve ─────────────────────────────────────── */
-
-static int resolve_recursive(const char *dir_path, const char *filename,
-                             char *out_path, size_t out_size) {
-    DIR *d = opendir(dir_path);
-    if (!d) return -1;
-
-    struct dirent *entry;
-    while ((entry = readdir(d)) != NULL) {
-        if (entry->d_name[0] == '.')
-            continue;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
 
         char full[512];
-        snprintf(full, sizeof(full), "%s/%s", dir_path, entry->d_name);
+        snprintf(full, sizeof(full), "%s/%s", dir_path, ent->d_name);
 
         struct stat st;
-        if (stat(full, &st) != 0)
-            continue;
+        if (stat(full, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            if (resolve_recursive(full, filename, out_path, out_size) == 0) {
-                closedir(d);
-                return 0;
+            /* Scan 1 level deep */
+            DIR *sub = opendir(full);
+            if (sub) {
+                struct dirent *sub_ent;
+                while ((sub_ent = readdir(sub)) != NULL) {
+                    if (sub_ent->d_name[0] == '.') continue;
+                    if (is_supported_extension(sub_ent->d_name)) {
+                        char sub_full[640];
+                        snprintf(sub_full, sizeof(sub_full), "%s/%s", full, sub_ent->d_name);
+                        if (append_usb_path(out_paths, count, cap, sub_full) != 0) {
+                            closedir(sub); closedir(d); return -1;
+                        }
+                    }
+                }
+                closedir(sub);
             }
-            continue;
-        }
-
-        if (strcmp(entry->d_name, filename) == 0) {
-            strncpy(out_path, full, out_size - 1);
-            out_path[out_size - 1] = '\0';
-            closedir(d);
-            return 0;
+        } else if (is_supported_extension(ent->d_name)) {
+            if (append_usb_path(out_paths, count, cap, full) != 0) { closedir(d); return -1; }
         }
     }
     closedir(d);
-    return -1;
+    return 0;
 }
 
-/* ── Public API ────────────────────────────────────────────── */
+/* ── Listing API ───────────────────────────────────────────── */
+
+/* [CN-FORK] v0.6.0.176 栈帧红线：本函数原来把 legacy_map[16384] 和 items 循环里
+ * 一整套 6 倍最坏转义缓冲（sk_e/pp_e/id_e/surl_e/det_e/src_e/desc_e/org_e/od_e …）
+ * 都放在栈上，整帧 53848 B —— 真机 MHD 每条连接一条 pthread、栈只有 64KB，必 SIGSEGV。
+ * 整块搬堆：函数入口 malloc 一次，两个出口各 free 一次。 */
+typedef struct {
+    char legacy_map[16384];
+    char sk_e[6 * 128], pp_e[6 * 512], kind_e[6 * 16], fn_e[6 * 256];
+    char id_e[6 * 128], surl_e[6 * 1024], sname_e[6 * 256], name_e[6 * 256];
+    char ver_e[6 * 64], csum_e[6 * 65], lup_e[6 * 64], auth_e[6 * 128], det_e[6 * 1024];
+    char src_e[6 * 1024], desc_e[6 * 1024];
+    char org_e[6 * 64], od_e[6 * 1024];
+} PayloadListJsonScratch;
 
 size_t payload_mgr_list_json(char *json_buf, size_t buf_size) {
-    PayloadEntry *payloads = NULL;
-    int count = 0;
-    int max = 256;
+    if (!json_buf || !buf_size) return 0;
+    SlotMeta *slots = NULL;
+    size_t slot_count = 0;
+    json_buf[0] = '\0';
+    if (slot_list_all(&slots, &slot_count) != 0) return 0;
+
+    /* [CN-FORK] v0.6.0.176 大缓冲 scratch 指针先置 NULL：USB 扫描段可能 goto
+     * scan_failed（在 malloc 之前），出口统一 free(NULL) 是安全的。 */
+    PayloadListJsonScratch *sc = NULL;
+
+    /* Enumerate USB payloads */
+    char **usb_paths = NULL;
+    size_t usb_count = 0, usb_cap = 0;
     int scan_usb = config_read_bool("SCAN_USB_PAYLOADS", 0);
 
-    /* Scan pldmgr subdirs (this includes PAYLOADS_STORAGE_DIR under /data/nayeplmtools) */
-    for (int i = 0; i < SCAN_DIRS_COUNT; i++) {
-        scan_payloads_recursive(SCAN_DIRS[i], 0, &payloads, &count, max, 3);
-    }
+    for (int u = 0; u < 8; u++) {
+        char pldmgr_usb[64];
+        /* [CN-FORK] U 盘库目录名统一成 nayeplmtools（上游用 "pldmgr"），见 pldmgr.h */
+        snprintf(pldmgr_usb, sizeof(pldmgr_usb), PLDMGR_USB_ROOT_FORMAT "/" PLDMGR_USB_LIB_NAME, u);
+        if (scan_usb_dir(pldmgr_usb, &usb_paths, &usb_count, &usb_cap) != 0) goto scan_failed;
 
-    /* Optionally scan USB root directories */
-    if (scan_usb) {
-        for (int usb = 0; usb < 8; usb++) {
-            char usb_root[64];
-            snprintf(usb_root, sizeof(usb_root), "/mnt/usb%d", usb);
-            struct stat st;
-            if (stat(usb_root, &st) == 0 && S_ISDIR(st.st_mode))
-                scan_payloads_recursive(usb_root, 0, &payloads, &count, max, 0);
+        if (scan_usb) {
+            char root_usb[64];
+            snprintf(root_usb, sizeof(root_usb), PLDMGR_USB_ROOT_FORMAT, u);
+            DIR *d = opendir(root_usb);
+            if (d) {
+                struct dirent *ent;
+                while ((ent = readdir(d)) != NULL) {
+                    if (ent->d_name[0] == '.') continue;
+                    if (is_supported_extension(ent->d_name)) {
+                        char full[512];
+                        snprintf(full, sizeof(full), "%s/%s", root_usb, ent->d_name);
+                        if (append_usb_path(&usb_paths, &usb_count, &usb_cap, full) != 0) {
+                            closedir(d); goto scan_failed;
+                        }
+                    }
+                }
+                closedir(d);
+            }
         }
     }
 
-    /* Build JSON response */
-    JsonListBuilder jb = { json_buf, buf_size, 0, 1 };
-    json_append(&jb, "{\"payloads\":[");
+    /* Pop any legacy paths migration map */
+    /* [CN-FORK] v0.6.0.176 栈帧红线：legacy_map(16KB) 与下面 items 循环那套 6 倍转义
+     * 缓冲（~37KB）原来都在栈上，整帧 53848 B。真机 64KB 线程栈必死 —— 整块搬堆。 */
+    sc = malloc(sizeof(*sc));
+    if (!sc) goto scan_failed;   /* 走统一清理出口（slot_free_all / usb_paths / free(sc)） */
+    sc->legacy_map[0] = '\0';
+    int legacy_result = slot_pop_legacy_paths_json(sc->legacy_map, sizeof(sc->legacy_map));
+    int has_legacy = legacy_result == 0 && sc->legacy_map[0] != '\0';
 
-    for (int i = 0; i < count; i++) {
-        char path_escaped[1024];
-        pldmgr_json_escape(payloads[i].path, path_escaped, sizeof(path_escaped));
-        json_append(&jb, "%s\"%s\"", (i > 0) ? "," : "", path_escaped);
-    }
+    JsonListBuilder jb = { json_buf, buf_size, 0, 1, 0 };
+    if (legacy_result < -1) json_builder_fail(&jb);
+    char update_path[1024], pending_version[64], pending_e[6 * 64];
+    int pending = repository_check_self_update(update_path, sizeof(update_path), pending_version, sizeof(pending_version));
+    json_escape_checked(&jb, pending ? pending_version : "", pending_e, sizeof(pending_e));
+    json_append(&jb, "{\n  \"self\":{\"id\":\"pldmgr\",\"running_version\":\"%s\",\"pending_version\":\"%s\"},\n", MENU_VERSION, pending_e);
+    json_append(&jb, "  \"items\": [\n");
 
-    json_append(&jb, "],\"meta\":{");
+    for (size_t i = 0; i < slot_count; i++) {
+        json_escape_checked(&jb, slots[i].slot_key, sc->sk_e, sizeof(sc->sk_e));
+        json_escape_checked(&jb, slots[i].payload_path, sc->pp_e, sizeof(sc->pp_e));
+        json_escape_checked(&jb, slots[i].kind, sc->kind_e, sizeof(sc->kind_e));
+        json_escape_checked(&jb, slots[i].filename, sc->fn_e, sizeof(sc->fn_e));
 
-    int meta_first = 1;
-    for (int i = 0; i < count; i++) {
-        /* Try to load sidecar .json metadata */
-        char details_path[640];
-        snprintf(details_path, sizeof(details_path), "%s.json", payloads[i].path);
-        char *details_json = NULL;
-        size_t details_size = 0;
+        json_append(&jb, "    {\n"
+                         "      \"slot\": \"%s\",\n"
+                         "      \"path\": \"%s\",\n"
+                         "      \"kind\": \"%s\",\n"
+                         "      \"filename\": \"%s\"",
+                    sc->sk_e, sc->pp_e, sc->kind_e, sc->fn_e);
 
-        if (read_file_text(details_path, &details_json, &details_size) == 0 && details_json) {
-            /* Extract fields from sidecar */
-            char d_name[256] = "", d_desc[1024] = "", d_ver[64] = "", d_url[1024] = "";
-            char d_src[1024] = "", d_src_direct[1024] = "", d_last_update[64] = "";
-            char d_checksum[65] = "", d_downloaded[64] = "";
-            char d_install_src[128] = "", d_install_detail[1024] = "";
-            char d_source_name[256] = "";
+        if (strcmp(slots[i].kind, SLOT_KIND_REPO) == 0) {
 
-            const char *end = details_json + details_size;
-            json_extract_string(details_json, end, "name", d_name, sizeof(d_name));
-            json_extract_string(details_json, end, "description", d_desc, sizeof(d_desc));
-            json_extract_string(details_json, end, "version", d_ver, sizeof(d_ver));
-            json_extract_string(details_json, end, "url", d_url, sizeof(d_url));
-            json_extract_string(details_json, end, "source", d_src, sizeof(d_src));
-            json_extract_string(details_json, end, "source_direct", d_src_direct, sizeof(d_src_direct));
-            json_extract_string(details_json, end, "last_update", d_last_update, sizeof(d_last_update));
-            json_extract_string(details_json, end, "checksum", d_checksum, sizeof(d_checksum));
-            json_extract_string(details_json, end, "downloaded_at", d_downloaded, sizeof(d_downloaded));
-            json_extract_string(details_json, end, "install_source", d_install_src, sizeof(d_install_src));
-            json_extract_string(details_json, end, "install_source_detail", d_install_detail, sizeof(d_install_detail));
-            json_extract_string(details_json, end, "source_name", d_source_name, sizeof(d_source_name));
+            json_escape_checked(&jb, slots[i].id, sc->id_e, sizeof(sc->id_e));
+            json_escape_checked(&jb, slots[i].source_url, sc->surl_e, sizeof(sc->surl_e));
+            json_escape_checked(&jb, slots[i].source_name, sc->sname_e, sizeof(sc->sname_e));
+            json_escape_checked(&jb, slots[i].name, sc->name_e, sizeof(sc->name_e));
+            json_escape_checked(&jb, slots[i].version, sc->ver_e, sizeof(sc->ver_e));
+            json_escape_checked(&jb, slots[i].checksum, sc->csum_e, sizeof(sc->csum_e));
+            json_escape_checked(&jb, slots[i].last_update, sc->lup_e, sizeof(sc->lup_e));
+            json_escape_checked(&jb, slots[i].author, sc->auth_e, sizeof(sc->auth_e));
+            json_escape_checked(&jb, slots[i].details_url, sc->det_e, sizeof(sc->det_e));
 
-            char filename_escaped[512], ne[512], de[2048], ve[128], ue[2048], se[2048], sde[2048];
-            char lue[128], ce[128], dae[128], ise[256], ide[2048], sne[512];
-            pldmgr_json_escape(payloads[i].filename, filename_escaped, sizeof(filename_escaped));
-            pldmgr_json_escape(d_name, ne, sizeof(ne));
-            pldmgr_json_escape(d_desc, de, sizeof(de));
-            pldmgr_json_escape(d_ver, ve, sizeof(ve));
-            pldmgr_json_escape(d_url, ue, sizeof(ue));
-            pldmgr_json_escape(d_src, se, sizeof(se));
-            pldmgr_json_escape(d_src_direct, sde, sizeof(sde));
-            pldmgr_json_escape(d_last_update, lue, sizeof(lue));
-            pldmgr_json_escape(d_checksum, ce, sizeof(ce));
-            pldmgr_json_escape(d_downloaded, dae, sizeof(dae));
-            pldmgr_json_escape(d_install_src, ise, sizeof(ise));
-            pldmgr_json_escape(d_install_detail, ide, sizeof(ide));
-            pldmgr_json_escape(d_source_name, sne, sizeof(sne));
+            json_escape_checked(&jb, slots[i].source, sc->src_e, sizeof(sc->src_e));
+            json_escape_checked(&jb, slots[i].description, sc->desc_e, sizeof(sc->desc_e));
 
-            json_append(&jb, "%s\"%s\":{"
-                        "\"display_name\":\"%s\",\"description\":\"%s\",\"version\":\"%s\","
-                        "\"url\":\"%s\",\"source\":\"%s\",\"source_direct\":\"%s\","
-                        "\"last_update\":\"%s\",\"checksum\":\"%s\",\"downloaded_at\":\"%s\","
-                        "\"install_source\":\"%s\",\"install_source_detail\":\"%s\","
-                        "\"source_name\":\"%s\"}",
-                        meta_first ? "" : ",",
-                        filename_escaped,
-                        ne, de, ve, ue, se, sde, lue, ce, dae, ise, ide, sne);
-            
-            meta_first = 0;
-            free(details_json);
+            json_append(&jb, ",\n"
+                             "      \"id\": \"%s\",\n"
+                             "      \"source_url\": \"%s\",\n"
+                             "      \"source_name\": \"%s\",\n"
+                             "      \"name\": \"%s\",\n"
+                             "      \"version\": \"%s\",\n"
+                             "      \"checksum\": \"%s\",\n"
+                             "      \"last_update\": \"%s\",\n"
+                             "      \"author\": \"%s\",\n"
+                             "      \"details_url\": \"%s\",\n"
+                             "      \"source\": \"%s\",\n"
+                             "      \"description\": \"%s\"",
+                        sc->id_e, sc->surl_e, sc->sname_e, sc->name_e, sc->ver_e,
+                        sc->csum_e, sc->lup_e, sc->auth_e, sc->det_e, sc->src_e, sc->desc_e);
+        } else {
+            json_escape_checked(&jb, slots[i].origin, sc->org_e, sizeof(sc->org_e));
+            json_escape_checked(&jb, slots[i].origin_detail, sc->od_e, sizeof(sc->od_e));
+
+            json_append(&jb, ",\n"
+                             "      \"origin\": \"%s\",\n"
+                             "      \"origin_detail\": \"%s\"",
+                        sc->org_e, sc->od_e);
         }
+
+        json_append(&jb, "\n    }%s\n", (i + 1 < slot_count) ? "," : "");
     }
 
-    json_append(&jb, "}}");
+    json_append(&jb, "  ],\n  \"usb\": [\n");
+    for (size_t u = 0; u < usb_count; u++) {
+        char u_e[6 * 512];
+        json_escape_checked(&jb, usb_paths[u], u_e, sizeof(u_e));
+        json_append(&jb, "    \"%s\"%s\n", u_e, (u + 1 < usb_count) ? "," : "");
+    }
 
-    if (payloads)
-        free(payloads);
+    /* Provide payloads array containing all paths for backward compatibility */
+    json_append(&jb, "  ],\n  \"payloads\": [\n");
+    size_t total_p = slot_count + (size_t)usb_count;
+    size_t curr_p = 0;
+    for (size_t i = 0; i < slot_count; i++) {
+        char pp_e[6 * 512];
+        json_escape_checked(&jb, slots[i].payload_path, pp_e, sizeof(pp_e));
+        curr_p++;
+        json_append(&jb, "    \"%s\"%s\n", pp_e, (curr_p < total_p) ? "," : "");
+    }
+    for (size_t u = 0; u < usb_count; u++) {
+        char u_e[6 * 512];
+        json_escape_checked(&jb, usb_paths[u], u_e, sizeof(u_e));
+        curr_p++;
+        json_append(&jb, "    \"%s\"%s\n", u_e, (curr_p < total_p) ? "," : "");
+    }
+
+    if (has_legacy) {
+        json_append(&jb, "  ],\n  \"legacy_paths\": %s\n}", sc->legacy_map);
+    } else {
+        json_append(&jb, "  ]\n}\n");
+    }
+
+    slot_free_all(slots);
+    for (size_t u = 0; u < usb_count; u++) free(usb_paths[u]);
+    if (usb_paths) free(usb_paths);
+    free(sc);
 
     return jb.pos;
+scan_failed:
+    slot_free_all(slots);
+    for (size_t u = 0; u < usb_count; u++) free(usb_paths[u]);
+    free(usb_paths);
+    free(sc);
+    json_buf[0] = '\0';
+    return 0;
 }
 
-int payload_mgr_resolve_path(const char *filename, char *out_path, size_t out_size) {
-    for (int i = 0; i < SCAN_DIRS_COUNT; i++) {
-        if (resolve_recursive(SCAN_DIRS[i], filename, out_path, out_size) == 0)
-            return 0;
+int payload_mgr_delete_payload(const char *slot_or_filename) {
+    if (!slot_or_filename || slot_or_filename[0] == '\0') return -1;
+    if (strstr(slot_or_filename, "..")) return -1;
+
+    /* If it is a direct slot key */
+    if (strncmp(slot_or_filename, "repo/", 5) == 0 || strncmp(slot_or_filename, "local/", 6) == 0) {
+        return slot_delete(slot_or_filename);
     }
+
+    /* If it starts with PAYLOADS_STORAGE_DIR */
+    size_t base_len = strlen(PAYLOADS_STORAGE_DIR);
+    if (strncmp(slot_or_filename, PAYLOADS_STORAGE_DIR, base_len) == 0 && slot_or_filename[base_len] == '/') {
+        const char *rel = slot_or_filename + base_len + 1;
+        if (strncmp(rel, "repo/", 5) == 0 || strncmp(rel, "local/", 6) == 0) {
+            char extracted_slot[256];
+            strncpy(extracted_slot, rel, sizeof(extracted_slot) - 1);
+            extracted_slot[sizeof(extracted_slot) - 1] = '\0';
+            char *s1 = strchr(extracted_slot, '/');
+            if (s1) {
+                char *s2 = strchr(s1 + 1, '/');
+                if (s2) *s2 = '\0';
+            }
+            return slot_delete(extracted_slot);
+        }
+    }
+
+    /* Fallback: match by filename or payload_path */
+    const char *target_fn = strrchr(slot_or_filename, '/');
+    target_fn = target_fn ? target_fn + 1 : slot_or_filename;
+
+    SlotMeta *slots = NULL;
+    size_t count = 0;
+    if (slot_list_all(&slots, &count) == 0 && slots) {
+        for (size_t i = 0; i < count; i++) {
+            if (strcmp(slots[i].filename, target_fn) == 0 ||
+                strcmp(slots[i].payload_path, slot_or_filename) == 0) {
+                int res = slot_delete(slots[i].slot_key);
+                slot_free_all(slots);
+                return res;
+            }
+        }
+        slot_free_all(slots);
+    }
+
     return -1;
 }
 
-int payload_mgr_delete_payload_file(const char *filename) {
-    char resolved[512];
-    if (!filename || strstr(filename, "/") || strstr(filename, ".."))
+int payload_mgr_check_existing(const char *filename, char *out_json, size_t out_size) {
+    JsonListBuilder jb = { out_json, out_size, 0, 1, 0 };
+    if (is_pldmgr_name(filename)) {
+        json_append(&jb, "{\"status\":\"error\",\"message\":\"Payload Manager updates require the official repository\"}");
         return -1;
-
-    if (payload_mgr_resolve_path(filename, resolved, sizeof(resolved)) != 0)
+    }
+    if (!filename || filename[0] == '\0') {
+        json_append(&jb, "{\"status\":\"error\",\"message\":\"Missing filename\"}");
         return -1;
+    }
 
-    /* Also remove .json sidecar */
-    char meta_path[640];
-    snprintf(meta_path, sizeof(meta_path), "%s.json", resolved);
-    remove(meta_path);
+    char lkey[128];
+    slot_local_key(filename, lkey, sizeof(lkey));
 
-    /* Update autoload config */
-    pldmgr_autoload_update_config_entry(filename, NULL);
+    char check_dir[640];
+    snprintf(check_dir, sizeof(check_dir), "%s/local/%s", PAYLOADS_STORAGE_DIR, lkey);
 
-    return remove(resolved);
+    SlotMeta meta;
+    if (slot_read_meta(check_dir, &meta) != 0) {
+        json_append(&jb, "{\"error\":\"Failed to read slot metadata\"}");
+        return -1;
+    }
+    int exists = meta.payload_path[0] != '\0';
+
+    char key_e[6 * 128];
+    json_escape_checked(&jb, lkey, key_e, sizeof(key_e));
+
+    if (exists) {
+        char slot_e[6 * 128], fn_e[6 * 256];
+        json_escape_checked(&jb, meta.slot_key, slot_e, sizeof(slot_e));
+        json_escape_checked(&jb, meta.filename, fn_e, sizeof(fn_e));
+        json_append(&jb,
+                 "{\"status\":\"ok\",\"key\":\"%s\",\"folder_exists\":true,\"file_exists\":true,"
+                 "\"folder_name\":\"%s\",\"existing\":{\"slot\":\"%s\",\"filename\":\"%s\"}}",
+                 key_e, key_e, slot_e, fn_e);
+    } else {
+        json_append(&jb,
+                 "{\"status\":\"ok\",\"key\":\"%s\",\"folder_exists\":false,\"file_exists\":false,"
+                 "\"folder_name\":\"%s\",\"existing\":null}",
+                 key_e, key_e);
+    }
+    return jb.error ? -1 : 0;
 }
 
-int payload_mgr_import_to_storage(const char *filename, const char *temp_path,
-                                  const char *install_source, const char *install_source_detail,
-                                  char *msg_buf, size_t msg_buf_size) {
-    if (!filename || strstr(filename, "/") || strstr(filename, "..")) {
+int payload_mgr_import_to_storage_mode(const char *filename, const char *temp_path,
+                                       const char *mode, const char *install_source,
+                                       const char *install_source_detail,
+                                       char *msg_buf, size_t msg_buf_size,
+                                       char *out_slot, size_t out_slot_size) {
+    if (!filename || strstr(filename, "/") || strstr(filename, "..") || is_pldmgr_name(filename)) {
         snprintf(msg_buf, msg_buf_size, "Invalid filename");
         return -1;
     }
@@ -655,156 +719,176 @@ int payload_mgr_import_to_storage(const char *filename, const char *temp_path,
         return -1;
     }
 
-    char folder_name[128];
-    pldmgr_utils_get_payload_folder_name(filename, folder_name, sizeof(folder_name));
+    char lkey[128];
+    slot_local_key(filename, lkey, sizeof(lkey));
 
-    char payload_dir[512];
-    snprintf(payload_dir, sizeof(payload_dir), "%s/%s", PAYLOADS_STORAGE_DIR, folder_name);
-    if (ensure_dir_recursive(payload_dir) != 0) {
-        snprintf(msg_buf, msg_buf_size, "Failed to create directory");
-        return -1;
+    char target_slot[128], base_slot[128];
+    snprintf(base_slot, sizeof(base_slot), "local/%s", lkey);
+    SlotMeta meta;
+    memset(&meta, 0, sizeof(meta));
+    meta.schema = PAYLOAD_SLOT_SCHEMA;
+    strcpy(meta.kind, SLOT_KIND_LOCAL);
+    strncpy(meta.filename, filename, sizeof(meta.filename) - 1);
+
+    time_t now = time(NULL);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    strftime(meta.installed_at, sizeof(meta.installed_at), "%Y-%m-%dT%H:%M:%S%z", &tmv);
+
+    strncpy(meta.origin, install_source ? install_source : "web_upload", sizeof(meta.origin) - 1);
+    if (install_source_detail) {
+        strncpy(meta.origin_detail, install_source_detail, sizeof(meta.origin_detail) - 1);
     }
 
-    char final_path[640];
-    snprintf(final_path, sizeof(final_path), "%s/%s", payload_dir, filename);
-
-    /* Remove old files in the payload directory */
-    payload_mgr_remove_old_files(payload_dir, filename);
-
-    if (rename(temp_path, final_path) != 0) {
-        snprintf(msg_buf, msg_buf_size, "Failed to move file");
+    if (slot_commit_file(base_slot, temp_path, mode, &meta, 0, target_slot, sizeof(target_slot))) {
+        snprintf(msg_buf, msg_buf_size, "Storage commit failed (conflict, invalid mode, or I/O error)");
         return -1;
     }
+    /* On failure the request completion callback still owns the upload. */
+    if (remove(temp_path))
+        pldmgr_log("[PLDMGR] Upload committed; retaining request file for startup cleanup: %s\n", temp_path);
 
-    /* Write metadata sidecar */
-    char details_path[700];
-    snprintf(details_path, sizeof(details_path), "%s/%s.json", payload_dir, filename);
-    write_simple_payload_details_json(filename, details_path, install_source, install_source_detail);
+    if (out_slot && out_slot_size > 0) {
+        strncpy(out_slot, target_slot, out_slot_size - 1);
+        out_slot[out_slot_size - 1] = '\0';
+    }
 
-    pldmgr_log("[PLDMGR] Imported payload: %s -> %s\n", filename, final_path);
+    pldmgr_log("[PLDMGR] Local import complete: slot=%s filename=%s\n", target_slot, filename);
     snprintf(msg_buf, msg_buf_size, "Imported %s", filename);
-    /* [CN-FORK] 同步更新越狱引导器目录（若该工具在其中有登记） */
-    ps5_autoloader_sync(filename, final_path);
+    /* [CN-FORK] 同步更新越狱引导器目录（若该工具在其中有登记）。
+     * v0.6.0 起落点由 slot 管理，这里把刚写入的 slot key 解回真实路径。 */
+    char final_path[640];
+    if (slot_resolve(target_slot, final_path, sizeof(final_path)) == 0)
+        ps5_autoloader_sync(filename, final_path);
     return 0;
 }
-
-int payload_mgr_check_existing(const char *filename, char *out_json, size_t out_size) {
-    char folder_name[128];
-    char folder_path[512];
-    char file_path[640];
-    struct stat st;
-
-    pldmgr_utils_get_payload_folder_name(filename, folder_name, sizeof(folder_name));
-    snprintf(folder_path, sizeof(folder_path), "%s/%s", PAYLOADS_STORAGE_DIR, folder_name);
-    snprintf(file_path, sizeof(file_path), "%s/%s", folder_path, filename);
-
-    int folder_exists = (stat(folder_path, &st) == 0 && S_ISDIR(st.st_mode));
-    int file_exists = (stat(file_path, &st) == 0 && S_ISREG(st.st_mode));
-
-    snprintf(out_json, out_size, "{\"status\":\"ok\",\"folder_exists\":%s,\"file_exists\":%s,\"folder_name\":\"%s\"}",
-             folder_exists ? "true" : "false", file_exists ? "true" : "false", folder_name);
-    return 0;
-}
-
-int payload_mgr_write_metadata(const char *payload_path, const char *install_source,
-                               const char *install_source_detail) {
-    char details_path[700];
-    const char *filename = strrchr(payload_path, '/');
-    filename = filename ? filename + 1 : payload_path;
-    snprintf(details_path, sizeof(details_path), "%s.json", payload_path);
-    return write_simple_payload_details_json(filename, details_path, install_source, install_source_detail);
-}
-
-/* ── USB Check / Move ──────────────────────────────────────── */
 
 int payload_mgr_usb_check(const char *usb_path, char *out_json, size_t out_size) {
-    if (!is_allowed_usb_path(usb_path)) {
-        snprintf(out_json, out_size, "{\"error\":\"Invalid USB path\"}");
+    JsonListBuilder jb = { out_json, out_size, 0, 1, 0 };
+    if (!is_allowed_usb_path(usb_path) || is_pldmgr_name(usb_path)) {
+        json_append(&jb, "{\"error\":\"Invalid USB path\"}");
         return -1;
     }
 
     struct stat st;
     if (stat(usb_path, &st) != 0) {
-        snprintf(out_json, out_size, "{\"error\":\"File not found\"}");
+        json_append(&jb, "{\"error\":\"File not found\"}");
         return -1;
     }
 
     const char *filename = strrchr(usb_path, '/');
     filename = filename ? filename + 1 : usb_path;
 
-    char existing_path[512];
-    int exists = (payload_mgr_resolve_path(filename, existing_path, sizeof(existing_path)) == 0);
+    char lkey[128];
+    slot_local_key(filename, lkey, sizeof(lkey));
 
-    char name_e[512], path_e[1024];
-    pldmgr_json_escape(filename, name_e, sizeof(name_e));
-    pldmgr_json_escape(usb_path, path_e, sizeof(path_e));
+    char check_dir[640];
+    snprintf(check_dir, sizeof(check_dir), "%s/local/%s", PAYLOADS_STORAGE_DIR, lkey);
 
-    snprintf(out_json, out_size,
-             "{\"filename\":\"%s\",\"path\":\"%s\",\"size\":%lld,\"exists\":%s}",
-             name_e, path_e, (long long)st.st_size, exists ? "true" : "false");
-    return 0;
+    SlotMeta meta;
+    if (slot_read_meta(check_dir, &meta) != 0) {
+        json_append(&jb, "{\"error\":\"Failed to read slot metadata\"}");
+        return -1;
+    }
+    int exists = meta.payload_path[0] != '\0';
+    char usb_hash[65], installed_hash[65];
+    if (!S_ISREG(st.st_mode) || st.st_size <= 0 || compute_sha256_file(usb_path, usb_hash) ||
+        (exists && compute_sha256_file(meta.payload_path, installed_hash))) {
+        json_append(&jb, "{\"error\":\"Failed to verify payload contents\"}"); return -1;
+    }
+
+    char name_e[6 * 256], path_e[6 * 512], key_e[6 * 128];
+    json_escape_checked(&jb, filename, name_e, sizeof(name_e));
+    json_escape_checked(&jb, usb_path, path_e, sizeof(path_e));
+    json_escape_checked(&jb, lkey, key_e, sizeof(key_e));
+
+    if (exists) {
+        char slot_e[6 * 128], exfn_e[6 * 256];
+        json_escape_checked(&jb, meta.slot_key, slot_e, sizeof(slot_e));
+        json_escape_checked(&jb, meta.filename, exfn_e, sizeof(exfn_e));
+
+        int is_same = !strcmp(meta.filename, filename) && !strcmp(usb_hash, installed_hash);
+        json_append(&jb,
+                 "{\"filename\":\"%s\",\"path\":\"%s\",\"size\":%lld,\"sha256\":\"%s\",\"key\":\"%s\","
+                 "\"status\":\"%s\",\"folder_exists\":true,\"folder_name\":\"%s\","
+                 "\"existing\":{\"slot\":\"%s\",\"filename\":\"%s\"}}",
+                 name_e, path_e, (long long)st.st_size, usb_hash, key_e,
+                 is_same ? "exists_same" : "exists_different", key_e,
+                 slot_e, exfn_e);
+    } else {
+        json_append(&jb,
+                 "{\"filename\":\"%s\",\"path\":\"%s\",\"size\":%lld,\"sha256\":\"%s\",\"key\":\"%s\","
+                 "\"status\":\"ready\",\"folder_exists\":false,\"folder_name\":\"%s\","
+                 "\"existing\":null}",
+                 name_e, path_e, (long long)st.st_size, usb_hash, key_e, key_e);
+    }
+    return jb.error ? -1 : 0;
 }
 
-int payload_mgr_usb_move(const char *usb_path, int overwrite, int keep_original, char *out_json,
-                         size_t out_size) {
-    if (!is_allowed_usb_path(usb_path)) {
-        snprintf(out_json, out_size, "{\"ok\":false,\"message\":\"Invalid USB path\"}");
+int payload_mgr_usb_move(const char *usb_path, const char *mode, int keep_original,
+                         char *out_json, size_t out_size) {
+    JsonListBuilder jb = { out_json, out_size, 0, 1, 0 };
+    if (!is_allowed_usb_path(usb_path) || is_pldmgr_name(usb_path)) {
+        json_append(&jb, "{\"ok\":false,\"message\":\"Invalid USB path\"}");
         return -1;
     }
 
     struct stat st;
     if (stat(usb_path, &st) != 0) {
-        snprintf(out_json, out_size, "{\"ok\":false,\"message\":\"File not found\"}");
+        json_append(&jb, "{\"ok\":false,\"message\":\"File not found\"}");
         return -1;
     }
 
     const char *filename = strrchr(usb_path, '/');
     filename = filename ? filename + 1 : usb_path;
 
-    char folder_name[128];
-    pldmgr_utils_get_payload_folder_name(filename, folder_name, sizeof(folder_name));
+    char lkey[128];
+    slot_local_key(filename, lkey, sizeof(lkey));
 
-    char payload_dir[512];
-    snprintf(payload_dir, sizeof(payload_dir), "%s/%s", PAYLOADS_STORAGE_DIR, folder_name);
-    ensure_dir_recursive(payload_dir);
+    char target_slot[128], base_slot[128];
+    snprintf(base_slot, sizeof(base_slot), "local/%s", lkey);
+    SlotMeta meta;
+    memset(&meta, 0, sizeof(meta));
+    meta.schema = PAYLOAD_SLOT_SCHEMA;
+    strcpy(meta.kind, SLOT_KIND_LOCAL);
+    strncpy(meta.filename, filename, sizeof(meta.filename) - 1);
 
-    char final_path[640];
-    snprintf(final_path, sizeof(final_path), "%s/%s", payload_dir, filename);
+    time_t now = time(NULL);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    strftime(meta.installed_at, sizeof(meta.installed_at), "%Y-%m-%dT%H:%M:%S%z", &tmv);
 
-    /* Check for existing file */
-    if (!overwrite && access(final_path, F_OK) == 0) {
-        snprintf(out_json, out_size, "{\"ok\":false,\"message\":\"File already exists\","
-                 "\"exists\":true}");
+    strcpy(meta.origin, "usb");
+    strncpy(meta.origin_detail, usb_path, sizeof(meta.origin_detail) - 1);
+
+    if (slot_commit_file(base_slot, usb_path, mode, &meta, 0, target_slot, sizeof(target_slot))) {
+        json_append(&jb, "{\"ok\":false,\"message\":\"Storage commit failed (conflict, invalid mode, or I/O error)\"}");
         return -1;
     }
 
-    /* Remove old files if overwriting */
-    if (overwrite) {
-        payload_mgr_remove_old_files(payload_dir, filename);
-    }
-
-    if (copy_file(usb_path, final_path) != 0) {
-        snprintf(out_json, out_size, "{\"ok\":false,\"message\":\"Copy failed\"}");
-        return -1;
-    }
-
-    /* Write metadata */
-    char details_path[700];
-    snprintf(details_path, sizeof(details_path), "%s/%s.json", payload_dir, filename);
-    write_simple_payload_details_json(filename, details_path, "usb", usb_path);
-
-    /* Remove the original file if not copying */
     if (!keep_original) {
-        if (remove(usb_path) != 0) {
+        char original_hash[65], copied_hash[65];
+        struct stat current;
+        int unchanged = !stat(usb_path, &current) && current.st_dev == st.st_dev &&
+            current.st_ino == st.st_ino && current.st_size == st.st_size &&
+            !compute_sha256_file(usb_path, original_hash) &&
+            !compute_sha256_file(meta.payload_path, copied_hash) && !strcmp(original_hash, copied_hash);
+        if (!unchanged || remove(usb_path) != 0) {
             pldmgr_log("[PLDMGR] Warning: Failed to remove original file from USB: %s\n", usb_path);
-            snprintf(out_json, out_size, "{\"ok\":true,\"message\":\"Moved successfully\",\"warning\":\"Payload copied, but failed to delete original from USB.\"}");
+            json_append(&jb,
+                     "{\"ok\":true,\"slot\":\"%s\",\"message\":\"Moved successfully\","
+                     "\"warning\":\"Payload copied, but failed to delete original from USB.\"}",
+                     target_slot);
         } else {
-            pldmgr_log("[PLDMGR] USB payload moved: %s -> %s\n", usb_path, final_path);
-            snprintf(out_json, out_size, "{\"ok\":true,\"message\":\"Moved successfully\"}");
+            pldmgr_log("[PLDMGR] USB payload moved: %s -> %s\n", usb_path, meta.payload_path);
+            json_append(&jb, "{\"ok\":true,\"slot\":\"%s\",\"message\":\"Moved successfully\"}",
+                     target_slot);
         }
     } else {
-        pldmgr_log("[PLDMGR] USB payload copied: %s -> %s\n", usb_path, final_path);
-        snprintf(out_json, out_size, "{\"ok\":true,\"message\":\"Copied successfully\"}");
+        pldmgr_log("[PLDMGR] USB payload copied: %s -> %s\n", usb_path, meta.payload_path);
+        json_append(&jb, "{\"ok\":true,\"slot\":\"%s\",\"message\":\"Copied successfully\"}",
+                 target_slot);
     }
-    return 0;
+
+    return jb.error ? -1 : 0;
 }

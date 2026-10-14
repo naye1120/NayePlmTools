@@ -18,6 +18,13 @@
  <img src="./pldmgr_screenshot.png" width="640" alt="NayePlmTools 界面：游戏列表（中文）" />
 </p>
 
+## Features
+- **Web-Based Interface**: A modern dashboard to manage payloads from your PC, phone, or the PS5 itself.
+- **Import Payloads**: Easily add new payloads from a USB drive or download them from the cloud repository.
+- **Automated Startup**: Set up a list of payloads to load automatically whenever you start the manager.
+- **Home Screen Shortcut**: Installs a dedicated "Payload Manager" app icon to your PS5 home screen for quick access.
+- **Favorites and Process Management**: Keep favorite payloads at hand, inspect active processes, and terminate eligible processes.
+
 ---
 
 ## 这是什么
@@ -75,6 +82,10 @@
 - 深色主题；**电视端（遥控器）适配**；**移动端二级菜单**（手机端 PKG 安装 / 常用配置 / 游戏管理 / 活动进程 / 设置 / 关于 收进下拉菜单，桌面与电视端保持原侧栏）。
 - 刷新后停在当前页；存档、多媒体等面板「铺满右侧」。
 - 多语言：继承上游 [Crowdin](https://crowdin.com/project/ps5-payload-manager) 的全部语言，并叠加本分支的中文文案覆盖层。
+
+## Translations
+
+PS5 Payload Manager supports multiple languages. For the list of supported languages, how to report translation issues or suggest improvements, and past community translators, see [TRANSLATIONS.md](TRANSLATIONS.md).
 
 ---
 
@@ -154,6 +165,7 @@ bash tools/build_tiles.sh
 
 - [owendswang](https://github.com/owendswang) —— [ps5-fan-control](https://github.com/owendswang/ps5-fan-control)，以及上游贡献。
 - [BenNoxXD](https://github.com/BenNoxXD) —— Disc Player 终止逻辑。
+- [上游全部贡献者](https://github.com/itsPLK/ps5-payload-manager/graphs/contributors) —— 对本项目上游的贡献。
 
 以及所有参与 PS5 homebrew 社区的开发者。
 

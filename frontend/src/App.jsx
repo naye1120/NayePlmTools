@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useHistoryNavigation } from './hooks/useHistoryNavigation'
+import { createRequestScope } from './utils/requestScope'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Settings,
   Cpu,
   Database,
   RefreshCw,
+  Globe,
   Package,
   Menu,
   Terminal,
@@ -15,15 +18,27 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import './App.css'
+import { apiFetch, mutationFetch } from './utils/mutationRequest'
+
+// Contexts
+import { useRepository } from './contexts/RepositoryContext'
 
 // Utilities
-import { cn, isPS5 } from './utils/helpers'
+import { cn, isPS5, formatSourceTag } from './utils/helpers'
+import { slug } from './utils/versions'
+import { resolveSourceDisplayName } from './utils/payloadStatus'
 
 // UI Components
 import Toast from './components/ui/Toast'
 import Modal from './components/ui/Modal'
 import NavButton from './components/ui/NavButton'
+// [CN-FORK] v0.6.0 合入：加载遮罩的图标/名称改成上游这两个新组件（PayloadName 是
+// fork 里原有的，PayloadIcon 是上游新增的）。PayloadButton 未引入 —— fork 的
+// payload 列表全部走自己的 StorageHub，没有上游的 dashboard 视图。
+import PayloadIcon from './components/ui/PayloadIcon'
+import PayloadName from './components/ui/PayloadName'
 import LogoIcon from './components/ui/LogoIcon'
+import ErrorBoundary from './components/ui/ErrorBoundary'
 
 // Views
 import StorageHub from './components/views/StorageHub'
@@ -114,9 +129,25 @@ function readStoredView() {
   }
 }
 
+/* [CN-FORK] v0.6.0 合入：toast id 改用自增序号（原来是数组长度），连点两条
+ * 同样的文案时也能拿到不同 key。 */
+let toastSeq = 0
+
 function App() {
   const { t, i18n } = useTranslation();
   const [view, setView] = useState(readStoredView) /* [CN-FORK] v0.5.1.64 默认页 payload 管理页；v0.5.2.154 起刷新后回到上次那一页 */
+  /* ── 以下状态来自上游 v0.6.0（fork 侧原本是「用到什么才声明什么」，合并后
+   * 统一收在这里，声明在首次使用之前）。 */
+  const { fetchRemote, clearCache, sources } = useRepository()
+  const [items, setItems] = useState([])
+  const [selfUpdate, setSelfUpdate] = useState(null)
+  const [uploadConflictModal, setUploadConflictModal] = useState({ show: false, file: null, folderName: '' })
+  const [conflictPrompt, setConflictPrompt] = useState(null)
+  const [externalLinkUrl, setExternalLinkUrl] = useState(null)
+  const [installingPayloadId, setInstallingPayloadId] = useState(null)
+  const [autoloadDelayModal, setAutoloadDelayModal] = useState(false)
+  const [isManageMode, setIsManageMode] = useState(false)
+  const [selectedPayload, setSelectedPayload] = useState(null)
   const mainRef = useRef(null)
 
   /* [CN-FORK] v0.5.2.154 把当前页写回去。**只写白名单里的页**：像 move_from_usb 这种
@@ -178,33 +209,70 @@ function App() {
   const [payloads, setPayloads] = useState([])
   const [config, setConfig] = useState({})
   const [ip, setIp] = useState('0.0.0.0')
+  /* [CN-FORK] v0.6.0 合入：上游删掉了 version 状态（它的侧栏不显示版本号、
+   * AboutView 也不要 version）。fork 的侧栏底部常驻「v{version}」、关于页拿它 → 补回来。 */
   const [version, setVersion] = useState('Loading...')
   const [loading, setLoading] = useState(false)
-  const [activeLoadingName, setActiveLoadingName] = useState('')
+  /* [CN-FORK] v0.6.0 合入：加载态从「只有个名字」升级成「整个 payload 的展示信息」
+   * （图标 / 名字 / 版本 / 来源徽标）。fork 原来的 activeLoadingName 随之删除 ——
+   * loadPayload 与加载遮罩都被上游版本换掉了，它已无人引用。launchHistory 也未引入：
+   * 上游只有 dashboard 的收藏卡会读它，fork 没有 dashboard 视图。 */
+  const [activeLoadingPayload, setActiveLoadingPayload] = useState(null)
   const [toasts, setToasts] = useState([])
   /* 只留 setter：加载态本身没有渲染出口（payload 列表自带骨架），但状态留着
    * 给后面的刷新链判「第一次加载完没有」。去掉变量名是为了 no-unused-vars 不报 ——
-   * 别顺手把整行删掉，setter 还在用。 */
-  const [, setLoadingPayloads] = useState(true)
+   * 别顺手把整行删掉，setter 还在用。
+   * v0.6.0 上游把变量名接回来了：AutoloadOverlay 的 itemsLoading 与 dashboard 的
+   * 骨架分支都读它 → fork 侧恢复 [loadingPayloads, setLoadingPayloads]。 */
+  const [loadingPayloads, setLoadingPayloads] = useState(true)
   const [downloadModal, setDownloadModal] = useState({ show: false, name: '', progress: 0 })
+  /* [CN-FORK] v0.5.2.93 confirmModal 的 danger 档：删除文件不可逆 → 实心红确认条。
+   * 覆盖 / 重装这类可重做的确认仍走主色橙。上游 0.6.0 没有这个字段。
+   * payloadMeta 改为只读（fork 原本带个 never-used 的 setter）。 */
   const [confirmModal, setConfirmModal] = useState({ show: false, title: '', message: '', onConfirm: null, danger: false })
   const [moveFromUsbPath, setMoveFromUsbPath] = useState(null)
   const [storageScrollTarget, setStorageScrollTarget] = useState(null)
   const [showLogs, setShowLogs] = useState(false)
-  const [payloadMeta, setPayloadMeta] = useState({})
-
+  const [payloadMeta, setPayloadMeta] = useState({}) /* [CN-FORK] /list_payloads 的 meta 表：filename -> meta，多源目录读它 */
+  const { navigate, handleSelectPayload, handleClosePayload } = useHistoryNavigation({
+    view,
+    setView,
+    confirmModal,
+    setConfirmModal,
+    downloadModal,
+    setDownloadModal,
+    showLogs,
+    setShowLogs,
+    isManageMode,
+    setIsManageMode,
+    selectedPayload,
+    setSelectedPayload,
+    moveFromUsbPath,
+    setMoveFromUsbPath,
+    delayModal: autoloadDelayModal,
+    setDelayModal: setAutoloadDelayModal,
+    uploadConflictModal,
+    setUploadConflictModal,
+    conflictPrompt,
+    setConflictPrompt,
+    externalLinkUrl,
+    setExternalLinkUrl,
+  })
+  /* [CN-FORK] v0.6.0 合入：上游的 payload 收藏夹机制（favoritePayloads 本地状态 +
+   * FAVORITES 前后端双向同步 + 退出前补写 /set_config + legacy_paths 迁移）整块未引入。
+   * 它唯一的上游消费方是 dashboard 收藏区视图，fork 决定「管理 Payload 一页统管」、
+   * 不引入那个视图 → 没有界面会写也没有界面会读，留着只会白发一次 /set_config。
+   * 后端 /get_config、/set_config 的 FAVORITES 键保持原样，将来要做收藏 UI 再从这接线。 */
   useEffect(() => {
     if (!showLogs) return
     const eventSource = new EventSource('/events')
     eventSource.onmessage = (e) => {
       setLogs(prev => [...prev, e.data].slice(-200))
     }
+    eventSource.addEventListener('gap', eventSource.onmessage)
     return () => eventSource.close()
   }, [showLogs])
   const [isOffline, setIsOffline] = useState(false)
-
-
-
 
   const showConfirm = (title, message, onConfirm, danger = false) => {
     setConfirmModal({
@@ -219,10 +287,11 @@ function App() {
     })
   }
 
-  const addToast = (message, type = 'success') => {
-    const id = Date.now()
+  const addToast = useCallback((message, type = 'success') => {
+    toastSeq += 1
+    const id = `${Date.now()}-${toastSeq}`
     setToasts(prev => [...prev, { id, message, type }])
-  }
+  }, [])
 
   /* [CN-FORK] v0.5.2.92 视图进入顺序记在 ref 栈里，供遥控器「返回」键回退
    * （不写 URL/hash：PS5 老内核的 history 行为不可靠，栈在内存里最简单也够用）。 */
@@ -255,9 +324,10 @@ function App() {
     setToasts(prev => prev.filter(t => t.id !== id))
   }
 
-  const api = async (endpoint, options = {}) => {
+  const api = useCallback(async (endpoint, options = {}) => {
     try {
-      const response = await fetch(endpoint, options)
+      const response = await (options.method === 'POST' ? mutationFetch(endpoint, options) : apiFetch(endpoint, options))
+      if (!response.ok) return null
       if (options.method === 'POST') return response.text()
       try {
         const text = await response.text()
@@ -265,17 +335,26 @@ function App() {
         return JSON.parse(text)
       } catch { return null }
     } catch { return null }
-  }
+  }, [])
 
-  /* [CN-FORK] v0.5.2.125 必须是函数声明：函数体内有 `() => refreshPayloads(retryCount + 1)`
-   * 自引用（失败重试那条路），写成 `const refreshPayloads = async () => {…}` 会被 Babel 的
-   * async 降级搞坏（自引用不重写，变成悬空标识符）。详见 utils/gameApi.js 里 watchJob 的
-   * tick 注释与 HANDOVER §6。 */
-  async function refreshPayloads(retryCount = 0) {
+  /* [CN-FORK] v0.6.0 合入：refreshPayloads 从「函数声明」改成「命名 useCallback」。
+   * fork 那条「必须是函数声明，否则 Babel async 降级会挂」的坑是 v0.5.2.125 的事了 ——
+   * 上游用的是**函数表达式**形式（async function retryPayloads(...)），自引用走的是
+   * 函数名本身而不是外层 const，所以不受那条坑影响；
+   * 重试定时器句柄也改挂 ref（payloadRetryRef），componentWillUnmount 不清也不会
+   * 再往已卸载的组件里 setState（appAliveRef 兜住）。 */
+  const payloadRetryRef = useRef(null)
+  const appAliveRef = useRef(false)
+  const refreshPayloads = useCallback(async function retryPayloads(retryCount = 0) {
     setLoadingPayloads(true)
     const data = await api('/list_payloads')
-    if (data?.payloads) {
-      const sorted = [...data.payloads].sort((a, b) => {
+    if (!appAliveRef.current) return
+    if (data?.items || data?.payloads) {
+      const rawItems = data.items || []
+      setItems(rawItems)
+      setSelfUpdate(data.self || null)
+
+      const sorted = [...(data.payloads || [])].sort((a, b) => {
         const aIsUsb = a.startsWith('/mnt/usb')
         const bIsUsb = b.startsWith('/mnt/usb')
         if (aIsUsb && !bIsUsb) return 1
@@ -283,67 +362,85 @@ function App() {
         return a.localeCompare(b)
       })
       setPayloads(sorted)
-      // Build metadata map: filename -> meta object
+
+      // [CN-FORK] Build metadata map: filename -> meta object（多源目录的
+      // 「来源徽标 / 版本」读它；fork 原来的 setPayloadMeta 在这里）。
       if (data.meta && typeof data.meta === 'object') {
         setPayloadMeta(data.meta)
       }
+
       setLoadingPayloads(false)
     } else if (retryCount < 5) {
-      setTimeout(() => refreshPayloads(retryCount + 1), 1000)
+      clearTimeout(payloadRetryRef.current)
+      payloadRetryRef.current = setTimeout(() => retryPayloads(retryCount + 1), 1000)
     } else {
+      setItems([])
       setPayloads([])
       setLoadingPayloads(false)
     }
-  }
+  }, [api])
 
   /* [CN-FORK] v0.5.2.96 删掉 refreshHistory / launchHistory：拉回来的启动历史没有任何界面消费
-   * （消费方是已下线的仪表盘收藏区），但每次进页和每次启动都还在白发一次 /history_list。 */
+   * （消费方是已下线的仪表盘收藏区），但每次进页和每次启动都还在白发一次 /history_list。
+   * v0.6.0 上游把它接回来了（launchHistory 只喂给 dashboard 收藏卡的 isLaunched 徽标），
+   * fork 没有 dashboard 视图 → 继续不接；后端 /history_list 保留原样。 */
 
-  const refreshConfig = async () => {
+  const refreshConfig = useCallback(async () => {
     const data = await api('/get_config')
-    if (data) setConfig(data)
-  }
+    if (!appAliveRef.current) return
+    if (data) {
+      setConfig(data)
+    }
+  }, [api])
 
   const handleAbort = async () => {
-    await fetch('/abort').catch(() => { })
+    await mutationFetch('/abort').catch(() => { })
     setAutoloadStatus(prev => prev ? { ...prev, remaining: -1 } : null)
     addToast(t("app.toasts.sequence_aborted", "Sequence Aborted"), "error")
   }
 
   const handleFinish = async () => {
-    await fetch('/autoload_clear').catch(() => { })
+    await mutationFetch('/autoload_clear').catch(() => { })
     setAutoloadStatus(null)
     window.location.reload()
   }
 
-  const loadPayload = async (path) => {
-    const name = path.split('/').pop().replace(/\.(elf|bin)$/i, '').replace(/_/g, ' ')
+  const loadPayload = async (slotOrPath, presentation = {}) => {
+    if (!slotOrPath) return
+    const name = presentation.name || slotOrPath.split('/').pop().replace(/\.(elf|bin)$/i, '').replace(/_/g, ' ')
     setLoading(true)
-    setActiveLoadingName(name)
+    setActiveLoadingPayload({ ...presentation, key: slotOrPath, name, path: presentation.path || slotOrPath })
     try {
-      const safePath = encodeURI(path)
-      const res = await fetch(`/loadpayload:${safePath}`)
+      const safeParam = encodeURI(slotOrPath)
+      const res = await mutationFetch(`/loadpayload:${safeParam}`)
       if (!res.ok) throw new Error(`${t("app.toasts.launch_failed", "Launch failed")} (${res.status})`)
       addToast(t("app.toasts.payload_launched", "{{name}} launched", { name }))
+      /* [CN-FORK] 上游在这里补了一句 refreshHistory()（刷新启动历史给 dashboard 徽标用），
+       * fork 没有 dashboard 视图、且 .96 已主动删掉这条无人消费的请求 → 不接。 */
     } catch (e) { addToast(e.message || t("app.toasts.launch_failed", "Launch failed"), "error") }
     setTimeout(() => {
       setLoading(false)
-      setActiveLoadingName('')
+      setActiveLoadingPayload(null)
     }, 1500)
   }
 
-  const handleDelete = (fileName) => {
+  const handleDelete = (slotOrFilename, customName) => {
+    if (!slotOrFilename) return
+    const name = customName || slotOrFilename
     showConfirm(
       t("app.modals.delete_payload.title", "Delete Payload"),
-      t("app.modals.delete_payload.message", "Are you sure you want to remove {{fileName}}?", { fileName }),
+      t("app.modals.delete_payload.message", "Are you sure you want to remove {{fileName}}?", { fileName: name }),
       async () => {
-        const res = await fetch(`/manage:delete?filename=${encodeURIComponent(fileName)}`)
+        const res = await mutationFetch(`/manage:delete?slot=${encodeURIComponent(slotOrFilename)}`)
         if (!res.ok) {
           addToast(`Delete failed (${res.status})`, 'error')
           return
         }
         refreshPayloads()
-        addToast(t("app.toasts.payload_removed", "{{fileName}} removed", { fileName }))
+        /* [CN-FORK] v0.6.0 合入：占位变量从「不存在的 fileName」改成 name ——
+         * fork 原来这里写 { fileName }，函数里没有这个标识符，删成功时的提示
+         * 会显示成「undefined removed」。上游顺手修掉了，采纳。 */
+        addToast(t("app.toasts.payload_removed", "{{fileName}} removed", { fileName: name }))
       },
       /* [CN-FORK] v0.5.2.93 删除文件不可逆 → 危险档确认（实心红）；覆盖/重装这类可重做的确认走主色橙 */
       true
@@ -356,95 +453,135 @@ function App() {
     input.value = ''
     if (!file) return
 
-    const ext = file.name.split('.').pop().toLowerCase();
+    const ext = file.name.split('.').pop().toLowerCase()
     if (ext !== 'elf' && ext !== 'bin') {
-      addToast(t("app.toasts.unsupported_file", "Unsupported file type. Only .elf and .bin files are allowed."), "error");
-      return;
+      addToast(
+        t("app.toasts.unsupported_file", "Unsupported file type. Only .elf and .bin files are allowed."),
+        "error"
+      )
+      return
     }
 
     try {
-      const res = await fetch(`/manage:check?filename=${encodeURIComponent(file.name)}`)
+      const res = await apiFetch(`/manage:check?filename=${encodeURIComponent(file.name)}`)
       const data = await res.json()
-      if (data.file_exists || data.folder_exists) {
-        setConfirmModal({
+      if (data?.existing || data?.file_exists || data?.folder_exists) {
+        setUploadConflictModal({
           show: true,
-          title: t("app.modals.overwrite.title", "Overwrite Payload"),
-          message: data.file_exists
-            ? t("app.modals.overwrite.file_exists", "The file {{fileName}} already exists. Overwrite it?", { fileName: file.name })
-            : t("app.modals.overwrite.folder_exists", "A different version of this payload exists in the \"{{folderName}}\" folder. Overwrite it?", { folderName: data.folder_name }),
-          onConfirm: () => performUpload(file)
+          file,
+          folderName: data.key || data.folder_name || file.name,
         })
       } else {
-        performUpload(file)
+        performUpload(file, 'new')
       }
     } catch {
-      /* 探活失败就当「没有同名文件」，直接上传 —— 这一步只是省一次确认框。 */
-      performUpload(file)
+      /* 探活失败就当「没有同名文件」，直接上传 —— 这一步只是省一次确认框。
+       * [CN-FORK] v0.6.0 合入：显式传 mode='new'（上游写法；默认值也是 'new'，
+       * 但 /manage:upload 的 mode 语义靠它决定「保留同名」还是「覆盖」，写明白更稳）。 */
+      performUpload(file, 'new')
     }
   }
 
-  const performUpload = async (file) => {
-    setConfirmModal({ show: false })
+  const performUpload = async (file, mode = 'new') => {
+    setUploadConflictModal({ show: false, file: null, folderName: '' })
     setDownloadModal({ show: true, name: file.name, progress: 20 })
     try {
-      const res = await fetch(`/manage:upload?filename=${encodeURIComponent(file.name)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: file
-      })
+      const res = await mutationFetch(
+        `/manage:upload?filename=${encodeURIComponent(file.name)}&mode=${encodeURIComponent(mode)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: file,
+        }
+      )
       if (!res.ok) throw new Error(`${t("app.toasts.upload_failed", "Upload failed")} (${res.status})`)
-      setDownloadModal(prev => ({ ...prev, progress: 100 }))
+      setDownloadModal((prev) => ({ ...prev, progress: 100 }))
       addToast(t("app.toasts.payload_uploaded", "{{fileName}} uploaded", { fileName: file.name }))
       refreshPayloads()
-    } catch (e) { addToast(e.message || t("app.toasts.upload_failed", "Upload failed"), "error") }
+    } catch (e) {
+      addToast(e.message || t("app.toasts.upload_failed", "Upload failed"), "error")
+    }
     setTimeout(() => setDownloadModal({ show: false }), 800)
   }
 
-  const handleInstall = async (p, sourceId, repoUrl) => {
-    if (p.isUpdate || p.isInstalled) {
-      setConfirmModal({
-        show: true,
-        title: p.isUpdate ? t("app.modals.reinstall.update_title", "Update Payload") : t("app.modals.reinstall.reinstall_title", "Reinstall Payload"),
-        message: t("app.modals.reinstall.message", "A version of {{name}} is already installed. Do you want to replace it with the repository version?", { name: p.name || p.filename }),
-        onConfirm: () => performInstall(p, sourceId, repoUrl)
-      })
-    } else {
-      performInstall(p, sourceId, repoUrl)
-    }
+  const handleInstall = async (p, sourceId, repoUrl, options = {}) => {
+    performInstall(p, sourceId, repoUrl, options)
   }
 
-  const performInstall = async (p, sourceId, repoUrl) => {
+  const performInstall = async (p, sourceId, repoUrl, options = {}) => {
     setConfirmModal({ show: false })
-    setDownloadModal({ show: true, name: p.filename, progress: 10 })
+    const displayName = p.name || p.filename
+    const payloadId = p.id || slug(p.name || p.filename)
+    setInstallingPayloadId(payloadId)
+    setDownloadModal({ show: true, name: displayName, progress: 10 })
     try {
-      setDownloadModal(prev => ({ ...prev, progress: 30 }))
-      let url = `/repository_install?filename=${encodeURIComponent(p.filename)}`
-      if (sourceId) url += `&source_id=${encodeURIComponent(sourceId)}`
-      if (repoUrl) url += `&repo_url=${encodeURIComponent(repoUrl)}`
-      const res = await fetch(url)
-      setDownloadModal(prev => ({ ...prev, progress: 80 }))
+      setDownloadModal((prev) => ({ ...prev, progress: 30 }))
+      let url = `/repository_install?id=${encodeURIComponent(payloadId)}`
+      if (repoUrl) url += `&source_url=${encodeURIComponent(repoUrl)}`
+      if (options.mode) url += `&mode=${encodeURIComponent(options.mode)}`
+      if (options.replaceSlot) url += `&replace_slot=${encodeURIComponent(options.replaceSlot)}`
+
+      const res = await mutationFetch(url)
+      setDownloadModal((prev) => ({ ...prev, progress: 80 }))
 
       const data = await res.json().catch(() => null)
       if (res.ok && data?.ok) {
-        setDownloadModal(prev => ({ ...prev, progress: 100 }))
-        addToast(t("app.toasts.payload_installed", "{{fileName}} installed", { fileName: p.filename }))
-        refreshPayloads()
-      } else throw new Error(data?.message || t("app.toasts.install_failed", "Installation failed"))
-    } catch (e) { addToast(e.message || t("app.toasts.install_failed", "Installation failed"), 'error') }
+        setDownloadModal((prev) => ({ ...prev, progress: 100 }))
+        addToast(
+          data.self_update ? t("app.toasts.self_update_downloaded", "Update downloaded — applies on next start") : t("app.toasts.payload_installed", "{{fileName}} installed", {
+            fileName: displayName,
+          })
+        )
+        await refreshPayloads()
+        if (data.refreshed) {
+          fetchRemote(true)
+        }
+      } else if (data?.conflict) {
+        setDownloadModal({ show: false, name: '', progress: 0 })
+        const conflict = data.conflict
+        const thisRepoName = resolveSourceDisplayName({ source_url: repoUrl }, sources)
+        setConfirmModal({
+          show: true,
+          title: t("storage_hub.conflict_title", "Payload Conflict"),
+          message: t(
+            "storage_hub.conflict_message",
+            "\"{{name}}\" is already installed from {{otherSource}} ({{version}}). Install from {{thisSource}} too?",
+            {
+              name: displayName,
+              otherSource: resolveSourceDisplayName(conflict, sources),
+              version: conflict.version || "",
+              thisSource: thisRepoName,
+            }
+          ),
+          onConfirm: () =>
+            performInstall(p, sourceId, repoUrl, {
+              mode: 'replace',
+              replaceSlot: conflict.slot,
+            }),
+        })
+        return
+      } else {
+        throw new Error(data?.message || t("app.toasts.install_failed", "Installation failed"))
+      }
+    } catch (e) {
+      addToast(e.message || t("app.toasts.install_failed", "Installation failed"), 'error')
+    } finally {
+      setInstallingPayloadId(null)
+    }
     setTimeout(() => setDownloadModal({ show: false }), 800)
   }
 
   const handleImportFromUsb = (path) => {
     setMoveFromUsbPath(path)
-    setView('move_from_usb')
+    navigate('move_from_usb', { path })
   }
 
   const handleSaveConfig = async (newConfig) => {
-    const merged = { ...config, ...newConfig }
     const success = await api('/set_config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(merged)
+      body: JSON.stringify(newConfig),
+      keepalive: true,
     })
     if (success) {
       refreshConfig()
@@ -456,10 +593,13 @@ function App() {
   }
 
   useEffect(() => {
+    appAliveRef.current = true
+    const controller = createRequestScope()
     const init = async () => {
       let offline = false
       try {
-        const ipRes = await fetch('/getip').then(r => r.text())
+        const ipRes = await apiFetch('/getip', { signal: controller.signal }).then(r => r.text())
+        if (controller.aborted) return
         if (ipRes.toLowerCase().includes('<!doctype')) offline = true
         else setIp(ipRes)
       } catch {
@@ -467,13 +607,17 @@ function App() {
       }
 
       try {
-        const verRes = await fetch('/version').then(r => r.text())
+        const verRes = await apiFetch('/version', { signal: controller.signal }).then(r => r.text())
         if (verRes.toLowerCase().includes('<!doctype')) offline = true
+        /* [CN-FORK] v0.6.0 对比：上游删掉了「拉 /version 并 setVersion」这段（它的侧栏不再显示
+         * 版本号、AboutView 也不要 version）。fork 的侧栏底部常驻「v{version}」、关于页要
+         * 拿 version → 保留 fork 侧。 */
         else setVersion(verRes)
       } catch {
         offline = true
       }
 
+      if (controller.aborted) return
       if (offline) {
         setIsOffline(true)
       } else {
@@ -481,18 +625,21 @@ function App() {
         refreshConfig()
       }
     }
-    init()
-  }, [])
+    void init()
+    return () => {
+      appAliveRef.current = false
+      controller.abort()
+      clearTimeout(payloadRetryRef.current)
+    }
+  }, [refreshConfig, refreshPayloads])
 
 
 
 
   useEffect(() => {
     if (view === 'autoload' || view === 'storage') {
-      /* 换页时刷一次远端配置与 payload 列表。这两句按规则属于「effect 里同步 setState」，
-       * 但它们是**外部系统的读**（去主机上重新拉一份），不是派生 state —— 与本文件里
-       * 既有的几条刷新 effect 同一写法，照旧 disable。 */
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- 去主机重新拉配置，不是派生 state
+      /* 换页时刷一次远端配置与 payload 列表：这是去主机重新拉一份外部系统的读，
+       * 不是派生 state。 */
       refreshConfig()
       refreshPayloads()
     } else if (view === 'game_manage') {
@@ -502,20 +649,22 @@ function App() {
        * 否则弹窗里显示的还是上一次的远程位置。只需 config，不需要 payloads。 */
       refreshConfig()
     }
-  }, [view])
+  }, [view, refreshConfig, refreshPayloads])
 
   useEffect(() => {
     let statusTimeout
+    const controller = createRequestScope()
     async function poll() {
       try {
-        const res = await fetch('/autoload_status')
+        const res = await apiFetch('/autoload_status', { signal: controller.signal, cache: 'no-store' })
         if (res.ok) {
           const data = await res.json()
+          if (controller.aborted) return
           setAutoloadStatus(data)
 
           // Poll as long as autoload is active (remaining >= 0), including DONE state
           // Only stop when remaining goes negative (after /autoload_clear is called)
-          const isActive = data && data.remaining >= 0
+          const isActive = data && Number.isFinite(data.remaining) && data.remaining >= 0
           if (isActive) {
             const delay = data.remaining > 0 ? 600 : 500
             statusTimeout = setTimeout(poll, delay)
@@ -523,12 +672,15 @@ function App() {
           return
         }
       } catch {
-        /* 读不到运行状态就当「没在跑」，下一轮 5 秒后再问一次。 */
+        /* 读不到运行状态就当「没在跑」，下一轮 5 秒后再问一次。
+         * [CN-FORK] v0.6.0 合入：补 controller.aborted 判据 —— 组件已卸载时
+         * 不再排下一轮，避免往已卸载组件里 setState 触发 React 告警。 */
+        // network or server transient error
       }
-      statusTimeout = setTimeout(poll, 5000)
+      if (!controller.aborted) statusTimeout = setTimeout(poll, 5000)
     }
     poll()
-    return () => clearTimeout(statusTimeout)
+    return () => { controller.abort(); clearTimeout(statusTimeout) }
   }, [])
 
 
@@ -548,15 +700,13 @@ function App() {
   // Keep overlay active while remaining >= 0, including DONE state.
   // The overlay is only dismissed when handleFinish() calls /autoload_clear,
   // which resets remaining to -1 on the backend.
-  const isAutoloadActive = autoloadStatus && autoloadStatus.remaining >= 0;
+  const isAutoloadActive = autoloadStatus && Number.isFinite(autoloadStatus.remaining) && autoloadStatus.remaining >= 0;
 
   if (isAutoloadActive) {
-    return <AutoloadOverlay status={autoloadStatus} onCancel={handleAbort} onFinish={handleFinish} isPS5={isPS5} />;
+    return <AutoloadOverlay status={autoloadStatus} items={items} itemsLoading={loadingPayloads} onCancel={handleAbort} onFinish={handleFinish} isPS5={isPS5} />;
   }
 
   return (
-
-
     <div className={cn(
       "min-h-screen min-h-[100dvh] ps5-bg text-zinc-100 font-ps5 flex",
       isPS5 ? "flex-row overflow-hidden" : "flex-col md:flex-row md:overflow-hidden"
@@ -615,6 +765,48 @@ function App() {
 
       {/* [CN-FORK] v0.5.2.85 侧栏底改 bg-ps-surface（变量驱动）：深色为藏蓝夜轨、浅色为淡蓝侧栏，
           与画布 ps-black 拉开一档层次，不再靠 bg-black/40 的半透黑叠加 */}
+      {/* [CN-FORK] v0.6.0 合入：上传撞名确认框（Replace / Keep both）。fork 的 StorageHub
+          自带上传流程、目前不弹它，但 uploadConflictModal 状态本来就要给
+          useHistoryNavigation 用，留着这个 Modal 不增加成本。 */}
+      <Modal
+        show={uploadConflictModal.show}
+        title={t("app.modals.overwrite.title", "Upload Payload")}
+        onClose={() => setUploadConflictModal({ show: false, file: null, folderName: '' })}
+        footer={
+          <div className="flex flex-col sm:flex-row w-full gap-3">
+            <button
+              type="button"
+              onClick={() => setUploadConflictModal({ show: false, file: null, folderName: '' })}
+              className="flex-1 py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 text-white font-bold uppercase text-sm transition-all"
+            >
+              {t("app.buttons.cancel", "Cancel")}
+            </button>
+            <button
+              type="button"
+              onClick={() => performUpload(uploadConflictModal.file, 'replace')}
+              className="flex-1 py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black uppercase text-sm transition-all shadow-lg"
+            >
+              {t("storage_hub.conflict_replace", "Replace")}
+            </button>
+            <button
+              type="button"
+              onClick={() => performUpload(uploadConflictModal.file, 'keep_both')}
+              className="flex-1 py-3 px-4 rounded-xl bg-ps-blue hover:bg-ps-blue/80 text-white font-black uppercase text-sm transition-all shadow-lg"
+            >
+              {t("storage_hub.conflict_keep_both", "Keep both")}
+            </button>
+          </div>
+        }
+      >
+        <p>
+          {t(
+            "app.modals.overwrite.folder_exists",
+            "A version of this payload exists in internal storage ({{folderName}}). Replace the existing version or keep both?",
+            { folderName: uploadConflictModal.folderName }
+          )}
+        </p>
+      </Modal>
+
       <aside className={cn(
         "flex-col bg-ps-surface border-r border-white/5 transition-all duration-500 z-[100] h-screen",
         isPS5 ? "flex" : "hidden md:flex",
@@ -760,14 +952,14 @@ function App() {
 
       {/* MAIN CONTENT AREA */}
       <div className={cn(
-        "flex flex-col relative",
+        "flex flex-col relative min-w-0",
         isPS5 ? "h-screen flex-1 min-h-0" : "md:h-screen md:flex-1 md:min-h-0"
       )}>
         <main ref={mainRef} className={cn(
           "custom-scrollbar w-full flex flex-col",
           /* [CN-FORK] 「PKG安装」要铺满整个模块页：四边内边距全清零、解除普通页面用的
            * 1800px 居中宽度上限（超宽屏下它会让 iframe 左右留边）、改 overflow-hidden 让
-           * iframe 自己接管滚动。本项目没有 fixed 覆盖式顶栏（各视图自带 h1），pkg 视图里
+           * iframe 自己接管滚动。本项目没有 fixed 覆盖式顶标（各视图自带 h1），pkg 视图里
            * main 的第一个子元素就是 iframe，所以原先那 pt-16 只是 64px 纯空白，去掉不会遮内容。
            * 手机端（<md）父容器没有 h-screen，flex-1 拿不到确定高度会让 iframe 塌成 150px，
            * 故显式给一个「视口高 - 底部导航」的高度；md 以上交回 flex-1。 */
@@ -778,10 +970,19 @@ function App() {
             : cn("max-w-[1800px] mx-auto",
                 isPS5 ? "pt-16 px-16 pb-12 flex-1 overflow-y-auto" : "pt-6 px-6 pb-[calc(var(--bar-h)+4rem)] md:pt-16 md:px-16 md:pb-12 md:flex-1 md:overflow-y-auto")
         )}>
-          {/* [CN-FORK] v0.5.1.64 主页视图整体删除（硬件信息探测下线 + 不再保留空壳页） */}
+          {/* [CN-FORK] v0.5.1.64 主页视图整体删除（硬件信息探测下线 + 不再保留空壳页）
+              —— 上游 0.6.0 把它改造成了「收藏夹」并重新启用，但 fork 的产品决定是
+              「管理 Payload」一页统管（StorageHub 里已装 / 仓库 / USB 三段），不保留
+              单独的 dashboard；收藏能力后端已支持（/get_config 的 FAVORITES），
+              哪天要接前端挂个 dashboardItems 视图即可。 */}
+          {/* [CN-FORK] v0.6.0 合入：上游给所有视图套了 ErrorBoundary（视图渲染炸了
+              不至于整页白屏，可单独关闭重试）—— 采纳，这是纯健壮性增强。 */}
+          <ErrorBoundary title={t("app.error.view_error", "View Render Error")} canDismiss>
 
           {view === 'storage' && (
             <StorageHub
+              items={items}
+              self={selfUpdate}
               payloads={payloads}
               payloadMeta={payloadMeta}
               loadPayload={loadPayload}
@@ -793,16 +994,24 @@ function App() {
               ip={ip}
               scrollTarget={storageScrollTarget}
               onClearScrollTarget={() => setStorageScrollTarget(null)}
+              selectedPayload={selectedPayload}
+              onSelectPayload={handleSelectPayload}
+              onClosePayload={handleClosePayload}
+              conflictPrompt={conflictPrompt}
+              setConflictPrompt={setConflictPrompt}
+              externalLinkUrl={externalLinkUrl}
+              setExternalLinkUrl={setExternalLinkUrl}
+              installingPayloadId={installingPayloadId}
             />
           )}
 
           {view === 'move_from_usb' && moveFromUsbPath && (
             <MoveFromUsbView
               path={moveFromUsbPath}
-              onBack={() => setView('storage')}
+              onBack={() => navigate('storage')}
               onComplete={() => {
                 refreshPayloads()
-                setView('storage')
+                navigate('storage')
                 setMoveFromUsbPath(null)
               }}
               addToast={addToast}
@@ -811,14 +1020,17 @@ function App() {
 
           {view === 'autoload' && (
             <AutoloadView
+              items={items}
               payloads={payloads}
               config={config}
               onSaveConfig={handleSaveConfig}
               onToast={addToast}
               onRedirect={(v, target) => {
                 if (target) setStorageScrollTarget(target)
-                setView(v)
+                navigate(v)
               }}
+              delayModal={autoloadDelayModal}
+              setDelayModal={setAutoloadDelayModal}
             />
           )}
 
@@ -832,13 +1044,14 @@ function App() {
               setLogs={setLogs}
               showLogs={showLogs}
               setShowLogs={setShowLogs}
-              onNavigate={(v) => setView(v)}
+              onNavigate={(v) => navigate(v)}
+              onClearCache={clearCache}
             />
           )}
 
           {view === 'sources' && (
             <ManageSourcesView
-              onBack={() => setView('settings')}
+              onBack={() => navigate('settings')}
               ip={ip}
               addToast={addToast}
               showConfirm={showConfirm}
@@ -861,15 +1074,42 @@ function App() {
           {view === 'common_entries' && <CommonEntriesView showConfirm={showConfirm} addToast={addToast} />}
           {view === 'game_manage' && <GameManageView addToast={addToast} showConfirm={showConfirm} config={config} />}
           {view === 'pkg' && <PkgManagerFrame />}
+          </ErrorBoundary>
         </main>
       </div>
 
       {loading && (
-        <div className="fixed inset-0 bg-ps-black/95 z-[9999] flex flex-col items-center justify-center space-y-12">
-          <div className="ps5-robust-spinner" />
-          <div className="text-center">
-            <h4 className="text-4xl font-extrabold text-white tracking-tight mb-4 uppercase italic">{activeLoadingName || t("app.loading.title", "Launching...")}</h4>
-            <p className="label-caps !text-ps-blue tracking-[0.3em] font-black">{t("app.loading.subtitle", "LAUNCHING PAYLOAD...")}</p>
+        <div className="fixed inset-0 bg-ps-black/95 z-[9999] flex flex-col items-center justify-center px-6 py-10" role="status" aria-live="polite">
+          <div className="w-full max-w-xl flex flex-col items-center text-center space-y-6">
+            <PayloadIcon
+              icon={activeLoadingPayload?.icon}
+              name={activeLoadingPayload?.path?.split('/').pop() || activeLoadingPayload?.name}
+              className="w-24 h-24 md:w-28 md:h-28 text-4xl shadow-lg"
+            />
+            <div className="w-full space-y-4">
+              <PayloadName
+                path={activeLoadingPayload?.path}
+                displayName={activeLoadingPayload?.name || t("app.loading.title", "Launching...")}
+                version={activeLoadingPayload?.version}
+                hideVersion hideIcon centered
+                className="text-white text-2xl md:text-4xl leading-snug"
+              />
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {activeLoadingPayload?.version && (
+                  <span className="text-sm text-zinc-400 font-bold bg-white/10 px-3 py-1 rounded-lg">
+                    {activeLoadingPayload.version}
+                  </span>
+                )}
+                {activeLoadingPayload?.sourceName && (
+                  <span className="inline-flex items-center gap-2 text-sm text-zinc-400 font-medium bg-white/10 px-3 py-1 rounded-lg max-w-full" title={activeLoadingPayload.sourceName}>
+                    <Globe className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{formatSourceTag(activeLoadingPayload.sourceName)}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="ps5-robust-spinner !w-10 !h-10 !border-4" />
+            <p className="text-sm text-ps-blue font-medium tracking-wide">{t("app.loading.subtitle", "LAUNCHING PAYLOAD...")}</p>
           </div>
         </div>
       )}

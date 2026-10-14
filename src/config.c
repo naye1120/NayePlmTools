@@ -1,187 +1,204 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <pthread.h>
 #include "config.h"
 #include "pldmgr.h"
 #include "json_helpers.h"
 #include "utils.h" /* [CN-FORK] pldmgr_utils_strip_config_line */
 #include "cJSON.h" /* [CN-FORK] v0.5.2.145 取 ARCHIVE_GLOBAL_CONFIG 的字符串值 */
 
-/* ── Read / Write full config ──────────────────────────────── */
+/* Covers read/modify/write across settings, favorites and autoload edits.
+ * Never call loader/autoload callbacks with this lock held. */
+static pthread_mutex_t config_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define LIST_CAPACITY 4096
+#define CONFIG_LIMIT (64 * 1024)
 
-void config_read(PldmgrConfig *cfg) {
-    FILE *f;
-    char line[256];
+/* [CN-FORK] v0.6.0.176 配置键表。
+ *
+ * 上游 v0.6.0 用「键名数组 + 平行指针数组」把解析/写回统一起来，本 fork 在它的
+ * 基础上把键表扩成「键名 + 结构体偏移 + 类型 + 合法区间」三元组，这样：
+ *   ① fork 自己的 6 个键（KILL_DISC_PLAYER_ON_STARTUP / DEFAULT_REPO_ENABLED /
+ *      FAN_*）能挂进同一套机制，不再需要手写 strncmp 分支；
+ *   ② 校验规则跟着键走 —— 布尔键只收 true/false，整型键收十进制并按区间夹，
+ *      不会再出现「布尔键塞了 3600」这种脏值。
+ * write_config 的「保留未知键」判定也用这张表，所以 fork 的键写回时不会被当成
+ * 未知键重复追加。 */
+typedef enum { SET_BOOL, SET_INT } SettingKind;
+typedef struct {
+    const char *key;
+    size_t offset;
+    SettingKind kind;
+    long min, max;
+} SettingKey;
 
-    /* Defaults */
-    cfg->autoload_enabled      = 0;
-    cfg->last_repository_update = 0;
-    cfg->auto_browser_open     = 1;
-    cfg->autoload_delay        = 5;
-    cfg->kill_disc_player      = 1;
-    cfg->scan_usb_payloads     = 0;
-    cfg->auto_install_app      = 1;
-    /* [CN-FORK] v0.5.2.67 默认开启多来源：内置官方源默认关掉后，靠多来源模式才能显示预置的 repo.630810.xyz */
-    cfg->multi_sources_enabled = 1;
-    /* [CN-FORK] v0.5.2.67 默认云端仓库总开关：内置官方源（itsPLK GitHub 镜像）在国内经常拉不动，
-     * 本版默认关掉，开机不再拉 payloads.json；改用预置的 repo.630810.xyz 作为默认来源 */
-    cfg->default_repo_enabled  = 0;
-    /* [CN-FORK] 风扇温控（模型 A）默认关；目标温度默认 72°C（安全区间 60~85） */
-    cfg->fan_enabled           = 0;
-    cfg->fan_target            = 72;
-    cfg->fan_applied           = 0;
-    cfg->fan_interval          = 7;
-    /* [CN-FORK] v0.5.1.64 删除 read_hardware_info：主页硬件信息功能整体下线（stats.c 已移出构建），
-     * 旧配置文件里残留的 READ_HARDWARE_INFO= 行会被下面的解析自然忽略 */
+static const SettingKey setting_keys[] = {
+    {"AUTOLOAD_ENABLED",            offsetof(PldmgrConfig, autoload_enabled),      SET_BOOL, 0, 1},
+    {"AUTO_BROWSER_OPEN",           offsetof(PldmgrConfig, auto_browser_open),     SET_BOOL, 0, 1},
+    {"AUTOLOAD_DELAY",              offsetof(PldmgrConfig, autoload_delay),        SET_INT,  0, 3600},
+    {"SCAN_USB_PAYLOADS",           offsetof(PldmgrConfig, scan_usb_payloads),     SET_BOOL, 0, 1},
+    {"AUTO_INSTALL_APP",            offsetof(PldmgrConfig, auto_install_app),      SET_BOOL, 0, 1},
+    {"MULTI_SOURCES_ENABLED",       offsetof(PldmgrConfig, multi_sources_enabled), SET_BOOL, 0, 1},
+    /* ── [CN-FORK] 以下 6 个键上游 v0.6.0 没有 ───────────────────── */
+    {"KILL_DISC_PLAYER_ON_STARTUP", offsetof(PldmgrConfig, kill_disc_player),      SET_BOOL, 0, 1},
+    {"DEFAULT_REPO_ENABLED",        offsetof(PldmgrConfig, default_repo_enabled),  SET_BOOL, 0, 1},
+    {"FAN_CONTROL_ENABLED",         offsetof(PldmgrConfig, fan_enabled),           SET_BOOL, 0, 1},
+    {"FAN_TARGET",                  offsetof(PldmgrConfig, fan_target),            SET_INT,  0, 1000},
+    {"FAN_APPLIED",                 offsetof(PldmgrConfig, fan_applied),           SET_BOOL, 0, 1},
+    {"FAN_INTERVAL",                offsetof(PldmgrConfig, fan_interval),          SET_INT,  0, 86400},
+};
+#define SETTING_COUNT ((int)(sizeof(setting_keys) / sizeof(setting_keys[0])))
+/* 列表项在 Update 位图里的下标，紧跟设置键之后。 */
+enum { IDX_AUTOLOAD_LIST = SETTING_COUNT, IDX_FAVORITES };
+#define SETTING_MASK ((1u << SETTING_COUNT) - 1u)
 
-    f = fopen(PLDMGR_CONFIG_PATH, "r");
-    if (!f)
-        return;
-
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "AUTOLOAD_ENABLED=", 17) == 0)
-            cfg->autoload_enabled = atoi(line + 17);
-        else if (strncmp(line, "LAST_REPOSITORY_UPDATE=", 23) == 0)
-            cfg->last_repository_update = atol(line + 23);
-        else if (strncmp(line, "AUTO_BROWSER_OPEN=", 18) == 0)
-            cfg->auto_browser_open = atoi(line + 18);
-        else if (strncmp(line, "AUTOLOAD_DELAY=", 15) == 0)
-            cfg->autoload_delay = atoi(line + 15);
-        else if (strncmp(line, "KILL_DISC_PLAYER_ON_STARTUP=", 28) == 0)
-            cfg->kill_disc_player = atoi(line + 28);
-        else if (strncmp(line, "SCAN_USB_PAYLOADS=", 18) == 0)
-            cfg->scan_usb_payloads = atoi(line + 18);
-        else if (strncmp(line, "AUTO_INSTALL_APP=", 17) == 0)
-            cfg->auto_install_app = atoi(line + 17);
-        else if (strncmp(line, "MULTI_SOURCES_ENABLED=", 22) == 0)
-            cfg->multi_sources_enabled = atoi(line + 22);
-        else if (strncmp(line, "DEFAULT_REPO_ENABLED=", 21) == 0)
-            cfg->default_repo_enabled = atoi(line + 21);
-        else if (strncmp(line, "FAN_CONTROL_ENABLED=", 20) == 0)
-            cfg->fan_enabled = atoi(line + 20);
-        else if (strncmp(line, "FAN_TARGET=", 11) == 0)
-            cfg->fan_target = atoi(line + 11);
-        else if (strncmp(line, "FAN_APPLIED=", 12) == 0)
-            cfg->fan_applied = atoi(line + 12);
-        else if (strncmp(line, "FAN_INTERVAL=", 13) == 0)
-            cfg->fan_interval = atoi(line + 13);
-    }
-    fclose(f);
+static int setting_lookup(const char *key) {
+    for (int i = 0; i < SETTING_COUNT; i++)
+        if (!strcmp(key, setting_keys[i].key)) return i;
+    return -1;
 }
 
+static void defaults(PldmgrConfig *cfg) {
+    *cfg = (PldmgrConfig){
+        .auto_browser_open = 1, .autoload_delay = 5, .auto_install_app = 1,
+        /* [CN-FORK] v0.5.2.67 默认开启多来源：内置官方源默认关掉后，
+         * 靠多来源模式才能显示预置的 repo.630810.xyz。 */
+        .multi_sources_enabled = 1,
+        /* [CN-FORK] v0.5.2.67 内置官方源（itsPLK GitHub 镜像）国内经常拉不动，
+         * 默认关掉，开机不再拉 payloads.json。 */
+        .default_repo_enabled = 0,
+        /* [CN-FORK] BD-JB 用户开机杀光盘播放器默认开。 */
+        .kill_disc_player = 1,
+        /* [CN-FORK] 风扇温控（模型 A）默认关，目标温度 72°C。 */
+        .fan_enabled = 0, .fan_target = 72, .fan_applied = 0, .fan_interval = 7,
+    };
+}
+static int read_config(PldmgrConfig *cfg) {
+    defaults(cfg);
+    char *text = NULL; size_t size = 0;
+    if (read_file_text(PLDMGR_CONFIG_PATH, &text, &size)) return errno == ENOENT ? 0 : -1;
+    if (size > CONFIG_LIMIT || memchr(text, 0, size)) { free(text); return -1; }
+    char *save = NULL;
+    for (char *line = strtok_r(text, "\r\n", &save); line; line = strtok_r(NULL, "\r\n", &save)) {
+        char *equal = strchr(line, '=');
+        if (!equal) continue;
+        *equal++ = 0;
+        char *end; errno = 0;
+        long value = strtol(equal, &end, 10);
+        if (errno || *end || end == equal) continue;
+        if (!strcmp(line, "LAST_REPOSITORY_UPDATE")) { if (value >= 0) cfg->last_repository_update = value; continue; }
+        int index = setting_lookup(line);
+        if (index < 0) continue;
+        /* 旧文件里可能留着越界/非布尔值（历史手改），一律忽略、保留默认。 */
+        const SettingKey *setting = &setting_keys[index];
+        if (value < setting->min || value > setting->max) continue;
+        *(int *)((char *)cfg + setting->offset) = (int)value;
+    }
+    free(text); return 0;
+}
+void config_read(PldmgrConfig *cfg) { if (cfg) read_config(cfg); }
+static int write_config(const PldmgrConfig *cfg) {
+    /* [CN-FORK] 键数由 7 增至 13，512 字节的栈缓冲不够放（含 last_update 的 20 位数字），
+     * 提到 1024 并保留长度检查。 */
+    char text[1024];
+    int length = snprintf(text, sizeof(text),
+        "AUTOLOAD_ENABLED=%d\nLAST_REPOSITORY_UPDATE=%ld\nAUTO_BROWSER_OPEN=%d\n"
+        "AUTOLOAD_DELAY=%d\nKILL_DISC_PLAYER_ON_STARTUP=%d\nSCAN_USB_PAYLOADS=%d\n"
+        "AUTO_INSTALL_APP=%d\nMULTI_SOURCES_ENABLED=%d\nDEFAULT_REPO_ENABLED=%d\n"
+        "FAN_CONTROL_ENABLED=%d\nFAN_TARGET=%d\nFAN_APPLIED=%d\nFAN_INTERVAL=%d\n",
+        !!cfg->autoload_enabled, cfg->last_repository_update, !!cfg->auto_browser_open,
+        cfg->autoload_delay, !!cfg->kill_disc_player, !!cfg->scan_usb_payloads,
+        !!cfg->auto_install_app, !!cfg->multi_sources_enabled, !!cfg->default_repo_enabled,
+        !!cfg->fan_enabled, cfg->fan_target, !!cfg->fan_applied, cfg->fan_interval);
+    if (length < 0 || (size_t)length >= sizeof(text) || ensure_dir_recursive(BASE_DATA_DIR)) return -1;
+    char *old = NULL; size_t size = 0;
+    if (read_file_text(PLDMGR_CONFIG_PATH, &old, &size) && errno != ENOENT) return -1;
+    if (size > CONFIG_LIMIT || (old && memchr(old, 0, size))) { free(old); return -1; }
+    char *complete = malloc((size_t)length + size + 2);
+    if (!complete) { free(old); return -1; }
+    memcpy(complete, text, (size_t)length);
+    size_t pos = (size_t)length;
+    const char *line = old;
+    while (line && line < old + size) {
+        const char *end = memchr(line, '\n', (size_t)(old + size - line));
+        if (!end) end = old + size;
+        size_t n = (size_t)(end - line);
+        int known = n >= 23 && !memcmp(line, "LAST_REPOSITORY_UPDATE=", 23);
+        for (int i = 0; i < SETTING_COUNT && !known; i++) {
+            size_t k = strlen(setting_keys[i].key);
+            if (n > k && !memcmp(line, setting_keys[i].key, k) && line[k] == '=') known = 1;
+        }
+        if (!known) { memcpy(complete + pos, line, n); pos += n; complete[pos++] = '\n'; }
+        line = end < old + size ? end + 1 : old + size;
+    }
+    int result = pos > CONFIG_LIMIT ? -1 : write_file_text(PLDMGR_CONFIG_PATH, complete, pos);
+    free(complete); free(old); return result;
+}
 int config_write(const PldmgrConfig *cfg) {
-    FILE *f;
-
-    mkdir(BASE_DATA_DIR, 0777);
-    f = fopen(PLDMGR_CONFIG_PATH, "w");
-    if (!f)
-        return -1;
-
-    fprintf(f, "AUTOLOAD_ENABLED=%d\n",      cfg->autoload_enabled ? 1 : 0);
-    fprintf(f, "LAST_REPOSITORY_UPDATE=%ld\n", cfg->last_repository_update);
-    fprintf(f, "AUTO_BROWSER_OPEN=%d\n",      cfg->auto_browser_open ? 1 : 0);
-    fprintf(f, "AUTOLOAD_DELAY=%d\n",         cfg->autoload_delay);
-    fprintf(f, "KILL_DISC_PLAYER_ON_STARTUP=%d\n", cfg->kill_disc_player ? 1 : 0);
-    fprintf(f, "SCAN_USB_PAYLOADS=%d\n",      cfg->scan_usb_payloads ? 1 : 0);
-    fprintf(f, "AUTO_INSTALL_APP=%d\n",       cfg->auto_install_app ? 1 : 0);
-    fprintf(f, "MULTI_SOURCES_ENABLED=%d\n",  cfg->multi_sources_enabled ? 1 : 0);
-    fprintf(f, "DEFAULT_REPO_ENABLED=%d\n",   cfg->default_repo_enabled ? 1 : 0);
-    fprintf(f, "FAN_CONTROL_ENABLED=%d\n",    cfg->fan_enabled ? 1 : 0);
-    fprintf(f, "FAN_TARGET=%d\n",             cfg->fan_target);
-    fprintf(f, "FAN_APPLIED=%d\n",            cfg->fan_applied ? 1 : 0);
-    fprintf(f, "FAN_INTERVAL=%d\n",           cfg->fan_interval);
-    fclose(f);
-    return 0;
+    if (!cfg || cfg->autoload_delay < 0 || cfg->autoload_delay > 3600 || cfg->last_repository_update < 0) return -1;
+    pthread_mutex_lock(&config_mutex);
+    int result = write_config(cfg);
+    pthread_mutex_unlock(&config_mutex); return result;
 }
-
-/* ── Single-key helpers ────────────────────────────────────── */
-
 int config_read_bool(const char *key, int default_val) {
-    FILE *f = fopen(PLDMGR_CONFIG_PATH, "r");
-    if (!f) return default_val;
-    char line[256];
-    int res = default_val;
-    size_t key_len = strlen(key);
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, key, key_len) == 0 && line[key_len] == '=') {
-            res = atoi(line + key_len + 1);
-            break;
-        }
-    }
-    fclose(f);
-    return res;
-}
-
-int config_upsert_value(const char *key, const char *value) {
-    FILE *f;
-    char line[256];
-    char old_lines[64][256];
-    int line_count = 0;
-    int replaced = 0;
-    size_t key_len = strlen(key);
-
-    ensure_dir_recursive(BASE_DATA_DIR);
-
-    f = fopen(PLDMGR_CONFIG_PATH, "r");
-    if (f) {
-        while (line_count < 64 && fgets(line, sizeof(line), f)) {
-            if (strncmp(line, key, key_len) == 0 && line[key_len] == '=') {
-                snprintf(old_lines[line_count], sizeof(old_lines[line_count]),
-                         "%s=%s\n", key, value);
-                replaced = 1;
-            } else {
-                strncpy(old_lines[line_count], line, sizeof(old_lines[line_count]));
-                old_lines[line_count][sizeof(old_lines[line_count]) - 1] = '\0';
+    if (!key) return default_val;
+    char *text = NULL; size_t size = 0;
+    if (read_file_text(PLDMGR_CONFIG_PATH, &text, &size)) return default_val;
+    int result = default_val;
+    if (size <= CONFIG_LIMIT && !memchr(text, 0, size)) {
+        char *save = NULL;
+        for (char *line = strtok_r(text, "\r\n", &save); line; line = strtok_r(NULL, "\r\n", &save)) {
+            size_t length = strlen(key);
+            if (strlen(line) > length && !strncmp(line, key, length) && line[length] == '=') {
+                if (!strcmp(line + length + 1, "0")) result = 0;
+                else if (!strcmp(line + length + 1, "1")) result = 1;
+                break;
             }
-            line_count++;
         }
-        fclose(f);
     }
-
-    if (!replaced && line_count < 64) {
-        snprintf(old_lines[line_count], sizeof(old_lines[line_count]),
-                 "%s=%s\n", key, value);
-        line_count++;
-    }
-
-    f = fopen(PLDMGR_CONFIG_PATH, "w");
-    if (!f)
-        return -1;
-    for (int i = 0; i < line_count; i++) {
-        fputs(old_lines[i], f);
-    }
-    fclose(f);
-    return 0;
+    free(text); return result;
 }
-
+int config_upsert_value(const char *key, const char *value) {
+    if (!key || !key[0] || !value || strlen(key) > 255 || strlen(value) > CONFIG_LIMIT ||
+        strpbrk(key, "=\r\n") || strpbrk(value, "\r\n")) return -1;
+    pthread_mutex_lock(&config_mutex);
+    char *old = NULL; size_t size = 0;
+    int result = -1;
+    if (read_file_text(PLDMGR_CONFIG_PATH, &old, &size) && errno != ENOENT) goto done;
+    if (size > CONFIG_LIMIT || (old && memchr(old, 0, size))) goto done;
+    size_t capacity = size + strlen(key) + strlen(value) + 4;
+    char *text = malloc(capacity);
+    if (!text) goto done;
+    size_t pos = 0;
+    /* Preserve unrelated and unknown keys without fixed-line truncation. */
+    const char *line = old;
+    while (line && line < old + size) {
+        const char *end = memchr(line, '\n', (size_t)(old + size - line));
+        if (!end) end = old + size;
+        size_t n = (size_t)(end - line), key_size = strlen(key);
+        if (!(n > key_size && !memcmp(line, key, key_size) && line[key_size] == '=')) {
+            memcpy(text + pos, line, n); pos += n; text[pos++] = '\n';
+        }
+        line = end < old + size ? end + 1 : old + size;
+    }
+    int count = snprintf(text + pos, capacity - pos, "%s=%s\n", key, value);
+    if (count >= 0 && (size_t)count < capacity - pos && !ensure_dir_recursive(BASE_DATA_DIR))
+        result = write_file_text(PLDMGR_CONFIG_PATH, text, pos + (size_t)count);
+    free(text);
+done:
+    free(old); pthread_mutex_unlock(&config_mutex); return result;
+}
 int config_read_last_update(long *out_ts) {
-    FILE *f;
-    char line[256];
-    long ts = 0;
-
-    *out_ts = 0;
-    f = fopen(PLDMGR_CONFIG_PATH, "r");
-    if (!f)
-        return 0;
-
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "LAST_REPOSITORY_UPDATE=", 23) == 0) {
-            ts = atol(line + 23);
-            break;
-        }
-    }
-    fclose(f);
-
-    *out_ts = ts;
-    return 0;
+    if (!out_ts) return -1;
+    PldmgrConfig cfg; int result = read_config(&cfg); *out_ts = cfg.last_repository_update; return result;
 }
-
 int config_write_last_update(long ts) {
-    char ts_buf[64];
-    snprintf(ts_buf, sizeof(ts_buf), "%ld", ts);
-    return config_upsert_value("LAST_REPOSITORY_UPDATE", ts_buf);
+    if (ts < 0) return -1;
+    char value[64]; snprintf(value, sizeof(value), "%ld", ts);
+    return config_upsert_value("LAST_REPOSITORY_UPDATE", value);
 }
 
 /* ── [CN-FORK] v0.5.2.145 全局存档配置（单独文件）──────────────────────────
@@ -216,183 +233,293 @@ int config_read_archive_global(char *out, size_t osz) {
     return (int)n;
 }
 
-/* ── JSON config update handler (from /set_config POST body) ── */
-
-/* Helper: extract a JSON boolean value for a given key.
- * Returns 1 for true, 0 for false, or unchanged if key not found. */
-static int extract_json_bool(const char *json, const char *key, int current) {
-    char search[64];
-    snprintf(search, sizeof(search), "\"%s\"", key);
-    char *pos = strstr(json, search);
-    if (!pos) return current;
-    char *val = strchr(pos, ':');
-    if (!val) return current;
-    val++;
-    while (*val == ' ') val++;
-    if (strncmp(val, "true", 4) == 0) return 1;
-    if (strncmp(val, "false", 5) == 0) return 0;
-    return current;
-}
-
-static int extract_json_int(const char *json, const char *key, int current) {
-    char search[64];
-    snprintf(search, sizeof(search), "\"%s\"", key);
-    char *pos = strstr(json, search);
-    if (!pos) return current;
-    char *val = strchr(pos, ':');
-    if (!val) return current;
-    val++;
-    while (*val == ' ') val++;
-    return atoi(val);
-}
-
-int config_handle_set_json(const char *json_data) {
-    if (!json_data)
-        return -1;
-
-    /* Read existing config */
-    PldmgrConfig cfg;
-    config_read(&cfg);
-
-    /* [CN-FORK] v0.5.1.64 加固：旧实现把下面全部开关的保存都挂在「body 里必须带 AUTOLOAD_ENABLED」
-     * 这一个条件上。只要 /get_config 出过一次问题（本版本就因字符串跨行拆分把 key 拆坏过），
-     * 前端合并出来的 body 就缺这个键，于是设置页每个开关都变成静默 no-op（连日志都不打）。
-     * 现在各开关无条件应用（基线是 config_read 的现值，没带的键不会被动），
-     * autoload_abort 仍只在显式关掉自启时触发。 */
-    int enabled = extract_json_bool(json_data, "AUTOLOAD_ENABLED", -1);
-    if (enabled != -1)
-        cfg.autoload_enabled = enabled;
-    cfg.auto_browser_open     = extract_json_bool(json_data, "AUTO_BROWSER_OPEN", cfg.auto_browser_open);
-    cfg.autoload_delay        = extract_json_int(json_data, "AUTOLOAD_DELAY", cfg.autoload_delay);
-    cfg.kill_disc_player      = extract_json_bool(json_data, "KILL_DISC_PLAYER_ON_STARTUP", cfg.kill_disc_player);
-    cfg.scan_usb_payloads     = extract_json_bool(json_data, "SCAN_USB_PAYLOADS", cfg.scan_usb_payloads);
-    cfg.auto_install_app      = extract_json_bool(json_data, "AUTO_INSTALL_APP", cfg.auto_install_app);
-    cfg.multi_sources_enabled = extract_json_bool(json_data, "MULTI_SOURCES_ENABLED", cfg.multi_sources_enabled);
-    /* [CN-FORK] v0.5.1.65 默认云端仓库开关 */
-    cfg.default_repo_enabled  = extract_json_bool(json_data, "DEFAULT_REPO_ENABLED", cfg.default_repo_enabled);
-
-    if (config_write(&cfg) == 0) {
-        pldmgr_log("[PLDMGR] Saved config to %s\n", PLDMGR_CONFIG_PATH);
-    }
-    if (enabled == 0)
-        pldmgr_autoload_abort();
-
-    /* Handle AUTOLOAD_LIST if present */
-    char *list_start = strstr(json_data, "\"AUTOLOAD_LIST\"");
-    if (list_start) {
-        char *val = strchr(list_start, ':');
-        if (val) {
-            val++;
-            while (*val == ' ' || *val == '\"')
-                val++;
-
-            char *list_end = strchr(val, '\"');
-            size_t list_len = list_end ? (size_t)(list_end - val) : 0;
-            char *list_val = malloc(list_len + 1);
-            if (list_val) {
-                memcpy(list_val, val, list_len);
-                list_val[list_len] = '\0';
-
-                mkdir(BASE_DATA_DIR, 0777);
-                /* [CN-FORK] 这份 txt 的格式是「!延时 + 文件名」成对。旧实现整份覆盖时
-                 * 只写文件名，等于在设置页每勾一次就把用户手写的 !1000 全冲掉。
-                 * 现在先读旧文件建「文件名 -> 延时行」映射，写回时每条都带延时行，
-                 * 查不到历史的用 !1000 兜底。 */
-                char old_names[100][256];
-                int  old_cnt = 0;
-                FILE *old = fopen(AUTOLOAD_CONFIG_PATH, "r");
-                if (old) {
-                    char ln[256];
-                    while (old_cnt < 100 && fgets(ln, sizeof(ln), old)) {
-                        pldmgr_utils_strip_config_line(ln);
-                        if (!ln[0] || ln[0] == '!') continue;
-                        strncpy(old_names[old_cnt], ln, sizeof(old_names[0]) - 1);
-                        old_names[old_cnt][sizeof(old_names[0]) - 1] = '\0';
-                        old_cnt++;
-                    }
-                    fclose(old);
-                }
-
-                FILE *f = fopen(AUTOLOAD_CONFIG_PATH, "w");
-                if (f) {
-                    /* [CN-FORK] v0.5.2.154 / v0.5.2.155 「逗号列表 ↔ txt 行」必须**幂等**。
-                     *
-                     * 病灶（用户口径：「自动加载页面，自己多次增加 1 秒延时」），两半：
-                     *
-                     * ① `.154` 修掉的：`/get_config` 是把 autoload.txt 的**每一行**（含
-                     *    `!1000` 这种延时行）用逗号拼起来回传的，所以前端拿到的列表里本来
-                     *    就**带着延时项**；而旧实现给**每个** token 都补一行默认延时 —— 于是
-                     *    token `!1000` 自己也被补成两行。一次保存行数就翻一倍：
-                     *    `!1000,name` → `!1000,!1000,!1000,name` → …
-                     *
-                     * ② `.155` 修的（真机实测残留）：上一版只按「上一条是不是延时行」判断，
-                     *    于是**两个载荷名相邻**时（用户把条目挪到一起，或手删掉中间那条
-                     *    延时行）仍会补一条 —— 列表与文件对不上，用户存一次就被塞回一条。
-                     *    真机复现：写 `!1000,kstuff,shadowmountplus` 读回
-                     *    `!1000,kstuff,!1000,shadowmountplus`。
-                     *
-                     * 现在只给**旧文件里从没出现过**的载荷名补延时行 —— 那种名字只可能来自
-                     * 「用户刚从可用列表里加进来」，它前面天然没有延时；已经存在于旧文件的
-                     * 载荷名一律不补，用户删了就是删了、挪了就是挪了。于是列表与文件严格
-                     * 一一对应，来回存多少次都不变。 */
-                    int prev_is_delay = 0;
-                    char *token = strtok(list_val, ",");
-                    while (token) {
-                        pldmgr_utils_strip_config_line(token);
-                        if (*token) {
-                            if (token[0] == '!') {
-                                fprintf(f, "%s\n", token);
-                                prev_is_delay = 1;
-                            } else {
-                                if (!prev_is_delay) {
-                                    int known = 0;
-                                    for (int i = 0; i < old_cnt; i++) {
-                                        if (strcmp(old_names[i], token) == 0) { known = 1; break; }
-                                    }
-                                    if (!known) fprintf(f, "!1000\n");
-                                }
-                                fprintf(f, "%s\n", token);
-                                prev_is_delay = 0;
-                            }
-                        }
-                        token = strtok(NULL, ",");
-                    }
-                    fclose(f);
-                    pldmgr_log("[PLDMGR] Saved autoload list to %s\n",
-                               AUTOLOAD_CONFIG_PATH);
-                }
-                free(list_val);
-            }
+/* [CN-FORK] v0.5.2.145 /set_config 里的 ARCHIVE_GLOBAL_CONFIG 单独落盘。
+ *
+ * 这里**必须**用 cJSON 取，不能用 strstr 找引号的老办法：这个值本身就是一个 JSON
+ * **字符串**（内容是转义过的 JSON），里面全是 \" 与 \\，手写扫描极容易在第一个内层
+ * 引号处截断，存进去就是半个 JSON。cJSON 会替我们做完整的反转义。
+ * 值以对象或字符串形式给都认（前端给的是 JSON.stringify 出来的字符串）。
+ *
+ * 上游 v0.6.0 的 update_member 对未知键一律返回 0（忽略），所以这个键不会让
+ * 整份 /set_config 变成 CONFIG_INVALID —— 单独在这里补一次即可。 */
+static void config_apply_archive_global(const char *json_data) {
+    cJSON *root = cJSON_Parse(json_data);
+    if (!root) return;
+    cJSON *ag = cJSON_GetObjectItem(root, "ARCHIVE_GLOBAL_CONFIG");
+    if (cJSON_IsString(ag) && ag->valuestring && ag->valuestring[0]) {
+        if (config_write_archive_global(ag->valuestring) == 0)
+            pldmgr_log("[PLDMGR] Saved global archive config to %s\n", ARCHIVE_GLOBAL_PATH);
+        else
+            pldmgr_log("[PLDMGR] 全局存档配置写入失败（%s）\n", ARCHIVE_GLOBAL_PATH);
+    } else if (cJSON_IsObject(ag)) {
+        char *s = cJSON_PrintUnformatted(ag);
+        if (s) {
+            if (config_write_archive_global(s) == 0)
+                pldmgr_log("[PLDMGR] Saved global archive config to %s\n", ARCHIVE_GLOBAL_PATH);
+            free(s);
         }
     }
+    cJSON_Delete(root);
+}
 
-    /* [CN-FORK] v0.5.2.145 全局存档配置（设置页「存档配置」）。
-     * 这里**必须**用 cJSON 取，不能用上面那种 strstr 找引号的老办法：这个值本身就是
-     * 一个 JSON **字符串**（内容是转义过的 JSON），里面全是 \" 与 \\，手写扫描极容易
-     * 在第一个内层引号处截断，存进去就是半个 JSON。cJSON 会替我们做完整的反转义。
-     * 值以对象或字符串形式给都认（前端给的是 JSON.stringify 出来的字符串）。 */
-    {
-        cJSON *root = cJSON_Parse(json_data);
-        if (root) {
-            cJSON *ag = cJSON_GetObjectItem(root, "ARCHIVE_GLOBAL_CONFIG");
-            if (cJSON_IsString(ag) && ag->valuestring && ag->valuestring[0]) {
-                if (config_write_archive_global(ag->valuestring) == 0)
-                    pldmgr_log("[PLDMGR] Saved global archive config to %s\n",
-                               ARCHIVE_GLOBAL_PATH);
-                else
-                    pldmgr_log("[PLDMGR] 全局存档配置写入失败（%s）\n", ARCHIVE_GLOBAL_PATH);
-            } else if (cJSON_IsObject(ag)) {
-                char *s = cJSON_PrintUnformatted(ag);
-                if (s) {
-                    if (config_write_archive_global(s) == 0)
-                        pldmgr_log("[PLDMGR] Saved global archive config to %s\n",
-                                   ARCHIVE_GLOBAL_PATH);
-                    free(s);
-                }
-            }
-            cJSON_Delete(root);
+/* CSV is a legacy wire format; commas separate entries, never occur inside one.
+ * Newlines/control characters cannot be represented safely in line files. */
+static int csv_lines(const char *csv, char *out, size_t capacity) {
+    size_t pos = 0;
+    if (!csv) csv = "";
+    const char *start = csv;
+    while (*start) {
+        const char *end = strchr(start, ','); if (!end) end = start + strlen(start);
+        const char *next = *end ? end + 1 : end;
+        while (start < end && (*start == ' ' || *start == '\t')) start++;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        size_t length = (size_t)(end - start);
+        for (const char *p = start; p < end; p++) if ((unsigned char)*p < 32 || *p == 127) return -1;
+        if (length) {
+            if (length + 1 >= capacity - pos) return -1;
+            memcpy(out + pos, start, length); pos += length; out[pos++] = '\n';
+        }
+        start = next;
+    }
+    out[pos] = 0; return 0;
+}
+static int save_csv(const char *path, const char *csv) {
+    char lines[LIST_CAPACITY];
+    if (csv_lines(csv, lines, sizeof(lines)) || ensure_dir_recursive(BASE_DATA_DIR)) return -1;
+    return write_file_text(path, lines, strlen(lines));
+}
+
+/* [CN-FORK] v0.5.2.154 / v0.5.2.155 AUTOLOAD_LIST 专用写回。
+ *
+ * 上游 v0.6.0 用通用 save_csv 写回（一个 token 一行、不补任何东西）。本 fork 保留
+ * 自己那套「旧文件里从没出现过的载荷名，前面补一条 `!1000`」的兜底 —— 那是 .60
+ * 以来的格式约定，新增条目自带 1 秒间隔。
+ *
+ * 用户口径（原文）：「自动加载页面，自己多次增加 1 秒延时」。这个坑有两半：
+ *   ① `.154` 修的：`/get_config` 把 autoload.txt 的**每一行**（含 `!1000`）逗号拼接
+ *      回传，旧写回逻辑给**每个** token 都补一行默认延时 → token `!1000` 自己被补成
+ *      两行，一次保存行数翻倍。
+ *   ② `.155` 修的（真机实测残留）：只按「上一条是不是延时行」判断，于是**两个载荷名
+ *      相邻**时仍会补一条。真机复现：写 `!1000,kstuff,shadowmountplus` 读回
+ *      `!1000,kstuff,!1000,shadowmountplus`。
+ *
+ * 现在只给「旧文件里从没出现过的载荷名」补延时行 —— 那种名字只可能来自「用户刚从
+ * 可用列表里加进来」，它前面天然没有延时；已存在于旧文件的载荷名一律不补，用户删了
+ * 就是删了、挪了就是挪了。于是列表与文件严格一一对应，来回存多少次都不变。
+ *
+ * 缓冲区一律 static：本函数在 config_mutex 保护下调用，且真机连接线程栈只有 64KB
+ * （见 tools/check_stack_frames.sh 那道静态守卫）。 */
+static int save_autoload_csv(const char *csv) {
+    static char lines[LIST_CAPACITY];
+    static char out[LIST_CAPACITY * 2];
+    static char old_names[100][256];
+
+    if (csv_lines(csv, lines, sizeof(lines))) return -1;
+
+    int old_cnt = 0;
+    char *old = NULL; size_t old_size = 0;
+    if (read_file_text(AUTOLOAD_CONFIG_PATH, &old, &old_size) == 0 && old) {
+        char *save = NULL;
+        for (char *line = strtok_r(old, "\r\n", &save); line && old_cnt < 100;
+             line = strtok_r(NULL, "\r\n", &save)) {
+            pldmgr_utils_strip_config_line(line);
+            if (!line[0] || line[0] == '!') continue;
+            strncpy(old_names[old_cnt], line, sizeof(old_names[0]) - 1);
+            old_names[old_cnt][sizeof(old_names[0]) - 1] = '\0';
+            old_cnt++;
         }
     }
+    free(old);
 
+    size_t pos = 0;
+    int prev_is_delay = 0;
+    char *save = NULL;
+    for (char *token = strtok_r(lines, "\n", &save); token; token = strtok_r(NULL, "\n", &save)) {
+        pldmgr_utils_strip_config_line(token);
+        if (!token[0]) continue; /* 空 token 不产生空行 */
+        if (token[0] == '!') {
+            prev_is_delay = 1;
+        } else {
+            if (!prev_is_delay) {
+                int known = 0;
+                for (int i = 0; i < old_cnt; i++)
+                    if (!strcmp(old_names[i], token)) { known = 1; break; }
+                if (!known) {
+                    if (pos + 7 >= sizeof(out)) return -1;
+                    memcpy(out + pos, "!1000\n", 6);
+                    pos += 6;
+                }
+            }
+            prev_is_delay = 0;
+        }
+        size_t n = strlen(token);
+        if (pos + n + 2 >= sizeof(out)) return -1;
+        memcpy(out + pos, token, n);
+        pos += n;
+        out[pos++] = '\n';
+    }
+    if (ensure_dir_recursive(BASE_DATA_DIR)) return -1;
+    return write_file_text(AUTOLOAD_CONFIG_PATH, out, pos);
+}
+typedef struct {
+    unsigned seen;
+    int values[SETTING_COUNT];
+    char autoload[LIST_CAPACITY], favorites[LIST_CAPACITY];
+} Update;
+static int favorite_item(const char *start, const char *end, void *context) {
+    Update *update = context;
+    char item[LIST_CAPACITY];
+    if (json_decode_string(start, end, item, sizeof(item)) || strchr(item, ',') || strpbrk(item, "\r\n")) return -1;
+    size_t used = strlen(update->favorites), count = strlen(item);
+    if (used + count + (used && count ? 1 : 0) >= sizeof(update->favorites)) return -1;
+    if (count) { if (used) update->favorites[used++] = ','; memcpy(update->favorites + used, item, count + 1); }
     return 0;
+}
+static int update_member(const char *key, const char *start, const char *end, void *context) {
+    Update *update = context;
+    int index = setting_lookup(key);
+    if (index < 0) {
+        if (!strcmp(key, "AUTOLOAD_LIST")) index = IDX_AUTOLOAD_LIST;
+        else if (!strcmp(key, "FAVORITES")) index = IDX_FAVORITES;
+        else return 0; /* read-only/unknown fields（含 fork 的 ARCHIVE_GLOBAL_CONFIG，单独处理） */
+    }
+    unsigned bit = 1u << index;
+    if (update->seen & bit) return -1;
+    update->seen |= bit;
+    size_t size = (size_t)(end - start);
+    if (index < SETTING_COUNT) {
+        const SettingKey *setting = &setting_keys[index];
+        long value;
+        if (setting->kind == SET_BOOL) {
+            if (size == 4 && !memcmp(start, "true", 4)) value = 1;
+            else if (size == 5 && !memcmp(start, "false", 5)) value = 0;
+            else return -1;
+        } else {
+            if (!size || size > 5) return -1;
+            value = 0;
+            for (const char *p = start; p < end; p++) {
+                if (*p < '0' || *p > '9') return -1;
+                value = value * 10 + *p - '0';
+            }
+            if (value < setting->min || value > setting->max) return -1;
+        }
+        update->values[index] = (int)value;
+    } else {
+        char *csv = index == IDX_AUTOLOAD_LIST ? update->autoload : update->favorites;
+        if (index == IDX_FAVORITES && *start == '[') {
+            if (json_visit_array(start, end, favorite_item, update)) return -1;
+        } else if (json_decode_string(start, end, csv, LIST_CAPACITY)) return -1;
+        char lines[LIST_CAPACITY];
+        if (csv_lines(csv, lines, sizeof(lines))) return -1;
+    }
+    return 0;
+}
+int config_handle_set_json(const char *json) {
+    Update update = {0};
+    if (!json || json_visit_object(json, json + strlen(json), update_member, &update)) return CONFIG_INVALID;
+    pthread_mutex_lock(&config_mutex);
+    PldmgrConfig cfg;
+    int result = read_config(&cfg);
+    for (int i = 0; i < SETTING_COUNT; i++)
+        if (update.seen & (1u << i))
+            *(int *)((char *)&cfg + setting_keys[i].offset) = update.values[i];
+    /* Validate the entire request before any write. Individual files publish
+     * atomically; on I/O failure prior successful file publications remain.
+     * Lists go first, enabled/settings last: never enable an unsaved new list. */
+    if (!result && (update.seen & (1u << IDX_AUTOLOAD_LIST))) result = save_autoload_csv(update.autoload);
+    if (!result && (update.seen & (1u << IDX_FAVORITES))) result = save_csv(FAVORITES_CONFIG_PATH, update.favorites);
+    if (!result && (update.seen & SETTING_MASK)) result = write_config(&cfg);
+    pthread_mutex_unlock(&config_mutex);
+    if (!result && (update.seen & 1u) && !update.values[0]) pldmgr_autoload_abort();
+    if (!result) config_apply_archive_global(json);
+    return result;
+}
+
+int config_get_favorites_csv(char *out_buf, size_t max_size, int *out_file_exists) {
+    if (!out_buf || !max_size) return -1;
+    out_buf[0] = '\0';
+    if (out_file_exists) *out_file_exists = 0;
+    FILE *f = fopen(FAVORITES_CONFIG_PATH, "r");
+    if (!f) return errno == ENOENT ? 0 : -1;
+    if (out_file_exists) *out_file_exists = 1;
+    char *line = malloc(max_size);
+    if (!line) { fclose(f); return -1; }
+    size_t length = 0, written = 0;
+    int first = 1;
+    for (;;) {
+        int c = fgetc(f);
+        if (c == 0 || (c == EOF && ferror(f))) goto failed;
+        if (c == EOF || c == '\r' || c == '\n') {
+            line[length] = '\0';
+            char *start = line;
+            while (*start && isspace((unsigned char)*start)) start++;
+            char *end = line + length;
+            while (end > start && isspace((unsigned char)end[-1])) end--;
+            size_t count = (size_t)(end - start);
+            if (count) {
+                if (!first) {
+                    if (written + 1 >= max_size) goto failed;
+                    out_buf[written++] = ',';
+                }
+                if (count >= max_size - written) goto failed;
+                memcpy(out_buf + written, start, count);
+                written += count;
+                out_buf[written] = '\0';
+                first = 0;
+            }
+            length = 0;
+            if (c == EOF) break;
+        } else {
+            if (length + 1 >= max_size) goto failed;
+            line[length++] = (char)c;
+        }
+    }
+    free(line);
+    if (fclose(f) == 0) return 0;
+    out_buf[0] = '\0';
+    return -1;
+failed:
+    free(line);
+    fclose(f);
+    out_buf[0] = '\0';
+    return -1;
+}
+
+
+int config_save_favorites_csv(const char *csv) {
+    pthread_mutex_lock(&config_mutex);
+    int result = save_csv(FAVORITES_CONFIG_PATH, csv);
+    pthread_mutex_unlock(&config_mutex); return result;
+}
+int config_update_list_entry(const char *path, const char *old_key, const char *new_key) {
+    if (!path || !old_key || !old_key[0] || strpbrk(old_key, ",\r\n") ||
+        strlen(old_key) >= LIST_CAPACITY ||
+        (new_key && (strlen(new_key) >= LIST_CAPACITY || strpbrk(new_key, ",\r\n")))) return -1;
+    pthread_mutex_lock(&config_mutex);
+    char *old = NULL; size_t size = 0; int result = -1;
+    if (read_file_text(path, &old, &size)) { result = errno == ENOENT ? 0 : -1; goto done; }
+    if (size > CONFIG_LIMIT || memchr(old, 0, size)) goto done;
+    size_t capacity = size + 1;
+    /* Each matching line may grow. Bound allocation even for legacy big files. */
+    if (new_key) capacity += (size + 1) * (strlen(new_key) + 1);
+    if (capacity > 16 * 1024 * 1024) goto done;
+    char *text = malloc(capacity);
+    if (!text) goto done;
+    size_t pos = 0; int changed = 0; char *save = NULL;
+    for (char *line = strtok_r(old, "\r\n", &save); line; line = strtok_r(NULL, "\r\n", &save)) {
+        while (*line && isspace((unsigned char)*line)) line++;
+        char *end = line + strlen(line);
+        while (end > line && isspace((unsigned char)end[-1])) *--end = 0;
+        if (!strcmp(line, old_key)) { changed = 1; line = (char *)new_key; }
+        if (line && *line) { size_t n = strlen(line); memcpy(text + pos, line, n); pos += n; text[pos++] = '\n'; }
+    }
+    result = changed ? (pos >= LIST_CAPACITY ? -1 : write_file_text(path, text, pos)) : 0;
+    free(text);
+done:
+    free(old); pthread_mutex_unlock(&config_mutex); return result;
+}
+int pldmgr_favorites_update_entry(const char *old_key, const char *new_key) {
+    int result = config_update_list_entry(FAVORITES_CONFIG_PATH, old_key, new_key);
+    if (result) pldmgr_log("[Favorites] Failed to update entry: %s\n", old_key ? old_key : "");
+    return result;
 }
