@@ -1,5 +1,13 @@
 name: Release On-Demand
 
+# [CN-FORK] 本工作流已按 fork 口径改写（上游原版只能产出单个 pldmgr_v*.elf）。
+# 差异：
+#   1) 产物名 NayePlmTools_<version>.elf（上游为 pldmgr_v<version>.elf），见 Makefile 的 ELF 变量；
+#   2) 同时出两个磁贴变体：-me（NAYE00001 媒体栏）/ -ga（NAYE00004 游戏栏），
+#      由 tools/build_tiles.sh 在 SDK 容器内一次跑完；
+#   3) tag 仍为 v<MENU_VERSION>，即 v0.6.0.176 这种四段式。
+# ⚠ 本工作流未在 CI 实跑验证过（SDK 镜像需现建，耗时较长）；本地出包口径见 CHANGELOG.md ⑥。
+
 on:
   workflow_dispatch:
 
@@ -43,10 +51,29 @@ jobs:
           fi
           echo "Release $TAG does not exist. Proceeding."
 
-      - name: Build Payload Manager
+      - name: Build SDK container image
         run: |
-          chmod +x build_release.sh
-          ./build_release.sh
+          # tools/build_tiles.sh 硬编码 /opt/ps5-payload-sdk/bin，该路径只存在于容器内，
+          # 所以变体编译必须在容器里跑；前端（npm）则留在宿主上跑。
+          docker build -t ps5-payload-sdk-pldmgr -f Dockerfile.sdk .
+
+      - name: Build frontend on host
+        run: |
+          # 先删 dist：title 占位符 [[TITLE_PLACEHOLDER]] 只替换一次，残留旧 dist 会让标题空转。
+          rm -rf frontend/dist
+          make frontend-build
+
+      - name: Build both tile variants
+        run: |
+          docker run --rm -v "$PWD":/src -w /src ps5-payload-sdk-pldmgr \
+            bash tools/build_tiles.sh
+
+      - name: Verify variant title ids
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          grep -aq "NAYE00001" "NayePlmTools_${VERSION}-me.elf" || { echo "me variant missing NAYE00001"; exit 1; }
+          grep -aq "NAYE00004" "NayePlmTools_${VERSION}-ga.elf" || { echo "ga variant missing NAYE00004"; exit 1; }
+          ls -l "NayePlmTools_${VERSION}-me.elf" "NayePlmTools_${VERSION}-ga.elf"
 
       - name: Create Release
         env:
@@ -54,17 +81,30 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.version }}"
-          # Get the most recent tag before this release to generate the changelog link
+
           PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
           if [ -n "$PREV_TAG" ]; then
-            NOTES="Full Changelog: https://github.com/${{ github.repository }}/compare/$PREV_TAG...$TAG"
+            COMPARE="Full Changelog: https://github.com/${{ github.repository }}/compare/$PREV_TAG...$TAG"
           else
-            NOTES="First Release."
+            COMPARE="First Release."
           fi
-          
-          # Create the release and upload the ELF file
+
+          # 用 printf 而非 heredoc：YAML 块标量里所有行都带缩进，heredoc 终止符无法落在行首。
+          printf '%s\n' \
+            "NayePlmTools v${VERSION} (CN-FORK)" \
+            "" \
+            "PS5 Payload Manager 中文分支。两个磁贴变体功能完全相同，只是安装到 PS5 主屏后落在不同的栏：" \
+            "" \
+            "- \`NayePlmTools_${VERSION}-me.elf\` — 媒体栏（titleId \`NAYE00001\`）" \
+            "- \`NayePlmTools_${VERSION}-ga.elf\` — 游戏栏（titleId \`NAYE00004\`）" \
+            "" \
+            "装载后打开 \`http://<PS5-IP>:8911/\` 使用面板。二者只装一个即可，不要同时安装。" \
+            "" \
+            "${COMPARE}" \
+            > /tmp/notes.md
+
           gh release create "$TAG" \
-            --title "$TAG" \
-            --notes "$NOTES" \
-            "pldmgr_v${VERSION}.elf"
+            --title "NayePlmTools v${VERSION}" \
+            --notes-file /tmp/notes.md \
+            "NayePlmTools_${VERSION}-me.elf" \
+            "NayePlmTools_${VERSION}-ga.elf"

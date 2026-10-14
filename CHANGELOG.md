@@ -77,6 +77,11 @@ fork 里有 **9 个既有 lint 错误**（4 × `react-hooks/set-state-in-effect`
   （`[PLDMGR] Migrated: /data/nayeplmtools/payloads/ShadowMountPlus/`）。
 - **代码推送**：用户口径「推送只 github」—— 只推 `origin`（`github.com/naye1120/NayePlmTools`），
   本地 `cn-fork` → `origin/main`；不动 `fork` / `upstream` 两个远程。
+- **GitHub Release**：`v0.6.0.176` 已发（本仓库**首个** Release），附件为 `-me` / `-ga` 两个 ELF。
+  同时把上游带来的 `.github/workflows/release.yml` 改成 fork 口径 —— 上游原版上传的是
+  `pldmgr_v${VERSION}.elf`，与本仓库产物名 `NayePlmTools_${VERSION}[-me|-ga].elf` 不符且只出单变体，
+  手动触发必然在 `gh release create` 那步失败；现改为在 SDK 容器内跑 `tools/build_tiles.sh`
+  一次产出双变体并同时上传。⚠ 该工作流尚未在 CI 实跑验证（需现建 SDK 镜像）。
 
 ---
 
