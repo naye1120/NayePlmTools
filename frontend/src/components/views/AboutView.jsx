@@ -84,6 +84,18 @@ const REFERENCES = [
  * 日期是琥珀色、能力清单是蓝色。 */
 const CHANGELOG = [
   {
+    date: "2026-10-14",
+    items: [
+      "合并上游 v0.6.0 —— 上游版本从 v0.5.2 跳到 v0.6.0（「关于本 Fork」里的上游版本号已同步）。底层换成新的仓库上下文、槽位管理、进程管理与日志服务，并带上上游这一版的稳定性修复。",
+      "「获取载荷」页重做：卡片网格 + 搜索 + 按来源筛选 + 安装状态徽标，仓库目录大时不再卡顿。",
+      "新增载荷详情页：直接看该载荷的 README 文档与版本信息，不用再跳去 GitHub。",
+      "收藏与自定义顺序改为存在主机上：换浏览器、换设备都同步，不再各存各的。",
+      "遥控器返回键 / 浏览器后退：现在先关弹窗、详情、编辑态，不再直接退出浏览器；并支持用 URL 直达某一页。",
+      "自动加载页样式刷新、载荷启动浮层重做、通知条更干净；新增荷兰语。",
+      "「关于本 Fork」版式调整：原作者捐赠入口（支持 itsPLK）从右上角移到 fork 信息表下方，右侧只留本 fork 收款码与仓库入口。",
+    ],
+  },
+  {
     date: "2026-10-13",
     items: [
       "本地快照只在两个时机发生：游戏退出时（与往远程推送同一时刻）和手动「立即备份」。删掉了全部「静默窗口」与延迟重试队列 —— 退出就当场拍，不再有「等下一轮」这种永远等不到的等待。",
@@ -218,23 +230,22 @@ const AboutView = ({ version }) => {
               </a>
             </dd>
             <dt className="text-zinc-500">{t("donate.fork_upstream_version", "上游版本")}</dt>
-            <dd className="text-white font-semibold">v0.5.2</dd>
+            {/* [CN-FORK] v0.6.0.176 合并上游 v0.6.0 后同步（用户口径：「这里上游版本没更新」）。 */}
+            <dd className="text-white font-semibold">v0.6.0</dd>
             <dt className="text-zinc-500">{t("donate.fork_version", "本 Fork 版本")}</dt>
             {/* [CN-FORK] v0.5.2.113 现读构建时烧入的 __APP_VERSION__（vite.config.js
                 从 include/pldmgr.h 的 MENU_VERSION 取）。dev server 下它是 'dev'。 */}
             <dd className="text-white font-semibold">v{version || __APP_VERSION__}</dd>
           </dl>
-        </div>
 
-        {/* 右侧：两块捐赠栏（原作者按钮 + 本 fork 二维码） */}
-        <div className="flex flex-col gap-6 items-center xl:items-end min-w-0 w-full xl:w-[18rem]">
-          {/* 上：原作者捐赠入口 —— 按钮而不是二维码：itsPLK 的 DONATE.md 里写的是
-              「查看捐赠方式」而非单一收款码，按钮形态更合适（点开新页去看）。 */}
+          {/* [CN-FORK] v0.6.0.176 用户口径：「红框圈起来的东西放到绿框的位置」——
+              原作者捐赠入口从右列顶部搬到 fork 信息表**下方**（左列底部），
+              右列只留本 fork 的收款码 + 仓库按钮。 */}
           <a
             href={originalDonateUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="w-full flex items-center gap-3 px-4 py-3 bg-red-600/10 border border-red-600/30 hover:bg-red-600/20 rounded-2xl transition-colors group"
+            className="flex items-center gap-3 px-4 py-3 bg-red-600/10 border border-red-600/30 hover:bg-red-600/20 rounded-2xl transition-colors group"
           >
             <span className="p-2 rounded-xl bg-red-600/20 text-red-400 group-hover:text-red-300 shrink-0">
               <GithubMark className="w-5 h-5" />
@@ -244,8 +255,11 @@ const AboutView = ({ version }) => {
               <span className="block text-white font-bold truncate">支持 itsPLK →</span>
             </span>
           </a>
+        </div>
 
-          {/* 下：本 fork 维护者捐赠二维码 —— **真实收款码图片**（v0.5.2.171 起，
+        {/* 右侧：本 fork 收款码 + 仓库按钮（原作者入口 v0.6.0.176 起移到左列） */}
+        <div className="flex flex-col gap-6 items-center xl:items-end min-w-0 w-full xl:w-[18rem]">
+          {/* 本 fork 维护者捐赠二维码 —— **真实收款码图片**（v0.5.2.171 起，
               之前是用 QRCodeSVG 画的仓库链接二维码，扫出来只是打开 GitHub）。
               图片经 Vite 资源导入，单文件产物里被内联成 base64 data URI。 */}
           <div className="w-full flex flex-col items-center gap-2 px-4 py-4 rounded-2xl border border-ps-blue/30 bg-ps-blue/5">

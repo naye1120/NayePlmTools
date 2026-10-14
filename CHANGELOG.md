@@ -58,10 +58,25 @@ fork 里有 **9 个既有 lint 错误**（4 × `react-hooks/set-state-in-effect`
   **有意留 backlog**，详见 `FORK-CN.md` §4.1「已知欠账」。fork 的验证门槛始终是
   `test/run_host_tests.sh`（单数），不是上游那套。
 
-### ⑤ 未做/待确认
+### ⑤ 关于页跟进（真机看后反馈）
 
-- 未推真机（`.173`–`.176` 均未推）。出包后按惯例先 `/shutdown` 再推、成功只认 `GET /version`。
-- `.175` 的两笔提交（`6a187dd` / `7cde065`）此前未 push 到 `origin/main`，本轮一并处理。
+- **「上游版本」没更新**：`frontend/src/components/views/AboutView.jsx` 里那行是**写死的** `v0.5.2`
+  → 改成 `v0.6.0`。
+- **版式**：用户口径「红框圈起来的东西放到绿框的位置」—— 原作者捐赠入口（`支持 itsPLK →`）
+  从右列顶部搬到 fork 信息表**下方**（左列底部），右列只留本 fork 收款码 + 仓库入口。
+- **页内更新日志**：`AboutView.jsx` 的 `CHANGELOG` 加 `2026-10-14` 分组，写清合并 v0.6.0 带来的
+  能力（获取载荷页重做 / 载荷详情页 / 收藏存主机 / 返回键语义 / 荷兰语）。
+
+### ⑥ 出包与推送
+
+- **出包**：`NayePlmTools_0.6.0.176-me.elf`（NAYE00001 媒体栏）/ `-ga.elf`（NAYE00004 游戏栏），
+  各 12,367,448 B。⚠ 内嵌标题短哈希 = **出包时的 `HEAD`**，所以必须**先提交再出包** ——
+  本轮第一次出包时还没提交，标题烧成了 `DEV`，删掉 `frontend/dist` 重出后才对。
+- **真机**（`192.168.1.214`）：`.176` 已推（推的是 **`-ga`** 变体，与真机上装的游戏栏磁贴一致），
+  `GET /version` → `0.6.0.176`；启动日志里能看到合并后的存储迁移跑通
+  （`[PLDMGR] Migrated: /data/nayeplmtools/payloads/ShadowMountPlus/`）。
+- **代码推送**：用户口径「推送只 github」—— 只推 `origin`（`github.com/naye1120/NayePlmTools`），
+  本地 `cn-fork` → `origin/main`；不动 `fork` / `upstream` 两个远程。
 
 ---
 
