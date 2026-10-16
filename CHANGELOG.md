@@ -95,6 +95,17 @@ fork 从 v0.5.1 起自己加的 **25 条 POST 路由一条都没进表** —— 
 `mock-policy.js` 那段压根没被执行到）。即 `make test-host` 在 HEAD 上本来就是红的，
 本次把它从「6 个失败（含 http 链接不过）」降到「5 个失败，http 全绿」。
 
+### ⑦ 顺带钉死：脚本行尾（Windows 检出坑）
+
+`test/run_host_tests.sh` 在**用户自己那台 Windows + WSL 机器上跑不起来**：本机
+`core.autocrlf=true`、仓库又没有 `.gitattributes`，检出时把 `*.sh` / `Makefile` 转成了 CRLF，
+bash 读到 `set -u\r` 直接 `invalid option`，`cd "$(dirname "$0")/..\r"` 报 No such file or directory。
+提交里的字节**一直是 LF**（`git ls-files --eol` → `i/lf`），坑只在 Windows 检出侧，
+所以一直没人撞见 —— 本次为了坐实 ⑤ 那句 `overall: PASS`，只能先 `sed 's/\r$//'` 滤一遍 CR
+再喂 bash。新增 `.gitattributes` 把 `*.sh` / `Makefile` / `*.mk` / `*.py` /
+`.github/workflows/*.yml` 钉成 LF（当时工作区共 **244 个**文件被转成 CRLF，
+根目录的 `build_release.sh` / `deploy.sh` / `build_deps.sh` 同样受影响）。
+
 ---
 
 ## v0.6.0.176 (CN-FORK) — 2026-10-14 · 上游 v0.6.0 全量合并

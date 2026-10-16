@@ -1,0 +1,16 @@
+# [CN-FORK] v0.6.0.177 Windows 检出（core.autocrlf=true）会把下面这几类文件转成
+# CRLF，而 CRLF 能直接把脚本废掉：bash 读到 `set -u\r` 报 `invalid option`、
+# `cd "$(dirname "$0")/..\r"` 报 No such file or directory，make 的 recipe 也会多一个 \r。
+#
+# 本仓 test/run_host_tests.sh 在 Windows + WSL 上就是这么跑不起来的 ——
+# 提交里的字节一直是 LF（git ls-files --eol: i/lf），只有工作区被转换了，
+# 于是「.176 CHANGELOG 里记的 overall: PASS」在用户自己机器上变成一句跑不动的脚本。
+# 在这里钉死 LF：提交与工作区永远一致，检出后不用再 sed 滤 CR。
+*.sh    text eol=lf
+Makefile text eol=lf
+*.mk    text eol=lf
+*.py    text eol=lf
+.github/workflows/*.yml text eol=lf
+
+# 其余（md / json / jsx / c / h）保持 autocrlf 默认行为，不在这次范围内 ——
+# 它们不被解释器执行，CRLF 只影响 diff 噪音，不该顺手扩大改动面。
