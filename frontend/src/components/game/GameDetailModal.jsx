@@ -5,6 +5,10 @@ import Modal from '../ui/Modal'
 import { formatSizeAlways, formatStamp } from './format'
 import { Chip, GridRow, Note } from './parts'
 import { getGameDetail } from '../../utils/gameApi'
+/* [CN-FORK] v0.6.0.177 起 /loadpayload:* 是 POST-only（v0.6.0 安全层），
+ * 裸 fetch 走的是 GET，在真机上被方法闸门回 405 —— 症状是「点了没反应」，
+ * 而 mock 那侧两条方法都接，掩盖掉了它。 */
+import { mutationFetch } from '../../utils/mutationRequest'
 
 /* [CN-FORK] v0.5.2.112 游戏详情弹窗（磁贴点开）
  *
@@ -202,7 +206,9 @@ export default function GameDetailModal({ show, game, onClose, onOpenSaves, onOp
           go = true
         } else {
           setSmpPhase(t('game.smp_launching', '正在启动 ShadowMount…'))
-          const res = await fetch(`/loadpayload:${encodeURI(path)}`).catch(() => null)
+          /* [CN-FORK] v0.6.0.177 必须 POST（方法闸门只收 POST，GET 直接 405）；
+           * 带上标记是因为这条路由会过 CSRF 校验，而某些浏览器的同源 GET 不带 Origin。 */
+          const res = await mutationFetch(`/loadpayload:${encodeURI(path)}`).catch(() => null)
           if (!res || !res.ok) throw new Error(t('game.smp_start_fail', 'ShadowMount 启动失败'))
           setSmpPhase(t('game.smp_waiting', '已发起启动，正在等待端口就绪…'))
           if (!(await waitSmpAlive()))

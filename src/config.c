@@ -233,6 +233,36 @@ int config_read_archive_global(char *out, size_t osz) {
     return (int)n;
 }
 
+/* [CN-FORK] v0.6.0.177 多媒体存档配置的落盘 / 读取。与上面的 archive_global 那对
+ * 一模一样（单独一份 JSON、不校验、不进 key=value 行式文件），差异只在路径。 */
+int config_write_media_archive(const char *json) {
+    if (!json) return -1;
+    ensure_dir_recursive(BASE_DATA_DIR);
+    FILE *f = fopen(MEDIA_ARCHIVE_PATH, "w");
+    if (!f) return -1;
+    size_t n = strlen(json);
+    size_t w = fwrite(json, 1, n, f);
+    fclose(f);
+    return (w == n) ? 0 : -1;
+}
+
+int config_read_media_archive(char *out, size_t osz) {
+    if (!out || osz < 2) return -1;
+    out[0] = 0;
+    FILE *f = fopen(MEDIA_ARCHIVE_PATH, "r");
+    if (!f) return -1;
+    size_t n = fread(out, 1, osz - 1, f);
+    fclose(f);
+    out[n] = 0;
+    /* 空文件 / 只有空白 = 没配过。返回 -1 让调用方按「未启用」处理，
+     * 不要把空白当成一份合法配置读出去。 */
+    int blank = 1;
+    for (size_t i = 0; i < n; i++)
+        if (out[i] != ' ' && out[i] != '\n' && out[i] != '\r' && out[i] != '\t') { blank = 0; break; }
+    if (blank) { out[0] = 0; return -1; }
+    return (int)n;
+}
+
 /* [CN-FORK] v0.5.2.145 /set_config 里的 ARCHIVE_GLOBAL_CONFIG 单独落盘。
  *
  * 这里**必须**用 cJSON 取，不能用 strstr 找引号的老办法：这个值本身就是一个 JSON
@@ -256,6 +286,31 @@ static void config_apply_archive_global(const char *json_data) {
         if (s) {
             if (config_write_archive_global(s) == 0)
                 pldmgr_log("[PLDMGR] Saved global archive config to %s\n", ARCHIVE_GLOBAL_PATH);
+            free(s);
+        }
+    }
+    cJSON_Delete(root);
+}
+
+/* [CN-FORK] v0.6.0.177 /set_config 里 MEDIA_ARCHIVE_CONFIG 这个键的处理。
+ * 与 config_apply_archive_global 完全同构（那份是存档的，这份是多媒体的），
+ * 只是落点换成 MEDIA_ARCHIVE_PATH。为什么复制而不抽成一个带路径参数的函数：
+ * 两处的失败日志与将来的分支（媒体这份可能还要顺手踢一次自动备份）都会长得不一样，
+ * 抽参数省下的三行换不来可读性。 */
+static void config_apply_media_archive(const char *json_data) {
+    cJSON *root = cJSON_Parse(json_data);
+    if (!root) return;
+    cJSON *ma = cJSON_GetObjectItem(root, "MEDIA_ARCHIVE_CONFIG");
+    if (cJSON_IsString(ma) && ma->valuestring && ma->valuestring[0]) {
+        if (config_write_media_archive(ma->valuestring) == 0)
+            pldmgr_log("[PLDMGR] Saved global media archive config to %s\n", MEDIA_ARCHIVE_PATH);
+        else
+            pldmgr_log("[PLDMGR] 多媒体存档配置写入失败（%s）\n", MEDIA_ARCHIVE_PATH);
+    } else if (cJSON_IsObject(ma)) {
+        char *s = cJSON_PrintUnformatted(ma);
+        if (s) {
+            if (config_write_media_archive(s) == 0)
+                pldmgr_log("[PLDMGR] Saved global media archive config to %s\n", MEDIA_ARCHIVE_PATH);
             free(s);
         }
     }
@@ -432,6 +487,9 @@ int config_handle_set_json(const char *json) {
     pthread_mutex_unlock(&config_mutex);
     if (!result && (update.seen & 1u) && !update.values[0]) pldmgr_autoload_abort();
     if (!result) config_apply_archive_global(json);
+    /* 多媒体存档配置与存档那份互不影响，所以**无论上面的开关改没改**都要扫一遍
+     * —— 弹窗保存时 body 里往往只有 MEDIA_ARCHIVE_CONFIG 这一个键。 */
+    if (!result) config_apply_media_archive(json);
     return result;
 }
 

@@ -569,6 +569,19 @@ export function deleteMedia(tid, id, opts) {
   return request(`/game_media_delete${q({ tid, id })}`, opts)
 }
 
+/* [CN-FORK] v0.6.0.177 手动「远程同步」—— 把本机媒体推到设置页配的 SMB/FTP 位置。
+ * 与 packMedia **逐字同形**（body {tid, ids|null}、返回 {job_id, error, message}、
+ * 进度走 /game_job_status），因为 watchJob / 取消那套是两条任务共用的一份代码；
+ * 形状一旦分岔就得多写一个分支，而分支迟早会走偏（见 check_post_routes.sh 那条教训）。
+ *   ids = null（未选中任何项）→ 全量（**增量**：账本里已传过且大小没变的自动跳过）；
+ *   ids = 选中项 → 只推这些，且一律强推（用户点名的不看账本）。
+ * 后端用 409 EBUSY 表示「已有任务在跑」（打包与同步共用全局单槽）。 */
+export function syncMedia(tid, ids, opts) {
+  return request('/game_media_sync', {
+    ...opts, method: 'POST', body: { tid, ids: ids && ids.length ? ids : null },
+  })
+}
+
 /* ── 改名 / 磁贴图标 / 磁贴背景 ───────────────────────────────────────────
  * [CN-FORK] v0.5.2.112 用户口径：「你只把修改磁贴图标放出来了，还要增加一个修改背景的」
  * —— 磁贴上的图**拆成两层**，两层的语义、尺寸与格式都不同，所以是两套独立接口：

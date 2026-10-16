@@ -40,6 +40,7 @@
 #include "thermal.h"    /* [CN-FORK] 温控只读端点 /thermal_stats */
 #include "game_mgr.h"   /* [CN-FORK] 游戏列表 /game_list + 图标 /game_icon */
 #include "game_media.h" /* [CN-FORK] v0.5.2.115 多媒体管理 /game_media*（六条 + 任务两条） */
+#include "media_remote.h" /* [CN-FORK] v0.6.0.177 多媒体远程同步 /game_media_sync + 自动备份 kick */
 #include "game_runtime.h" /* [CN-FORK] v0.5.2.116 删源 / 挂载 / 卸载挂载 / 卸载安装 */
 #include "game_saves.h"   /* [CN-FORK] v0.5.2.116 存档六条 */
 #include "save_remote.h"  /* [CN-FORK] v0.5.2.172 SR_ENOTFOUND（远程存档下载的「远端没有」）*/
@@ -115,15 +116,63 @@ static enum MHD_Result add_response_header(struct MHD_Response *resp,
 }
 
 /* Explicit actions use POST. Automatic cache refresh on a read remains a read;
- * repository_refresh is the explicit forced-refresh action. */
-static int is_mutation_route(const char *url) {
+ * repository_refresh is the explicit forced-refresh action.
+ *
+ * [CN-FORK] v0.6.0.177 这张表**当初只登记了上游自己的 14 条**，本 fork 加的
+ * 全部 POST 路由一条都没进来 —— 于是下面那道方法闸门（`mutation ? POST : GET`）
+ * 对它们一律按「不是 mutation」处理，**强制 GET**，而前端发的是 POST，
+ * 结果就是用户看到的「好几个功能无缘无故 405」（不是 404、不是 400，是 405）。
+ *
+ * 漏表是双输：漏掉一条 POST = 用户看到 405；漏掉一条 GET 变更 = 完全绕过 CSRF。
+ *
+ * ⚠ 新增 POST 路由的三处登记缺一不可：这里（is_post_route）、
+ * gr_post_limit（收不收请求体）、gr_dispatch_post（收到后怎么处理）。
+ * 后两处由 tools/check_post_routes.sh 静态守，这一处也已被它一并覆盖。 */
+/* 表 A：**必须是 POST** 的路由（方法闸门 + CSRF 两处都用）。 */
+static int is_post_route(const char *url) {
     const char *routes[] = { ROUTE_UPLOAD, ROUTE_DELETE, ROUTE_SHUTDOWN,
         ROUTE_SET_CONFIG, ROUTE_ABORT, ROUTE_AUTOLOAD_CLEAR, ROUTE_REPO_REFRESH,
         ROUTE_REPO_INSTALL, ROUTE_SOURCES_SET, ROUTE_SOURCES_ADD,
-        ROUTE_SOURCES_REMOVE, ROUTE_REPO_CACHE_CLEAR, ROUTE_USB_MOVE_PERFORM, ROUTE_PROCESS_KILL };
+        ROUTE_SOURCES_REMOVE, ROUTE_REPO_CACHE_CLEAR, ROUTE_USB_MOVE_PERFORM, ROUTE_PROCESS_KILL,
+        /* ── [CN-FORK] 本 fork 的 POST 路由（25 条：23 条在 gr_dispatch_post 里分发，
+         *   /game_media_pack 与 /pkgmanager_upload 各走自己的专用分支，另加新端点
+         *   /game_media_sync）—— 上游那张表只登了自己的 14 条，这 25 条当初
+         *   一条都没进来，于是它们全被方法闸门当成 GET 而前端发的是 POST，
+         *   结果就是用户报的「好几个功能无缘无故 405」。 ── */
+        ROUTE_GAME_SAVE_UPLOAD, ROUTE_GAME_SAVE_GARLIC, ROUTE_GAME_TILE_ICON,
+        ROUTE_GAME_TILE_BACKGROUND, ROUTE_GAME_MUSIC, ROUTE_GAME_MUSIC_AT9,
+        ROUTE_GAME_PREFS_SET, ROUTE_GAME_DELETE, ROUTE_GAME_SAVE_AUTO,
+        ROUTE_GAME_SAVE_TEST, ROUTE_GAME_SAVE_SNAP, ROUTE_GAME_SAVE_SYNC,
+        ROUTE_GAME_RENAME, ROUTE_GAME_SYNC, ROUTE_GAME_MOUNT, ROUTE_GAME_UNMOUNT,
+        ROUTE_GAME_UNINSTALL, ROUTE_GAME_SAVE_REMOTE_DELETE, ROUTE_SYSTEM_APP_VISIBLE,
+        ROUTE_SYSTEM_APP_PIN, ROUTE_TILE_GROUP_PIN, ROUTE_TILE_GROUP_ORDER,
+        ROUTE_GAME_MEDIA_PACK, ROUTE_GAME_MEDIA_SYNC, ROUTE_PKG_UPLOAD };
     for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++)
         if (!strcmp(url, routes[i])) return 1;
     return !strncmp(url, ROUTE_LOAD_PAYLOAD, strlen(ROUTE_LOAD_PAYLOAD));
+}
+
+/* 表 B：**变更型 GET** —— 方法仍然是 GET（前端就是这么调的，改成 POST 要连
+ * 前端一起动，两头不同步会把老功能从 405 换成 403），但它们确实改状态，
+ * 所以必须过下面的 CSRF 校验 —— v0.6.0 上游把它们整个漏在表外，
+ * 于是这几条**任意跨站页面都能触发**（用户点开一个网页就能删他的存档/截图）。
+ * 只进 CSRF，不进方法闸门，两张表由此分开。 */
+static int is_get_mutation(const char *url) {
+    const char *routes[] = {
+        ROUTE_QUICKLINKS_ADD, ROUTE_QUICKLINKS_REMOVE, ROUTE_GAME_SAVE_DELETE,
+        ROUTE_GAME_MEDIA_DELETE, ROUTE_GAME_TILE_ICON_RESET,
+        ROUTE_GAME_TILE_BACKGROUND_RESET, ROUTE_GAME_MUSIC_RESET,
+        ROUTE_GAME_JOB_CANCEL, ROUTE_PKG_LAUNCH, ROUTE_PKG_STOP, ROUTE_FAN_CONTROL };
+    for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++)
+        if (!strcmp(url, routes[i])) return 1;
+    return 0;
+}
+
+/* 「这条请求是写吗」= 方法闸门（表 A）∪ CSRF（表 A ∪ 表 B）。
+ * 拆成两个谓词是为了让两件事各归各：表 B 的路由进了这张总表之后
+ * 仍然能被表 A 的方法闸门放行成 GET。 */
+static int is_mutation_route(const char *url) {
+    return is_post_route(url) || is_get_mutation(url);
 }
 /* HTTP daemon only. Compare the complete authority, including the port; never
  * accept suffix/prefix matches, null/file origins, userinfo, or multiple origins.
@@ -137,6 +186,25 @@ static int same_origin(const char *value, const char *host, int referer) {
     if (strlen(host) != n || strncasecmp(authority, host, n)) return 0;
     return referer ? (!authority[n] || authority[n] == '/') : authority[n] == 0;
 }
+/* Allow 头里的方法表可能是一个列表（psaccounts 那一组允许 GET、POST 两种），
+ * 这里按逗号分段比对，而不是 strcmp —— 直接 strcmp 会让 psaccounts 那几条
+ * GET 请求变成 405（它明明能处理 GET）。 */
+static int in_method_list(const char *list, const char *m) {
+    if (!list || !m) return 0;
+    size_t n = strlen(m);
+    const char *p = list;
+    while (*p) {
+        const char *e = strchr(p, ',');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        while (len && *p == ' ') { p++; len--; }
+        while (len && p[len - 1] == ' ') len--;
+        if (len == n && strncmp(p, m, n) == 0) return 1;
+        if (!e) break;
+        p = e + 1;
+    }
+    return 0;
+}
+
 static int mutation_authorized(struct MHD_Connection *conn) {
     const char *host = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Host");
     const char *origin = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Origin");
@@ -414,6 +482,11 @@ static size_t gr_post_limit(const char *url) {
      * 重排的 body 是一个 order 数组（几十个 9 位 tid ≈ 1KB 以内），给 64KB 是留足余量。 */
     if (strcmp(url, ROUTE_TILE_GROUP_PIN) == 0) return (size_t)1 << 20;
     if (strcmp(url, ROUTE_TILE_GROUP_ORDER) == 0) return (size_t)64 << 10;
+    /* [CN-FORK] v0.6.0.177 多媒体远程同步：body 与 /game_media_pack 同形
+     * {tid, ids:[…]|null}，全是 content_path 字符串。给 1MB（pack 那条是 512KB），
+     * 是因为同步允许**全选**：全选时 ids 会比打包那次长一截，撞上限的表现是
+     * 「点同步没反应」（status->error → 413），比 405 还难查。 */
+    if (strcmp(url, ROUTE_GAME_MEDIA_SYNC) == 0) return (size_t)1 << 20;
     return 0;
 }
 
@@ -918,6 +991,25 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         return (rn < 0 || (size_t)rn >= size) ? -1 : rn;
     }
 
+    /* [CN-FORK] v0.6.0.177 多媒体「远程同步」（多媒体管理页的手动推送按钮）。
+     * 返回形状与 /game_media_pack 逐字同形（job_id / error / message，200/409/400）：
+     * 前端 watchJob 那一套轮询对两条任务是同一份代码，形状不一样就得写两个分支，
+     * 而两个分支迟早会走偏（`.137` 的教训就是「分开写的两张表」）。
+     * 任务在 mr_sync_start 里就起线程了，HTTP 这边立刻回 job_id —— 传几个 GB
+     * 的录屏绝不能让连接站着等（前端 post 超时 20s，连接必断）。 */
+    if (strcmp(url, ROUTE_GAME_MEDIA_SYNC) == 0) {
+        long long job_id = 0;
+        char msg[240], emsg[700];
+        msg[0] = 0;
+        int rc = mr_sync_start(body, len, &job_id, msg, sizeof(msg));
+        pldmgr_json_escape(msg, emsg, sizeof(emsg));
+        *code = (rc == 0) ? MHD_HTTP_OK
+                          : (rc == -1 ? MHD_HTTP_CONFLICT : MHD_HTTP_BAD_REQUEST);
+        int n = snprintf(out, size, "{\"job_id\":%lld,\"error\":\"%s\",\"message\":\"%s\"}",
+                         job_id, rc == 0 ? "" : (rc == -1 ? "EBUSY" : "EBAD"), emsg);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
     return gr_json_err(out, size, code, MHD_HTTP_NOT_FOUND, "ENOENT", "没有这条路由");
 }
 
@@ -1315,24 +1407,37 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     (void)cls;
     (void)version;
 
+    /* [CN-FORK] v0.6.0.177 方法闸门看**表 A**（必须 POST），CSRF 看**总表**
+     * （表 A ∪ 变更型 GET）。两者合一的老写法在这里会互相打架：变更型 GET 一旦
+     * 进了总表就被强制成 POST，而前端是按 GET 调的，修一个 405 会造出另一个。
+     * psaccounts 的 /api/ 一组是**两种方法都收**（api.c 自己认 GET/POST/HEAD），
+     * 所以它只在「要不要允许多一个 POST」这点上搭一下闸门，**不**并进本文件的
+     * CSRF 层 —— 那一层要求 Origin/Referer/标记，会挡住它自己那套 cookie 会话
+     * 的合法调用方（比如从收藏夹 / 书签直接 GET 的场景）。 */
+    int want_post = is_post_route(url);
+    int psapi = psaccounts_wants(url);
+    const char *allow = psapi ? "GET, POST" : (want_post ? "POST" : "GET");
     int mutation = is_mutation_route(url);
     if (!strcmp(method, "OPTIONS")) {
         const char *origin = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Origin");
         const char *host = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Host");
         const char *requested_method = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Access-Control-Request-Method");
         const char *headers = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Access-Control-Request-Headers");
-        const char *allowed_method = mutation ? "POST" : "GET";
         if (!same_origin(origin, host, 0) || !preflight_headers_valid(headers) ||
-            (requested_method && strcmp(requested_method, allowed_method)))
+            (requested_method && !in_method_list(allow, requested_method)))
             return send_request_error(conn, MHD_HTTP_FORBIDDEN, "Preflight rejected");
         struct MHD_Response *resp = create_buffer_response(0, NULL, MHD_RESPMEM_PERSISTENT);
-        add_response_header(resp, "Access-Control-Allow-Methods", allowed_method);
+        add_response_header(resp, "Access-Control-Allow-Methods", allow);
         add_response_header(resp, "Access-Control-Allow-Headers", "Content-Type, X-PLDMGR-Request");
         return send_response(conn, MHD_HTTP_OK, resp);
     }
-    if (strcmp(method, mutation ? "POST" : "GET")) {
+    if (!in_method_list(allow, method)) {
         struct MHD_Response *resp = create_buffer_response(0, NULL, MHD_RESPMEM_PERSISTENT);
-        add_response_header(resp, "Allow", mutation ? "POST, OPTIONS" : "GET, OPTIONS");
+        /* Allow 头照 RFC 要连 OPTIONS 一起列；而 Access-Control-Allow-Methods
+         * 里**不能**带 OPTIONS —— run_http_tests.py 钉死了那条要等于 "POST"。 */
+        char allow_hdr[32];
+        snprintf(allow_hdr, sizeof(allow_hdr), "%s, OPTIONS", allow);
+        add_response_header(resp, "Allow", allow_hdr);
         return send_response(conn, MHD_HTTP_METHOD_NOT_ALLOWED, resp);
     }
     /* Reject before allocating request state, opening an upload, activating
@@ -2278,6 +2383,12 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             return queue_json_error(conn, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
                                     "读取系统媒体库失败（av_content.db）");
         }
+        /* [CN-FORK] v0.6.0.177 自动备份的**唯一触发点**：列表返回时顺手踢一下。
+         * 为什么不单开一条端点 / 为什么不是「新文件落地时立刻传」——
+         * 面板侧拿不到系统「新截图落盘」的事件（那是主机的事，铁律② 也不许轮询），
+         * 而打开多媒体管理页本身就是「这里可能有新东西」的信号；kick 是非阻塞的
+         * （读一遍配置 + 起线程），HTTP 这边一毫秒都不多站。 */
+        mr_auto_kick(mtid);
         resp = MHD_create_response_from_buffer((size_t)mlen, (void *)mresp_buf, MHD_RESPMEM_MUST_FREE);
         MHD_add_response_header(resp, "Content-Type", "application/json");
         MHD_add_response_header(resp, "Cache-Control", "no-store");
@@ -2643,7 +2754,7 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
          * 理由：http_on_request 是一条巨型 if/else 链，clang 会把**所有分支**的局部
          * 数组都算进同一个栈帧（-fstack-usage 实测把这条链推到 35KB），而
          * tools/check_stack_frames.sh 的闸门是 32KB/函数。 */
-        size_t raw_cap = 4096 + 2048 + 4096;   /* list / archive-global / favorites */
+        size_t raw_cap = 4096 + 2048 + 4096 + 2048;   /* list / archive-global / favorites / media-archive */
         char *raw = malloc(raw_cap);
         char *esc = malloc(6 * raw_cap);
         if (!raw || !esc) {
@@ -2653,9 +2764,11 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         char *list_buf     = raw;                        /* 4096 */
         char *ag_raw       = raw + 4096;                 /* 2048 */
         char *fav_buf      = raw + 6144;                 /* 4096 */
+        char *ma_raw       = raw + 10240;                /* 2048 */
         char *list_escaped = esc;                        /* 6*4096  */
         char *ag_escaped   = esc + 6 * 4096;             /* 6*2048  */
         char *fav_escaped  = esc + 6 * 4096 + 6 * 2048;  /* 6*4096  */
+        char *ma_escaped   = esc + 6 * 4096 + 6 * 2048 + 6 * 4096; /* 6*2048 */
         char *resp_buf = NULL;
 
         if (read_autoload_list(list_buf, 4096, 1) != 0) {
@@ -2666,6 +2779,12 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         ag_raw[0] = 0;
         if (config_read_archive_global(ag_raw, 2048) < 0)
             ag_raw[0] = 0;
+        /* [CN-FORK] v0.6.0.177 多媒体存档配置（设置页那个新弹窗）。
+         * 与 ARCHIVE_GLOBAL_CONFIG 平级的**另一份**原文，同样必须从 /get_config
+         * 发出去 —— 不发的话弹窗一关再开就是空的，用户会以为没保存。 */
+        ma_raw[0] = 0;
+        if (config_read_media_archive(ma_raw, 2048) < 0)
+            ma_raw[0] = 0;
         fav_buf[0] = 0;
         int fav_exists = 0;
         if (config_get_favorites_csv(fav_buf, 4096, &fav_exists) != 0) {
@@ -2676,6 +2795,7 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         pldmgr_json_escape(list_buf, list_escaped, 6 * 4096);
         pldmgr_json_escape(ag_raw, ag_escaped, 6 * 2048);
         pldmgr_json_escape(fav_buf, fav_escaped, 6 * 4096);
+        pldmgr_json_escape(ma_raw, ma_escaped, 6 * 2048);
 
         if (!alloc_response_buffer(&resp_buf)) {
             free(raw); free(esc);
@@ -2688,6 +2808,7 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                     "\"KILL_DISC_PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s,"
                     "\"AUTO_INSTALL_APP\":%s,\"MULTI_SOURCES_ENABLED\":%s,"
                     "\"DEFAULT_REPO_ENABLED\":%s,\"ARCHIVE_GLOBAL_CONFIG\":\"%s\","
+                    "\"MEDIA_ARCHIVE_CONFIG\":\"%s\","
                     "\"FAVORITES\":\"%s\",\"FAVORITES_INITIALIZED\":%s}",
                     cfg.autoload_enabled ? "true" : "false", list_escaped, cfg.last_repository_update,
                     cfg.auto_browser_open ? "true" : "false", cfg.autoload_delay,
@@ -2695,7 +2816,7 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                     cfg.auto_install_app ? "true" : "false",
                     cfg.multi_sources_enabled ? "true" : "false",
                     cfg.default_repo_enabled ? "true" : "false",
-                    ag_escaped, fav_escaped, fav_exists ? "true" : "false");
+                    ag_escaped, ma_escaped, fav_escaped, fav_exists ? "true" : "false");
         free(raw); free(esc);
         if (!resp_buf[0]) return send_serialization_error(conn, resp_buf);
         resp = create_buffer_response(strlen(resp_buf),

@@ -58,6 +58,10 @@ SRCS += src/game_title.c src/game_saves.c src/game_runtime.c
 # curl_init.c 单独一个 TU：utils.c 被一堆纯文件系统的宿主测试链着，curl 符号
 # 不能进 utils.o（见 src/curl_init.c 文件头）。save_remote.c 与 game_runtime.c 都调它。
 SRCS += src/save_remote.c src/game_auto.c src/curl_init.c
+# [CN-FORK] v0.6.0.177 多媒体的远程备份（设置页「多媒体存档配置」）：配置读取 +
+# 手动同步任务（GJ_KIND_SYNC）+ 自动增量备份。传输本身复用 save_remote.o 的
+# sr_push_media，所以它必须排在 save_remote 后面（链接顺序无关，逻辑上有依赖）。
+SRCS += src/media_remote.c
 # [CN-FORK] v0.5.2.118 磁贴写回主机那一步：改名要写 app.db + appinfo.db 的平铺名字列，
 # 换背景要写 app.db 的 pic0Info —— 都得真跑 SQL，见 third_party/sqlite3 那段规则。
 SRCS += src/tile_db.c

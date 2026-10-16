@@ -9,6 +9,8 @@ import LoadingState from '../ui/LoadingState'
 import ThermalSection from './ThermalSection' /* [CN-FORK] 温控管理板块 */
 import AccountToolsSection from './AccountToolsSection' /* [CN-FORK] v0.5.2.99 账号/远程游玩配对板块（移植自 PS5 Account Tools） */
 import PkgManagerCard from './PkgManagerCard' /* [CN-FORK] v0.5.2.101 PKG Manager 开关：按用户指令从设置页搬到本页最下面 */
+/* [CN-FORK] v0.6.0.177 /loadpayload:* 是 POST-only，裸 fetch（GET）在真机上回 405 */
+import { mutationFetch } from '../../utils/mutationRequest'
 
 /* [CN-FORK] 「常用入口」页：手动维护的快捷访问清单（IP:port 类服务导航）。
  * 数据存 payload 侧 /data/nayeplmtools/quicklinks.json（非浏览器 localStorage），
@@ -217,7 +219,9 @@ export default function CommonEntriesView({ showConfirm, addToast }) {
           notify(t('entries.already_running',
             '该程序看起来已经在运行，但这个地址从本机连不通（可能只监听了 127.0.0.1）'), 'error')
         } else {
-          const res = await fetch(`/loadpayload:${encodeURI(path)}`).catch(() => null)
+          /* [CN-FORK] v0.6.0.177 必须 POST：裸 fetch 走 GET 会被方法闸门回 405，
+           * 表现是「点快捷方式没动静」（mock 那侧两条方法都接，测试因此看不见）。 */
+          const res = await mutationFetch(`/loadpayload:${encodeURI(path)}`).catch(() => null)
           if (!res || !res.ok) throw new Error(t('entries.start_fail', '启动失败'))
           if (!(await waitAlive(entry, 700, 45)))
             throw new Error(t('entries.start_timeout', '已发起拉起，但端口迟迟没有就绪'))

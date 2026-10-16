@@ -71,6 +71,26 @@ typedef struct {
 /* 这一版支持哪些协议。ftp / http 走 libcurl，smb 走 libsmb2（见文件头）。 */
 int sr_mode_supported(const char *mode);
 
+/* [CN-FORK] v0.6.0.177 多媒体远程同步：一条「本机文件 → 远端相对路径」。 */
+typedef struct {
+    const char *rel;   /* 远端相对路径（media/ 之下），如 photo/<生成器>/<TID>/<hex>/xxx.png */
+    const char *local; /* 本机绝对路径 */
+} sr_mfile_t;
+
+/* [CN-FORK] v0.6.0.177 把一批媒体文件推到 <base>/<TID>/media/<rel>。
+ * 与 sr_push 分开是因为语义不同：sr_push 是「一个 tid 一个 zip 整份覆盖」，
+ * 这里是**增量传单个文件**（一次同步常常只是新增的两张截图）。
+ *
+ * 返回 0 = 全部成功；-1 = 有失败（err = 第一个失败原因，**其余文件照传**）；
+ * 1 = 被 step() 中止（取消）。out_bytes / out_done 回累计字节与成功条数。
+ * step() 每传完一个文件调一次（i = 下标，ok = 这个文件成没成），返回非 0 即停 ——
+ * 调用方用这一次回调同时做「记账 + 进度 + 取消」，见 media_remote.c 的 mr_step。 */
+int sr_push_media(const sr_cfg_t *c, const char *tid,
+                  const sr_mfile_t *files, int n,
+                  long long *out_bytes, int *out_done,
+                  int (*step)(void *ud, int i, int ok), void *ud,
+                  char *err, size_t errsz);
+
 /* sr_pull 的专用返回码：**远端还没有这个文件**。
  * 与「失败」分开是因为语义完全不同 —— 第一次用自动存档时远端当然是空的，
  * 那是「没得拉」而不是「拉失败」，混在一起会让用户第一次开游戏就看到一条红色报错。

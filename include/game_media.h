@@ -104,6 +104,15 @@ int game_media_count(const char *tid);
 /* 按 id（content_path）取一条；找不到返回 -1。items_json 之外的路径解析都走它。 */
 int game_media_lookup(const char *id, game_media_item_t *out);
 
+/* [CN-FORK] v0.6.0.177 遍历某个 tid 下的全部媒体条目（与 /game_media 列表同一条
+ * md_scan_locked，只是回调换成调用方的 —— 远程同步要的是「文件路径 + 大小」，
+ * 而不是几百 KB 再解析回去的 JSON，理由与 game_media_count 一样）。
+ * cb 返回 0 继续、非 0 立刻中止（外部想停就停，别为一个「够了」扫到底）。
+ * 返回 0 = 扫完；-1 = 参数非法 / 媒体库读不了。回调在媒体库的锁里被调用，
+ * **回调内不要再去调本模块的其它接口**（会自锁），做纯计算与传输即可。 */
+typedef int (*game_media_item_cb)(const game_media_item_t *it, void *user);
+int game_media_each(const char *tid, game_media_item_cb cb, void *user);
+
 /* 缩略图：按 want_w 缩放并缓存到磁盘。返回 0 成功（*out 需 free），
  * -1 = id 非法，-2 = 找不到或解不出图（HDR .jxr，浏览器也显示不了 → 404）。 */
 int game_media_thumb(const char *id, int want_w, unsigned char **out,

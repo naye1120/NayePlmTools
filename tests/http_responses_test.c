@@ -170,6 +170,15 @@ const char *http_test_lookup(struct MHD_Connection *connection,
 
 static int failures, checks;
 
+/* 期望值哨兵：只断言「**不是 405**」，不看具体状态码。
+ *
+ * 用在下面 fork 路由那张回归表上 —— 那些路由的最终状态码取决于请求体解析结果与
+ * 后端桩的返回（有的 200、有的 400），把它们一个个钉死既脆弱又跑偏；
+ * 这张表要守的只有一件事：**方法闸门有没有把 fork 自己的路由放进来**。
+ * （v0.6.0.177 的 bug 就是漏表 —— 25 条 POST 路由被当成 GET，前端一律 405。）
+ * 取 40500 是为了不与任何真实状态码撞车。 */
+#define EXPECT_NOT_405 40500u
+
 static void run_request(struct Request request, int oom, int creation_failure, int queue_failure) {
     created = destroyed = 0;
     queued_status = cors_count = 0;
@@ -193,7 +202,12 @@ static void run_request(struct Request request, int oom, int creation_failure, i
         failed |= result != MHD_NO || queued_status != 0;
     } else {
         failed |= result != (queue_failure ? MHD_NO : MHD_YES);
-        failed |= queued_status != expected_status || cors_count != 1;
+        if (!oom && request.status == EXPECT_NOT_405) {
+            failed |= queued_status == 405;
+            failed |= cors_count != 1;
+        } else {
+            failed |= queued_status != expected_status || cors_count != 1;
+        }
         if (oom) failed |= strstr(body, "memory") == NULL;
     }
     checks++;
@@ -271,6 +285,54 @@ static int unit_tests(int ownership_only, int oom_only) {
             fail_cors = 1;
             run_request(requests[i], 0, 0, 0);
             fail_cors = 0;
+        }
+    }
+
+    /* [CN-FORK] v0.6.0.177 fork 自有路由的**方法闸门回归表** —— 这张表就是
+     * 「好几个功能无缘无故 405」那个 bug 的封条。
+     *
+     * 当时的现象与这里的断言正好互为反面：
+     *   · 表 A 那 25 条 POST 路由，被 is_post_route 漏掉后闸门强制 GET，
+     *     前端发 POST → 405。这里 POST 必须**放行**（EXPECT_NOT_405）、
+     *     GET 必须被闸门挡掉（405）—— 两边一起断言，才防得住
+     *     「为了修 405 把路由整个搬出表 A」这种反向改坏。
+     *   · 表 B 那 11 条是**变更型 GET**，形状反过来：GET 必须放行、POST 必须 405。
+     *     它们一旦被误并进表 A，前端按 GET 调的老功能就会从 405 换成 405（还是红），
+     *     所以这两张表谁也不能合并。
+     * 上游那 14 条在上面的 requests[] 里已经各自钉过（含 {"/repository_cache_clear",
+     * "GET", 405}），这里只补 fork 自己那批 —— 它们当初一条都没进表。 */
+    if (!ownership_only && !oom_only) {
+        static const char *const post_routes[] = {           /* 表 A：POST 放行、GET 拒绝 */
+            "/game_save_upload", "/game_save_import_garlic", "/game_tile_icon",
+            "/game_tile_background", "/game_music", "/game_music_at9",
+            "/game_prefs_set", "/game_delete", "/game_save_auto",
+            "/game_save_test", "/game_save_snap", "/game_save_sync",
+            "/game_rename", "/game_title_sync", "/game_mount", "/game_unmount",
+            "/game_uninstall", "/game_save_remote_delete", "/system_app_visible",
+            "/system_app_pin", "/tile_group_pin", "/tile_group_order",
+            "/game_media_pack", "/game_media_sync", "/pkgmanager_upload",
+        };
+        static const char *const get_mutation_routes[] = {   /* 表 B：GET 放行、POST 拒绝 */
+            "/quicklinks_add", "/quicklinks_remove", "/game_save_delete",
+            "/game_media_delete", "/game_tile_icon_reset", "/game_tile_background_reset",
+            "/game_music_reset", "/game_job_cancel", "/pkgmanager_launch",
+            "/pkgmanager_stop", "/fan_control",
+        };
+        for (size_t i = 0; i < sizeof(post_routes) / sizeof(post_routes[0]); i++) {
+            struct Request accepted = {post_routes[i], "POST", EXPECT_NOT_405, {{0}}};
+            run_request(accepted, 0, 0, 0);
+            run_request(accepted, 0, 0, 1);
+            struct Request rejected = {post_routes[i], "GET", 405, {{0}}};
+            run_request(rejected, 0, 0, 0);
+        }
+        /* /loadpayload: 是前缀匹配的 POST 路由（is_post_route 用 strncmp 收它），
+         * 上面的表用的是整串比较，这里单独钉一下反面。 */
+        run_request((struct Request){"/loadpayload:pldmgr.elf", "GET", 405, {{0}}}, 0, 0, 0);
+        for (size_t i = 0; i < sizeof(get_mutation_routes) / sizeof(get_mutation_routes[0]); i++) {
+            struct Request accepted = {get_mutation_routes[i], "GET", EXPECT_NOT_405, {{0}}};
+            run_request(accepted, 0, 0, 0);
+            struct Request rejected = {get_mutation_routes[i], "POST", 405, {{0}}};
+            run_request(rejected, 0, 0, 0);
         }
     }
     if (!ownership_only) {

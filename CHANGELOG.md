@@ -1,3 +1,102 @@
+## v0.6.0.177 (CN-FORK) — 2026-10-17 · 修「无缘无故 405」+ 多媒体远程备份
+
+> 用户口径（原文）：「很多功能无缘无故 405」；另要求设置页加**多媒体存档配置**（SMB/FTP 远端 +
+> 自动备份开关），多媒体管理页加**远程同步**按钮。
+
+### ① 405 的根因：方法闸门那张表只登了上游自己的 14 条
+
+`src/http_server.c` 的方法闸门原话是 `is_mutation_route(url) ? "POST" : "GET"`，而
+`is_mutation_route()` 里的 `routes[]` 是**上游**的 14 条 POST 路由（`/manage:upload`、`/set_config`…）。
+fork 从 v0.5.1 起自己加的 **25 条 POST 路由一条都没进表** —— 闸门要求 GET、前端发 POST，
+于是 `Allow: GET, OPTIONS` + **405**。这不是「偶发」：每加一条 fork 路由就多一个 405，
+`.176` 时点「删除游戏 / 改名 / 挂载卸载 / 上传存档 / 上传 PKG / 设背景音乐」全是这个症状。
+前端另有两处裸 `fetch('/loadpayload:…')` 打的是 POST-only 路由（`GameDetailModal.jsx:205`、
+`CommonEntriesView.jsx:220`），同一批。
+
+**为什么一直没被测出来**：`tests/run_http_tests.py` 在这个 fork 上**从来没链接过** ——
+见 ⑤，跑不了的测试和跑绿的测试在报告里长得一样。
+
+### ② 修法：一张表拆成三张，各管一件事
+
+| 表 | 谁用 | 内容 |
+|---|---|---|
+| `is_post_route()` | 方法闸门 + CSRF（POST-only） | 上游 14 + fork 25 = 39 条 |
+| `is_get_mutation()` | **只进 CSRF，不进方法闸门** | 11 条变更型 GET |
+| `is_mutation_route()` | 仅 = 两者并集，**只给 CSRF** | 50 条 |
+
+- **表 B 绝不能并进表 A**：那 11 条（`/fan_control`、`/quicklinks_add`、`/game_media_delete`、
+  `/pkgmanager_launch`…）前端**就是按 GET 调的**，并进 A 会把它们从「能用」变成 405 ——
+  修一个 bug 造出另一个。两张表的形状互为反面，所以 `tests/http_responses_test.c` 里
+  两边一起断言（POST 要放行 + GET 要 405；GET 变更型反过来）。
+- **`psaccounts_wants` 的 `GET, POST`** 走新增的 `in_method_list()`（逗号分段比对），
+  **只给方法闸门**、不并进 CSRF 层；405 的 `Allow` 头用 `snprintf("%s, OPTIONS", allow)`
+  追加 OPTIONS，而 `Access-Control-Allow-Methods` **不带** OPTIONS（`tests/run_http_tests.py:260`
+  钉死 `== "POST"`）。
+- **顺带堵上的一个 CSRF 洞**（读 HEAD 代码实证）：HEAD 的 CSRF 校验挂在同一个
+  `is_mutation_route()` 上，那 11 条变更型 GET 因此**完全没过 CSRF** —— 面板在 LAN 内无鉴权，
+  用户浏览器打开任意网页，那页面用 `<img src="http://<PS5>:8911/game_media_delete?tid=…&id=…">`
+  这种简单 GET 就能删掉他的截图/存档（简单请求不预检，浏览器照发）。现在它们进了表 B，
+  跨站的 `Origin`/`Referer` 会被 `same_origin()` 挡成 403。
+
+### ③ 新功能：多媒体的远程备份（**独立一份配置**）
+
+- 设置页存档配置格下面新增「多媒体存档配置」弹窗（`MediaArchiveConfigModal.jsx`）：
+  SMB / FTP 远端 + 「自动备份」开关；配置存 `MEDIA_ARCHIVE_CONFIG`，
+  **不与「设置 → 存档配置」共用**（用户要求各配各的）。配置形状与存档一致，
+  因此直接复用 `saveConfig.js` 的 `MODES/MODE_FIELDS` 与现成的 `/game_save_test` 连通性探测。
+- 手动同步 `POST /game_media_sync`：有选中推选中、没选中全量；走 `GJ_KIND_SYNC`
+  占全局任务槽；body 上限 1MB；响应形状与 `/game_media_pack` **逐字同形**，HTTP 立即回 job_id。
+- 自动备份：唯一触发点是 `/game_media` 拉取成功后 `mr_auto_kick()`（铁律②：不轮询）；
+  不占任务槽（`g_mr_mu` trylock）。
+- 账本在本机 `MEDIA_BACKUP_STATE_DIR/<tid>.json`（只记 size 不记 mtime，理由见
+  `media_remote.c` 文件头：媒体文件只增不改，多记一个字段就多一处会说谎的地方）；
+  远端布局 `<base>/<TID>/media/<rel>`，`sr_media_rel_ok` 末段长度收紧到 1..200。
+- 传输复用 `save_remote.o` 的 `sr_push_media`（step 回调签名改成 `int (*)(void*,int,int)`，
+  cancel 由返回值传递而非调 `gj_cancelled()` —— 两个状态源会打架）。
+- `mr_state_save` 顺带修掉 `fclose` 双调用（UB）。
+
+### ④ `tests/run_http_tests.py` 在这个 fork 上从来没链接过
+
+`tests/http_backend_stubs.c` 只接住了上游路由，fork 的 **79 个后端符号**全是 undefined reference。
+**为什么没人发现**：`test/run_host_tests.sh`（fork 自己那套）**不包含**这一条，
+`.176` 记的 `overall: PASS` 与它无关；`make test-host` 又排在 `run_integrity_tests.py` 后面，
+在本机被 openssl 卡住，永远走不到 http 这一条。
+
+- 补 `tests/fork_backend_stubs.c`：79 个桩，三条规矩（只写 JSON/回码、绝不碰文件系统、
+  绝不起了线程；「起任务」类一律回失败）。
+- `tests/http_responses_test.c` 新增 **98 条方法闸门断言**，把 405 那个 bug 变成封条。
+- **负控验证过**：把 `ROUTE_GAME_PREFS_SET` / `ROUTE_GAME_DELETE` 从表 A 删掉 →
+  立刻红 6 条（`POST → 405` 正是用户报的现象，`GET → 200` 是 POST-only 契约被绕过）。
+- `run_http_tests.py` 补 `-Isrc`（桩要照 `psaccounts/api.h` 的原型声明）+ 链桩文件；
+  `--config-only` 模式下那两个 config 桩按 `PLDMGR_TEST_REAL_CONFIG` 闸住（真 src/config.c 提供）。
+
+### ⑤ 验证结果
+
+- **ELF**：`prospero-clang` 链接通过，0 error / 0 warning（`media_remote.c` 已进 `SRCS`）。
+- **出包**：`bash tools/build_tiles.sh` → `-me`（NAYE00001）/ `-ga`（NAYE00004）双变体，
+  版本号烧成 `.177`。
+- **宿主**：`tests/run_http_tests.py`（默认 + `--autoload-only` / `--logs-only` / `--config-only`）
+  **360 checks / 0 failures**；`bash test/run_host_tests.sh` → `overall: PASS`；
+  `tools/check_post_routes.sh` 三张表一致（disp=23 / lim=23 / gate=24）。
+- **端到端**（`--serve` 起真 MHD，curl 打真实 loopback）：
+  `POST /game_delete|/game_media_sync|/pkgmanager_upload` = 400、`/system_app_pin` = 200
+  （**都不是 405**）；`GET /game_delete` = 405；`GET /fan_control`、`/quicklinks_add` = 200；
+  跨站 `GET /quicklinks_add` = **403**。
+- **前端**：`eslint . --max-warnings=0` 0 错；`node --test` **118/118**；
+  `vite build` + `tools/check_frontend_bundle.mjs` 通过；`mock-policy.js` 改成两表镜像
+  （`postRoutes` / `getMutationRoutes`），CSRF 判据从「仅 POST」改成「总表都查」。
+
+### ⑥ 既有失败（在干净 HEAD 上逐个复现过，与本次无关）
+
+`git worktree` 拉了一份 `0971d90` 对照：`run_repository_icons_tests`、`run_self_update_tests`、
+`run_storage_tests`、`run_config_tests`（`config_driver.c:44` 的断言 + driver 自己漏的 38 字节）
+在 HEAD 上**同样红**；`run_integrity_tests` 是本机 openssl 拒收 `-days -1`（环境）；
+`run_mock_security_tests.mjs` 第 22 行挂（mock 目录没有 `icon_key` fixture，
+`mock-policy.js` 那段压根没被执行到）。即 `make test-host` 在 HEAD 上本来就是红的，
+本次把它从「6 个失败（含 http 链接不过）」降到「5 个失败，http 全绿」。
+
+---
+
 ## v0.6.0.176 (CN-FORK) — 2026-10-14 · 上游 v0.6.0 全量合并
 
 > 用户口径（原文）：「熟悉一下项目，然后将上游最新的更新拉取并合并」。

@@ -23,6 +23,11 @@
 
 #define GJ_KIND_PACK   0 /* 打包（媒体 zip） */
 #define GJ_KIND_DELETE 1 /* 删除游戏源 */
+/* [CN-FORK] v0.6.0.177 远程同步（把媒体推到设置页配的 SMB/FTP 位置）。
+ * 与打包**共用同一个槽**是契约（见上面的单槽说明）：第二个任务一律 409 EBUSY，
+ * 进度同样由 /game_job_status 出（gj_status_json 的字段是种类无关的）。
+ * 只有一处按 kind 分岔：aux 里的 `name` 只对 PACK 有意义，SYNC 不写它。 */
+#define GJ_KIND_SYNC   2
 
 typedef struct {
     long long id;

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Terminal, ChevronRight, Globe, Languages, Palette, CloudDownload, Power, Save, AppWindow } from 'lucide-react'
+import { Terminal, ChevronRight, Globe, Languages, Palette, CloudDownload, Power, Save, AppWindow, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../utils/helpers'
 /* [CN-FORK] v0.6.0 合入：导入取两侧并集 —— LANGUAGE_NAMES（上游的语言选择行在用）
@@ -14,6 +14,9 @@ import Switch from '../ui/Switch'
 import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥档位统一 */
 // [CN-FORK] v0.5.2.143 设置页「存档配置」弹窗
 import ArchiveConfigModal from './ArchiveConfigModal'
+// [CN-FORK] v0.6.0.177 设置页「多媒体存档配置」弹窗（独立一份 SMB/FTP + 自动备份开关，
+// 与上面的存档配置并列、互不相干 —— 见 MediaArchiveConfigModal 文件头）
+import MediaArchiveConfigModal from './MediaArchiveConfigModal'
 // [CN-FORK] v0.5.2.158 设置页「个性化软件」弹窗（主机内置软件的显示 / 隐藏）
 import SystemAppsModal from './SystemAppsModal'
 // [CN-FORK] v0.5.2.154 「更新日志」与「支持作者」两块整体搬到「关于」页（AboutView）。
@@ -77,6 +80,8 @@ const NavRow = ({ icon: _Icon, title, description, onClick, danger }) => (
 const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate, onClearCache }) => {
   const { t, i18n } = useTranslation()
   const [showArchiveConfig, setShowArchiveConfig] = useState(false)
+  /* [CN-FORK] v0.6.0.177 多媒体存档配置弹窗（存档配置右边那一格） */
+  const [showMediaArchive, setShowMediaArchive] = useState(false)
   /* [CN-FORK] v0.5.2.158 「个性化软件」弹窗 */
   const [showSystemApps, setShowSystemApps] = useState(false)
   const autoOpen = config.AUTO_BROWSER_OPEN !== false
@@ -291,6 +296,16 @@ const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate,
           description={t("settings.archive_desc", "配置自动存档与本地快照的默认参数。")}
           onClick={() => setShowArchiveConfig(true)}
         />
+
+        {/* [CN-FORK] v0.6.0.177 多媒体存档配置：与上面那颗**并列的第二格**（本节 body
+            是 xl:grid-cols-2，两颗正好铺满一行）。刻意不合并进存档配置弹窗 ——
+            用户口径是多媒体有自己的 SMB/FTP 位置，两个开关长在一张表里迟早被一起改坏。 */}
+        <NavRow
+          icon={Upload}
+          title={t("settings.media_archive_title", "多媒体存档配置")}
+          description={t("settings.media_archive_desc", "配置截图 / 录屏的远程位置与自动备份。")}
+          onClick={() => setShowMediaArchive(true)}
+        />
       </Section>
 
       {/* Diagnostics */}
@@ -314,6 +329,15 @@ const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate,
       <ArchiveConfigModal
         show={showArchiveConfig}
         onClose={() => setShowArchiveConfig(false)}
+        config={config}
+        onSaveConfig={onSaveConfig}
+        addToast={addToast}
+      />
+
+      {/* [CN-FORK] v0.6.0.177 多媒体存档配置弹窗 */}
+      <MediaArchiveConfigModal
+        show={showMediaArchive}
+        onClose={() => setShowMediaArchive(false)}
         config={config}
         onSaveConfig={onSaveConfig}
         addToast={addToast}

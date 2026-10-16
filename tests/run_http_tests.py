@@ -552,6 +552,9 @@ def main():
                 f"static const unsigned int assets_{name}_len = sizeof(assets_{name});\n")
         common = compiler + ["-std=c11", "-D_DEFAULT_SOURCE", "-g", "-O1", "-Wall", "-Wextra",
                              "-I" + str(build), "-Iinclude",
+                             # [CN-FORK] v0.6.0.177 桩文件要照 include/psaccounts/api.h 的
+                             # 原型声明 psaccounts_*（-Isrc 让 "psaccounts/api.h" 能解析）。
+                             "-Isrc",
                              # [CN-FORK] v0.6.0.176 fork 的 src/config.c 引 cJSON（取
                              # ARCHIVE_GLOBAL_CONFIG），上游不引 —— 补第三方头目录。
                              "-Isrc/psaccounts/third_party",
@@ -576,7 +579,12 @@ def main():
             extra_sources += ["src/autoload.c"]
             (storage / "nayeplmtools_config.txt").write_text("AUTOLOAD_ENABLED=1\nAUTO_BROWSER_OPEN=1\nAUTOLOAD_DELAY=5\n")
             (storage / "autoload.txt").write_text("local/running\n")
+        # [CN-FORK] v0.6.0.177 fork 自有路由的后端桩。缺了它链接不过（几十个
+        # undefined reference），这套测试在 fork 上是**长期跑不了**的 —— 跑不了的
+        # 测试和跑绿的测试长得一样，405 那批 bug 因此一直没人发现。见
+        # tests/fork_backend_stubs.c 文件头。
         run(common + cflags + extra_sources + [str(object_file), "src/utils.c", "src/json_helpers.c", "tests/http_backend_stubs.c",
+                               "tests/fork_backend_stubs.c",
                                "tests/http_responses_test.c",
                                # [CN-FORK] v0.6.0.176 fork 的 config.c/http_server.c 引 cJSON（上游不引），
                                # 生产构建经 Makefile 的 SRCS 链入，宿主测试这里补上实现。

@@ -70,6 +70,14 @@ int config_write_last_update(long ts);
 int config_write_archive_global(const char *json);
 /* 读全局存档配置原文。成功返回字节数（>0），文件不存在 / 读失败返回 -1。 */
 int config_read_archive_global(char *out, size_t osz);
+
+/* [CN-FORK] v0.6.0.177 多媒体存档配置（设置页「多媒体存档配置」弹窗）。
+ * 与上面的全局存档配置**平级、互不相干**：这份是媒体自己的远程位置 + 自动备份开关，
+ * 存那份是存档的。两份都存「前端 cfg 的 JSON 原文」，都不做校验、不落 nayeplmtools_config.txt
+ * （行式文件 256 字节的行缓冲会把 JSON 截断成半个，理由见 pldmgr.h 的 MEDIA_ARCHIVE_PATH）。 */
+int config_write_media_archive(const char *json);
+/* 读多媒体存档配置原文。成功返回字节数（>0），文件不存在 / 读失败返回 -1。 */
+int config_read_media_archive(char *out, size_t osz);
 /* Serialized, atomic replacement/removal of matching list entries. */
 int config_update_list_entry(const char *path, const char *old_key, const char *new_key);
 

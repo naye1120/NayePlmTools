@@ -3,14 +3,14 @@ import { useTranslation } from 'react-i18next'
 import {
   Image as ImageIcon, RefreshCw, Download, CheckSquare, Square, X,
   Play, Film, AlertTriangle, PackageOpen, Trash2, ChevronLeft, ChevronRight,
-  Share2,
+  Share2, Upload,
 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import Modal from '../ui/Modal'
 import Segmented from '../ui/Segmented'
 import { Block, Chip, Note, MiniEmpty, ProgressBar, Stat } from './parts'
 import { formatSizeAlways, formatDuration, formatRate, formatElapsed, formatStamp } from './format'
-import { getMedia, mediaThumbUrl, mediaFileUrl, packMedia, mediaPackUrl, deleteMedia, watchJob, cancelJob } from '../../utils/gameApi'
+import { getMedia, mediaThumbUrl, mediaFileUrl, packMedia, mediaPackUrl, deleteMedia, watchJob, cancelJob, syncMedia } from '../../utils/gameApi'
 
 /* [CN-FORK] v0.5.2.112 多媒体管理弹窗（磁贴第二颗按钮）
  *
@@ -54,11 +54,24 @@ const PHASE_TEXT = {
   preparing: ['game.phase_preparing', '正在读取媒体库…'],
   measuring: ['game.phase_measuring', '正在计算体积…'],
   packing: ['game.phase_packing', '正在写入压缩包…'],
+  syncing: ['game.phase_syncing', '正在传到远程位置…'],
   cancelled: ['game.phase_cancelled', '已取消'],
 }
 function phaseText(phase, t) {
   const e = PHASE_TEXT[phase]
   return e ? t(e[0], e[1]) : ''
+}
+
+/* 进度面板顶上那行标题。打包与同步共用这一块面板（同一个全局任务槽），
+ * 所以标题必须按 kind 分：同步跑到一半写「正在打包…」是会直接把人带沟里的。 */
+function jobTitle(job, kind, t) {
+  if (job.lost) return t('game.job_lost_title', '与主机失联')
+  if (kind === 'sync') {
+    if (!job.done) return t('game.media_syncing', '正在同步到远程…')
+    return job.ok ? t('game.media_sync_done', '远程同步完成') : t('game.media_sync_failed', '同步失败')
+  }
+  if (job.done) return job.ok ? t('game.pack_done', '打包完成') : t('game.pack_failed', '打包失败')
+  return t('game.packing', '正在打包…')
 }
 
 /* [CN-FORK] v0.5.2.131 打包一完成就自动下载，不再让用户去找那颗「下载打包文件」按钮。
@@ -106,7 +119,11 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
   const [tab, setTab] = useState('all')
   const [sel, setSel] = useState(() => new Set())
   const [preview, setPreview] = useState(null)      // 预览中的下标
-  const [job, setJob] = useState(null)              // 打包任务
+  const [job, setJob] = useState(null)              // 打包 / 同步任务
+  /* 当前那个任务是**哪一种**（pack | sync）。两者共用全局单槽与同一份进度字段，
+   * 只有这一行字不同 —— 不带 kind 的话，同步跑到一半界面会写着「正在打包…」，
+   * 用户按了取消也不知道自己取消的是什么。 */
+  const [jobKind, setJobKind] = useState('pack')
   const [packed, setPacked] = useState(null)        // {job_id, count} 打包完成后可下载
   const [busyId, setBusyId] = useState('')
   /* [CN-FORK] v0.5.2.125 取帧失败的视频 id（退回后端占位图），见网格里那段注释。 */
@@ -162,6 +179,7 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
     setSel(new Set())
     setPreview(null)
     setJob(null)
+    setJobKind('pack')
     setPacked(null)
     setCoverBad(new Set())
     setTickAt(0)
@@ -266,6 +284,45 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
   })
 
   const startPack = (ids) => { runPack(ids).catch(() => { /* runPack 自己已经报过了 */ }) }
+
+  /* 远程同步（v0.6.0.177）：把本机媒体推到设置页配的 SMB/FTP 位置。
+   * 与打包**共用全局单槽**（后端同一份 /game_job_status 与 /game_job_cancel），
+   * 所以按钮在 packing 时同样禁用；真撞上了后端回 409 EBUSY，message 直接弹出来。
+   *   ids = null（没选中任何项）→ 全量，**增量**（账本里已传过且大小没变的跳过）；
+   *   ids = 选中项            → 只推这些，且一律强推（用户点名的不看账本）。
+   * 进度面板复用打包那一块（kind 只改几个标题），完成后**不**下载、不记 packed ——
+   * 同步的产物在远端，主机上没有可以下下来的东西。 */
+  const startSync = (ids) => {
+    syncMedia(tid, ids).then((r) => {
+      if (!r || !r.job_id) {
+        addToast?.(t('game.media_sync_no_job', '主机没有返回任务号'), 'error')
+        return
+      }
+      setJobKind('sync')
+      setJob({ job_id: r.job_id, phase: 'preparing', percent: 0, active: true, done: false })
+      setTickAt(Date.now())
+      setNowMs(Date.now())
+      if (stopJobRef.current) stopJobRef.current()
+      stopJobRef.current = watchJob(r.job_id, (st) => {
+        if (!aliveRef.current) return
+        /* 与 runPack 同一条合并规则：失联重试只补字段，不抹掉已知的进度。 */
+        setJob((prev) => (st.transient && prev ? { ...prev, ...st } : st))
+        if (!st.transient) setTickAt(Date.now())
+        if (st.done) {
+          if (stopJobRef.current) { stopJobRef.current(); stopJobRef.current = null }
+          if (st.ok) {
+            addToast?.(t('game.media_sync_done', '远程同步完成'), 'success')
+          } else if (st.phase !== 'cancelled' && st.error && !st.transient) {
+            /* 用户自己按的取消不算失败：面板里 phase 已经写着「已取消」，
+             * 再弹一条红色 toast 会像是出了事故。 */
+            addToast?.(t('game.media_sync_fail', '远程同步失败：{{why}}', { why: st.error }), 'error')
+          }
+        }
+      })
+    }).catch((e) => {
+      addToast?.(e.message || t('game.media_sync_fail_generic', '远程同步失败'), 'error')
+    })
+  }
 
   /* [CN-FORK] v0.5.2.166 分享 —— 二维码里装的必须是**下载直链**。
    *
@@ -402,6 +459,23 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
               <Share2 className="w-4 h-4" />
               <span>{t('game.share_all', '分享全部')}</span>
             </button>
+            {/* [CN-FORK] v0.6.0.177 远程同步：**一颗按钮两件事** —— 有选中就只推选中的
+                （后端一律强推，不看账本），没选就推全部（增量：已传过的自动跳过）。
+                不拆成两颗是因为「同步」在用户心里就是一件事，拆开只会让人对着两颗
+                按钮先想「我该点哪个」；而且两颗按钮的禁用条件一模一样。 */}
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={items.length === 0 || packing}
+              onClick={() => startSync(selCount > 0 ? Array.from(sel) : null)}
+            >
+              <Upload className="w-4 h-4" />
+              <span>
+                {selCount > 0
+                  ? t('game.media_sync_selected', '远程同步选中（{{n}}）', { n: selCount })
+                  : t('game.media_sync_all', '远程同步全部')}
+              </span>
+            </button>
           </div>
         }
       >
@@ -462,11 +536,7 @@ export default function MediaManagerModal({ show, game, onClose, addToast, showC
                   <div className="flex items-center justify-between gap-3 mb-2">
                     <div className="flex items-baseline gap-2 min-w-0">
                       <strong className="text-white panel-note shrink-0">
-                        {job.lost
-                          ? t('game.job_lost_title', '与主机失联')
-                          : job.done
-                            ? (job.ok ? t('game.pack_done', '打包完成') : t('game.pack_failed', '打包失败'))
-                            : t('game.packing', '正在打包…')}
+                        {jobTitle(job, jobKind, t)}
                       </strong>
                       {!job.done && phaseText(job.phase, t) && (
                         <span className="panel-tiny text-zinc-500 truncate">{phaseText(job.phase, t)}</span>

@@ -1193,3 +1193,397 @@ int sr_delete(const sr_cfg_t *c, const char *tid, const char *uid,
     if (err) snprintf(err, errsz, "不支持的传输方式（%s）", c->mode);
     return -1;
 }
+
+/* ══ [CN-FORK] v0.6.0.177 一批本地文件 → <base>/<TID>/media/<rel> ═══════════
+ * 多媒体远程同步用（设置页「多媒体存档配置」的自动备份 + 多媒体管理页的手动推送）。
+ *
+ * 为什么不复用 sr_push：那条永远是「一个 tid 一个 zip 整份覆盖」，而媒体是
+ * **增量传单个文件** —— 一次同步常常只是新增的一两张截图，为它们重新打包整批
+ * 录屏（动辄几个 GB）在真机上等不起，也白烧一遍流量。
+ *
+ * 远端布局：<base>/<TID>/media/<rel>，rel = content_path 去掉 "/av_contents/" 前缀，
+ * 即 photo/<生成器>/<TID>/<hex>/<文件>。**保留那层目录**（不压平成一层）：
+ * 压平之后主机上的原路径在远端就没了，回不去；同名冲突也只能靠运气。
+ */
+
+/* rel 的白名单。rel 虽然来自 av_content.db（系统只读库），但「库可信」不是
+ * 免检理由 —— md_path_ok 在读库那侧挡过一道，这里是**远端路径**的最后一道，
+ * 漏了就是往 <TID>/media/ 之外写文件（zip/tar 解包那条路同一个教训）。 */
+static int sr_media_rel_ok(const char *rel) {
+    if (!rel || !*rel || strlen(rel) > 512) return 0;
+    if (rel[0] == '/' || rel[0] == '\\') return 0;
+    if (strstr(rel, "..") || strchr(rel, '\\')) return 0;
+    int slashes = 0;
+    for (const char *p = rel; *p; p++) {
+        unsigned char ch = (unsigned char)*p;
+        if (ch < 0x20 || ch == 0x7f) return 0;
+        if (*p == '/') slashes++;
+    }
+    /* 真实布局 photo/<生成器>/<TID>/<hex>/<文件> = 4 段；上下都留出固件改布局的余量 */
+    if (slashes < 1 || slashes > 8) return 0;
+    /* 文件名单独限长：下面逐个上传时文件名是 snprintf 进 name[300] 的，
+     * 悄悄截断会写出一个「跟账本上的名字对不上」的远端文件 —— 宁可在这里拒掉。 */
+    const char *base = strrchr(rel, '/');
+    base = base ? base + 1 : rel;
+    size_t bn = strlen(base);
+    return bn > 0 && bn <= 200;
+}
+
+/* rel → 目录段（去掉最后一段文件名）。sep 让同一个函数同时供
+ * FTP/HTTP（'/'）与 SMB（'\\'）用 —— 两处各写一遍必然漂开。 */
+static int sr_media_dir_of(const char *rel, char *out, size_t osz, char sep) {
+    const char *sl = strrchr(rel, '/');
+    if (!sl || sl == rel) { out[0] = 0; return 0; }
+    size_t n = (size_t)(sl - rel);
+    if (n + 1 > osz) return -1;
+    memcpy(out, rel, n);
+    out[n] = 0;
+    if (sep == '\\')
+        for (size_t i = 0; i < n; i++) if (out[i] == '/') out[i] = '\\';
+    return 0;
+}
+
+/* FTP / HTTP 的公共前缀：<base>/<TID>/media。只拼一次，逐个文件再补 /<目录>/<文件名>。 */
+static int sr_media_prefix(const sr_cfg_t *c, const char *tid,
+                           char *out, size_t osz, char *err, size_t errsz) {
+    out[0] = 0;
+    if (!c || !c->mode[0]) {
+        if (err) snprintf(err, errsz, "没有配置多媒体的远程位置");
+        return -1;
+    }
+    if (!sr_seg_ok(tid)) {
+        if (err) snprintf(err, errsz, "标题 ID 不合法");
+        return -1;
+    }
+    if (!strcmp(c->mode, "ftp")) {
+        if (!c->host[0]) {
+            if (err) snprintf(err, errsz, "没有填 FTP 主机地址");
+            return -1;
+        }
+        int port = (c->port > 0 && c->port < 65536) ? c->port : 21;
+        char dir[700];
+        dir[0] = 0;
+        if (c->path[0]) {
+            const char *p = c->path;
+            while (*p == '/') p++;
+            snprintf(dir, sizeof(dir), "/%s", p);
+            sr_trim_slash(dir);
+        }
+        int n = snprintf(out, osz, "ftp://%s:%d%s/%s/media", c->host, port, dir, tid);
+        if (n <= 0 || (size_t)n >= osz) {
+            out[0] = 0;
+            if (err) snprintf(err, errsz, "地址过长");
+            return -1;
+        }
+        return 0;
+    }
+    if (!strcmp(c->mode, "http")) {
+        if (!c->url[0]) {
+            if (err) snprintf(err, errsz, "没有填 HTTP 地址");
+            return -1;
+        }
+        if (strncmp(c->url, "http://", 7) != 0 && strncmp(c->url, "https://", 8) != 0) {
+            if (err) snprintf(err, errsz, "HTTP 地址要以 http:// 或 https:// 开头");
+            return -1;
+        }
+        char base[700];
+        snprintf(base, sizeof(base), "%s", c->url);
+        sr_trim_slash(base);
+        int n = snprintf(out, osz, "%s/%s/media", base, tid);
+        if (n <= 0 || (size_t)n >= osz) {
+            out[0] = 0;
+            if (err) snprintf(err, errsz, "地址过长");
+            return -1;
+        }
+        return 0;
+    }
+    if (err) snprintf(err, errsz, "不支持的传输方式（%s）", c->mode);
+    return -1;
+}
+
+/* 单个文件 → url（FTP STOR / HTTP PUT）。
+ * 与 sr_push 的 curl 分支同构，只差两处，两处都是**必须**的：
+ *   ① 不设 CURLOPT_TIMEOUT —— 录屏几百 MB，180 秒的整段上限会把正常传输掐死；
+ *      卡住交给低速熔断（60 秒收不到 1 字节）认，那才是「还在不在动」的判据。
+ *   ② 每次新开一个 easy handle —— 一次同步几十上百个文件，handle 复用省的那点
+ *      开销远小于「上一个文件的 FTP 会话状态没清干净」这类疑难杂症。 */
+static int sr_curl_put_local(const sr_cfg_t *c, const char *url, const char *local,
+                             long long *out_bytes, char *err, size_t errsz) {
+    struct stat st;
+    if (stat(local, &st) != 0 || !S_ISREG(st.st_mode)) {
+        if (err) snprintf(err, errsz, "本机文件读不到（%s）", strerror(errno));
+        return -1;
+    }
+    FILE *f = fopen(local, "rb");
+    if (!f) {
+        if (err) snprintf(err, errsz, "本机文件打不开（%s）", strerror(errno));
+        return -1;
+    }
+    pldmgr_curl_init();
+    CURL *cu = curl_easy_init();
+    if (!cu) {
+        fclose(f);
+        if (err) snprintf(err, errsz, "初始化传输失败");
+        return -1;
+    }
+    struct curl_slist *hdrs = NULL;
+    curl_easy_setopt(cu, CURLOPT_URL, url);
+    curl_easy_setopt(cu, CURLOPT_CONNECTTIMEOUT, SR_CONNECT_TIMEOUT);
+    curl_easy_setopt(cu, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(cu, CURLOPT_LOW_SPEED_LIMIT, SR_LOW_SPEED_BYTES);
+    curl_easy_setopt(cu, CURLOPT_LOW_SPEED_TIME, SR_LOW_SPEED_SEC);
+    curl_easy_setopt(cu, CURLOPT_UPLOAD, 1L);
+    curl_easy_setopt(cu, CURLOPT_READFUNCTION, sr_read_file);
+    curl_easy_setopt(cu, CURLOPT_READDATA, f);
+    curl_easy_setopt(cu, CURLOPT_INFILESIZE_LARGE, (curl_off_t)st.st_size);
+
+    if (!strcmp(c->mode, "ftp")) {
+        if (c->user[0]) {
+            curl_easy_setopt(cu, CURLOPT_USERNAME, c->user);
+            curl_easy_setopt(cu, CURLOPT_PASSWORD, c->password);
+        }
+        /* 远端的 <TID>/media/<…> 第一次推时整条链都不存在 —— 与 sr_push 同理，
+         * 不自建就永远推不上，而 FTP 报的还是 550 这种含糊的错。 */
+        curl_easy_setopt(cu, CURLOPT_FTP_CREATE_MISSING_DIRS, (long)CURLFTP_CREATE_DIR_RETRY);
+        curl_easy_setopt(cu, CURLOPT_FTP_USE_EPSV, 1L);
+    } else {
+        curl_easy_setopt(cu, CURLOPT_CUSTOMREQUEST, "PUT");
+        hdrs = curl_slist_append(hdrs, "Content-Type: application/octet-stream");
+        hdrs = curl_slist_append(hdrs, "Expect:"); /* 见 sr_push：自建 HTTP 服务常被 100-continue 卡一秒 */
+        if (c->token[0]) {
+            char auth[400];
+            snprintf(auth, sizeof(auth), "Authorization: Bearer %s", c->token);
+            hdrs = curl_slist_append(hdrs, auth);
+        }
+        curl_easy_setopt(cu, CURLOPT_HTTPHEADER, hdrs);
+    }
+
+    CURLcode rc = curl_easy_perform(cu);
+    long http = 0;
+    curl_easy_getinfo(cu, CURLINFO_RESPONSE_CODE, &http);
+    if (hdrs) curl_slist_free_all(hdrs);
+    curl_easy_cleanup(cu);
+    fclose(f);
+
+    if (rc != CURLE_OK) {
+        if (err) snprintf(err, errsz, "%s", sr_curl_msg(rc));
+        return -1;
+    }
+    if (http >= 400) {
+        if (err) snprintf(err, errsz, "远程拒绝了这次上传（HTTP %ld）", http);
+        return -1;
+    }
+    if (out_bytes) *out_bytes = (long long)st.st_size;
+    return 0;
+}
+
+/* 单个文件 → SMB。dir 是 <TID> 之下的相对目录（已带 "media" 那一段，反斜杠分隔）。
+ * 与 sr_smb_push 同一口径：先写 .tmp 再改名 —— 传到一半断线时远端会留半截文件，
+ * 谁去拉拿到的都是坏的；改名是原子的，远端那份要么完整要么还是旧的。 */
+static int sr_smb_put_local(smb_sess_t *ss, const char *dir, const char *name,
+                            const char *local, long long *out_bytes, char *err, size_t errsz) {
+    char full[SR_SMB_PATH_MAX], tmpp[SR_SMB_PATH_MAX];
+    char nbuf[300], tbuf[320];
+    struct smb2fh *fh = NULL;
+    uint8_t *buf = NULL;
+    FILE *f = NULL;
+    long long total = 0;
+    int rc = -1;
+
+    if (smb_mkdirs(ss->s, dir, err, errsz) != 0) return -1;
+
+    snprintf(nbuf, sizeof(nbuf), "%s", name);
+    snprintf(tbuf, sizeof(tbuf), "%s.tmp", name);
+    smb_join(full, sizeof(full), dir, nbuf);
+    smb_join(tmpp, sizeof(tmpp), dir, tbuf);
+
+    smb2_unlink(ss->s, tmpp); /* 上一轮崩溃留下的残件，清不掉也无所谓 */
+    fh = smb2_open(ss->s, tmpp, O_CREAT | O_WRONLY);
+    if (!fh) {
+        if (err) snprintf(err, errsz, "在远程建不了临时文件：%s", smb_human(ss->s, 0));
+        goto out;
+    }
+
+    uint32_t chunk = smb2_get_max_write_size(ss->s);
+    if (chunk < SR_SMB_CHUNK_MIN) chunk = SR_SMB_CHUNK_MIN;
+    if (chunk > SR_SMB_CHUNK_MAX) chunk = SR_SMB_CHUNK_MAX;
+    buf = (uint8_t *)malloc(chunk); /* 堆上分配：MHD 连接线程只有 64KB 栈 */
+    if (!buf) {
+        if (err) snprintf(err, errsz, "内存不足");
+        goto out;
+    }
+    f = fopen(local, "rb");
+    if (!f) {
+        if (err) snprintf(err, errsz, "本机文件打不开（%s）", strerror(errno));
+        goto out;
+    }
+    for (;;) {
+        size_t got = fread(buf, 1, chunk, f);
+        if (got == 0) break;
+        int w = smb2_write(ss->s, fh, buf, (uint32_t)got);
+        if (w < 0) {
+            if (err) snprintf(err, errsz, "写远程失败：%s", smb_human(ss->s, w));
+            goto out;
+        }
+        if ((size_t)w != got) {
+            if (err) snprintf(err, errsz, "写远程的字节数对不上（要 %u，实际 %d）",
+                              (unsigned)got, w);
+            goto out;
+        }
+        total += w;
+    }
+    fclose(f);
+    f = NULL;
+    smb2_fsync(ss->s, fh);
+    if (smb2_close(ss->s, fh) != 0) {
+        fh = NULL;
+        if (err) snprintf(err, errsz, "关闭远程文件失败：%s", smb_human(ss->s, 0));
+        goto out;
+    }
+    fh = NULL;
+
+    int r = smb2_rename(ss->s, tmpp, full);
+    if (r == -EEXIST) { /* libsmb2 的 rename 不带 replace，目标已存在会直接失败 */
+        smb2_unlink(ss->s, full);
+        r = smb2_rename(ss->s, tmpp, full);
+    }
+    if (r != 0) {
+        smb2_unlink(ss->s, tmpp);
+        if (err) snprintf(err, errsz, "替换远程文件失败：%s", smb_human(ss->s, r));
+        goto out;
+    }
+    rc = 0;
+
+out:
+    if (f) fclose(f);
+    if (fh) smb2_close(ss->s, fh);
+    if (buf) free(buf);
+    if (rc == 0 && out_bytes) *out_bytes = total;
+    return rc;
+}
+
+/* 把一批媒体文件推到远端。返回：
+ *   0  = 全部成功；
+ *  -1  = 有文件失败（err = 第一个失败原因；**其余文件照传**，能多救一条是一条）；
+ *   1  = 被 step() 中止（取消）。
+ * step() 每传完一个文件调用一次（i = 下标，ok = 这个文件成没成），返回非 0 即停。
+ * out_done 回成功条数。调用方在 step 里同时做「记账 + 进度 + 取消」三件事 ——
+ * 分成三次回调就会出现「进度走完但账没记」这种下次要重传的错位。 */
+int sr_push_media(const sr_cfg_t *c, const char *tid,
+                  const sr_mfile_t *files, int n,
+                  long long *out_bytes, int *out_done,
+                  int (*step)(void *ud, int i, int ok), void *ud,
+                  char *err, size_t errsz) {
+    if (out_bytes) *out_bytes = 0;
+    if (out_done) *out_done = 0;
+    if (err && errsz) err[0] = 0;
+    if (!c || !files || n <= 0) {
+        if (err) snprintf(err, errsz, "没有要同步的文件");
+        return -1;
+    }
+    if (!sr_mode_supported(c->mode)) {
+        if (err) snprintf(err, errsz, "不支持的传输方式（%s）", c->mode);
+        return -1;
+    }
+    for (int i = 0; i < n; i++) {
+        if (!sr_media_rel_ok(files[i].rel) || !files[i].local || !files[i].local[0]) {
+            if (err) snprintf(err, errsz, "第 %d 个文件的路径不合法", i + 1);
+            return -1;
+        }
+    }
+
+    int ok = 0, failed = 0, aborted = 0;
+    long long total = 0;
+    char first_err[SR_ERR_MAX];
+    first_err[0] = 0;
+
+    if (!strcmp(c->mode, "smb")) {
+        /* 一个 session 传整批 —— 这与 sr_push「一次一连」的取舍**相反**，
+         * 原因是量：存档一次一个包，媒体一次几十上百个文件，
+         * 每个文件都重做一遍协商会让同步慢到像卡死。 */
+        smb_sess_t ss;
+        if (smb_sess_open(c, tid, &ss, err, errsz) != 0) return -1;
+        for (int i = 0; i < n && !aborted; i++) {
+            char dir[SR_SMB_PATH_MAX], sub[600], mdir[SR_SMB_PATH_MAX], name[300];
+            int f_ok = 0;
+            if (sr_media_dir_of(files[i].rel, sub, sizeof(sub), '\\') != 0) {
+                if (!first_err[0]) snprintf(first_err, sizeof(first_err), "第 %d 个文件的路径过长", i + 1);
+                failed++;
+            } else {
+                const char *sl = strrchr(files[i].rel, '/');
+                snprintf(name, sizeof(name), "%s", sl ? sl + 1 : files[i].rel);
+                /* dir = <sub>\<tid> \ media [\ <子目录>]。sub 为空时只有一层 media。 */
+                smb_join(dir, sizeof(dir), ss.dir, "media");
+                if (sub[0]) {
+                    smb_join(mdir, sizeof(mdir), dir, sub);
+                    snprintf(dir, sizeof(dir), "%s", mdir);
+                }
+                long long b = 0;
+                char e[SR_ERR_MAX];
+                e[0] = 0;
+                if (sr_smb_put_local(&ss, dir, name, files[i].local, &b, e, sizeof(e)) == 0) {
+                    ok++;
+                    total += b;
+                    f_ok = 1;
+                } else {
+                    failed++;
+                    if (!first_err[0]) snprintf(first_err, sizeof(first_err), "%s", e);
+                }
+            }
+            if (out_done) *out_done = ok;
+            if (out_bytes) *out_bytes = total;
+            /* 这条失败也要回调：否则调用方的进度会在这里卡一个格子不走，
+             * 看着像卡死（步进的账本/进度以「传过这个下标」为准，不管成没成）。 */
+            if (step && step(ud, i, f_ok)) aborted = 1;
+        }
+        smb_sess_close(&ss);
+    } else {
+        char prefix[SR_URL_MAX];
+        if (sr_media_prefix(c, tid, prefix, sizeof(prefix), err, errsz) != 0) return -1;
+        for (int i = 0; i < n && !aborted; i++) {
+            char sub[600], url[SR_URL_MAX], name[300];
+            int f_ok = 0;
+            if (sr_media_dir_of(files[i].rel, sub, sizeof(sub), '/') != 0) {
+                if (!first_err[0]) snprintf(first_err, sizeof(first_err), "第 %d 个文件的路径过长", i + 1);
+                failed++;
+            } else {
+                const char *sl = strrchr(files[i].rel, '/');
+                snprintf(name, sizeof(name), "%s", sl ? sl + 1 : files[i].rel);
+                int un = snprintf(url, sizeof(url), "%s%s%s/%s", prefix,
+                                  sub[0] ? "/" : "", sub, name);
+                if (un <= 0 || (size_t)un >= sizeof(url)) {
+                    if (!first_err[0]) snprintf(first_err, sizeof(first_err), "第 %d 个文件的地址过长", i + 1);
+                    failed++;
+                } else {
+                    long long b = 0;
+                    char e[SR_ERR_MAX];
+                    e[0] = 0;
+                    if (sr_curl_put_local(c, url, files[i].local, &b, e, sizeof(e)) == 0) {
+                        ok++;
+                        total += b;
+                        f_ok = 1;
+                    } else {
+                        failed++;
+                        if (!first_err[0]) snprintf(first_err, sizeof(first_err), "%s", e);
+                    }
+                }
+            }
+            if (out_done) *out_done = ok;
+            if (out_bytes) *out_bytes = total;
+            if (step && step(ud, i, f_ok)) aborted = 1;
+        }
+    }
+
+    if (out_done) *out_done = ok;
+    if (out_bytes) *out_bytes = total;
+    if (aborted) {
+        if (err) snprintf(err, errsz, "已取消");
+        return 1;
+    }
+    if (failed) {
+        if (err) snprintf(err, errsz, "%s（%d/%d 个文件失败）",
+                          first_err[0] ? first_err : "上传失败", failed, n);
+        return -1;
+    }
+    return 0;
+}

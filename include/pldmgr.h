@@ -66,6 +66,12 @@
 #define ROUTE_GAME_MEDIA_PACK "/game_media_pack"
 #define ROUTE_GAME_MEDIA_PACK_GET "/game_media_pack_get"
 #define ROUTE_GAME_MEDIA_DELETE "/game_media_delete"
+/* [CN-FORK] v0.6.0.177 多媒体的「远程同步」（设置页「多媒体存档配置」里的自动备份，
+ * 与多媒体管理页那个手动推送按钮，共用这一条）。
+ *   POST /game_media_sync?tid=   body {ids:[content_path,…]|null} → {job_id}
+ * ids 缺省 / null / 空数组 = 全量（该 tid 下全部媒体），与 /game_media_pack 同一形状；
+ * 任务进度同样走 /game_job_status 与 /game_job_cancel（全局单槽，两种任务互斥）。 */
+#define ROUTE_GAME_MEDIA_SYNC "/game_media_sync"
 /* [CN-FORK] 通用任务进度/取消：打包任务在用，日后游戏删除任务同样挂这两条 */
 #define ROUTE_GAME_JOB_STATUS "/game_job_status"
 #define ROUTE_GAME_JOB_CANCEL "/game_job_cancel"
@@ -157,7 +163,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.6.0.176" /* [CN-FORK] 本 fork 版本：上游基线 0.6.0（已合并 upstream/main，merge 见 HANDOVER.md §0）+ 构建序号（.176，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.6.0.177" /* [CN-FORK] 本 fork 版本：上游基线 0.6.0（已合并 upstream/main，merge 见 HANDOVER.md §0）+ 构建序号（.177，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，
@@ -175,6 +181,19 @@
  * 单独成文件还省掉了「JSON 里的引号怎么塞进行式文件」这一层转义。 */
 #ifndef ARCHIVE_GLOBAL_PATH
 #define ARCHIVE_GLOBAL_PATH "/data/nayeplmtools/archive_global.json"
+#endif
+/* [CN-FORK] v0.6.0.177 多媒体存档配置（设置页「多媒体存档配置」弹窗）。
+ * 与 ARCHIVE_GLOBAL_PATH 是**两份互不相干**的配置（用户口径：多媒体有自己的
+ * SMB/FTP 位置，不跟存档那份绑死）。同样是 JSON 原文单独成文件，理由同上：
+ * 行式 config_upsert_value 的 256 字节行缓冲装不下它，装下了也会截断成半个 JSON。 */
+#ifndef MEDIA_ARCHIVE_PATH
+#define MEDIA_ARCHIVE_PATH "/data/nayeplmtools/media_archive.json"
+#endif
+/* [CN-FORK] v0.6.0.177 增量备份的「已经传过哪些文件」账本，一个游戏一份
+ * （<tid>.json）。按 tid 分文件而不是一个大账本：媒体条目动辄上千条，
+ * 单账本要整读整写，而分文件之后每次同步只碰自己那一份。 */
+#ifndef MEDIA_BACKUP_STATE_DIR
+#define MEDIA_BACKUP_STATE_DIR "/data/nayeplmtools/media_backup"
 #endif
 /* [CN-FORK] 上游 v0.6.0 新增「收藏」列表（payload 槽位级，见 src/slot.c）。
  * 与 .164 的 game_prefs.json（游戏磁贴收藏）是两件事：那份管游戏列表排序，

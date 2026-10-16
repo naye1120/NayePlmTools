@@ -727,6 +727,43 @@ int game_media_lookup(const char *id, game_media_item_t *out) {
     return rc;
 }
 
+/* ── [CN-FORK] v0.6.0.177 遍历某个 tid 的全部条目（远程同步用）──────────────
+ * **先在锁里复制、解锁后再回调** —— 这是这个函数存在的全部理由。
+ * 回调里做的是网络传输（一次同步能跑几分钟），握着 g_mu 跑的话，
+ * 同一时刻的缩略图、列表、计数全部堵在锁上，界面表现是「弹窗一直转圈」。
+ * （md_build_entries 收路径时也是同样的两段式，见它那段注释。） */
+typedef struct { game_media_item_t *v; int n, cap; } md_items_t;
+
+static int md_collect_item_cb(const game_media_item_t *it, void *user) {
+    md_items_t *a = (md_items_t *)user;
+    if (a->n >= MD_MAX_ITEMS) return 1;
+    if (a->n == a->cap) {
+        int nc = a->cap ? a->cap * 2 : 32;
+        game_media_item_t *nv = (game_media_item_t *)realloc(a->v,
+                                                             (size_t)nc * sizeof(game_media_item_t));
+        if (!nv) return 1; /* 收不动就停：宁可少同步几条，也不能半路把锁攥着不放 */
+        a->v = nv;
+        a->cap = nc;
+    }
+    a->v[a->n++] = *it;
+    return 0;
+}
+
+int game_media_each(const char *tid, game_media_item_cb cb, void *user) {
+    if (!cb || !md_tid_ok(tid)) return -1;
+    md_items_t a;
+    memset(&a, 0, sizeof(a));
+    pthread_mutex_lock(&g_mu);
+    int rc = md_scan_locked(tid, NULL, md_collect_item_cb, &a);
+    pthread_mutex_unlock(&g_mu);
+    if (rc != 0) { free(a.v); return -1; }
+    for (int i = 0; i < a.n; i++) {
+        if (cb(&a.v[i], user) != 0) break;
+    }
+    free(a.v);
+    return 0;
+}
+
 /* ── 原图 / 原视频：fd 直出 ── */
 static const char *md_mime_of(const char *path) {
     const char *dot = strrchr(path, '.');
