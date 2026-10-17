@@ -1,4 +1,4 @@
-## v0.6.1.181 (CN-FORK) — 2026-10-18 · 合并上游 v0.6.1（基线升级）
+## v0.6.1.181 (CN-FORK) — 2026-10-18 · 合并上游 v0.6.1（基线升级）+ 已安装列表图标对齐仓库
 
 > 拉取并合并 upstream/main 至 v0.6.1（`6a47b85`）。上游自 v0.6.0 基线仅两个提交：
 > `71f983f` Revert「移除开机杀光盘播放器」把该功能加回、`6a47b85` 版本号 bump 到 v0.6.1。
@@ -6,6 +6,12 @@
 > `DEFAULT_REPO_ENABLED`/`FAN_*`）、`/get_config` 输出、设置页开关均为上游的超集，
 > 故 `config.h`/`config.c`/`http_server.c`/`SettingsView.jsx` 四处代码冲突一律保留 fork 侧。
 > 仅把版本基线记为 0.6.1、构建序号续到 `.181`；⚠ 数据目录仍按 fork 约定用 `/data/nayeplmtools/`（上游 `/data/pldmgr/` 不采纳）。
+>
+> 用户口径（原文）：「将框起来的图标改成跟仓库一样的图标，如果没有 取名字的第一个字。」
+> - `StorageHub.jsx`：「已安装的 Payload」行图标由写死的 `<Package>` 立方体改为 `<PayloadIcon icon={remoteMatch?.icon} .../>`，
+>   命中仓库条目即显示与仓库卡片同源的真图标。
+> - `PayloadIcon.jsx`：无真图标时的兜底由彩色立方体改为「名字第一个字」染色块（`Array.from` 取首字，兼容 CJK），
+>   仓库卡片与已安装列表共用该组件，兜底表现一致。
 
 ## v0.6.0.180 (CN-FORK) — 2026-10-18 · 修复「刷新总落回仓库配置页」+ 预置源改用 payloads_v2.json（仓库图标接入）
 

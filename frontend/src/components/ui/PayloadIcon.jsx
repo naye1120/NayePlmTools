@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { cn } from '../../utils/helpers';
-import { Package } from 'lucide-react';
 
 const COLORS = [
   ['#3b82f6', '#1d4ed8'], // blue
@@ -38,18 +37,21 @@ const PayloadIcon = ({ icon, name, className }) => {
     );
   }
 
-  // Fallback
+  // [CN-FORK] 兜底：仓库没有真图标时，用「名字第一个字」染色块替代原来的立方体。
+  // Array.from 保证 CJK / 代理对也能取到真正的第一个字，而不是半个字符。
   const hash = stringToHash(name || 'Payload');
   const [colorStart, colorEnd] = COLORS[hash % COLORS.length];
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  const initial = trimmed ? Array.from(trimmed)[0].toUpperCase() : '?';
 
   return (
     <div 
-      className={cn("rounded-2xl flex items-center justify-center border border-white/10 shrink-0 text-white relative overflow-hidden", className)}
+      className={cn("rounded-2xl flex items-center justify-center border border-white/10 shrink-0 text-white font-bold relative overflow-hidden select-none", className)}
       style={{
         background: `linear-gradient(135deg, ${colorStart}, ${colorEnd})`
       }}
     >
-      <Package className="w-1/2 h-1/2 opacity-90" />
+      {initial}
     </div>
   );
 };

@@ -7,6 +7,7 @@ import { getPayloadStatus, resolveSourceDisplayName, isRepositoryPayloadVisible 
 import { slug } from '../../utils/versions'
 import { formatSyncTime } from '../../utils/syncTime'
 import PayloadName from '../ui/PayloadName'
+import PayloadIcon from '../ui/PayloadIcon'
 import Modal from '../ui/Modal'
 import { useRepository } from '../../contexts/RepositoryContext'
 import PayloadCard from '../ui/PayloadCard'
@@ -525,9 +526,14 @@ const StorageHub = ({
                 >
                   <div className="flex flex-row items-center justify-between w-full">
                     <div className="flex items-center space-x-3 min-w-0 flex-1">
-                      <div className="p-2 rounded-lg shrink-0">
-                        <Package className="w-4 h-4 text-ps-blue" />
-                      </div>
+                      {/* [CN-FORK] 已安装列表图标与仓库卡片同源：命中仓库条目就取其真图标
+                       * (remoteMatch.icon)，没有则 PayloadIcon 兜底为名字首字染色块，
+                       * 不再是原先写死的立方体。name 传仓库文件名与 PayloadCard 一致，保证同色同字。 */}
+                      <PayloadIcon
+                        icon={remoteMatch?.icon}
+                        name={remoteMatch?.filename || fileName}
+                        className="w-9 h-9 text-base shrink-0"
+                      />
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <PayloadName path={fileName} className="text-white font-semibold" stacked />
                         {sourceBadge && (
