@@ -129,7 +129,7 @@ const mockConfig = {
 let mockSources = [
   { id: 'default', name: 'Official Repository', url: MOCK_DEFAULT_REPO_URL, removable: false },
   /* [CN-FORK] v0.5.2.67 预置的国内镜像仓库（与后端 sources_seed_defaults 保持一致） */
-  { id: 'source_cn', name: 'repo.630810.xyz', url: 'https://repo.630810.xyz/payloads.json', removable: true }
+  { id: 'source_cn', name: 'repo.630810.xyz', url: 'https://repo.630810.xyz/payloads_v2.json', removable: true }
 ];
 
 let autoloadStatus = {
@@ -2417,7 +2417,7 @@ const buildRepositoryResponse = () => {
   groups.push({
     id: 'source_cn',
     name: 'repo.630810.xyz',
-    url: 'https://repo.630810.xyz/payloads.json',
+    url: 'https://repo.630810.xyz/payloads_v2.json',
     last_update: lastRepositoryUpdate,
     error: false,
     payloads: communityRepository.map(p => ({ ...p, source_id: 'source_cn', source_name: 'repo.630810.xyz' }))

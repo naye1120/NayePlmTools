@@ -1,3 +1,27 @@
+## v0.6.0.180 (CN-FORK) — 2026-10-18 · 修复「刷新总落回仓库配置页」+ 预置源改用 payloads_v2.json（仓库图标接入）
+
+> 用户口径（原文）：「无论在哪个页面刷新，刷新完最后都会在仓库配置页面。另外自定义仓库的图标没有接入过来。」
+
+### ① 刷新落回「仓库配置」页 = 两套「当前页」机制打架
+
+CN-FORK 的 localStorage 视图恢复（`pldmgrView`）与上游 v0.6.0 合入的 hash 路由（`useHistoryNavigation`）并存：
+侧栏切页只走 `setView` 不更新 hash，导致 hash 长期停在最后一次 `navigate('sources')` 留下的 `#/sources`；
+刷新时 seed 逻辑读到这个过期 hash → 覆盖 localStorage 恢复的页面 → 总落回仓库配置页。
+
+- `App.jsx`：侧栏 / 手机底部导航 / 二级菜单三处 `setView(...)` 统一改为 `navigate(...)`，切页即同步 hash。
+- `useHistoryNavigation.js`：`getRouteFromHash` / `formatHash` 补齐 fork 独有页面（`about` / `common_entries` / `game_manage` / `pkg`）；
+  popstate 守卫去掉 `curView === 'dashboard'` 条件，fallthrough 将 `dashboard` 归一为 `storage`。
+
+### ② 自定义仓库图标没接入 = 出厂预置源指向了裸数组 payloads.json
+
+`sources_seed_defaults`（`src/sources.c`）首次开机预置的 `repo.630810.xyz` 源写死指向 `payloads.json`（裸数组），
+而裸数组无法声明顶层 `icons_url`，后端 `resolve_icons_url` 直接 return → 永远不拉图标目录 → 全彩色兜底方块。
+仓库侧已发布对象包装的 `payloads_v2.json`（带 `"icons_url": "icons.json"`），预置地址同步改指 v2。
+
+- `src/sources.c`：slot 1 预置 URL `payloads.json` → `payloads_v2.json`。
+- `frontend/mock-server.js`：两处 mock 预置源同步改指 v2，保持与真机一致。
+- ⚠ 仅对**首次开机（sources.json 不存在）**的新装生效；已开机设备需在「管理来源」手动删旧源、加 v2 地址。
+
 ## v0.6.0.179 (CN-FORK) — 2026-10-17 · 「个性化软件」：两个开关真正写进主机 + 行标题图标 + 换图标/换背景
 
 > 用户口径（原文）：「有些按钮关机开机后会被重置；同时在每个标题前边加上一个图标，

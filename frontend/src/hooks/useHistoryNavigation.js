@@ -37,6 +37,13 @@ export function getRouteFromHash(hash) {
   if (rawPath === 'settings') return { type: 'settings', ...extra }
   if (rawPath === 'donate') return { type: 'donate', ...extra }
   if (rawPath === 'sources') return { type: 'sources', ...extra }
+  /* [CN-FORK] fork 独有的几个页面（关于 / 常用入口 / 游戏管理 / PKG安装）在上游
+   * 路由表里没有对应项，getRouteFromHash 会把它们的 hash 认成 dashboard，
+   * 刷新后就落不回原本那一页 —— 这里补上，让 URL 与 view 一一对应。 */
+  if (rawPath === 'about') return { type: 'about', ...extra }
+  if (rawPath === 'common_entries') return { type: 'common_entries', ...extra }
+  if (rawPath === 'game_manage') return { type: 'game_manage', ...extra }
+  if (rawPath === 'pkg') return { type: 'pkg', ...extra }
 
   if (rawPath === 'move-from-usb' || rawPath === 'move_from_usb') {
     const path = queryParams.get('path') || null
@@ -67,6 +74,12 @@ export function formatHash(route) {
   else if (route.type === 'settings') base = '#/settings'
   else if (route.type === 'donate') base = '#/donate'
   else if (route.type === 'sources') base = '#/sources'
+  /* [CN-FORK] 与 getRouteFromHash 同步：fork 独有页面也要能写出可回读的 hash，
+   * 否则侧栏切到这些页时 URL 停在上一页，刷新会被上一页的 hash 拽回去。 */
+  else if (route.type === 'about') base = '#/about'
+  else if (route.type === 'common_entries') base = '#/common_entries'
+  else if (route.type === 'game_manage') base = '#/game_manage'
+  else if (route.type === 'pkg') base = '#/pkg'
   else if (route.type === 'move_from_usb') {
     base = '#/move-from-usb'
   }
@@ -549,7 +562,11 @@ export function useHistoryNavigation({
       }
 
       // 3. Guard against WebKit's initial onload popstate event on PS5
-      if (!hasUserNavigatedRef.current && curView === 'dashboard' && target.type === 'dashboard') {
+      // [CN-FORK] fork 的根页是 storage 而不是 dashboard，刷新后被 localStorage/seed 恢复的
+      // curView 多半是一个真实页（非 dashboard）。原来的判据要求 curView === 'dashboard' 才忽略，
+      // 于是 WebKit 加载后补发的这次 popstate 不再被吞掉，会把当前页清成 dashboard（空白）。
+      // 只要用户还没主动导航过、且目标解析成 dashboard，就当作启动噪声忽略。
+      if (!hasUserNavigatedRef.current && target.type === 'dashboard') {
         return
       }
       if (Date.now() - initialMountTimeRef.current < 1500 && curView === 'dashboard' && target.type === 'dashboard' && !target.mode && !target.modal) {
@@ -613,8 +630,11 @@ export function useHistoryNavigation({
         m.setMoveFromUsbPath(null)
       }
 
-      currentViewRef.current = target.type
-      setView(target.type)
+      // [CN-FORK] fork 没有 dashboard 视图（根页是 storage）：把解析成 dashboard 的返回目标
+      // 归一到 storage，避免浏览器/遥控器回到根 hash 时落到一个不存在的空白页。
+      const nextType = target.type === 'dashboard' ? 'storage' : target.type
+      currentViewRef.current = nextType
+      setView(nextType)
     }
 
     window.addEventListener('popstate', handlePopState)

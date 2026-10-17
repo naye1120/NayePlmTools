@@ -844,7 +844,7 @@ function App() {
                     sidebar
                     sidebarExpanded={sidebarExpanded}
                     active={view === i.id}
-                    onClick={() => setView(i.id)}
+                    onClick={() => navigate(i.id)}
                     icon={i.icon}
                     label={t(i.label[0], i.label[1])}
                   />
@@ -903,7 +903,7 @@ function App() {
             <NavButton
               key={i.id}
               active={view === i.id}
-              onClick={() => { setView(i.id); setMobileMenu(null) }}
+              onClick={() => { navigate(i.id); setMobileMenu(null) }}
               icon={i.icon}
               label={t(i.label[0], i.label[1])}
               mobileLabel={t(i.mobile[0], i.mobile[1])}
@@ -930,7 +930,7 @@ function App() {
                   <li key={child.id}>
                     <button
                       type="button"
-                      onClick={() => { setView(child.id); setMobileMenu(null) }}
+                      onClick={() => { navigate(child.id); setMobileMenu(null) }}
                       className={cn(
                         'w-full flex flex-col items-center justify-center gap-1.5 py-3 transition-colors',
                         view === child.id

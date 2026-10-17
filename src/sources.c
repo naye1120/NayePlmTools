@@ -335,9 +335,12 @@ void sources_seed_defaults(void) {
     sources[0].enabled   = 1; /* 落盘不记开关，启用状态每次由 load_sources 从配置重算 */
 
     /* slot 1：预置的国内镜像仓库，添加并启用，用户可删除 */
+    /* [CN-FORK] v0.6.1.x 预置源改用 payloads_v2.json（对象包装 + 顶层 icons_url）：
+     * 裸数组 payloads.json 无法声明 icons_url，后端 resolve_icons_url 直接 return，
+     * 出厂自带这条源永远出不了图标。仓库侧已发布 v2，这里同步指向它。 */
     snprintf(sources[1].id, sizeof(sources[1].id), "source_cn");
     snprintf(sources[1].name, sizeof(sources[1].name), "repo.630810.xyz");
-    snprintf(sources[1].url, sizeof(sources[1].url), "https://repo.630810.xyz/payloads.json");
+    snprintf(sources[1].url, sizeof(sources[1].url), "https://repo.630810.xyz/payloads_v2.json");
     sources[1].removable = 1;
     sources[1].enabled   = 1;
 
