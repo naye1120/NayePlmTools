@@ -32,7 +32,9 @@
 /* 一个账号的 MyHome 组最多记这么多条。真机上是 3~5 条；给 512 是留足余量，
  * 又能在有人把整库塞进来时挡住内存膨胀（超出部分截断并记日志）。 */
 #define TG_MAX_ITEMS 512
-#define TG_ID_MAX 24 /* itemId 实际 9 位，留到 24 免得将来有更长的形式 */
+/* itemId 实际 9 位，留到 24 免得将来有更长的形式。值公开在 tile_group.h
+ * （调用方要按它开数组），这里只做个别名，免得两个数字各写一份、哪天改一个。 */
+#define TG_ID_MAX TILE_GROUP_ID_MAX
 
 typedef struct {
     char id[TG_ID_MAX];
@@ -589,4 +591,70 @@ int tile_group_reorder(const char *const *tids, int n, char *msg, size_t msgsz,
     if (out_moved) *out_moved = o.moved;
     pldmgr_log("[PLDMGR] tile_group: reorder n=%d moved=%d\n", n, o.moved);
     return 0;
+}
+
+/* ── ④ [CN-FORK] v0.6.0.179 只读查询（个性化软件的 pinned 字段）──────────── */
+
+/* 不回写，所以每张表都不开事务（tg_foreach 里 fn 返回 0 → 立刻 ROLLBACK 放锁）。
+ * 但 tg_foreach 仍会走一次 tile_db_backup_dbs —— 那是幂等的「首次动手前留底片」，
+ * 读路径撞上它只是建一回文件，不会改 app.db 一个字节。 */
+
+typedef struct {
+    char (*ids)[TG_ID_MAX];
+    int max;
+    int n;
+} tg_ids_ctx;
+
+static int tg_ids_cb(sqlite3 *db, const char *table, void *ctx) {
+    tg_ids_ctx *p = (tg_ids_ctx *)ctx;
+    tg_list l;
+    if (tg_list_alloc(&l) != 0) return 0;
+    if (tg_load(db, table, &l) != 0) { tg_list_free(&l); return 0; }
+    for (int i = 0; i < l.n && p->n < p->max; i++) {
+        int dup = 0;
+        for (int k = 0; k < p->n; k++) {
+            if (strcmp(p->ids[k], l.it[i].id) == 0) { dup = 1; break; }
+        }
+        if (dup) continue;
+        snprintf(p->ids[p->n], TG_ID_MAX, "%s", l.it[i].id);
+        p->n++;
+    }
+    tg_list_free(&l);
+    return 0;
+}
+
+int tile_group_pin_tids(char (*ids)[TG_ID_MAX], int max) {
+    if (!ids || max <= 0) return 0;
+    tg_ids_ctx p;
+    memset(&p, 0, sizeof(p));
+    p.ids = ids;
+    p.max = max;
+    tg_foreach(NULL, NULL, tg_ids_cb, &p);
+    return p.n;
+}
+
+typedef struct {
+    const char *tid;
+    int found;
+} tg_has_ctx;
+
+static int tg_has_cb(sqlite3 *db, const char *table, void *ctx) {
+    tg_has_ctx *p = (tg_has_ctx *)ctx;
+    tg_list l;
+    if (tg_list_alloc(&l) != 0) return 0;
+    if (tg_load(db, table, &l) != 0) { tg_list_free(&l); return 0; }
+    for (int i = 0; i < l.n; i++) {
+        if (strcmp(l.it[i].id, p->tid) == 0) { p->found = 1; break; }
+    }
+    tg_list_free(&l);
+    return 0;
+}
+
+int tile_group_has(const char *tid) {
+    if (!tg_tid_ok(tid)) return 0;
+    tg_has_ctx p;
+    memset(&p, 0, sizeof(p));
+    p.tid = tid;
+    tg_foreach(NULL, NULL, tg_has_cb, &p);
+    return p.found;
 }

@@ -18,12 +18,16 @@ export const postRoutes = [
   '/game_save_test', '/game_save_snap', '/game_save_sync', '/game_rename', '/game_title_sync',
   '/game_mount', '/game_unmount', '/game_uninstall', '/game_save_remote_delete',
   '/system_app_visible', '/system_app_pin', '/tile_group_pin', '/tile_group_order',
+  /* [CN-FORK] v0.6.0.179 内置软件的图标 / 背景（裸 PNG body，与 /game_tile_* 同形） */
+  '/app_tile_icon', '/app_tile_background',
   '/game_media_pack', '/game_media_sync', '/pkgmanager_upload',
 ]
 export const getMutationRoutes = [
   /* [CN-FORK] 变更型 GET：方法不变（前端就是这么调的），但必须过 CSRF 校验 */
   '/quicklinks_add', '/quicklinks_remove', '/game_save_delete', '/game_media_delete',
   '/game_tile_icon_reset', '/game_tile_background_reset', '/game_music_reset',
+  /* [CN-FORK] v0.6.0.179 内置软件两层图的「恢复默认」（与 /game_tile_*_reset 同形） */
+  '/app_tile_icon_reset', '/app_tile_background_reset',
   '/game_job_cancel', '/pkgmanager_launch', '/pkgmanager_stop', '/fan_control',
 ]
 /** @deprecated 用 isPostRoute / isGetMutationRoute；保留这个名字是因为它就是

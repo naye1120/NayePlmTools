@@ -148,9 +148,29 @@
 #define ROUTE_SYSTEM_APPS "/system_apps"
 #define ROUTE_SYSTEM_APP_VISIBLE "/system_app_visible"
 /* [CN-FORK] v0.5.2.164 「个性化软件」的第二个开关：置顶。
- * 与 visible 是两件事 —— visible 写 app.db 那一列（系统认），置顶落**本面板**的
- * /data/nayeplmtools/app_pins.json（面板自己的列表排序），不动 app.db。 */
+ * v0.6.0.179 起它**写主机**：app.db 的 tbl_group_<uid>（groupName='MyHome'，
+ * idx 就是主屏位置）—— 与游戏磁贴那条链同一个载体。`.164` 写的是本面板的
+ * app_pins.json，主机压根不知道，用户看到的就是「置顶按了没反应、重启就重置」；
+ * 那份文件现在退化成「意图记录」，只给开机对账用（见 src/app_pin.c）。 */
 #define ROUTE_SYSTEM_APP_PIN "/system_app_pin"
+/* [CN-FORK] v0.6.0.179 「个性化软件」：给内置软件换图标 / 背景。
+ *
+ * 内置软件（NPXS）没有可写的 sce_sys（资产全在只读的 /system_ex/rnps/apps/<TID>），
+ * 所以走的是**列指针**：图存在我们自己的 /data/nayeplmtools/apptiles/<TID>/ 下，
+ * 只把 app.db 的 icon0Info / pic0Info 指过去。取值与理由见 include/app_tile.h 头注释。
+ *   GET  /app_icon?tid=            → PNG（有自定义回我们那份，否则回主机自带那张）
+ *   GET  /app_tile_bg?tid=         → PNG 预览（我们存的那份自定义背景）
+ *   POST /app_tile_icon?tid=       → 裸 PNG 请求体 → {ok,bytes,message}
+ *   POST /app_tile_background?tid= → 裸 PNG 请求体 → {ok,bytes,dds_bytes,message}
+ *   GET  /app_tile_icon_reset?tid= → {ok,message}（还原主机那一列 + 删我们这份）
+ *   GET  /app_tile_background_reset?tid= → {ok,message}
+ * 两条 reset 与 /game_tile_*_reset 同形：**变更型 GET**，要过 CSRF 校验。 */
+#define ROUTE_APP_ICON "/app_icon"
+#define ROUTE_APP_TILE_BG "/app_tile_bg"
+#define ROUTE_APP_TILE_ICON "/app_tile_icon"
+#define ROUTE_APP_TILE_BACKGROUND "/app_tile_background"
+#define ROUTE_APP_TILE_ICON_RESET "/app_tile_icon_reset"
+#define ROUTE_APP_TILE_BACKGROUND_RESET "/app_tile_background_reset"
 /* [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序，落 game_prefs.json）。
  * GET  /game_prefs           → {"prefs":{"<TID>":{"fav":bool,"pin":bool}, ...}}
  * POST /game_prefs_set       body {tid, fav?, pin?} → {ok, tid, fav, pin} */
@@ -163,7 +183,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.6.0.178" /* [CN-FORK] 本 fork 版本：上游基线 0.6.0（已合并 upstream/main，merge 见 HANDOVER.md §0）+ 构建序号（.178，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.6.0.179" /* [CN-FORK] 本 fork 版本：上游基线 0.6.0（已合并 upstream/main，merge 见 HANDOVER.md §0）+ 构建序号（.179，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，

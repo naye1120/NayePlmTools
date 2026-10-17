@@ -105,6 +105,24 @@ int game_title_set_bg(const char *tid, const unsigned char *png, size_t len,
 int game_title_reset_icon(const char *tid);
 int game_title_reset_bg(const char *tid);
 
+/* ── [CN-FORK] v0.6.0.179 两个图片工具（公开给内置软件那条链）───────────────
+ *
+ * 为什么不各写一份：这两件事的规格都是**真机消融出来的**（「装到主机上的文件
+ * 必须是 PNG」「主屏只认 BC1 DDS」），抄第二份就等于埋一个「两处细节哪天漂开」的雷。
+ * app_tile_write.c 要用同一套，所以在这里开两个口子，实现仍在 game_title.c。
+ *
+ * normalize_png：把入参变成「确定是 PNG」的字节（本来就是 PNG 则原样透传，
+ *   JPEG 等重新编码）。0 = 成功（*out 归调用方 free），-1 = 解码失败（msg 给人话）。
+ * encode_bg：解码 → 缩到 1920×1080 → 编 BC1 DDS，并回一张同尺寸的 PNG
+ *   （给面板预览 / 装到主机的 pic0.png）。dds 与 png 由调用方 free。 */
+int game_title_img_normalize_png(const unsigned char *in, size_t len,
+                                 unsigned char **out, size_t *out_len,
+                                 char *msg, size_t msgsz);
+int game_title_img_encode_bg(const unsigned char *png, size_t len,
+                             unsigned char **out_dds, size_t *out_dds_len,
+                             unsigned char **out_pic0, size_t *out_pic0_len,
+                             char *msg, size_t msgsz);
+
 /* ── 给 game_mgr.c 用的小工具（列表项 / 详情都要盖名）──────────────────
  * 把 src 里的原名按我们存的覆盖，没改过就原样返回。out 可以和 src 相同。 */
 const char *game_title_override_name(const char *tid, const char *orig,

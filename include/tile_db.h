@@ -60,6 +60,38 @@ int tile_db_set_name(const char *tid, const char *new_name,
 int tile_db_set_bg(const char *tid, const char *dds_path,
                    char *msg, size_t msgsz);
 
+/* ── [CN-FORK] v0.6.0.179 「图片列」的通用三件套 ────────────────────────────
+ *
+ * 为什么要有这一层：内置软件（NPXS）的图标/背景**不能**照游戏那条链写。
+ * 真机取证（`_ftp_probe/vis_evidence/app_current.db`，19 个内置软件：
+ * `AppInfoJson._org_path` / `metaDataPath` 全在 **`/system_ex/rnps/apps/<TID>`** 下，
+ * 而 `icon0Info` 就是那条链上的一张只读的 `/system_ex/rnps/.../icon0.png`），
+ * 可游戏的写链（game_mgr_sce_sys_dir）**只认 /user/app 那几个前缀**，
+ * 对 NPXS 一律返回 0 —— 于是「上传成功、主屏没变」会原样复发（.164 置顶那个病）。
+ *
+ * 换背景那一列（pic0Info）当年就是「Shell 只看这一列」推出来的（见 .118 的消融），
+ * 图标那一列（icon0Info）形状完全一样：`<文件路径>?ts=<秒>`。所以对内置软件，
+ * 我们把图放在**我们自己的目录**里，只把这两列指过去 —— 一个字节都不写进系统只读区。
+ *
+ * 三件事分开给，是因为「写」有两个语义完全不同的调用方（上传 = 指向我们刚写的文件，
+ * 还原 = 把**原始那一串**原样写回去），而 read 是给还原留底片用的。 */
+#define TILE_DB_ICON_COLUMN "icon0Info"
+
+/* 把 app.db 里所有带该列的表、属于这个 title 的行改成 "<path>?ts=<mtime>"。
+ * 返回 0 = 至少写了一行；-1 = 参数不合法 / 文件不在 / 没匹配到行；-2 = 写了但失败。 */
+int tile_db_set_image(const char *tid, const char *column, const char *path,
+                      char *msg, size_t msgsz);
+
+/* 把该列原样写成 value；value == NULL 表示**写回 SQL NULL**
+ * （内置软件的 pic0Info 出厂就是 NULL，还原必须还原成 NULL 而不是空串）。 */
+int tile_db_set_image_raw(const char *tid, const char *column, const char *value,
+                          char *msg, size_t msgsz);
+
+/* 读 tbl_contentinfo 里这一行的这一列。0 = 有这一行（*is_null 告诉是不是 NULL，
+ * 非 NULL 时 out 已填），-1 = 没有这一行 / 库打不开 / 列不存在。 */
+int tile_db_get_image(const char *tid, const char *column,
+                      char *out, size_t osz, int *is_null);
+
 #ifdef __cplusplus
 }
 #endif

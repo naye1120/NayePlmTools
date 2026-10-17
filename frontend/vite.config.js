@@ -120,6 +120,15 @@ export default defineConfig(({ command }) => ({
        * 表现是置顶按钮点了报「主机返回了无法识别的内容」，排序模式提交也永远失败。
        * 一条前缀就覆盖三条（http-proxy 按前缀匹配）。 */
       '/tile_group': { target: API_TARGET, changeOrigin: false },
+      /* [CN-FORK] v0.6.0.179 「个性化软件」弹窗的整组端点（/system_apps、/system_app_visible、
+       * /system_app_pin）。`.158` 加这个弹窗时漏了这条代理，于是 `npm run dev` 里整个弹窗
+       * 永远「读不到清单」—— 与上面 /game_ 那条注释里说的是同一类症状：
+       * 请求被 SPA fallback 吞成 index.html，前端只看到 JSON 解析错误，看不出原因。 */
+      '/system_app': { target: API_TARGET, changeOrigin: false },
+      /* [CN-FORK] v0.6.0.179 内置软件的图标 / 背景（/app_icon、/app_tile_bg、两条上传、两条恢复）。
+       * 两条前缀覆盖六个端点（http-proxy 按前缀匹配）。 */
+      '/app_icon': { target: API_TARGET, changeOrigin: false },
+      '/app_tile': { target: API_TARGET, changeOrigin: false },
       '/fan_control': { target: API_TARGET, changeOrigin: false },
       /* [CN-FORK] v0.5.1.64 删 /game_icon 代理：「当前游戏」探测随主页一起下线 */
       '/repository_install': { target: API_TARGET, changeOrigin: false },

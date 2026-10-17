@@ -24,6 +24,7 @@
 #include <stdarg.h>
 
 #include "app_visibility.h"
+#include "app_tile.h"
 #include "sqlite3.h"
 
 /* pldmgr_log 的桩：与 test/game_mgr_test.c 同一手法（log_server.c 不进来）。 */
@@ -135,7 +136,48 @@ static void make_db(void) {
     xexec(db, "INSERT INTO tbl_group_111 VALUES ('NPXS40047',7)");
     xexec(db, "CREATE TABLE tbl_iconinfo_333 (titleId TEXT PRIMARY KEY, titleName TEXT)");
 
+    /* [CN-FORK] v0.6.0.179 主机的主屏固定列表（tbl_group_<uid> 的 MyHome 组）。
+     * 真机取证里内置软件**本来就在这个组里**（NPXS40037 / NPXS40047 / NPXS40071），
+     * 这一轮「置顶」就是往这里写（`.164` 只写我们自己的 JSON，主机压根不知道，
+     * 用户看到的就是「置顶按了没反应、重启就被重置」）。
+     * 两张表的条目集合故意不一致：222 只有两条、333 有三条 —— 用来钉「跨账号取并集」，
+     * 写侧本来就是一次写所有账号表。上面那张 tbl_group_111 是**形状不对**的诱饵
+     * （只有 itemId/visible，没有 groupName/idx）：它必须被 tg_is_group_table 排除，
+     * 否则置顶会写进一张缺列的表、SQL 报错、置顶又变成静默失败。 */
+    const char *gcols = "(itemId TEXT, groupName TEXT, type TEXT, idx INT, lastModifiedDate TEXT)";
+    char gsql[256];
+    snprintf(gsql, sizeof(gsql), "CREATE TABLE tbl_group_222 %s", gcols);
+    xexec(db, gsql);
+    snprintf(gsql, sizeof(gsql), "CREATE TABLE tbl_group_333 %s", gcols);
+    xexec(db, gsql);
+    xexec(db, "INSERT INTO tbl_group_222 VALUES ('NPXS40047','MyHome','title',1,NULL)");
+    xexec(db, "INSERT INTO tbl_group_222 VALUES ('PPSA32786','MyHome','title',2,NULL)");
+    xexec(db, "INSERT INTO tbl_group_333 VALUES ('NPXS40071','MyHome','title',1,NULL)");
+    xexec(db, "INSERT INTO tbl_group_333 VALUES ('PPSA32786','MyHome','title',2,NULL)");
+    xexec(db, "INSERT INTO tbl_group_333 VALUES ('NPXS40037','MyHome','title',3,NULL)");
+    /* OtherGroup 里的条目不算「主屏固定」：列表只读 MyHome。 */
+    xexec(db, "INSERT INTO tbl_group_333 VALUES ('NPXS40056','OtherGroup','title',1,NULL)");
+
     sqlite3_close(db);
+}
+
+/* 主机固定列表里有没有这条 MyHome 条目（1 = 有）。 */
+static int read_group_item(const char *table, const char *tid) {
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2(DB, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return -999;
+    }
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+             "SELECT count(*) FROM %s WHERE itemId='%s' AND groupName='MyHome'", table, tid);
+    sqlite3_stmt *st = NULL;
+    int n = -999;
+    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) == SQLITE_OK && sqlite3_step(st) == SQLITE_ROW)
+        n = sqlite3_column_int(st, 0);
+    if (st) sqlite3_finalize(st);
+    sqlite3_close(db);
+    return n > 0 ? 1 : 0;
 }
 
 static int read_visible(const char *table, const char *tid) {
@@ -196,28 +238,112 @@ int main(void) {
     /* `.161`：用户真机口径「所有应用程序、欢迎 是可以编辑显示和隐藏的」。
      * `.160` 把这两条错关进固定名单 —— 这里钉死它们**必须是可控的**，
      * 免得下次又有人拿出厂值反推规则。欢迎出厂 visible=0，所以它是 hidden:true 但照样可控。
-     * ⚠ v0.5.2.164 起每条 app 多一个 `"pinned"` 字段（面板侧的置顶，落 app_pins.json），
-     * 位置在 hidden 与 controllable 之间 —— 这里的锚点串跟着改，别把新字段当成「格式坏了」。 */
-    CHECK(strstr(j, "\"NPXS40056\",\"name\":\"所有应用程序\",\"hidden\":false,\"pinned\":false,\"controllable\":true") != NULL,
+     * ⚠ v0.5.2.164 起每条 app 多一个 `"pinned"` 字段；
+     * ⚠ v0.6.0.179 起再多 `"custom_icon"` / `"custom_bg"` 两个（面板里设过自定义图没有）。
+     * 位置固定在 hidden 与 controllable 之间 —— 这里的锚点串跟着改，
+     * 别把新字段当成「格式坏了」而把它们从响应里删掉。 */
+    CHECK(strstr(j, "\"NPXS40056\",\"name\":\"所有应用程序\",\"hidden\":false,\"pinned\":false,\"custom_icon\":0,\"custom_bg\":0,\"controllable\":true") != NULL,
           "所有应用程序应回 controllable:true");
-    CHECK(strstr(j, "\"NPXS40063\",\"name\":\"欢迎\",\"hidden\":true,\"pinned\":false,\"controllable\":true") != NULL,
+    CHECK(strstr(j, "\"NPXS40063\",\"name\":\"欢迎\",\"hidden\":true,\"pinned\":false,\"custom_icon\":0,\"custom_bg\":0,\"controllable\":true") != NULL,
           "欢迎出厂就是 0：hidden:true 但**不是**不可控");
 
-    /* [CN-FORK] v0.5.2.164 置顶（app_pin_*）。与 visible 是两件事：visible 写 app.db、
-     * 置顶落本面板的 app_pins.json。这里钉两条：
+    /* [CN-FORK] v0.6.0.179 pinned 改成**读主机的固定列表**（tbl_group_<uid> 的 MyHome），
+     * **跨账号取并集**：任一账号的固定列表里有它就算固定。取「与」会在真机上造出
+     * 「一个账号固定了、另一个没有 → 界面说没固定」这种没法自洽的状态。
+     * 上游 `.164` 那份读的是我们自己的 app_pins.json —— 主机压根不认，
+     * 所以这里每一句都在钉「读的是主机的库」。 */
+    const char *q47p = strstr(j, "\"NPXS40047\"");
+    CHECK(q47p && strstr(q47p, "\"pinned\":true") != NULL, "222 的 MyHome 里有它 → pinned:true");
+    CHECK(app_pin_get("NPXS40037") == 1, "333 的 MyHome 里有它 → app_pin_get 也是 1");
+    CHECK(app_pin_get("NPXS40075") == 0, "两份 MyHome 里都没有它 → 0");
+    CHECK(read_group_item("tbl_group_222", "NPXS40056") == 0,
+          "OtherGroup 里的条目不算主屏固定，读侧也不该顺手写它");
+
+    /* [CN-FORK] v0.5.2.164 / v0.6.0.179 置顶（app_pin_*）。**状态在主机**：
+     * app_pin_set 写 app.db 的 tbl_group_<uid>（groupName='MyHome'），app_pin_get 也读主机；
+     * 我们自己那份 app_pins.json 只是意图记录（开机对账用，见下面那一节）。
+     * 这里钉四件事：
      *   ① 写进去之后**同一个列表接口**能把它读回来（前端只认这一份，读不回来就等于没存）；
-     *   ② 置顶**不许碰 app.db 的 visible**（写错了会变成「点置顶顺手把软件藏了」）。 */
+     *   ② 置顶**不许碰 app.db 的 visible**（写错了会变成「点置顶顺手把软件藏了」）；
+     *   ③ 主机里那一行真的被插进/删掉了（不是只改了 JSON）；
+     *   ④ 取消置顶后读回状态也跟着回 false。 */
     {
         char pmsg[192];
-        CHECK(app_pin_set("NPXS40037", 1, pmsg, sizeof(pmsg)) == 0,
-              "置顶 NPXS40037 应成功（%s）", pmsg);
+        int pacc = 0, pidx = 0;
+        CHECK(app_pin_set("NPXS40075", 1, pmsg, sizeof(pmsg), &pacc, &pidx) == 0,
+              "置顶 NPXS40075 应成功（%s）", pmsg);
+        CHECK(pacc == 2, "两张账号表都要写上（accounts=%d）", pacc);
+        CHECK(pidx == 1, "置顶后位置应是第 1 位（idx=%d）", pidx);
+        CHECK(app_pin_get("NPXS40075") == 1, "置顶后读回状态应为已固定");
+        CHECK(read_group_item("tbl_group_222", "NPXS40075") == 1,
+              "主机 tbl_group_222 里应多出这一行");
+        /* 幂等：已经在最前时再点一次，**一次写都不发**（开机对账每次都要跑这条）。 */
+        CHECK(app_pin_set("NPXS40075", 1, pmsg, sizeof(pmsg), &pacc, &pidx) == 0 && pacc == 0,
+              "已经是第 1 位时再置顶应零写入（accounts=%d）", pacc);
         char *j2 = malloc(65536);
         CHECK(j2 && app_vis_list_json(j2, 65536) > 0, "置顶后重新拉列表应成功");
-        const char *q37 = j2 ? strstr(j2, "\"NPXS40037\"") : NULL;
-        CHECK(q37 && strstr(q37, "\"pinned\":true") != NULL, "置顶后该条应回 pinned:true");
-        CHECK(read_visible("tbl_iconinfo_111", "NPXS40037") == 0,
-              "置顶**不动** app.db 的 visible（40037 出厂两账号都是 0）");
+        const char *q75 = j2 ? strstr(j2, "\"NPXS40075\"") : NULL;
+        CHECK(q75 && strstr(q75, "\"pinned\":true") != NULL, "置顶后该条应回 pinned:true");
+        CHECK(read_visible("tbl_iconinfo_111", "NPXS40075") == 0 &&
+              read_visible("tbl_iconinfo_222", "NPXS40075") == 1,
+              "置顶**不动** app.db 的 visible（40075 出厂 111=0 / 222=1）");
         free(j2);
+
+        CHECK(app_pin_set("NPXS40075", 0, pmsg, sizeof(pmsg), NULL, NULL) == 0,
+              "取消置顶应成功（%s）", pmsg);
+        CHECK(app_pin_get("NPXS40075") == 0, "取消后读回应为未固定");
+        CHECK(read_group_item("tbl_group_222", "NPXS40075") == 0,
+              "取消置顶后主机里那一行要真的删掉");
+        /* 前置白名单：不是内置软件的一条都不许进主屏固定列表。 */
+        CHECK(app_pin_set("PPSA00001", 1, pmsg, sizeof(pmsg), NULL, NULL) != 0,
+              "游戏编号不许置顶");
+        CHECK(app_pin_set("NAYE00001", 1, pmsg, sizeof(pmsg), NULL, NULL) != 0,
+              "本面板自己的磁贴不许置顶（恢复入口就在那块磁贴上）");
+
+        /* 开机对账：主机重扫 / 换账号表把固定列表丢了 → 按意图补回来
+         * （「重启后被重置」这类问题的统一修法：意图留在盘上，开机重放）。 */
+        CHECK(app_pin_set("NPXS40075", 1, pmsg, sizeof(pmsg), NULL, NULL) == 0,
+              "再置顶一次（这一回意图文件里记的是 true）");
+        {
+            sqlite3 *gdb = NULL;
+            if (sqlite3_open_v2(DB, &gdb, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
+                xexec(gdb, "DELETE FROM tbl_group_222 WHERE itemId='NPXS40075'");
+                xexec(gdb, "DELETE FROM tbl_group_333 WHERE itemId='NPXS40075'");
+                sqlite3_close(gdb);
+            } else {
+                CHECK(0, "夹具打不开库做 DELETE");
+            }
+        }
+        CHECK(app_pin_get("NPXS40075") == 0, "模拟主机把固定列表丢了 → 读回应为未固定");
+        int pc = 0, pa = 0, pf = 0;
+        CHECK(app_pin_sync_all(pmsg, sizeof(pmsg), &pc, &pa, &pf) == 0,
+              "置顶对账应成功（%s）", pmsg);
+        CHECK(pa >= 1, "置顶对账应把它补回主机（applied=%d 失败=%d）", pa, pf);
+        CHECK(pf == 0, "置顶对账不该有失败（failed=%d）", pf);
+        CHECK(app_pin_get("NPXS40075") == 1, "补写之后读回应为已固定");
+        int pc2 = 0, pa2 = 0, pf2 = 0;
+        CHECK(app_pin_sync_all(pmsg, sizeof(pmsg), &pc2, &pa2, &pf2) == 0 && pa2 == 0,
+              "一致时置顶对账应零写入（applied=%d）", pa2);
+        CHECK(app_pin_set("NPXS40075", 0, pmsg, sizeof(pmsg), NULL, NULL) == 0,
+              "收尾：取消置顶（意图也一起回 false）");
+    }
+
+    printf("=== 自定义图标 / 背景：列表如实报（面板这一份） ===\n");
+    {
+        CHECK(app_tile_store_icon("NPXS40047", (const unsigned char *)"\x89PNG\r\n\x1a\nX", 9) == 0,
+              "落一份自定义图标");
+        CHECK(app_tile_store_bg("NPXS40047", (const unsigned char *)"\0\0\0\0DDS", 7,
+                                (const unsigned char *)"\x89PNG\r\n\x1a\nX", 9) == 0,
+              "落一份自定义背景");
+        char *j3 = list_json();
+        const char *q47c = j3 ? strstr(j3, "\"NPXS40047\"") : NULL;
+        CHECK(q47c && strstr(q47c, "\"custom_icon\":1") != NULL, "有自定义图标时应回 1");
+        CHECK(q47c && strstr(q47c, "\"custom_bg\":1") != NULL, "有自定义背景时应回 1");
+        const char *q63c = j3 ? strstr(j3, "\"NPXS40063\"") : NULL;
+        CHECK(q63c && strstr(q63c, "\"custom_icon\":0") != NULL, "没设过的应回 0");
+        free(j3);
+        CHECK(app_tile_drop_icon("NPXS40047") == 0 && app_tile_drop_bg("NPXS40047") == 0,
+              "清理（后面还要拉列表，别让自定义状态串场）");
     }
     free(j);
 
@@ -247,6 +373,42 @@ int main(void) {
     CHECK(strstr(j, "\"NPXS40047\"") != NULL && strstr(strstr(j, "\"NPXS40047\""), "\"hidden\":true") != NULL,
           "改完再读一次列表应反映新状态");
     free(j);
+
+    printf("=== 开机对账：主机把行改回来后，重放能对齐（「关机开机后被重置」的修法）===\n");
+    {
+        /* 现状：NPXS40056 刚被我们隐藏（两账号都 0）。模拟主机重扫 / 新账号表
+         * 把它翻回 visible=1 —— 真机上用户看到的就是「藏好的，重启又回来了」。 */
+        sqlite3 *db = NULL;
+        if (sqlite3_open_v2(DB, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+            CHECK(0, "夹具打不开库做 UPDATE");
+        } else {
+            xexec(db, "UPDATE tbl_iconinfo_111 SET visible=1 WHERE titleId='NPXS40056'");
+            xexec(db, "UPDATE tbl_iconinfo_222 SET visible=1 WHERE titleId='NPXS40056'");
+            sqlite3_close(db);
+        }
+        char *jb = list_json();
+        const char *q56 = strstr(jb, "\"NPXS40056\"");
+        CHECK(q56 && strstr(q56, "\"hidden\":false") != NULL,
+              "被主机改回来之后列表应显示 hidden:false（这就是用户报的现象）");
+        free(jb);
+
+        char smsg[192];
+        int sc = 0, sa = 0, sf = 0;
+        CHECK(app_vis_sync_all(smsg, sizeof(smsg), &sc, &sa, &sf) == 0, "对账应成功（%s）", smsg);
+        CHECK(sc >= 1, "至少检查了一条意图（checked=%d）", sc);
+        CHECK(sa >= 1, "至少补写一条（applied=%d）", sa);
+        CHECK(sf == 0, "不该有失败（failed=%d）", sf);
+        CHECK(read_visible("tbl_iconinfo_111", "NPXS40056") == 0 &&
+              read_visible("tbl_iconinfo_222", "NPXS40056") == 0,
+              "对账应把用户当初的「隐藏」写回去（两个账号都要）");
+
+        /* 一致时**一次写都不发**：这条链每次开机都跑，幂等是它成立的前提。 */
+        int sc2 = 0, sa2 = 0, sf2 = 0;
+        CHECK(app_vis_sync_all(smsg, sizeof(smsg), &sc2, &sa2, &sf2) == 0 && sa2 == 0,
+              "第二次对账应零写入（applied=%d）", sa2);
+        CHECK(read_visible("tbl_iconinfo_111", "NPXS40071") == 1,
+              "固定条目从不记意图，对账不该碰它");
+    }
 
     printf("=== 越界：不该动的表一行都不动 ===\n");
     {

@@ -292,11 +292,11 @@ static int unit_tests(int ownership_only, int oom_only) {
      * 「好几个功能无缘无故 405」那个 bug 的封条。
      *
      * 当时的现象与这里的断言正好互为反面：
-     *   · 表 A 那 25 条 POST 路由，被 is_post_route 漏掉后闸门强制 GET，
+     *   · 表 A 那 27 条 POST 路由，被 is_post_route 漏掉后闸门强制 GET，
      *     前端发 POST → 405。这里 POST 必须**放行**（EXPECT_NOT_405）、
      *     GET 必须被闸门挡掉（405）—— 两边一起断言，才防得住
      *     「为了修 405 把路由整个搬出表 A」这种反向改坏。
-     *   · 表 B 那 11 条是**变更型 GET**，形状反过来：GET 必须放行、POST 必须 405。
+     *   · 表 B 那 13 条是**变更型 GET**，形状反过来：GET 必须放行、POST 必须 405。
      *     它们一旦被误并进表 A，前端按 GET 调的老功能就会从 405 换成 405（还是红），
      *     所以这两张表谁也不能合并。
      * 上游那 14 条在上面的 requests[] 里已经各自钉过（含 {"/repository_cache_clear",
@@ -310,6 +310,7 @@ static int unit_tests(int ownership_only, int oom_only) {
             "/game_rename", "/game_title_sync", "/game_mount", "/game_unmount",
             "/game_uninstall", "/game_save_remote_delete", "/system_app_visible",
             "/system_app_pin", "/tile_group_pin", "/tile_group_order",
+            "/app_tile_icon", "/app_tile_background",
             "/game_media_pack", "/game_media_sync", "/pkgmanager_upload",
         };
         static const char *const get_mutation_routes[] = {   /* 表 B：GET 放行、POST 拒绝 */
@@ -317,6 +318,9 @@ static int unit_tests(int ownership_only, int oom_only) {
             "/game_media_delete", "/game_tile_icon_reset", "/game_tile_background_reset",
             "/game_music_reset", "/game_job_cancel", "/pkgmanager_launch",
             "/pkgmanager_stop", "/fan_control",
+            /* [CN-FORK] v0.6.0.179 内置软件的「恢复默认」：会改主机 app.db 的两列，
+             * 一律作变更型 GET（GET 放行、POST 405），过 CSRF。 */
+            "/app_tile_icon_reset", "/app_tile_background_reset",
         };
         for (size_t i = 0; i < sizeof(post_routes) / sizeof(post_routes[0]); i++) {
             struct Request accepted = {post_routes[i], "POST", EXPECT_NOT_405, {{0}}};

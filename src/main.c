@@ -32,6 +32,7 @@
 #include "utils.h" /* [CN-FORK] pldmgr_get_local_ip 提前取 IP */
 #include "fan_control.h" /* [CN-FORK] 风扇温控常驻重发守护 */
 #include "game_title.h"  /* [CN-FORK] v0.5.2.137 启动自愈：把 name.txt 重放到主机各层 */
+#include "app_visibility.h" /* [CN-FORK] v0.6.0.179 个性化软件启动对账（显隐/置顶/图标） */
 #include "game_saves.h"  /* [CN-FORK] v0.5.2.140 本地快照守护（存档的本地兜底） */
 #include "game_auto.h"   /* [CN-FORK] v0.5.2.142 自动存档守护（启动拉取 / 退出回传） */
 /* [CN-FORK] v0.5.2.99 PS5 Account Tools 源码并入：提权入口 + 远程游玩会话收尾 */
@@ -285,6 +286,14 @@ int main(int argc, char *argv[]) {
      * 这里起一条 detached 线程，延迟一会儿（等启动期 IO 过去）跑一次幂等重放 ——
      * 已经一致的款一次写都不发，所以可以每次开机无条件跑。safe_mode 下整条跳过。 */
     game_title_sync_start_daemon();
+
+    /* [CN-FORK] v0.6.0.179 「个性化软件」启动对账：显隐（主机自己会重写
+     * tbl_iconinfo 那几行，藏好的会自己翻回来）、置顶（`.164` 起压根没写主机，
+     * 重启后主屏顺序完全由主机决定）、自定义图标/背景（主机重扫会把
+     * tbl_contentinfo 那一行按源重建，两列指针一起丢）。
+     * 三条都是「先比一遍、一致就一次写都不发」的幂等重放，所以每次开机无条件跑。
+     * safe_mode 下整条跳过。 */
+    app_personalize_sync_start_daemon();
 
     /* [CN-FORK] v0.5.2.154 本地快照守护**已删除**：快照改成「游戏退出时触发一次」，
      * 由下面的自动存档引擎线程在做（见 game_auto.c 的 game_auto_tick 与

@@ -1,3 +1,129 @@
+## v0.6.0.179 (CN-FORK) — 2026-10-17 · 「个性化软件」：两个开关真正写进主机 + 行标题图标 + 换图标/换背景
+
+> 用户口径（原文）：「有些按钮关机开机后会被重置；同时在每个标题前边加上一个图标，
+> 以及在置顶按钮前边加上（上传背景的按钮）。」
+> 追问后确认：① 被重置的是**隐藏与置顶两个都**；② 置顶要**写主机、主屏真的固定**；
+> ③ 上传按钮**背景和图标都要**，且「这个页面的布局随着功能的增多也可以改的更好看一些」；
+> ④ 行标题前的图标要用**主机里该软件的真实图标**（读不到就用默认）。
+
+### ① 「关机开机后被重置」= 两个开关各自把状态放在了**主机不认**的地方
+
+逐条读代码 + 三份真机 `app.db` 快照（`_ftp_probe/vis_evidence/`）：
+
+| 开关 | 旧行为 | 为什么会被「重置」 |
+|---|---|---|
+| 隐藏 | 写 `tbl_iconinfo_<uid>.visible`（这一层本身是对的） | 主机自己会重写这几张表：快照里账号表集合 1 张 → 4 张 → 2 张，新出现的行 `visible` 默认 1；而列表读的是**跨账号「与」**语义 → 藏好的自己翻回来 |
+| 置顶 | **只写我们自己的** `/data/nayeplmtools/app_pins.json` | 主机压根不知道有这回事。更要紧的是：全仓库**没有任何代码按它排序** —— 用户按了等于没按，主屏顺序完全由主机决定 |
+
+### ② 统一修法：意图留在面板，开机对账重放
+
+沿用仓库里已有的那条路（`game_title_sync_all()`：主机把改名冲回原名 → 开机把用户改的名字重放回去）：
+
+| 意图文件 | 重放函数 | 幂等判据 |
+|---|---|---|
+| `/data/nayeplmtools/app_vis_wanted.json` | `app_vis_sync_all()` | 跨账号「与」语义与主机现值一致 → **一次写都不发** |
+| `/data/nayeplmtools/app_pins.json`（`.164` 那份，语义降级为**意图记录**） | `app_pin_sync_all()` | `tile_group_has()` 说主机固定列表里已经有了 → 跳过 |
+| 我们自己的图（见 ④） | `app_tile_sync_all()` | 那一列已经指着我们这份文件 → 跳过 |
+
+三条挂在 `app_personalize_sync_start_daemon()`（`src/app_personalize.c`；延迟 25s、
+`pldmgr_utils_safe_mode()` 时**整条跳过**、`pthread_create` + `detach`），调用点在 `main.c`
+里紧跟 `game_title_sync_start_daemon()`。所以整条链每次开机都无条件跑，且天然幂等。
+
+**不替用户做决定**：置顶对账只重放 `true`，绝不把用户在主机侧自己固定的条目挪走；
+三条对账都只碰「意图文件里有记录」的条目，其余一律不动。
+
+### ③ 置顶写主机：`tbl_group_<uid>` 的 MyHome 组（与游戏磁贴同一套）
+
+`POST /system_app_pin` 改走 `tile_group_set_pin()`（`.166` 给游戏磁贴用的那条），回包补上
+`accounts`（写进了几张账号表）与 `idx`（置顶后第几位），前端才能说清到底发生了什么。
+真机取证里 MyHome 组**本来就含 NPXS 条目**（NPXS40037 / 40047 / 40071），`idx` 就是主屏位置。
+`app_pin_get()` 也改成读主机（`tile_group_has()`）—— 拿我们自己那份 JSON 当状态，会出现
+「用户在主机上取消了固定、面板还显示已固定」。
+
+### ④ 换图标 / 换背景：内置软件只能走**列指针**，不能走游戏那条链
+
+真机取证（19 条内置软件全量）：`icon0Info = /system_ex/rnps/apps/<TID>/appdb/default/icon0.png?ts=…`
+（系统**只读**区），`pic0Info` 出厂是 SQL `NULL`；而 `game_mgr_sce_sys_dir()` 只认 `/user/app`
+那几个前缀，**对 NPXS 一律返回 0**。照游戏那条路走的结果只会是「面板说写好了、主屏一动不动」——
+与 `.164` 的置顶是同一个病，这一轮不重犯。
+
+改为：图放**我们自己的目录** `APP_TILE_DIR = /data/nayeplmtools/apptiles/<TID>/`，只把 app.db 的两列指过去：
+
+    icon0.png   ← icon0Info 指它（1:1；前端先缩到 512×512 —— 主屏上就是一格方图。文件名照抄
+                  主机原来那一份的结尾，`.118` 消融的结论）
+    pic0.dds    ← pic0Info 指它（1920×1080 / BC1 DXT1，规格只有 game_title.c 那一份）
+    bg.png      ← 面板预览用（`GET /app_tile_bg`；浏览器的 <img> 解不了 DDS）
+
+* 写之前把**原始那一串**存进底片（`orig_icon0info.txt` / `orig_pic0info.txt`；**0 字节 = SQL NULL**）。
+  「恢复默认」按原样写回 —— 原来是 NULL 就写回 NULL，不是空串（写空串主屏会照着一张不存在的图去画）。
+* 六条新路由：`GET /app_icon?tid=`（自定义优先，否则回**主机自带那张** → 行标题图标就是它）、
+  `GET /app_tile_bg?tid=`、`POST /app_tile_icon?tid=`、`POST /app_tile_background?tid=`、
+  `GET /app_tile_icon_reset?tid=` / `GET /app_tile_background_reset?tid=`（后两条是**变更型 GET**，过 CSRF）。
+* **不假成功**：`ok:true` 只说「**面板这一份**存好了」；主机 app.db 那一列到底写没写进去，
+  由新增的 `host_ok` 字段（`true`/`false`）如实带出来，原因在 `message` 里
+  （「已存到面板，但主机没写进去：…」）。前端按 `host_ok` 选提示档（false = 红色 9 秒 alert），
+  并把 `message` **原样**显示 —— 与 `/game_rename` 的 `host_ok` / `host_note` 同一套口径。
+  没有 `host_ok` 时前端只能靠嗅 `message` 的字符串来判断，太脆；这一轮顺手把它做成字段。
+* 分层：`src/app_tile.c` 只放路径 / 版本号 / 落盘 / 底片（纯文件，不依赖 sqlite 与 stb），
+  `src/app_tile_write.c` 放 PNG 规范化 + DDS 编码 + 写两列；`app_visibility.h` 与宿主测试只拉前者的头。
+* ⚠ **尚未真机验收**：这条链写内置软件是否被 Shell 采纳，**只能插上电视点一次才知道**
+  （游戏那条是消融验证过的，内置软件只是形状相同）。回滚路径：`git revert` 本提交即可；
+  已经改写过的列可用弹窗里的「恢复默认」逐条还原（底片就在 `apptiles/<TID>/orig_*.txt`）。
+
+### ⑤ 列表与接口的字段变化（冻结合约）
+
+`GET /system_apps` 每条新增 `custom_icon` / `custom_bg`（面板里设过自定义图没有），
+`pinned` 改为读主机；`POST /system_app_pin` 回 `accounts` / `idx`。
+既有口径一字不改：`controllable:false` 的条目（两个内容保存库 / 编辑 / 光碟占位）后端照旧返回、前端整组不显示。
+
+### ⑥ 弹窗重做（`SystemAppsModal.jsx`）
+
+每行 = 真图标（`/app_icon`，读不到显示占位方块）+ 标题 + `[换图标]` `[换背景]` `[恢复默认]` + 两个开关；
+自定义过的行加标记；背景做成整行底图 + 预览；忙碌态逐行显示；两个开关保留乐观更新 + 回滚，
+上传/还原**不做**乐观更新。布局按功能变多重排（栅格化、说明收拢）。
+成功提示不再写死一句「已写入主机」—— 改成显示后端回的 `message`、按 `host_ok` 分档
+（这条改动的理由就是上面 ④ 那条「不假成功」：写死的那句话会把失败盖成成功）。
+
+顺带补 `frontend/vite.config.js` 的 dev 代理：`/system_app`（`/system_apps`、`/system_app_visible`、
+`/system_app_pin`）与 `/app_icon`、`/app_tile`（`/app_tile_bg`、两条上传、两条恢复）。
+`.158` 加这个弹窗时就漏了第一条，于是 `npm run dev` 里整个弹窗永远「读不到清单」——
+与文件里 `/game_`、`/tile_group` 两条注释描述的是同一类症状（请求被 SPA fallback 吞成
+index.html，前端只看到 JSON 解析错误）。只影响本地预览，不影响真机。
+
+### ⑦ 测试与构建
+
+* 新增 `test/app_tile_test.c`（纯文件层）：tid 白名单与路径穿越、版本号**严格递增**（同一秒内连传两次
+  也必须变大，否则前端 `?v=` 不刷新 → 用户看到「换图没生效」）、底片只留第一次、NULL 底片语义、重复删。
+* 新增 `test/app_tile_write_test.c`（**写主机那一层**，合成 `app.db`）：这一层真机上不可达，
+  所以判据在这里钉死 —— 写完那两列指着我们自己的文件（`<路径>?ts=<秒>`）、底片留的是**动手之前**
+  那一串、「恢复默认」按原样写回、`pic0Info` 出厂 NULL **还原成 NULL 而不是空串**
+  （写空串主屏会照着一张不存在的图去画）、主机读不到那一行时 `host_ok == 0` 且 message 说明白、
+  非法 tid 与坏 PNG 一律 `-1`。图片用仓库自己的 stb 现编（真 PNG，不然「不是 PNG」那条分支测不出来）；
+  `game_title.c` 按普通 TU 链接，故 `game_mgr_*` 打桩（同 `param_rename_test.c` 的手法）。
+  夹具库必须用 `SQLITE_OPEN_CREATE` —— 照抄 `tile_db.c` 的纯 `READWRITE` 会得到一个
+  「文件不存在 → 静默按没有这一行处理」的假夹具，测试会一路绿却什么都没测到（第一次就踩了）。
+* `test/app_visibility_test.c` 扩：夹具补**真的** MyHome 组表（`tbl_group_222`/`333`，条目集合故意不一致）
+  与形状不对的诱饵（`tbl_group_111`，必须被 `tg_is_group_table` 排除）；钉住 pinned 读主机、
+  跨账号并集、置顶**不动** `visible`、已置顶时再置顶**零写入**，以及**两条开机对账**
+  （主机改回来后重放 / 第二次零写入）。
+* `tests/http_responses_test.c` 的「表 A（POST）」补 2 条、「表 B（变更型 GET）」补 2 条；
+  `tests/fork_backend_stubs.c` 补齐新符号的桩（缺一个这套测试就链接不过）。
+* `tests/run_http_tests.py`：370 项响应 + 232 项生命周期 + 610 项方法闸门 + 10,000 次真实环回
+  + 64 请求 / 8 并发客户端，全绿。`test/run_host_tests.sh` 全绿；
+  `tools/check_post_routes.sh`（分发 25 条 = 限长 25 条）、`tools/check_stack_frames.sh` 全绿
+  （新 GET 分支全部抽成独立 helper —— `http_on_request` 的栈帧已在闸门附近，链里再开缓冲就撞线）；
+  PS5 `make -j8` 零告警。
+* 前端：`npm run lint` 0 告警、`npm test` 127 项全绿（新增 9 项弹窗测试）。
+  顺带补 `frontend/mock-policy.js` 的方法闸门（不加则 mock 对两条新 POST 回 405，冒烟测试跑不起来）；
+  `mock-server.js` 的两条上传也回 `host_ok`（mock 里恒 `true`，注释里写了怎么手动演练 `false` 那条分支）。
+* ⚠ 顺带说明（与本轮无关）：`tests/run_config_tests.py`、`run_integrity_tests.py`、
+  `run_repository_icons_tests.py`、`run_self_update_tests.py`、`run_storage_tests.py`
+  这 5 个套件**在 HEAD（`d69379e`）上就是红的**（用 `git worktree` 拉干净树复现过），另开一轮修。
+
+### ⑧ 出包
+
+`NayePlmTools_0.6.0.179-me.elf`（NAYE00001 媒体栏）/ `-ga.elf`（NAYE00004 游戏栏）。
+
 ## v0.6.0.178 (CN-FORK) — 2026-10-17 · 修「升级了，/data/ps5_autoloader/ 里还是旧版本」
 
 > 用户口径（原文）：「177 版本并没有实现写入这个位置」（截图 `/data/ps5_autoloader/` 里

@@ -41,10 +41,11 @@
 /* 内置软件的 titleId 前缀，也是本模块唯一的写入白名单。 */
 #define APP_VIS_PREFIX "NPXS"
 
-/* GET /system_apps 的响应体：
+/* GET /system_apps 的响应体（v0.6.0.179 起加三个字段）：
  *   {"apps":[{"tid":"NPXS40037","name":"PlayStation Plus","hidden":true,
- *             "controllable":true},
+ *             "pinned":true,"custom_icon":0,"custom_bg":1,"controllable":true},
  *            {"tid":"NPXS40071","name":"游戏内容保存库","hidden":true,
+ *             "pinned":false,"custom_icon":0,"custom_bg":0,
  *             "controllable":false,"reason":"主屏固定入口：…"}, ...],
  *    "count":19,"accounts":1,"error":""}
  * 按 name 的拼音/字典序排不好做（中文标题），所以按 titleId 升序 —— 稳定且免排序。
@@ -52,6 +53,13 @@
  * 主屏照旧画」。`reason` 只在 false 时出现，是一句人话。
  * ⚠ `.161` 起这几条**照旧返回、但前端整组不显示**（用户口径：改不了的别摆出来）。
  * 名单留在后端而不是前端：前端自己抄一份必然和后端漂，漂了就又回到谎报。
+ *
+ * v0.6.0.179：
+ *   · `pinned` 改成**读主机**的固定列表（tbl_group_<uid> 的 MyHome 组，跨账号取并集）
+ *     —— 见 src/app_pin.c 的头注释：`.164` 起它读的是我们自己的 JSON，主机压根
+ *     不知道，用户看到的就是「置顶没生效」；
+ *   · `custom_icon` / `custom_bg`：面板里有没有存过自定义的图标 / 背景（1 = 有）。
+ *     前端拿它决定「恢复默认」是否可点，以及给 /app_icon 打 ?v= 破缓存。
  * 库打不开时回 {"apps":[],"count":0,"error":"…"}（不是空数组冒充成功）。
  * 返回写入 out 的字节数（不含 '\0'），缓冲不够回 -1。 */
 int app_vis_list_json(char *out, size_t size);
@@ -74,12 +82,50 @@ int app_vis_fixed_reason(const char *tid, const char **why);
  * msg 给人话（成功也可能留空）。首次写入前会走 tile_db 那份「原始备份只留一次」。 */
 int app_vis_set(const char *tid, int hidden, char *msg, size_t msgsz);
 
-/* [CN-FORK] v0.5.2.164 应用置顶：与 visible 是两件事（一个写 app.db、一个写本面板的 JSON）。
- * pin = true 把这条内置软件钉在主屏固定位置（不动 app.db 那一列）。
- * 这两个都是「个性化软件」弹窗的开关，但落到不同的存储。 */
-int app_pin_set(const char *tid, int pinned, char *msg, size_t msgsz);
+/* [CN-FORK] v0.5.2.164 应用置顶。
+ * v0.6.0.179 起状态在**主机**：app_pin_set 写 app.db 的 MyHome 固定列表
+ * （groupName='MyHome'，一次写所有账号表），app_pin_get 也读主机。
+ * 下面这份 JSON 退化成「面板这一侧的意图记录」，只给开机对账用。
+ *
+ * out_accounts / out_idx 由 tile_group_set_pin 原样带出来（写了几个账号的库、
+ * 置顶后的位置），/system_app_pin 回给前端用 —— 与 /tile_group_pin 同形。
+ * 返回 0 = 至少写进一个账号；-1 = 参数不合法；-2 = 主机一条都没写成（msg 说明）。 */
+int app_pin_set(const char *tid, int pinned, char *msg, size_t msgsz,
+                int *out_accounts, int *out_idx);
 int app_pin_get(const char *tid);
-/* 写出 {"pins":{"<tid>":true|false, ...}}。空 = {"pins":{}}。 */
+/* 写下意图记录 {"pins":{"<tid>":true|false, ...}}。空 = {"pins":{}}。 */
 int app_pin_list_json(char *out, size_t size);
+
+/* ── [CN-FORK] v0.6.0.179 开机对账（「关机开机后被重置」的修法）─────────────
+ *
+ * 现象（用户口径）：「有些按钮关机开机后会被重置」——两边都有：
+ *   · 隐藏：主机自己会重写 tbl_iconinfo_<uid> 那几行（真机三次快照里账号表集合
+ *     从 1 张变 4 张又变 2 张，新出现的行默认 visible=1）；列表用跨账号 AND 语义，
+ *     于是「藏好的」自己翻回来；
+ *   · 置顶：`.164` 起压根没写主机（见 src/app_pin.c 头注释），重启后主屏顺序
+ *     完全由主机决定。
+ * 修法沿用这个仓库已有的那条路（game_title_sync_all：改名被 SMP 冲回原名 → 开机重放）：
+ * **用户的选择留在面板自己的文件里，每次开机重放一遍**。一致时一次写都不发，
+ * 所以可以无条件跑。
+ *
+ * 为什么不是「读到什么就显示什么」：那样用户每次开机都得重新设一遍，
+ * 而且面板显示的与主机的会长期对不上 —— 用户要的是设置活下来，不是被告知它没了。
+ *
+ * ⚠ 代价（必须让用户知道）：面板里设过的条目，开机时会被**重新对齐到用户当初的选择**。
+ * 如果之后在主机自己的界面里改过同一条，这里的旧账会把它改回去。所以只对
+ * 「从本面板改过」的条目生效（没动过的条目在意图文件里根本没有记录）。
+ *
+ * app_vis_sync_all：重放隐藏意图（app_vis_wanted.json）。
+ * 返回 0（含「没有需要对齐的」），-1 = 意图文件读不了。
+ * checked / applied / failed 三个计数可为 NULL。 */
+int app_vis_sync_all(char *msg, size_t msgsz, int *checked, int *applied, int *failed);
+
+/* 重放置顶意图（app_pins.json 里 true 的那些）。语义与返回码同上。 */
+int app_pin_sync_all(char *msg, size_t msgsz, int *checked, int *applied, int *failed);
+
+/* 起一条 detached 线程，等启动期那阵 IO 过去后把上面两条 + app_tile_sync_all
+ * （自定义图标/背景的列指针）各跑一遍。safe_mode 下整条跳过（写主机数据库
+ * 与装 app 同级别）。实现与 main.c 里那条 game_title_sync_start_daemon 同形。 */
+void app_personalize_sync_start_daemon(void);
 
 #endif /* APP_VISIBILITY_H */

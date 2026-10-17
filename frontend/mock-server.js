@@ -698,9 +698,15 @@ const gameState = {
   tileGroup: tileGroupFixture(),
   /* 强制「主机固定列表写不进去」（tbl_group 表不存在 / 全表读失败），供前端降级分支测试。 */
   tileGroupBroken: false,
-  /* [CN-FORK] v0.5.2.164 「个性化软件」的置顶开关：tid -> bool（对应后端的 app_pins.json）。
-   * 与 hidden 分开存是刻意的 —— hidden 在真机上写 app.db，置顶只落本面板的 JSON。 */
-  appPins: {},
+  /* [CN-FORK] v0.6.0.179 「个性化软件」两层自定义图。
+   * 与游戏那两层（icon/bg/iconBytes/bgBytes/bgDds）**分开存**是刻意的：
+   * 内置软件不在 /user/app/<TID>/ 下，两张表的键空间真要混在一起，
+   * 同一个桶里就会出现「游戏 tid 与 NPXS tid 共用一个版本号计数器」这种对不上账的状态。 */
+  appIcon: {},          // NPXS tid -> 自定义**图标**版本号（>0 表示设过）
+  appIconBytes: {},     // tid -> 上传的图标 PNG 原始字节（/app_icon 在设过之后回它）
+  appBg: {},            // tid -> 自定义**背景**版本号
+  appBgBytes: {},       // tid -> 上传的背景 PNG 原始字节（/app_tile_bg 的预览就是它）
+  appBgDds: {},         // tid -> 上面那张背景转出来的 BC1 DDS（对齐后端的 dds_bytes）
   saves: {},            // tid -> 存档数组
   media: {},            // tid -> 媒体数组
   auto: {},             // tid -> 自动存档配置
@@ -2203,7 +2209,40 @@ app.post('/game_prefs_set', (req, res) => {
  *             mock 必须照着这条实现，否则回归会「本地全绿、真机把没列到的游戏也固定进主屏」。
  *   · 面板侧的 order（gameState.order）是**全量**保存的：那份管的是面板列表顺序，
  *     与主机固定列表是两回事（主机只管它自己组里那几个）。
+ *
+ * [CN-FORK] v0.6.0.179 置顶/取消置顶的实体挪进了上面的 `tileGroupPin()`，由这条路由与
+ * `/system_app_pin`（「个性化软件」弹窗的置顶开关）**共用**：两条路由写的是同一张表，
+ * 各抄一份必然漂移（后果是「同一个条目，从游戏页固定和从设置页固定结果不一样」）。
  * ══════════════════════════════════════════════════════════════════════════════ */
+/* [CN-FORK] v0.6.0.179 置顶（写主机 MyHome 组）的**唯一**实现，两条路由共用：
+ *   POST /tile_group_pin  —— 游戏磁贴的「固定到主屏」（`.167` 起界面上已下线，路由保留：
+ *                            它是唯一能把条目**新增**进组里的入口，见 gameApi.js）
+ *   POST /system_app_pin  —— 「个性化软件」弹窗里的置顶开关
+ * 两处各抄一份必然漂移，而它们写的是**同一张表**（app.db 的 tbl_group_<uid>）：
+ * 漂一次的后果是「同一个条目，从游戏页固定和从设置页固定结果不一样」——
+ * 这正是这个 mock 里反复出现的那类坑（同族见上面 tileGroupFixture 的两条 ⚠）。
+ *
+ * 返回 null = 主机写不进去（调用方回 EHOST，不是回一个假的 ok）。 */
+function tileGroupPin(tid, pinned, tag) {
+  if (gameState.tileGroupBroken) return null;
+  const items = gameState.tileGroup.items;
+  const at = items.findIndex((x) => x.itemId === tid);
+  if (pinned) {
+    /* 已在最前 → 幂等，一条都不写（后端同样返回 accounts=0）。 */
+    if (at === 0) return { accounts: 0, idx: items[0].idx, message: '已经在最前' };
+    if (at > 0) items.splice(at, 1);
+    items.unshift({ itemId: tid, idx: 1 });
+    items.forEach((x, i) => { x.idx = i + 1; });
+    console.log(`[Mock] ${tag} ${tid} -> 第 1 位（${items.length} 条）`);
+    return { accounts: gameState.tileGroup.accounts, idx: 1, message: '已写入主机固定列表' };
+  }
+  if (at < 0) return { accounts: 0, idx: 0, message: '本来就不在固定列表里' };
+  items.splice(at, 1);
+  items.forEach((x, i) => { x.idx = i + 1; });
+  console.log(`[Mock] ${tag} ${tid} -> 取消置顶（剩 ${items.length} 条）`);
+  return { accounts: gameState.tileGroup.accounts, idx: 0, message: '已从主机固定列表移除' };
+}
+
 app.get('/tile_group', (req, res) => {
   res.set('Cache-Control', 'no-store');
   if (gameState.tileGroupBroken) {
@@ -2218,25 +2257,11 @@ app.post('/tile_group_pin', (req, res) => {
   if (!/^[A-Z0-9]{6,16}$/.test(tid)) {
     return res.status(400).json({ error: 'EBAD', message: '游戏编号不合法' });
   }
-  if (gameState.tileGroupBroken) {
+  const r = tileGroupPin(tid, pinned, 'tile_group_pin');
+  if (!r) {
     return res.status(400).json({ error: 'EHOST', message: '主机 app.db 里没有 tbl_group 表（测试强制）' });
   }
-  const items = gameState.tileGroup.items;
-  const at = items.findIndex((x) => x.itemId === tid);
-  if (pinned) {
-    /* 已在最前 → 幂等，一条都不写（后端同样返回 accounts=0）。 */
-    if (at === 0) return res.json({ ok: true, tid, pinned: true, accounts: 0, idx: items[0].idx, message: '已经在最前' });
-    if (at > 0) items.splice(at, 1);
-    items.unshift({ itemId: tid, idx: 1 });
-    items.forEach((x, i) => { x.idx = i + 1; });
-    console.log(`[Mock] tile_group_pin ${tid} -> 第 1 位（${items.length} 条）`);
-    return res.json({ ok: true, tid, pinned: true, accounts: gameState.tileGroup.accounts, idx: 1, message: '已写入主机固定列表' });
-  }
-  if (at < 0) return res.json({ ok: true, tid, pinned: false, accounts: 0, idx: 0, message: '本来就不在固定列表里' });
-  items.splice(at, 1);
-  items.forEach((x, i) => { x.idx = i + 1; });
-  console.log(`[Mock] tile_group_pin ${tid} -> 取消置顶（剩 ${items.length} 条）`);
-  res.json({ ok: true, tid, pinned: false, accounts: gameState.tileGroup.accounts, idx: 0, message: '已从主机固定列表移除' });
+  res.json({ ok: true, tid, pinned, ...r });
 });
 
 app.post('/tile_group_order', (req, res) => {
@@ -2512,18 +2537,29 @@ const mockSystemApps = [
 ];
 
 app.get('/system_apps', (req, res) => {
+  res.set('Cache-Control', 'no-store');
   res.json({
     /* 与真机同一形状：不可控的那几条带 controllable:false + reason（一句人话），
-     * 前端据此不给开关。v0.5.2.164 起每条多一个 pinned（面板侧的置顶开关）。 */
+     * 前端据此不给开关。
+     * [CN-FORK] v0.6.0.179 每条多三个字段：
+     *   · pinned —— **主机主屏固定列表**（MyHome 组）里此刻到底有没有它。
+     *     `.164` 那份 appPins（面板自己的 JSON）已经删掉：主机看不见的状态正是
+     *     用户报的「置顶在 PS5 里没生效」，留着它 pinned 就有两个来源，迟早对不上。
+     *   · custom_icon / custom_bg —— 两层自定义图的**版本号**（0 = 没设过）。
+     *     前端拼 <img> 的 `&v=` 破缓存，也据它画「已自定义 · 恢复」那一排。 */
     apps: mockSystemApps.map((a) => ({
       ...a,
-      pinned: !!gameState.appPins[a.tid],
+      pinned: gameState.tileGroup.items.some((x) => x.itemId === a.tid),
+      custom_icon: gameState.appIcon[a.tid] || 0,
+      custom_bg: gameState.appBg[a.tid] || 0,
       ...(MOCK_FIXED_APPS[a.tid]
         ? { controllable: false, reason: MOCK_FIXED_APPS[a.tid] }
         : { controllable: true }),
     })),
     count: mockSystemApps.length,
-    accounts: 1,
+    /* 主机上有几个账号（每个账号一套可见性，写入时一次全写平）——
+     * 与固定列表那份 accounts 同源：真机上它们就是同一批账号。 */
+    accounts: gameState.tileGroup.accounts,
     error: '',
   });
 });
@@ -2539,13 +2575,17 @@ app.post('/system_app_visible', (req, res) => {
     return res.status(400).json({ error: 'EFIXED', message: MOCK_FIXED_APPS[tid] });
   }
   app.hidden = hidden;
-  logs.push(`[PLDMGR] app_vis: ${tid} -> visible=${hidden ? 0 : 1}（1 张账号表）`);
+  logs.push(`[PLDMGR] app_vis: ${tid} -> visible=${hidden ? 0 : 1}（${gameState.tileGroup.accounts} 张账号表）`);
   res.json({ ok: true, tid, hidden, message: '' });
 });
 
-/* [CN-FORK] v0.5.2.164 「个性化软件」的置顶开关。与 /system_app_visible 是**两条路**：
- * 那边写 app.db（这里用 app.hidden 模拟），这边只写本面板的 appPins。
- * 刻意**不**碰 app.hidden —— 真机上置顶也不动 app.db 那一列（见 include/game_prefs.h）。 */
+/* [CN-FORK] v0.6.0.179 「个性化软件」的置顶开关。与 /system_app_visible 是**两条路**：
+ * 那边写 app.db 的 visible 列（这里用 app.hidden 模拟），这边写 app.db 的
+ * tbl_group_<uid> MyHome 组 —— 走的是与游戏磁贴**同一个** tileGroupPin()，
+ * 也就是同一张表、同一套「挪到第 1 位 + 重新编号」。
+ *
+ * `.164` 那一版只写本面板的 appPins，主机压根不知道，用户看到的就是
+ * 「置顶按下去 PS5 里没反应」；这一版接回主机的同时把那个假状态源也删了。 */
 app.post('/system_app_pin', (req, res) => {
   const tid = String((req.body && req.body.tid) || '');
   if (typeof (req.body && req.body.pinned) !== 'boolean') {
@@ -2554,10 +2594,180 @@ app.post('/system_app_pin', (req, res) => {
   const pinned = req.body.pinned;
   const app = mockSystemApps.find((x) => x.tid === tid);
   if (!app) return res.status(400).json({ error: 'EBAD', message: '只能置顶主机内置软件' });
-  if (pinned) gameState.appPins[tid] = true;
-  else delete gameState.appPins[tid];
-  logs.push(`[PLDMGR] app_pin: ${tid} -> pinned=${pinned ? 1 : 0}`);
-  res.json({ ok: true, tid, pinned, message: '' });
+  /* 不可控条目（MOCK_FIXED_APPS）**不在这里拦**：真机那几条本来就常在 MyHome 组里
+   * （NPXS40071 就是「主屏固定入口」），置顶 / 取消置顶都是主机自己也认的操作；
+   * 而前端本来就不会把它们列出来。拦一下反而与后端行为不符。 */
+  const r = tileGroupPin(tid, pinned, 'system_app_pin');
+  if (!r) return res.status(400).json({ error: 'EHOST', message: '主机 app.db 里没有 tbl_group 表（测试强制）' });
+  logs.push(`[PLDMGR] app_pin: ${tid} -> pinned=${pinned ? 1 : 0}（MyHome 组，${r.accounts} 个账号，第 ${r.idx || '-'} 位）`);
+  res.json({ ok: true, tid, pinned, ...r });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * [CN-FORK] v0.6.0.179 内置软件的图标 / 背景（`/app_icon`、`/app_tile_*`）
+ *
+ * 与游戏那两层（`/game_tile_*`）**分开实现**：内置软件不在 /user/app/<TID>/ 下，
+ * 游戏那套写的是游戏目录，写过去等于写了个没人读的文件；而 `/game_icon` 对内置软件
+ * **永远 404** —— 前端要是拿它拼 <img src>，就会得到一排永远空着的图标位。
+ *
+ * 这里比游戏那两层多一条校验：**只认能解出来的 PNG**（契约里的 400 EBAD）。
+ * 主机要拿这张图去转 BC1 DDS，喂一张坏图进去会一路坏到主屏上，
+ * 而「接口说成功、主屏上是花的」是最难查的那类反馈。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/* 现编一张 128×128 的 PNG 当「主机自带图标」。
+ *
+ * 为什么不回一段硬编码的 base64：每个 tid 都得**长得不一样**，否则 19 行全是同一块色，
+ * 本地预览里分不清哪一行是哪一条（与 /game_icon 那张带 TID 的占位 SVG 同一个理由）。
+ * PNG 的每个 chunk 都要 CRC32，而 zlib 只给压缩、不给 chunk 校验，所以下面自带一个最小实现。 */
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([len, body, crc]);
+}
+
+function appIconPng(tid, size = 128) {
+  /* 颜色由 tid 派生 → 同一条软件每次都是同一张图（可断言，也不会「刷新一次变一个样」）。 */
+  const h = [...tid].reduce((s, ch) => s + ch.charCodeAt(0) * 7, 0);
+  const r = 40 + (h % 120);
+  const g = 40 + ((h >> 3) % 120);
+  const b = 60 + ((h >> 5) % 120);
+  const raw = Buffer.alloc((size * 3 + 1) * size);
+  for (let y = 0; y < size; y++) {
+    const row = y * (size * 3 + 1);
+    raw[row] = 0;   /* filter 0（不过滤）：只用 decodePng 认的那一种，编码端越简单越好 */
+    for (let x = 0; x < size; x++) {
+      const band = (x + y) % 64 < 12;
+      const o = row + 1 + x * 3;
+      raw[o] = band ? Math.min(255, r + 60) : r;
+      raw[o + 1] = band ? Math.min(255, g + 60) : g;
+      raw[o + 2] = band ? Math.min(255, b + 60) : b;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;    /* bit depth */
+  ihdr[9] = 2;    /* colorType 2 = RGB（decodePng 认 2 与 6） */
+  return Buffer.concat([
+    PNG_SIG,
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/* 两条软件故意只回 404（与 /game_icon 的两个样本同一手法）：
+ * 让「图标读不到 → 退回中性占位」这条路在本地预览里真的走得到，
+ * 也能核对「少一张图标不会让整行变矮 / 不会把列表打断」。 */
+const MOCK_APP_ICON_404 = ['NPXS40054', 'NPXS40099'];
+
+app.get('/app_icon', (req, res) => {
+  /* 后端这一路是 no-store（换完图标马上要看到新的，不能被 WebKit 缓存吃掉）——
+   * 破缓存另有显式的 `&v=`，与 no-store 不冲突。 */
+  res.set('Cache-Control', 'no-store');
+  const tid = String(req.query.tid || '');
+  if (!mockSystemApps.find((x) => x.tid === tid)) {
+    return res.status(404).type('text/plain').send('not found');
+  }
+  /* 有自定义就回**我们存的那份**；没有就回主机自带那张；两者都没有才 404。
+   * 与后端 app_icon.c 的语义逐字一致（前端一行代码都不用分这两种情况）。 */
+  const custom = gameState.appIconBytes[tid];
+  if (custom && custom.length) {
+    res.type('image/png');
+    return res.send(custom);
+  }
+  if (MOCK_APP_ICON_404.includes(tid)) {
+    return res.status(404).type('text/plain').send('not found');
+  }
+  res.type('image/png').send(appIconPng(tid));
+});
+
+/* 背景预览：没设过就是 404（前端按 onError 把那层氛围图摘掉），
+ * 设过就回我们存的那份 **PNG**（主机上是 DDS，浏览器显示不了）。 */
+app.get('/app_tile_bg', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const tid = String(req.query.tid || '');
+  const bytes = gameState.appBgBytes[tid];
+  if (!gameState.appBg[tid] || !bytes || !bytes.length) {
+    return res.status(404).type('text/plain').send('not found');
+  }
+  res.type('image/png').send(bytes);
+});
+
+/* 上传 / 恢复：与游戏那两条（/game_tile_icon、/game_tile_background）逐字同形
+ * —— 裸 PNG body、`{ok,bytes,host_ok,message}` / `{ok,bytes,dds_bytes,host_ok,message}`、
+ * reset 走 GET 回 `{ok,message}`。只有「必须能解出 PNG」这一条是内置软件独有的。
+ * `host_ok` 是给前端分辨「面板存好了」与「主机那一列也写进去了」的（见 gameApi.js 那句
+ * ⚠）：mock 里主机永远写得动，所以恒 true —— 想预览「主机没写进去」那条分支，
+ * 在下面那一行临时改成 false 即可。 */
+const APP_TILE_IMAGE_KINDS = {
+  icon: { bucket: () => gameState.appIcon, bytes: () => gameState.appIconBytes, path: 'app_tile_icon' },
+  bg: { bucket: () => gameState.appBg, bytes: () => gameState.appBgBytes, path: 'app_tile_background' },
+};
+
+Object.keys(APP_TILE_IMAGE_KINDS).forEach((kind) => {
+  const K = APP_TILE_IMAGE_KINDS[kind];
+  app.post(`/${K.path}`, express.raw({ type: () => true, limit: '64mb' }), (req, res) => {
+    const tid = String(req.query.tid || '');
+    if (!mockSystemApps.find((x) => x.tid === tid)) {
+      return res.status(404).json({ error: 'ENOENT', message: '主机上没有这个内置软件' });
+    }
+    const bytes = req.body || Buffer.alloc(0);
+    const png = decodePng(bytes);
+    if (!png) {
+      return res.status(400).json({ error: 'EBAD', message: '这不是一张能读的 PNG 图片' });
+    }
+    K.bytes()[tid] = bytes;
+    K.bucket()[tid] = (K.bucket()[tid] || 0) + 1;
+    let ddsBytes = 0;
+    if (kind === 'bg') {
+      const dds = encodeDxt1Dds(png);
+      gameState.appBgDds[tid] = dds;
+      ddsBytes = dds.length;
+    }
+    console.log(`[Mock] ${K.path} tid=${tid} png=${bytes.length}B ${png.w}x${png.h}`
+      + (kind === 'bg' ? ` -> dds=${ddsBytes}B` : ''));
+    res.json({
+      ok: true,
+      bytes: bytes.length,
+      ...(kind === 'bg' ? { dds_bytes: ddsBytes } : {}),
+      /* 真机上这里可能是 false（主机那一列没写进去），那一刻 message 会写明原因。
+       * mock 没有主机库，恒 true；上面注释里说了怎么手动演练那条分支。 */
+      host_ok: true,
+      message: kind === 'bg'
+        ? '背景已写入主机（重启或待机唤醒后主屏生效）'
+        : '图标已写入主机（重启或待机唤醒后主屏生效）',
+    });
+  });
+
+  app.get(`/${K.path}_reset`, (req, res) => {
+    const tid = String(req.query.tid || '');
+    delete K.bucket()[tid];
+    delete K.bytes()[tid];
+    if (kind === 'bg') delete gameState.appBgDds[tid];
+    console.log(`[Mock] ${K.path}_reset tid=${tid} -> 恢复主机自带那一张`);
+    res.json({ ok: true, message: kind === 'bg' ? '已恢复主机自带的背景' : '已恢复主机自带的图标' });
+  });
 });
 
 /* [CN-FORK] v0.6.0 合入：/loadpayload:* 在上游安全层里是 POST（前端走 mutationFetch），
@@ -2668,7 +2878,15 @@ app.post('/reset', (req, res) => {
    * 收藏/置顶的残留会让「收藏的排到最前」这条断言在第二次跑时假绿（本来就排前面）。 */
   gameState.music = {};
   gameState.prefs = {};
-  gameState.appPins = {};
+  /* [CN-FORK] v0.6.0.179 个性化软件的两层自定义图（原来这里是 appPins —— 那份状态
+   * 连着 `.164` 的假置顶一起删掉了，置顶现在真写 tileGroup，见下面那行）。
+   * 不清的话：上一节设过的图标 / 背景会串到下一节的「还没设过时回主机自带那张」断言（假红），
+   * 也会让「换完图标 <img> 的 v= 变了」那条断言在第二次跑时看不出变化（假绿）。 */
+  gameState.appIcon = {};
+  gameState.appIconBytes = {};
+  gameState.appBg = {};
+  gameState.appBgBytes = {};
+  gameState.appBgDds = {};
   /* [CN-FORK] v0.5.2.166 主机那份 .at9、面板手工顺序、主机固定列表也一起清 ——
    * 不清的话：上一节设过的音乐会串到下一节的「主机侧到底写没写」断言（假绿），
    * 上一节的拖拽顺序会让「第一次进页面按默认顺序」假红。 */

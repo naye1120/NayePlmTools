@@ -708,6 +708,86 @@ static int tt_as_png(const unsigned char *in, size_t len,
     return 0;
 }
 
+/* [CN-FORK] v0.6.0.179 把上面这两个「只有一份规格」的工具公开出去，给内置软件
+ * 那条链（app_tile_write.c）复用。规格是 DDS/DXT1 1920×1080 与「装到主机上的
+ * 文件必须是 PNG」两条真机结论（`.118` / `make_pic0.py`），各抄一份迟早会在
+ * 「同尺寸到底缩不缩」这种细节上漂开 —— 所以只暴露入口，实现留在原地。
+ *
+ * 缩放与 DDS 编码的实现文件里在下面（tt_resize / tt_encode_dds 紧挨着
+ * game_title_set_*），这里先声明一下：公开入口放在 tt_as_png 旁边是为了
+ * 三个图片工具挨着，读的人一眼能看到「规格只有这一处」。 */
+static unsigned char *tt_resize(const unsigned char *src, int sw, int sh, int dw, int dh);
+static unsigned char *tt_encode_dds(const unsigned char *rgba, size_t *out_len);
+int game_title_img_normalize_png(const unsigned char *in, size_t len,
+                                 unsigned char **out, size_t *out_len,
+                                 char *msg, size_t msgsz) {
+    return tt_as_png(in, len, out, out_len, msg, msgsz);
+}
+
+int game_title_img_encode_bg(const unsigned char *png, size_t len,
+                             unsigned char **out_dds, size_t *out_dds_len,
+                             unsigned char **out_pic0, size_t *out_pic0_len,
+                             char *msg, size_t msgsz) {
+    if (out_dds) *out_dds = NULL;
+    if (out_dds_len) *out_dds_len = 0;
+    if (out_pic0) *out_pic0 = NULL;
+    if (out_pic0_len) *out_pic0_len = 0;
+    if (msg && msgsz) msg[0] = 0;
+    if (!png || !len || !out_dds || !out_pic0) {
+        if (msg) snprintf(msg, msgsz, "参数不合法");
+        return -1;
+    }
+
+    int w = 0, h = 0, c = 0;
+    unsigned char *px = stbi_load_from_memory(png, (int)len, &w, &h, &c, 4);
+    if (!px) {
+        if (msg) snprintf(msg, msgsz, "图片解码失败（只认 PNG / JPEG）");
+        return -1;
+    }
+
+    unsigned char *resized = tt_resize(px, w, h, TT_BG_W, TT_BG_H);
+    if (!resized) {
+        if (w == TT_BG_W && h == TT_BG_H) resized = px; /* 同尺寸：不重采样，直接用 */
+        else { stbi_image_free(px); if (msg) snprintf(msg, msgsz, "内存不足"); return -1; }
+    }
+
+    size_t dds_len = 0;
+    unsigned char *dds = tt_encode_dds(resized, &dds_len);
+    /* 给面板预览 / 装到主机的 pic0.png：规格就是 1920×1080，入参不是这个尺寸时
+     * 不能原样用，要从缩放后的缓冲重编一张。 */
+    unsigned char *pic0 = NULL;
+    size_t pic0_len = 0;
+    if (w == TT_BG_W && h == TT_BG_H && tt_is_png(png, len)) {
+        pic0 = (unsigned char *)malloc(len);
+        if (pic0) {
+            memcpy(pic0, png, len);
+            pic0_len = len;
+        }
+    }
+    if (!pic0) {
+        tt_mem_t m;
+        memset(&m, 0, sizeof(m));
+        if (stbi_write_png_to_func(tt_mem_cb, &m, TT_BG_W, TT_BG_H, 4, resized, TT_BG_W * 4) && !m.oom)
+            { pic0 = m.p; pic0_len = m.len; }
+        else free(m.p);
+    }
+
+    if (resized != px) free(resized);
+    stbi_image_free(px);
+
+    if (!dds || !pic0) {
+        free(dds);
+        free(pic0);
+        if (msg) snprintf(msg, msgsz, "内存不足");
+        return -1;
+    }
+    *out_dds = dds;
+    *out_dds_len = dds_len;
+    *out_pic0 = pic0;
+    *out_pic0_len = pic0_len;
+    return 0;
+}
+
 /* ── 落到主机上 ────────────────────────────────────────────────────────────
  * 只写**已存在的 sce_sys 目录**（见 game_mgr_sce_sys_dir）。
  * 写之前把原图备份到 <dir>/orig/，*_reset 才有东西可还原；
@@ -1050,46 +1130,14 @@ int game_title_set_bg(const char *tid, const unsigned char *png, size_t len,
         return -1;
     }
 
-    int w = 0, h = 0, c = 0;
-    unsigned char *px = stbi_load_from_memory(png, (int)len, &w, &h, &c, 4);
-    if (!px) {
-        if (msg) snprintf(msg, msgsz, "图片解码失败（只认 PNG / JPEG）");
+    /* 解码 → 缩到 1920×1080 → BC1 DDS + 同尺寸 PNG。这一整套抽成了
+     * game_title_img_encode_bg()：内置软件那条链要的是**同一个规格**，
+     * 两处各写一份迟早会在「同尺寸缩不缩」上漂开。 */
+    unsigned char *dds = NULL, *pic0 = NULL;
+    size_t dds_len = 0, pic0_len = 0;
+    if (game_title_img_encode_bg(png, len, &dds, &dds_len, &pic0, &pic0_len,
+                                 msg, msgsz) != 0)
         return -1;
-    }
-
-    unsigned char *resized = tt_resize(px, w, h, TT_BG_W, TT_BG_H);
-    if (!resized) {
-        if (w == TT_BG_W && h == TT_BG_H) resized = px; /* 同尺寸：不重采样，直接用 */
-        else { stbi_image_free(px); if (msg) snprintf(msg, msgsz, "内存不足"); return -1; }
-    }
-
-    size_t dds_len = 0;
-    unsigned char *dds = tt_encode_dds(resized, &dds_len);
-    /* 装到主机上的 pic0.png：规格就是 1920×1080（make_pic0.py 的文档口径），
-     * 所以入参不是这个尺寸时不能原样写，要从缩放后的缓冲重编一张。 */
-    unsigned char *pic0 = NULL;
-    size_t pic0_len = 0;
-    if (w == TT_BG_W && h == TT_BG_H && tt_is_png(png, len)) {
-        pic0 = (unsigned char *)malloc(len);
-        if (pic0) { memcpy(pic0, png, len); pic0_len = len; }
-    }
-    if (!pic0) {
-        tt_mem_t m;
-        memset(&m, 0, sizeof(m));
-        if (stbi_write_png_to_func(tt_mem_cb, &m, TT_BG_W, TT_BG_H, 4, resized, TT_BG_W * 4) && !m.oom)
-            { pic0 = m.p; pic0_len = m.len; }
-        else free(m.p);
-    }
-
-    if (resized != px) free(resized);
-    stbi_image_free(px);
-
-    if (!dds || !pic0) {
-        free(dds);
-        free(pic0);
-        if (msg) snprintf(msg, msgsz, "内存不足");
-        return -1;
-    }
 
     unsigned char *store = NULL;
     size_t store_len = 0;

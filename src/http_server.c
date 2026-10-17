@@ -48,6 +48,7 @@
 #include "game_title.h"   /* [CN-FORK] v0.5.2.116 改名 + 磁贴两层图六条 */
 #include "fan_control.h" /* [CN-FORK] 风扇温控（模型 A）/fan_control */
 #include "app_visibility.h" /* [CN-FORK] v0.5.2.158 「个性化软件」/system_apps* */
+#include "app_tile.h"       /* [CN-FORK] v0.6.0.179 内置软件换图标/背景 /app_icon 等 */
 #include "game_prefs.h"     /* [CN-FORK] v0.5.2.164 游戏磁贴收藏 / 置顶 /game_prefs* */
 #include "game_music.h"     /* [CN-FORK] v0.5.2.163 背景音乐 /game_music[_reset] */
 #include "tile_group.h"     /* [CN-FORK] v0.5.2.166 主屏固定列表 /tile_group* */
@@ -146,6 +147,7 @@ static int is_post_route(const char *url) {
         ROUTE_GAME_RENAME, ROUTE_GAME_SYNC, ROUTE_GAME_MOUNT, ROUTE_GAME_UNMOUNT,
         ROUTE_GAME_UNINSTALL, ROUTE_GAME_SAVE_REMOTE_DELETE, ROUTE_SYSTEM_APP_VISIBLE,
         ROUTE_SYSTEM_APP_PIN, ROUTE_TILE_GROUP_PIN, ROUTE_TILE_GROUP_ORDER,
+        ROUTE_APP_TILE_ICON, ROUTE_APP_TILE_BACKGROUND,
         ROUTE_GAME_MEDIA_PACK, ROUTE_GAME_MEDIA_SYNC, ROUTE_PKG_UPLOAD };
     for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++)
         if (!strcmp(url, routes[i])) return 1;
@@ -162,6 +164,9 @@ static int is_get_mutation(const char *url) {
         ROUTE_QUICKLINKS_ADD, ROUTE_QUICKLINKS_REMOVE, ROUTE_GAME_SAVE_DELETE,
         ROUTE_GAME_MEDIA_DELETE, ROUTE_GAME_TILE_ICON_RESET,
         ROUTE_GAME_TILE_BACKGROUND_RESET, ROUTE_GAME_MUSIC_RESET,
+        /* [CN-FORK] v0.6.0.179 内置软件的「恢复默认」：会改主机 app.db 的两列，
+         * 必须过 CSRF（与游戏那两条 *_reset 同档）。 */
+        ROUTE_APP_TILE_ICON_RESET, ROUTE_APP_TILE_BACKGROUND_RESET,
         ROUTE_GAME_JOB_CANCEL, ROUTE_PKG_LAUNCH, ROUTE_PKG_STOP, ROUTE_FAN_CONTROL };
     for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++)
         if (!strcmp(url, routes[i])) return 1;
@@ -451,6 +456,12 @@ static size_t gr_post_limit(const char *url) {
     if (strcmp(url, ROUTE_GAME_SAVE_GARLIC) == 0) return (size_t)512 << 20;
     if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0 ||
         strcmp(url, ROUTE_GAME_TILE_BACKGROUND) == 0)
+        return (size_t)64 << 20;
+    /* [CN-FORK] v0.6.0.179 内置软件的图标 / 背景：与游戏那两条同形（裸 PNG），
+     * 同一个 64MB 上限（图标前端先缩到 512²、背景 1920×1080，正常几百 KB）。
+     * ⚠ 不登记这里的后果不是 404，而是**连接被直接关掉**（见文件头那段注释）。 */
+    if (strcmp(url, ROUTE_APP_TILE_ICON) == 0 ||
+        strcmp(url, ROUTE_APP_TILE_BACKGROUND) == 0)
         return (size_t)64 << 20;
     /* [CN-FORK] v0.5.2.163 背景音乐：MP3/OGG/WAV，体积上限 30MB（前端的软限制）。
      * 给到 64MB 是因为前端的 30MB 是软提示（防误传），这里真做了硬限。 */
@@ -781,6 +792,63 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
+    /* [CN-FORK] v0.6.0.179 内置软件换图标 / 换背景：与上面游戏那两条同形
+     * （tid 在 query，body 是裸 PNG 字节），错误码分档照同一套：
+     *   -1 = 参数/图片不合法（400）、-2 = 连面板这一份都没写下去（500）。
+     * **「主机那一列有没有写进去」不在这里分档**，而是由 message 如实带出去：
+     * 面板这一份是接口的事实源（列表里的图标与 /app_icon 都读它），主机那层是
+     * best-effort —— 但绝不能因此变成一次假成功（`.164` 置顶那个病的教训）。 */
+    if (strcmp(url, ROUTE_APP_TILE_ICON) == 0) {
+        char msg[192], esc[480];
+        long long bytes = 0;
+        int host_ok = 0;
+        msg[0] = 0;
+        if (!tid || !*tid)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (!body || !len)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "图片是空的");
+        int rc = app_tile_set_icon(tid, (const unsigned char *)body, len, &bytes, &host_ok,
+                                   msg, sizeof(msg));
+        if (rc == -1)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "图片不合法");
+        if (rc != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                               msg[0] ? msg : "写入失败");
+        pldmgr_json_escape(msg, esc, sizeof(esc));
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size,
+                         "{\"ok\":true,\"bytes\":%lld,\"host_ok\":%s,\"message\":\"%s\"}",
+                         bytes, host_ok ? "true" : "false", esc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
+    if (strcmp(url, ROUTE_APP_TILE_BACKGROUND) == 0) {
+        char msg[192], esc[480];
+        long long bytes = 0, dds = 0;
+        int host_ok = 0;
+        msg[0] = 0;
+        if (!tid || !*tid)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+        if (!body || !len)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "图片是空的");
+        int rc = app_tile_set_bg(tid, (const unsigned char *)body, len, &bytes, &dds, &host_ok,
+                                 msg, sizeof(msg));
+        if (rc == -1)
+            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+                               msg[0] ? msg : "图片不合法");
+        if (rc != 0)
+            return gr_json_err(out, size, code, MHD_HTTP_INTERNAL_SERVER_ERROR, "EIO",
+                               msg[0] ? msg : "写入失败");
+        pldmgr_json_escape(msg, esc, sizeof(esc));
+        *code = MHD_HTTP_OK;
+        int n = snprintf(out, size,
+                         "{\"ok\":true,\"bytes\":%lld,\"dds_bytes\":%lld,\"host_ok\":%s,"
+                         "\"message\":\"%s\"}",
+                         bytes, dds, host_ok ? "true" : "false", esc);
+        return (n < 0 || (size_t)n >= size) ? -1 : n;
+    }
+
     /* [CN-FORK] v0.5.2.163 背景音乐：POST body 是音频字节，name 在 query 里（前端用 file.name 原样带上）。
      实现落在 src/game_music.c（这一轮新增），接口与 game_title_set_icon 同一档：返回 -1 = 校验失败 / 1 = IO 失败 / 0 = 成功 + bytes。 */
     if (strcmp(url, ROUTE_GAME_MUSIC) == 0) {
@@ -873,25 +941,30 @@ static int gr_dispatch_post(struct MHD_Connection *conn, const char *url,
     }
 
     /* [CN-FORK] v0.5.2.164 「个性化软件」的第二个开关：置顶。
-     * 与 visible 分开是因为**落到不同的存储** —— visible 写 app.db（系统认），
-     * 置顶落本面板的 app_pins.json（面板自己的列表排序），不动 app.db。 */
+     * v0.6.0.179 起**写主机**（app.db 的 MyHome 固定列表），与 /tile_group_pin
+     * 同一个载体；回包里带上 accounts / idx，前端才能说清「写进了几张账号表、
+     * 现在排在第几位」—— 以前只写我们自己那份 JSON，界面上看不出任何差别。 */
     if (strcmp(url, ROUTE_SYSTEM_APP_PIN) == 0) {
         char btid[32], msg[192], esc[480];
-        int pinned = -1;
+        int pinned = -1, accounts = 0, gidx = 0;
         msg[0] = 0;
         if (!gr_json_str(body, len, "tid", btid, sizeof(btid)) || !btid[0])
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
         if (gr_json_bool(body, len, "pinned", &pinned) != 0 || pinned < 0)
             return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EINVAL",
                                "缺少 pinned（true=置顶 / false=取消置顶）");
-        if (app_pin_set(btid, pinned, msg, sizeof(msg)) != 0)
-            return gr_json_err(out, size, code, MHD_HTTP_BAD_REQUEST, "EBAD",
+        int rc = app_pin_set(btid, pinned, msg, sizeof(msg), &accounts, &gidx);
+        if (rc != 0)
+            return gr_json_err(out, size, code,
+                               rc == -2 ? MHD_HTTP_INTERNAL_SERVER_ERROR : MHD_HTTP_BAD_REQUEST,
+                               rc == -2 ? "EHOST" : "EBAD",
                                msg[0] ? msg : "写入失败");
         pldmgr_json_escape(msg, esc, sizeof(esc));
         *code = MHD_HTTP_OK;
         int n = snprintf(out, size,
-                         "{\"ok\":true,\"tid\":\"%s\",\"pinned\":%s,\"message\":\"%s\"}",
-                         btid, pinned ? "true" : "false", esc);
+                         "{\"ok\":true,\"tid\":\"%s\",\"pinned\":%s,\"accounts\":%d,"
+                         "\"idx\":%d,\"message\":\"%s\"}",
+                         btid, pinned ? "true" : "false", accounts, gidx, esc);
         return (n < 0 || (size_t)n >= size) ? -1 : n;
     }
 
@@ -1367,6 +1440,10 @@ static int is_noisy_route(const char *url) {
     if (strcmp(url, ROUTE_GAME_TILE_ICON) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_TILE_BG) == 0) return 1;
     if (strcmp(url, ROUTE_GAME_TILE_BG_DDS) == 0) return 1;
+    /* [CN-FORK] v0.6.0.179 内置软件的图标同样是每行一张 <img src>：
+     * 弹窗一开就是十几发，降噪（背景预览与两条 reset 一次一发，照旧记日志）。 */
+    if (strcmp(url, ROUTE_APP_ICON) == 0) return 1;
+    if (strcmp(url, ROUTE_APP_TILE_BG) == 0) return 1;
     /* [CN-FORK] v0.5.2.163 背景音乐读取（GET）。同一个 URL 一路径两方法：
      * POST 走 gr_dispatch_post（已登记），GET 这里返回 1 让它继续走到主处理函数。 */
     if (strcmp(url, ROUTE_GAME_MUSIC) == 0) return 1;
@@ -1399,6 +1476,67 @@ static int is_noisy_route(const char *url) {
 }
 
 /* ── Main request handler ──────────────────────────────────── */
+
+/* [CN-FORK] v0.6.0.179 内置软件的图标 / 背景（GET 侧）。
+ *
+ * 为什么都是独立函数、不就地写在下面那条 if/else 链里：clang 会把**所有分支**的
+ * 局部数组算进同一个栈帧（-fstack-usage 实测那条链已被推到 35KB，而
+ * tools/check_stack_frames.sh 的闸门是 32KB/函数，见 /get_config 那段的说明）。
+ * 这里几个 KB 级的路径缓冲留在链里就是往闸门上撞，所以一律挪出来。 */
+
+/* GET /app_icon?tid= —— 「每个标题前那个图标」的来源。
+ * 有自定义就回我们那一份（<APP_TILE_DIR>/<TID>/icon0.png）；
+ * 没有就回**主机自带那张**（tbl_contentinfo.icon0Info 指的文件，内置软件的资产
+ * 在只读的 /system_ex 里，只读不写）。
+ * 两样都没有（比如光碟占位那几条本来就没有图标）→ 404，前端显示占位方块。 */
+static enum MHD_Result app_tile_reply_icon(struct MHD_Connection *conn) {
+    const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+    if (!xt || !*xt)
+        return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+    char p[1024];
+    p[0] = 0;
+    if (app_tile_icon_file(xt, p, sizeof(p)) == 0)
+        return reply_file(conn, p, "image/png", NULL, 0);
+    if (app_tile_host_icon_path(xt, p, sizeof(p)) == 0)
+        return reply_file(conn, p, "image/png", NULL, 0);
+    return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "拿不到这张图标");
+}
+
+/* GET /app_tile_bg?tid= —— 我们存的那份**PNG 预览**（浏览器的 <img> 解不了 DDS）。 */
+static enum MHD_Result app_tile_reply_bg(struct MHD_Connection *conn) {
+    const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+    if (!xt || !*xt)
+        return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+    char p[1024];
+    p[0] = 0;
+    if (app_tile_bg_png_file(xt, p, sizeof(p)) != 0)
+        return queue_json_error(conn, MHD_HTTP_NOT_FOUND, "ENOENT", "没有设过自定义背景");
+    return reply_file(conn, p, "image/png", NULL, 0);
+}
+
+/* GET /app_tile_icon_reset | /app_tile_background_reset?tid= —— 恢复主机原来那一份。
+ * **message 一定带回前端**：主机那一列没还原成的时候，界面绝不能只显示一句
+ * 「已恢复默认」—— 那时主屏上指着一个不存在的文件，用户必须知道。
+ * 返回值分档与 game_*_reset 那两条不同（它们没有失败路径）：
+ *   -1 参数不合法 → 400；-2 主机没还原成 → **500 + ok:false**；0 → 200。 */
+static enum MHD_Result app_tile_reply_reset(struct MHD_Connection *conn, int is_bg) {
+    const char *xt = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "tid");
+    if (!xt || !*xt)
+        return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EINVAL", "缺少 tid");
+    char msg[192], esc[480], body[768];
+    msg[0] = 0;
+    int rc = is_bg ? app_tile_reset_bg(xt, msg, sizeof(msg))
+                   : app_tile_reset_icon(xt, msg, sizeof(msg));
+    if (rc == -1)
+        return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD",
+                                msg[0] ? msg : "这个编号改不了");
+    pldmgr_json_escape(msg, esc, sizeof(esc));
+    int n = snprintf(body, sizeof(body), "{\"ok\":%s,\"message\":\"%s\"}",
+                     rc == 0 ? "true" : "false", esc);
+    if (n < 0 || (size_t)n >= sizeof(body)) n = 0;
+    return queue_json(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_INTERNAL_SERVER_ERROR,
+                      body, (size_t)n);
+}
 
 enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                 const char *url, const char *method,
@@ -2722,6 +2860,17 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             return queue_json_error(conn, MHD_HTTP_BAD_REQUEST, "EBAD", "缺少 tid");
         game_title_reset_bg(xt);
         return queue_json(conn, MHD_HTTP_OK, "{\"ok\":true}", 11);
+    /* [CN-FORK] v0.6.0.179 内置软件的图标 / 背景预览 / 恢复默认。
+     * 实现在上面的 app_tile_reply_* 里，这里只转发 —— 那几个 KB 级的路径缓冲
+     * 留在本条链上就会把栈帧顶过闸门（见那里的注释）。 */
+    } else if (strcmp(url, ROUTE_APP_ICON) == 0) {
+        return app_tile_reply_icon(conn);
+    } else if (strcmp(url, ROUTE_APP_TILE_BG) == 0) {
+        return app_tile_reply_bg(conn);
+    } else if (strcmp(url, ROUTE_APP_TILE_ICON_RESET) == 0) {
+        return app_tile_reply_reset(conn, 0);
+    } else if (strcmp(url, ROUTE_APP_TILE_BACKGROUND_RESET) == 0) {
+        return app_tile_reply_reset(conn, 1);
     /* [CN-FORK] v0.5.2.163 背景音乐读取 + 恢复默认（GET 分支）。
      * 与 game_title_*_path 同一档：tid 在 query，没设过就 404 + ENOENT。
      * mime 走 game_music_path 报上来的（按落盘扩展名给 audio/mpeg 等）。 */

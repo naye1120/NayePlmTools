@@ -78,8 +78,52 @@ int app_vis_list_json(char *out, size_t size) { return (int)j(out, size, "{\"app
 int app_vis_set(const char *tid, int hidden, char *msg, size_t msgsz) {
     (void)tid; (void)hidden; snprintf(msg, msgsz, "test stub"); return 0;
 }
-int app_pin_set(const char *tid, int pinned, char *msg, size_t msgsz) {
-    (void)tid; (void)pinned; snprintf(msg, msgsz, "test stub"); return 0;
+int app_pin_set(const char *tid, int pinned, char *msg, size_t msgsz,
+                int *out_accounts, int *out_idx) {
+    (void)tid; (void)pinned; snprintf(msg, msgsz, "test stub");
+    if (out_accounts) *out_accounts = 1;
+    if (out_idx) *out_idx = pinned ? 1 : 0;
+    return 0;
+}
+
+/* [CN-FORK] v0.6.0.179 内置软件的图标 / 背景。找不到文件一律回 -1 →
+ * /app_icon 与 /app_tile_bg 回 404，与真机上「没设过、主机也没自带」一致；
+ * 上传/还原回 0 + 一句 message（与 src/app_tile_write.c 的分档同形）。 */
+int app_tile_icon_file(const char *tid, char *out, size_t osz) {
+    (void)tid; if (osz) out[0] = 0; return -1;
+}
+int app_tile_bg_png_file(const char *tid, char *out, size_t osz) {
+    (void)tid; if (osz) out[0] = 0; return -1;
+}
+int app_tile_bg_dds_file(const char *tid, char *out, size_t osz) {
+    (void)tid; if (osz) out[0] = 0; return -1;
+}
+int app_tile_host_icon_path(const char *tid, char *out, size_t osz) {
+    (void)tid; if (osz) out[0] = 0; return -1;
+}
+int app_tile_set_icon(const char *tid, const unsigned char *png, size_t len,
+                      long long *out_bytes, int *out_host_ok, char *msg, size_t msgsz) {
+    (void)tid; (void)png; (void)len;
+    if (out_bytes) *out_bytes = 0;
+    if (out_host_ok) *out_host_ok = 1;
+    snprintf(msg, msgsz, "test stub");
+    return 0;
+}
+int app_tile_set_bg(const char *tid, const unsigned char *png, size_t len,
+                    long long *out_bytes, long long *out_dds, int *out_host_ok,
+                    char *msg, size_t msgsz) {
+    (void)tid; (void)png; (void)len;
+    if (out_bytes) *out_bytes = 0;
+    if (out_dds) *out_dds = 0;
+    if (out_host_ok) *out_host_ok = 1;
+    snprintf(msg, msgsz, "test stub");
+    return 0;
+}
+int app_tile_reset_icon(const char *tid, char *msg, size_t msgsz) {
+    (void)tid; snprintf(msg, msgsz, "test stub"); return 0;
+}
+int app_tile_reset_bg(const char *tid, char *msg, size_t msgsz) {
+    (void)tid; snprintf(msg, msgsz, "test stub"); return 0;
 }
 int tile_group_list_json(char *out, size_t size) { return (int)j(out, size, "{\"group\":[]}"); }
 int tile_group_set_pin(const char *tid, int pinned, char *msg, size_t msgsz,

@@ -173,17 +173,44 @@
  *
  * 个性化软件（v0.5.2.158，设置页「启动与界面」里的一个入口）
  *   GET  /system_apps
- *        → { apps:[{tid,name,hidden}], count, accounts, error }
- *        tid      内置软件的 titleId（恒 NPXS 前缀，后端只回这一类）
- *        name     主机自己那份标题，来自主机的应用数据库，**不做本地化**
- *        hidden   主屏上此刻画不画这张磁贴
- *        accounts 主机上有几个用户（每个用户一套可见性，写入时一次全写平）
- *        error    读不到库时的人话；正常时是空串。apps 为空 + error 为空 = 真的没有
+ *        → { apps:[{tid,name,hidden,pinned,controllable,custom_icon,custom_bg}],
+ *            count, accounts, error }
+ *        tid                   内置软件的 titleId（恒 NPXS 前缀，后端只回这一类）
+ *        name                  主机自己那份标题，来自主机的应用数据库，**不做本地化**
+ *        hidden                主屏上此刻画不画这张磁贴（app.db 的 visible 列）
+ *        pinned                [CN-FORK] v0.6.0.179 **主机主屏固定列表**（app.db 的
+ *                              tbl_group_<uid>，group MyHome）里到底有没有它 ——
+ *                              与游戏磁贴同一个组、同一套机制
+ *        controllable          false = 面板改不动（真机实测那一列对它们不起作用），
+ *                              前端**整组不显示**，见文件末尾那段注释
+ *        custom_icon/custom_bg 1 = 我们存过自定义图（0 = 没设过，此时 /app_icon 会回
+ *                              主机自带那张）。拿它当 <img> URL 的 v= 破缓存用
+ *        accounts              主机上有几个用户（每个用户一套，写入时一次全写平）
+ *        error                 读不到库时的人话；正常时是空串。apps 为空 + error 为空 = 真的没有
  *   POST /system_app_visible     {tid, hidden:true|false} → {ok, tid, hidden, message}
  *        语义照控件名「隐藏开关」：**true = 隐藏，false = 显示**。
  *        状态只存在主机应用数据库的**那一列**里，本面板不再抄一份 ——
  *        所以关掉弹窗再打开看到的是主机的真实状态，包括别人（FTP、SMP）改的。
  *        ⚠ 写完主屏**不会实时重绘**，与改名/换图标一样要等重启或待机唤醒（见设置页说明）。
+ *   POST /system_app_pin         {tid, pinned:true|false} → {ok,tid,pinned,accounts,idx,message}
+ *        [CN-FORK] v0.6.0.179 与游戏磁贴**同一套**：写主机 app.db 的 MyHome 组，
+ *        pinned=true 把它挪到第 1 位（其余依次后移、重新编号），false 从组里删掉。
+ *        accounts = 这次写了几个账号（0 = 幂等命中，不是失败），idx = 置顶后的位置。
+ *
+ *   图标 / 背景两层（v0.6.0.179，与游戏那两层刻意分成两套，理由见文件末尾）：
+ *   GET  /app_icon?tid=         → PNG（有自定义回我们那份，否则主机自带那张；都没 → 404）
+ *   POST /app_tile_icon?tid=         裸 body（**PNG**，1:1，前端已缩到 512×512）
+ *                                    → {ok,bytes,host_ok,message}
+ *   GET  /app_tile_icon_reset?tid=   → {ok,message}（主机那一列没还原成时回 500 + ok:false）
+ *   POST /app_tile_background?tid=   裸 body（**PNG**，16:9，前端已缩到 1920×1080）
+ *                                    → {ok,bytes,dds_bytes,host_ok,message}
+ *   GET  /app_tile_background_reset?tid= → {ok,message}（同上）
+ *   GET  /app_tile_bg?tid=      → PNG 预览（我们存的自定义背景；没设过 → 404）
+ *
+ *   ⚠ 两个上传的 `ok:true` 只说「**面板这一份**存好了」，主机 app.db 那一列有没有写进去
+ *   看 `host_ok`（1 = 已指着我们这份文件；0 = 没写，原因在 `message` 里）。
+ *   调用方必须把 `message` 原样显示、并按 `host_ok` 选提示档（与 /game_rename 的
+ *   host_ok / host_note 同一口径）—— 不允许用一句写死的「已写入主机」盖过去。
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * 错误约定：后端失败时回 `{error:"<机器码>", message:"<中文人话>"}`。
@@ -701,8 +728,10 @@ export function uninstallGame(tid, opts) {
  * 组件里不出现裸 fetch 是 v0.5.2.112 定下的规矩。
  *
  * [CN-FORK] v0.5.2.160 契约补两个字段（真机取证出来的边界）；
- * [CN-FORK] v0.5.2.161 名单按用户真机口径收窄，且**不可控的条目前端整组不显示**：
- *   GET  /system_apps → {apps:[{tid,name,hidden,controllable,reason?}],count,accounts,error}
+ * [CN-FORK] v0.5.2.161 名单按用户真机口径收窄，且**不可控的条目前端整组不显示**；
+ * [CN-FORK] v0.6.0.179 契约补 pinned / custom_icon / custom_bg（见文件顶部总览）：
+ *   GET  /system_apps → {apps:[{tid,name,hidden,pinned,controllable,reason?,
+ *                              custom_icon,custom_bg}],count,accounts,error}
  *        `controllable:false` = 面板改不动的条目（两个内容保存库 / 编辑入口 / 光碟占位）。
  *        后端仍然回它们并带一句中文 `reason`（便于日志与以后复用），
  *        调用方（SystemAppsModal）据此**过滤掉、不列出来** —— 名单别在前端再抄一份。
@@ -717,12 +746,65 @@ export function setSystemAppHidden(tid, hidden, opts) {
   return request('/system_app_visible', { ...opts, method: 'POST', body: { tid, hidden } })
 }
 
-/* ── [CN-FORK] v0.5.2.164 个性化软件「置顶」开关 ────────────────────────────
- *   POST /system_app_pin {tid,pinned} → {ok,tid,pinned,message}
- * 与 hidden 是**两件事**：hidden 写 app.db（系统认），pinned 落本面板的
- * app_pins.json（面板自己的列表排序），不动 app.db。理由见 include/game_prefs.h。 */
+/* ── [CN-FORK] v0.6.0.179 个性化软件「置顶」开关 ────────────────────────────
+ *   POST /system_app_pin {tid,pinned} → {ok,tid,pinned,accounts,idx,message}
+ *
+ * `.164` 那一版是把置顶落到**本面板**的 app_pins.json（面板自己的列表排序）——
+ * 主机压根不知道，用户看到的就是「置顶按钮在 PS5 里没有生效」。
+ * 现在与游戏磁贴共用主机主屏那份**真·固定列表**（app.db 的 tbl_group_<uid>，
+ * MyHome 组），机制与真机取证见 v0.5.2.166 的 tile_group 注释与 include/tile_group.h。
+ * 写不进去回 400 {error:"EHOST"}，**不是** 200 —— 不再造第二个假成功。 */
 export function setSystemAppPinned(tid, pinned, opts) {
   return request('/system_app_pin', { ...opts, method: 'POST', body: { tid, pinned } })
+}
+
+/* ── [CN-FORK] v0.6.0.179 内置软件的图标 / 背景（两层）────────────────────────
+ * 与游戏那两层（/game_tile_icon、/game_tile_background）**刻意分成两套**，一条都不能复用：
+ *   · 主机内置软件不在 /user/app/<TID>/ 下，游戏那套写的是游戏目录，写过去等于写了个
+ *     没人会读的文件（主机画主屏磁贴时读的是 app.db 那一条）；
+ *   · `/game_icon` 对内置软件**永远 404**（它读的是游戏目录里的 icon0.png）——
+ *     拿它拼内置软件的 <img src>，只会得到一排永远空着的图标位。
+ *
+ * 尺寸与格式和游戏那两层同源（前端只传 PNG，DDS 由后端转），只有一处不同：
+ * **图标缩到 512×512**。游戏封面用 1024 是因为它要铺满磁贴大图；内置软件在主屏上
+ * 就是一格方图（主机侧那张也就是 512），传大了只是让用户多等几秒。
+ *
+ * 两个 GET 都是**资源 URL**，所以走 qa()（**不追加** `_=Date.now()`）—— 见 v0.5.2.166
+ * 那条注释：时间戳会让「值变了没有」永远不相等，也会让 <img> 每次重渲染都重下一遍。
+ * 破缓存由调用方拼 `&v=<custom_icon|custom_bg>`，那是能稳定比较、且只在真换了图之后
+ * 才变的东西。 */
+
+/* 图标：有自定义回我们那份，否则回**主机自带那张**（我们没设过也要能显示真图标）；
+ * 两者都没有才 404（老机型 / 没装的条目），前端 onError 退回中性占位。 */
+export function appIconUrl(tid) {
+  return `/app_icon${qa({ tid })}`
+}
+
+/* 背景预览（PNG）。主机上是 DDS，浏览器显示不了，所以后端另留一份 PNG 给这一路。 */
+export function appTileBackgroundUrl(tid) {
+  return `/app_tile_bg${qa({ tid })}`
+}
+
+/* 裸 body 上传 PNG —— 与 setTileIcon / setTileBackground 逐字同形（同一条 request 通道，
+ * 后端也是同一套流式 raw body 约定），别为内置软件再发明第二种上传机制。 */
+export function setAppTileIcon(tid, blob, opts) {
+  return request(`/app_tile_icon${q({ tid })}`, {
+    ...opts, method: 'POST', body: blob, timeoutMs: TIMEOUTS.upload,
+  })
+}
+
+export function resetAppTileIcon(tid, opts) {
+  return request(`/app_tile_icon_reset${q({ tid })}`, opts)
+}
+
+export function setAppTileBackground(tid, blob, opts) {
+  return request(`/app_tile_background${q({ tid })}`, {
+    ...opts, method: 'POST', body: blob, timeoutMs: TIMEOUTS.upload,
+  })
+}
+
+export function resetAppTileBackground(tid, opts) {
+  return request(`/app_tile_background_reset${q({ tid })}`, opts)
 }
 
 /* ── [CN-FORK] v0.5.2.164 游戏磁贴的收藏 / 置顶（面板侧列表排序）──────────────

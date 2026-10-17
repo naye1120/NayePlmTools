@@ -336,8 +336,41 @@ if [ -f /tmp/sqlite3_host.o ]; then
         -DTILE_DB_APPINFO_PATH='"/tmp/pldmgr_appvis_test/appinfo.db"' \
         -DTILE_DB_BAK_DIR='"/tmp/pldmgr_appvis_test/dbbak"' \
         -DAPP_PIN_PATH='"/tmp/pldmgr_appvis_test/app_pins.json"' \
+        -DAPP_VIS_WANTED_PATH='"/tmp/pldmgr_appvis_test/app_vis_wanted.json"' \
+        -DAPP_TILE_DIR='"/tmp/pldmgr_appvis_test/apptiles"' \
         src/app_pin.c src/psaccounts/third_party/cJSON.c \
+        src/app_tile.c src/tile_group.c \
         src/tile_db.c src/json_helpers.c src/utils.c /tmp/sqlite3_host.o -ldl
+fi
+
+# [CN-FORK] v0.6.0.179 内置软件磁贴图的**纯文件层**（src/app_tile.c）。
+# 不需要 sqlite：这一层只算路径、读版本号、落盘、留底片。写主机那一段
+# （app_tile_write.c 真跑 SQL）由上面 app_visibility 那一关连表一起覆盖。
+echo "=== app_tile ==="
+rm -rf /tmp/pldmgr_apptile_test
+run_one app_tile src/app_tile.c \
+    -Iinclude -Isrc/psaccounts/third_party \
+    -DAPP_TILE_DIR='"/tmp/pldmgr_apptile_test"' \
+    src/json_helpers.c src/utils.c src/psaccounts/third_party/cJSON.c
+
+# [CN-FORK] v0.6.0.179 换图标 / 换背景**写主机 app.db 两列**那一段（src/app_tile_write.c）。
+#
+# 为什么非有不可：这一轮改的是主机的应用数据库，真机上不可达（要插电视点一次才知道
+# 主屏认不认）。旧的那条路（写游戏目录）在真机上的表现就是「面板说成功、主屏一动不动」，
+# 与 `.164` 置顶同一个病 —— 所以「那一列到底写没写进去」「host_ok 有没有如实回 0」
+# 「NULL 还原回 NULL 还是空串」必须在合成库上钉死。
+# 图片用仓库自己的 stb 现编（game_title.c 按普通 TU 链接，故 game_mgr_* 打桩）。
+if [ -f /tmp/sqlite3_host.o ]; then
+    run_one app_tile_write src/app_tile_write.c \
+        -Iinclude -Ithird_party/sqlite3 -Isrc/psaccounts/third_party \
+        -DTILE_DB_APPDB_PATH='"/tmp/pldmgr_apptilew_test/app.db"' \
+        -DTILE_DB_APPINFO_PATH='"/tmp/pldmgr_apptilew_test/appinfo.db"' \
+        -DTILE_DB_BAK_DIR='"/tmp/pldmgr_apptilew_test/dbbak"' \
+        -DAPP_TILE_DIR='"/tmp/pldmgr_apptilew_test/apptiles"' \
+        src/app_tile.c src/game_title.c src/tile_db.c \
+        src/json_helpers.c src/utils.c \
+        src/psaccounts/third_party/cJSON.c src/psaccounts/third_party/stb_impl.c \
+        /tmp/sqlite3_host.o -ldl
 fi
 
 # [CN-FORK] v0.5.2.166 主屏固定列表（src/tile_group.c）：写 app.db 的 tbl_group_<uid>。

@@ -435,10 +435,30 @@ static int td_update_appinfo(const char *tid, const char *local_cid,
     return written;
 }
 
-/* ── 背景：一个列，每张带它的表各写一行 ──────────────────────────────────── */
+/* ── 图片列：一个列，每张带它的表各写一行 ────────────────────────────────────
+ * 写的是「哪一行」+「哪一列」的组合（游戏与内置软件的背景 = pic0Info、内置软件的
+ * 图标 = icon0Info），定位口径与改名那条链一致：优先 titleId，概念表退回
+ * localConceptId，两样都没有就**一格都不写** —— 改到别人的行比不改严重得多。 */
 
-static int td_write_bg_cell(sqlite3 *db, const char *table, const char *tid,
-                            const char *local_cid, const char *value) {
+/* 列名要插进 SQL 文本（标识符没法 bind）。表名那侧走 td_safe_ident（从
+ * sqlite_master 读回来的），列名这一侧是**调用方给的输入**，所以只认
+ * [A-Za-z0-9_] —— 引号、分号、注释符一律进不来。 */
+static int td_col_ok(const char *c) {
+    if (!c) return 0;
+    size_t n = strlen(c);
+    if (n < 1 || n > 64) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char ch = c[i];
+        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+              (ch >= '0' && ch <= '9') || ch == '_'))
+            return 0;
+    }
+    return 1;
+}
+
+static int td_write_image_cell(sqlite3 *db, const char *table, const char *column,
+                               const char *tid, const char *local_cid,
+                               const char *value, int is_null) {
     const char *key = NULL;
     const char *bind = NULL;
     if (td_has_column(db, table, "titleId")) {
@@ -452,24 +472,95 @@ static int td_write_bg_cell(sqlite3 *db, const char *table, const char *tid,
 
     char sql[512];
     snprintf(sql, sizeof(sql), "UPDATE \"%s\" SET \"%s\" = ? WHERE \"%s\" = ?",
-             table, TILE_DB_BG_COLUMN, key);
+             table, column, key);
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
-        pldmgr_log("[PLDMGR] tile_db: %s 预编译失败：%s\n", table,
+        pldmgr_log("[PLDMGR] tile_db: %s.%s 预编译失败：%s\n", table, column,
                    sqlite3_errmsg(db));
         if (st) sqlite3_finalize(st);
         return 0;
     }
-    sqlite3_bind_text(st, 1, value, -1, SQLITE_TRANSIENT);
+    /* 还原成 NULL 与还原成一串值都必须走得通：内置软件的 pic0Info 出厂就是 NULL，
+     * 用空串代替它，Shell 那边是「有一列值但是空」而不是「没有背景」。 */
+    if (is_null) sqlite3_bind_null(st, 1);
+    else sqlite3_bind_text(st, 1, value, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 2, bind, -1, SQLITE_TRANSIENT);
 
     int written = 0;
     if (sqlite3_step(st) == SQLITE_DONE)
         written = sqlite3_changes(db);
     else
-        pldmgr_log("[PLDMGR] tile_db: %s 写失败：%s\n", table, sqlite3_errmsg(db));
+        pldmgr_log("[PLDMGR] tile_db: %s.%s 写失败：%s\n", table, column,
+                   sqlite3_errmsg(db));
     sqlite3_finalize(st);
     return written;
+}
+
+/* 图片列两个写入口共用的一条：开库 → 开事务 → 扫表 → 提交/回滚。 */
+static int td_set_image_value(const char *tid, const char *column, const char *value,
+                              int is_null, char *msg, size_t msgsz) {
+    if (msg && msgsz) msg[0] = 0;
+    if (!td_tid_ok(tid) || !td_col_ok(column) || (!is_null && (!value || !value[0]))) {
+        if (msg && msgsz) snprintf(msg, msgsz, "参数不合法");
+        return -1;
+    }
+    tile_db_backup_dbs();
+
+    sqlite3 *db = td_open(TILE_DB_APPDB_PATH);
+    if (!db) {
+        if (msg && msgsz) snprintf(msg, msgsz, "打不开主机数据库");
+        return -1;
+    }
+    if (td_exec(db, "BEGIN IMMEDIATE") != SQLITE_OK) {
+        if (msg && msgsz) snprintf(msg, msgsz, "开事务失败（%s）", sqlite3_errmsg(db));
+        pldmgr_log("[PLDMGR] tile_db: %s BEGIN 失败：%s\n", column, sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return -1;
+    }
+
+    /* 概念表按 localConceptId 定位。真标题用 "cid:scp:..." 只能读回来；
+     * 读不到就退回参考工程那条 "cid:local:<tid>" —— 绑错最多 0 行，不会伤到别人。 */
+    char local_cid[160];
+    local_cid[0] = 0;
+    td_read_local_cid(db, tid, local_cid, sizeof(local_cid));
+    if (!local_cid[0]) snprintf(local_cid, sizeof(local_cid), "cid:local:%s", tid);
+
+    int written = 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table'",
+                           -1, &st, NULL) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            const char *table = (const char *)sqlite3_column_text(st, 0);
+            if (table && td_safe_ident(table) && td_has_column(db, table, column))
+                written += td_write_image_cell(db, table, column, tid, local_cid,
+                                               value, is_null);
+        }
+    } else {
+        pldmgr_log("[PLDMGR] tile_db: %s 表结构扫描失败：%s\n", column,
+                   sqlite3_errmsg(db));
+    }
+    if (st) sqlite3_finalize(st);
+
+    if (written <= 0) {
+        td_exec(db, "ROLLBACK");
+        sqlite3_close(db);
+        if (msg && msgsz)
+            snprintf(msg, msgsz, "主机数据库里还没有这个标题的这一行");
+        pldmgr_log("[PLDMGR] tile_db: app.db 里没有 %s 的 %s 行（还没注册？）\n",
+                   tid, column);
+        return -1;
+    }
+    if (td_exec(db, "COMMIT") != SQLITE_OK) {
+        if (msg && msgsz) snprintf(msg, msgsz, "提交失败（%s）", sqlite3_errmsg(db));
+        pldmgr_log("[PLDMGR] tile_db: %s COMMIT 失败：%s\n", column, sqlite3_errmsg(db));
+        td_exec(db, "ROLLBACK");
+        sqlite3_close(db);
+        return -2;
+    }
+    sqlite3_close(db);
+    pldmgr_log("[PLDMGR] tile_db: %s 的 %s 已登记 -> %s（%d 行）\n", tid, column,
+               is_null ? "(NULL)" : value, written);
+    return 0;
 }
 
 /* ── 对外两个入口 ────────────────────────────────────────────────────────── */
@@ -518,82 +609,74 @@ int tile_db_set_name(const char *tid, const char *new_name,
     return 0;
 }
 
-int tile_db_set_bg(const char *tid, const char *dds_path,
-                   char *msg, size_t msgsz) {
+int tile_db_set_image(const char *tid, const char *column, const char *path,
+                      char *msg, size_t msgsz) {
     if (msg && msgsz) msg[0] = 0;
-    if (!td_tid_ok(tid) || !dds_path || !dds_path[0]) {
+    if (!path || !path[0]) {
         if (msg && msgsz) snprintf(msg, msgsz, "参数不合法");
         return -1;
     }
-    tile_db_backup_dbs();
-
     /* ts 必须是**这个文件**的 mtime：先写文件再注册，两边才对得上。 */
     struct stat sb;
-    if (stat(dds_path, &sb) != 0) {
-        if (msg && msgsz) snprintf(msg, msgsz, "主机上没有这个背景文件");
+    if (stat(path, &sb) != 0) {
+        if (msg && msgsz) snprintf(msg, msgsz, "主机上没有这个图片文件");
         return -1;
     }
     char value[512];
-    int vn = snprintf(value, sizeof(value), "%s?ts=%lld", dds_path,
+    int vn = snprintf(value, sizeof(value), "%s?ts=%lld", path,
                       (long long)sb.st_mtime);
     if (vn < 0 || (size_t)vn >= sizeof(value)) {
         if (msg && msgsz) snprintf(msg, msgsz, "路径太长");
         return -1;
     }
+    return td_set_image_value(tid, column, value, 0, msg, msgsz);
+}
+
+int tile_db_set_image_raw(const char *tid, const char *column, const char *value,
+                          char *msg, size_t msgsz) {
+    /* 空串按 NULL 处理：底片文件里「空」就是「出厂没有这一列值」的写法。
+     * 真要写一个空串进来的调用方不存在，而把 NULL 写成 '' 会让还原变成假成功。 */
+    if (value && value[0]) return td_set_image_value(tid, column, value, 0, msg, msgsz);
+    return td_set_image_value(tid, column, NULL, 1, msg, msgsz);
+}
+
+int tile_db_get_image(const char *tid, const char *column,
+                      char *out, size_t osz, int *is_null) {
+    if (out && osz) out[0] = 0;
+    if (is_null) *is_null = 0;
+    if (!out || osz < 2 || !td_tid_ok(tid) || !td_col_ok(column)) return -1;
 
     sqlite3 *db = td_open(TILE_DB_APPDB_PATH);
-    if (!db) {
-        if (msg && msgsz) snprintf(msg, msgsz, "打不开主机数据库");
-        return -1;
-    }
-    if (td_exec(db, "BEGIN IMMEDIATE") != SQLITE_OK) {
-        if (msg && msgsz) snprintf(msg, msgsz, "开事务失败（%s）", sqlite3_errmsg(db));
-        pldmgr_log("[PLDMGR] tile_db: bg BEGIN 失败：%s\n", sqlite3_errmsg(db));
-        sqlite3_close(db);
-        return -1;
-    }
-
-    /* 概念表按 localConceptId 定位。真标题用 "cid:scp:..." 只能读回来；
-     * 读不到就退回参考工程那条 "cid:local:<tid>" —— 绑错最多 0 行，不会伤到别人。 */
-    char local_cid[160];
-    local_cid[0] = 0;
-    td_read_local_cid(db, tid, local_cid, sizeof(local_cid));
-    if (!local_cid[0]) snprintf(local_cid, sizeof(local_cid), "cid:local:%s", tid);
-
-    int written = 0;
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table'",
-                           -1, &st, NULL) == SQLITE_OK) {
-        while (sqlite3_step(st) == SQLITE_ROW) {
-            const char *table = (const char *)sqlite3_column_text(st, 0);
-            if (table && td_safe_ident(table) &&
-                td_has_column(db, table, TILE_DB_BG_COLUMN))
-                written += td_write_bg_cell(db, table, tid, local_cid, value);
+    if (!db) return -1;
+    int rc = -1;
+    /* 只认 tbl_contentinfo：它才是「这条内容有没有这张图」的正主，
+     * 也是写侧拿 tid 定位的那张表。 */
+    if (td_has_column(db, "tbl_contentinfo", column)) {
+        char sql[256];
+        snprintf(sql, sizeof(sql),
+                 "SELECT \"%s\" FROM tbl_contentinfo WHERE titleId = ?", column);
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, tid, -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(st) == SQLITE_ROW) {
+                rc = 0;
+                if (sqlite3_column_type(st, 0) == SQLITE_NULL) {
+                    if (is_null) *is_null = 1;
+                } else {
+                    const unsigned char *v = sqlite3_column_text(st, 0);
+                    if (v) snprintf(out, osz, "%s", (const char *)v);
+                }
+            }
         }
-    } else {
-        pldmgr_log("[PLDMGR] tile_db: bg 表结构扫描失败：%s\n", sqlite3_errmsg(db));
-    }
-    if (st) sqlite3_finalize(st);
-
-    if (written <= 0) {
-        td_exec(db, "ROLLBACK");
-        sqlite3_close(db);
-        if (msg && msgsz)
-            snprintf(msg, msgsz, "主机数据库里还没有这个标题的背景行");
-        pldmgr_log("[PLDMGR] tile_db: app.db 里没有 %s 的 %s 行（还没注册？）\n",
-                   tid, TILE_DB_BG_COLUMN);
-        return -1;
-    }
-    if (td_exec(db, "COMMIT") != SQLITE_OK) {
-        if (msg && msgsz) snprintf(msg, msgsz, "提交失败（%s）", sqlite3_errmsg(db));
-        pldmgr_log("[PLDMGR] tile_db: bg COMMIT 失败：%s\n", sqlite3_errmsg(db));
-        td_exec(db, "ROLLBACK");
-        sqlite3_close(db);
-        return -2;
+        if (st) sqlite3_finalize(st);
     }
     sqlite3_close(db);
+    return rc;
+}
 
-    pldmgr_log("[PLDMGR] tile_db: %s 背景已登记 -> %s（%d 行，主屏实时重绘）\n",
-               tid, value, written);
-    return 0;
+/* 背景那一列的老入口，语义一个字没变（写 <dds>?ts=<mtime>），只是挪到了通用实现上：
+ * 图标与背景的差别只有列名，多抄一份扫描逻辑就等于多一份会漂的判据。 */
+int tile_db_set_bg(const char *tid, const char *dds_path,
+                   char *msg, size_t msgsz) {
+    return tile_db_set_image(tid, TILE_DB_BG_COLUMN, dds_path, msg, msgsz);
 }

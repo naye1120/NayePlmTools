@@ -68,7 +68,9 @@ SRCS += src/tile_db.c
 # [CN-FORK] v0.5.2.158 「个性化软件」：读写 app.db 每个账号 tbl_iconinfo_<uid>.visible。
 # 与 tile_db.c 同一套理由 —— 要真跑 SQL，所以只能挂在合并版 sqlite3 上。
 SRCS += src/app_visibility.c
-# [CN-FORK] v0.5.2.164 应用置顶（与 visible 同弹窗的另一个开关，落点 JSON 而非 app.db）
+# [CN-FORK] v0.5.2.164 应用置顶（与 visible 同弹窗的另一个开关）
+# v0.6.0.179 起它写的是**主机** app.db 的 MyHome 固定列表（见 src/app_pin.c），
+# 落点 JSON /data/nayeplmtools/app_pins.json 只是意图记录，供开机对账重放。
 SRCS += src/app_pin.c
 # [CN-FORK] v0.5.2.166 主屏固定列表：读写主机 app.db 的 tbl_group_<uid>（置顶 / 排序的真身）
 SRCS += src/tile_group.c
@@ -76,6 +78,15 @@ SRCS += src/tile_group.c
 SRCS += src/game_prefs.c
 # [CN-FORK] v0.5.2.163 背景音乐（mp3/ogg/wav 落 /data/nayeplmtools/music/<TID>.<ext>）
 SRCS += src/game_music.c
+# [CN-FORK] v0.6.0.179 内置软件的图标 / 背景。分成两个翻译单元是刻意的：
+#   · app_tile.c       只有路径 / 版本号 / 落盘 / 底片（纯文件，不依赖 sqlite 与 stb），
+#                      app_visibility.c 与几个宿主测试要它，不该被拖重；
+#   · app_tile_write.c PNG 规范化 + DDS 编码 + 写 app.db 的两列（icon0Info/pic0Info）。
+SRCS += src/app_tile.c src/app_tile_write.c
+# [CN-FORK] v0.6.0.179 「个性化软件」的启动对账守护（显隐 / 置顶 / 图标背景三条重放）。
+# 单独一个翻译单元：它一被链接就把 app_tile_write.c 那套编解码器拉进来，
+# 宿主测试不编它就等于不存在（见 src/app_personalize.c 头注释）。
+SRCS += src/app_personalize.c
 OBJS := $(SRCS:.c=.o)
 # [CN-FORK] 版本取自 pldmgr.h MENU_VERSION；ELF 产物名带版本号：NayePlmTools_<version>.elf
 VERSION := $(shell grep '#define MENU_VERSION' include/pldmgr.h | awk '{print $$3}' | tr -d '"')
