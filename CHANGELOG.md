@@ -1,3 +1,60 @@
+## v0.6.0.178 (CN-FORK) — 2026-10-17 · 修「升级了，/data/ps5_autoloader/ 里还是旧版本」
+
+> 用户口径（原文）：「177 版本并没有实现写入这个位置」（截图 `/data/ps5_autoloader/` 里
+> 只有 `NayePlmTools_0.6.0.176-me.elf`）；追问后回答：「我已经在载荷管理上传了，
+> 但是 autoloader 并没有更新」，且 `autoload.txt` 里**确实**有 176 那一行。
+
+### ① 「装完同步引导器」这条路，只有一条安装路径真的会走
+
+同步逻辑是 `payload_mgr.c` 的 `ps5_autoloader_sync()`，逐条读调用点：
+
+| 安装路径 | 旧行为 |
+|---|---|
+| 网页上传 `/manage:upload` | ✅ 会同步（但 resolve 失败时静默跳过，见 ②） |
+| 从 U 盘导入 `payload_mgr_usb_move()` | ❌ **整条没调同步** |
+| 仓库 / 自定义源安装 `sources_repo_install()` | ❌ **整条没调同步** |
+| 自更新 `repository_install_self_update()` | ❌ 从不调同步（落点是 `payloads/pldmgr/`） |
+| 启动自检 `payload_mgr_bootstrap_self_sync()` | ❌ **死代码**，见 ③ |
+
+`HANDOVER.md:2896` 与 `AboutView.jsx` 一直写着「安装 payload 后同步登记到
+`ps5_autoloader`（全局覆盖）」「装完自动同步越狱引导器」—— 实际上只有上传那一条兑现。
+
+### ② 同步函数里三处静默 return：出错时不留任何痕迹
+
+「txt 读不开」「没匹配到条目」「复制失败」在旧代码里做的事完全一样：什么都不做、什么都不记。
+所以真机上「上传成功但引导器没变」根本查不出卡在哪。现在每条分支都写 `[AutoloaderSync]`
+日志（含 `strerror`）。上传路径也不再靠 `slot_resolve()` 反解路径 —— 解析失败时旧代码静默
+跳过，现在直接用 `slot_commit_file()` 填好的 `meta.payload_path`。
+
+### ③ 启动对账是 slot 化之前的死代码
+
+`payload_mgr_bootstrap_self_sync()` 扫的是 `payloads/<工具名>/`，而 v0.6.0 起载荷落在
+`payloads/local|repo/<key>/`（`slot.c`），那个目录不存在 → 直接 return，整段从未生效。
+重写后：在 `payloads/pldmgr/`（自更新落点）与全部槽位里找**最新**的一份自己，只在比在册
+版本新时才换进引导器（**绝不倒退**）；没登记时不新登记（登记只发生在用户明确安装时）。
+自更新成功后的同步走的正是这里：`main.c` 交棒重启 → 新版本启动 → 对账，
+所以不必在仓库层再挂钩子。
+
+### ④ 补登记，并沿用现有命名
+
+新增 `allow_register` 参数：本工具（`NayePlmTools`，兼容旧名 `pldmgr_*`）没登记时追加
+登记（`!1000` + 文件名），第三方载荷仍旧「已登记才换版本」，不会被顺手塞进开机自启。
+引导器目录里的文件名沿用现有约定 `NayePlmTools_<版本><变体>.elf`（`-me`/`-ga` 由
+`-DTILE_VARIANT_GAME` 决定），没有引入新名字。
+
+### ⑤ 测试
+
+新增 `tests/run_autoloader_sync_tests.py` + `tests/autoloader_sync_driver.c`（进 `make test-host`）：
+把 `include/pldmgr.h` 的数据路径改写到临时目录（同 `run_storage_tests.py` 的做法），用真的
+`payload_mgr.c`/`slot.c`/`sources.c` 跑 9 个用例 / 130 条断言 —— 换版本、补登记、第三方不
+登记、第三方换版本、U 盘导入同步、启动对账（对齐 / 不倒退 / 不新登记）、0 字节残包自愈。
+顺带给 `PAYLOADS_STORAGE_DIR`、`PS5_AUTOLOADER_DIR`、`PS5_AUTOLOADER_CONFIG` 补
+`#ifndef` 保护（宿主测试用 -D 覆盖，同 `BASE_DATA_DIR` 那批）。
+
+### ⑥ 出包
+
+`NayePlmTools_0.6.0.178-me.elf`（NAYE00001 媒体栏）/ `-ga.elf`（NAYE00004 游戏栏）。
+
 ## v0.6.0.177 (CN-FORK) — 2026-10-17 · 修「无缘无故 405」+ 多媒体远程备份
 
 > 用户口径（原文）：「很多功能无缘无故 405」；另要求设置页加**多媒体存档配置**（SMB/FTP 远端 +

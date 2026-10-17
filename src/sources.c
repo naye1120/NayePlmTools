@@ -1119,16 +1119,25 @@ int sources_repo_install(const char *source_url, const char *id,
     strncpy(meta->details_url, entry->details_url, sizeof(meta->details_url) - 1);
 
     char committed_slot[128];
+    char committed_payload[640] = "";
     /* An omitted mode preserves the established reinstall/update behavior;
      * explicit new is exclusive, and keep_both also works within one source. */
     const char *commit_mode = mode && mode[0] ? mode : "replace";
     int committed = slot_commit_file(target_slot, part_path, commit_mode, meta, !is_mode_replace && !is_mode_keep_both,
                                      committed_slot, sizeof(committed_slot));
+    if (!committed && meta->payload_path[0])
+        snprintf(committed_payload, sizeof(committed_payload), "%s", meta->payload_path);
     free(meta); remove(part_path);
     if (committed) {
         free(entry);
         json_append(&jb, "{\"ok\":false,\"message\":\"Storage commit failed (conflict or I/O error)\"}"); return -1;
     }
+    /* [CN-FORK] v0.6.0.178 仓库安装同样是一次「装载荷」：引导器目录 /data/ps5_autoloader/
+     * 里有这个工具时要换成新版本（本工具没登记也要登记）。此前只有网页上传那条路会同步，
+     * 从仓库/自定义源装完新版之后引导器停在旧版本，就是这条路径漏了。 */
+    if (committed_payload[0] && access(committed_payload, F_OK) == 0)
+        payload_mgr_autoloader_sync(entry->filename, committed_payload,
+                                    payload_mgr_is_self_payload(entry->filename));
     snprintf(target_slot, sizeof(target_slot), "%s", committed_slot);
     int old_cleanup_failed = 0;
     /* Retire a conflicting source only after the new slot is usable. */

@@ -115,6 +115,7 @@ test-host:
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_repository_icons_tests.py
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_self_update_tests.py
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_storage_tests.py
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_autoloader_sync_tests.py
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_autoload_tests.py
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_launcher_tests.py
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/run_process_tests.py

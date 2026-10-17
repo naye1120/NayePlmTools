@@ -163,7 +163,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.6.0.177" /* [CN-FORK] 本 fork 版本：上游基线 0.6.0（已合并 upstream/main，merge 见 HANDOVER.md §0）+ 构建序号（.177，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.6.0.178" /* [CN-FORK] 本 fork 版本：上游基线 0.6.0（已合并 upstream/main，merge 见 HANDOVER.md §0）+ 构建序号（.178，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，
@@ -203,14 +203,35 @@
 /* [CN-FORK] 安全模式哨兵文件：存在（内容无所谓）即在下次启动跳过全部引导期高危动作。
  * v0.5.1.64 起硬件探测已整体删除，本哨兵只负责跳过装机/杀光盘/开浏览器/自启序列。 */
 #define PLDMGR_SAFE_MODE_FLAG "/data/nayeplmtools/safe_mode"
+/* [CN-FORK] v0.6.0.178 起下面三个路径也允许宿主测试用 -D 覆盖（`#ifndef` 保护，
+ * 同 BASE_DATA_DIR 那批）：引导器同步的真实用例要凭空造 /data/ps5_autoloader
+ * 与 /data/nayeplmtools/payloads 两个目录，主机上跑不了。 */
+#ifndef PAYLOADS_STORAGE_DIR
 #define PAYLOADS_STORAGE_DIR "/data/nayeplmtools/payloads"
+#endif
 /* [CN-FORK] v0.6.0.176 U 盘上本工具的库目录名。上游用 "pldmgr"；本 fork 的数据目录
  * 整体叫 nayeplmtools（见 BASE_DATA_DIR 与 SCAN_DIRS），U 盘上保持一致。
  * 旧名 pldmgr / payload-manager 仍被当作 legacy 识别（见 src/slot.c 的迁移判定）。 */
 #define PLDMGR_USB_LIB_NAME "nayeplmtools"
 /* [CN-FORK] 越狱引导器的自动加载目录，安装 payload 后若同名工具在此则同步更新 */
+#ifndef PS5_AUTOLOADER_DIR
 #define PS5_AUTOLOADER_DIR    "/data/ps5_autoloader"
+#endif
+#ifndef PS5_AUTOLOADER_CONFIG
 #define PS5_AUTOLOADER_CONFIG PS5_AUTOLOADER_DIR "/autoload.txt"
+#endif
+/* [CN-FORK] v0.6.0.178 本工具自己的名字。autoload.txt 里按「去掉版本号的工具名」匹配
+ * 工具，这个名字同时决定引导器目录里的文件名前缀：NayePlmTools_<版本><变体>.elf。
+ * 注意它不是 is_pldmgr_name() 认的名字 —— 那个白名单是给「本工具不许从网页上传」
+ * 用的历史遗留，两者故意不同名。 */
+#define PLDMGR_APP_NAME "NayePlmTools"
+/* [CN-FORK] 出包变体后缀：加 -DTILE_VARIANT_GAME 出的是游戏栏包（NAYE00004），
+ * 默认是媒体栏包（NAYE00001）。引导器目录里沿用这套后缀。 */
+#ifdef TILE_VARIANT_GAME
+#define PLDMGR_VARIANT_SUFFIX "-ga"
+#else
+#define PLDMGR_VARIANT_SUFFIX "-me"
+#endif
 #define REPOSITORY_SOURCE_URL                                                  \
   "https://itsplk.github.io/ps5-payloads-mirror/payloads_v2.json"
 #define LEGACY_REPOSITORY_SOURCE_URL                                           \

@@ -267,8 +267,10 @@ int main(int argc, char *argv[]) {
      * [CN-FORK] v0.5.1.65 默认云端仓库关掉时 repository_ensure_fresh() 内部直接返回，不会发请求 */
     repository_ensure_fresh(0);
 
-    /* [CN-FORK] 启动自检：将已安装的 NayePlmTools 同步到 ps5_autoloader，
-     * 解决旧版本没有 sync 代码导致首次升级到 .20 时 ps5_autoloader 未更新的问题 */
+    /* [CN-FORK] 启动对账：把引导器目录里那份本工具对齐到 storage / 自更新目录里最新的一份。
+     * v0.6.0.178 前这段是死代码（找的是 slot 化之前的旧布局 payloads/<工具名>/，
+     * v0.6.0 起载荷落在 payloads/local|repo/<key>/），所以「自更新成功了、引导器还是旧版」
+     * 一直没人管；现在自更新重启后走的正是这里。 */
     payload_mgr_bootstrap_self_sync();
 
     /* Start Autoload Sequence (if config exists) */
