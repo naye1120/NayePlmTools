@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "페이로드 매니저가 실행될 때 브라우저를 자동으로 실행합니다.",
   "settings.auto_install_title": "앱 런처 자동 설치",
   "settings.auto_install_desc": "페이로드 매니저 앱을 PS5 홈 화면에 자동으로 설치합니다.",
+  "settings.kill_disc_title": "디스크 플레이어 종료",
+  "settings.kill_disc_desc": "시작 시 디스크 플레이어 앱을 자동으로 종료합니다(BD-JB 사용자용).",
   "settings.scan_usb_title": "USB 페이로드 검색",
   "settings.scan_usb_desc": "USB 드라이브 루트 디렉토리(/mnt/usb0-7)에서 .elf 및 .bin 파일을 검색합니다.",
   "settings.autoload_delay_title": "자동 실행 지연",

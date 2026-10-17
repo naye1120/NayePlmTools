@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "Abrir automaticamente o navegador quando o Payload Manager for executado.",
   "settings.auto_install_title": "Instalar o atalho do App",
   "settings.auto_install_desc": "Incluir automaticamente o atalho do Payload Manager na tela principal do PS5.",
+  "settings.kill_disc_title": "Fechar o reprodutor de discos",
+  "settings.kill_disc_desc": "Fechar automaticamente o reprodutor de discos na inicialização (para usuários do BD-JB).",
   "settings.scan_usb_title": "Verificar payloads no dispositivo USB",
   "settings.scan_usb_desc": "Ative a busca por arquivos .elf e .bin no caminho padrão nas unidades USB (/mnt/usb0-7).",
   "settings.autoload_delay_title": "Atraso do carregamento automático",

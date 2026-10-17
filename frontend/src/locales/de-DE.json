@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "Startet den Browser automatisch, sobald der Payload Manager ausgeführt wird.",
   "settings.auto_install_title": "App Launcher automatisch installieren",
   "settings.auto_install_desc": "Installiert den Payload Manager automatisch auf dem PS5-Startbildschirm.",
+  "settings.kill_disc_title": "Disc-Player beenden",
+  "settings.kill_disc_desc": "Disc-Player beim Start automatisch beenden (für BD-JB-Nutzer).",
   "settings.scan_usb_title": "USB-Payloads durchsuchen",
   "settings.scan_usb_desc": "Durchsucht das Stammverzeichnis angeschlossener USB-Speicher (/mnt/usb0-7) nach .elf- und .bin-Dateien.",
   "settings.autoload_delay_title": "Autoload-Verzögerung",

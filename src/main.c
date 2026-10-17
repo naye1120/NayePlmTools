@@ -246,6 +246,11 @@ int main(int argc, char *argv[]) {
         pldmgr_install_app_if_needed();
     }
 
+    /* Kill Disc Player if running (BD-JB host) and enabled in config */
+    if (cfg.kill_disc_player) {
+        ps5_kill_disc_player();
+    }
+
     /* Signal Resilience */
     signal(SIGPIPE, SIG_IGN);
     signal(SIGHUP, SIG_IGN);

@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix='pldmgr-loader-') as temp:
     subprocess.run(flags+[str(obj),'tests/launcher_driver.c','-Wl,-dead_strip' if sys.platform=='darwin' else '-Wl,--gc-sections','-o',str(binary)],cwd=ROOT,check=True)
     small=build/'small.elf';small.write_bytes(bytes(range(256))*80)
     big=build/'big.elf';big.write_bytes(bytes(range(256))*4096)
-    for case in ['ok','partial','interrupt','socket','fcntl','connect','socket-error','read','zero','connect-stall','send-stall','cancel-before','cancel-send','cancel-wait']:
+    for case in ['ok','partial','interrupt','socket','fcntl','connect','socket-error','read','zero','connect-stall','send-stall','cancel-before','cancel-send','cancel-wait','disc-none','disc-other','disc-title-error','disc-suspend-error','disc-ok','disc-no-pid','disc-kill-error','disc-gone']:
         fixture=big if case in ['send-stall','cancel-wait'] else small
         result=subprocess.run([str(binary),case,str(fixture)],text=True,capture_output=True,timeout=10)
         assert result.returncode==0,result.stdout+result.stderr

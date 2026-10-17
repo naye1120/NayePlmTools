@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "Payload Manager yürütüldüğünde tarayıcıyı otomatik olarak başlatın.",
   "settings.auto_install_title": "Otomatik Uygulama Başlatıcısı",
   "settings.auto_install_desc": "Payload Manager uygulamasını otomatik olarak PS5 ana ekranına yükleyin.",
+  "settings.kill_disc_title": "Disk oynatıcıyı kapat",
+  "settings.kill_disc_desc": "Başlangıçta disk oynatıcı uygulamasını otomatik olarak kapat (BD-JB kullanıcıları için).",
   "settings.scan_usb_title": "USB Veri Paketlerini Tara",
   "settings.scan_usb_desc": "USB sürücülerinin kök dizininde (/mnt/usb0-7) .elf ve .bin dosyalarının taranmasını etkinleştirin.",
   "settings.autoload_delay_title": "Otomatik Gecikmesi",

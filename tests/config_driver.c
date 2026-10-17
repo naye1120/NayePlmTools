@@ -43,9 +43,19 @@ static void fault(const char *name,int at) { fault_name=name; fault_at=at; fault
 static char *read_text(const char *path) { char *text; size_t size; CHECK(!read_file_text(path,&text,&size)); return text; }
 static void expect_text(const char *path,const char *expected) { char *text=read_text(path); CHECK(!strcmp(text,expected)); free(text); }
 static void scalar(void) {
+    PldmgrConfig initial; config_read(&initial); CHECK(initial.kill_disc_player==1);
+    /* Legacy values survive unrelated saves; toggling writes one canonical key. */
+    CHECK(!config_upsert_value("KILL_DISC_PLAYER_ON_STARTUP","0"));
+    CHECK(config_read_bool("KILL_DISC_PLAYER_ON_STARTUP",1)==0);
     CHECK(config_read_bool("AUTOLOAD_ENABLED",1)==1);
     CHECK(!config_handle_set_json("{\"AUTO_BROWSER_OPEN\":false}"));
-    PldmgrConfig cfg; config_read(&cfg); CHECK(cfg.auto_browser_open==0); CHECK(cfg.autoload_delay==5); CHECK(cfg.auto_install_app==1);
+    PldmgrConfig cfg; config_read(&cfg); CHECK(cfg.auto_browser_open==0); CHECK(cfg.autoload_delay==5); CHECK(cfg.auto_install_app==1 && cfg.kill_disc_player==0);
+    CHECK(!config_handle_set_json("{\"KILL_DISC_PLAYER_ON_STARTUP\":true}")); config_read(&cfg); CHECK(cfg.kill_disc_player==1 && cfg.auto_browser_open==0);
+    CHECK(!config_handle_set_json("{\"KILL_DISC_PLAYER_ON_STARTUP\":false,\"FAVORITES\":\"local/keep\",\"AUTOLOAD_LIST\":\"local/keep\"}"));
+    config_read(&cfg); CHECK(cfg.kill_disc_player==0);
+    CHECK(config_read_bool("KILL_DISC_PLAYER_ON_STARTUP",1)==0);
+    char *disc_saved=read_text(PLDMGR_CONFIG_PATH);
+    char *key=strstr(disc_saved,"KILL_DISC_PLAYER_ON_STARTUP=0\n"); CHECK(key && !strstr(key+1,"KILL_DISC_PLAYER_ON_STARTUP=")); free(disc_saved);
     CHECK(!config_handle_set_json("{\"SCAN_USB_PAYLOADS\":true}")); config_read(&cfg); CHECK(cfg.scan_usb_payloads==1 && cfg.auto_browser_open==0);
     CHECK(!config_handle_set_json("{\"AUTO_INSTALL_APP\":false}")); config_read(&cfg); CHECK(cfg.auto_install_app==0 && cfg.scan_usb_payloads==1);
     CHECK(!config_handle_set_json("{\"MULTI_SOURCES_ENABLED\":true}")); config_read(&cfg); CHECK(cfg.multi_sources_enabled==1);
@@ -67,7 +77,7 @@ static void scalar(void) {
 static void validation(void) {
     CHECK(!config_handle_set_json("{\"AUTOLOAD_ENABLED\":true,\"FAVORITES\":\"local/keep\",\"AUTOLOAD_LIST\":\"local/keep\"}"));
     char *old=read_text(PLDMGR_CONFIG_PATH);
-    const char *invalid[]={"{", "{} garbage", "[]", "{\"AUTOLOAD_ENABLED\":false,\"AUTOLOAD_DELAY\":-1}",
+    const char *invalid[]={"{\"KILL_DISC_PLAYER_ON_STARTUP\":0}", "{\"KILL_DISC_PLAYER_ON_STARTUP\":null}", "{\"KILL_DISC_PLAYER_ON_STARTUP\":true,\"KILL_DISC_PLAYER_ON_STARTUP\":false}", "{", "{} garbage", "[]", "{\"AUTOLOAD_ENABLED\":false,\"AUTOLOAD_DELAY\":-1}",
         "{\"FAVORITES\":\"local/change\",\"AUTO_BROWSER_OPEN\":0}", "{\"AUTOLOAD_ENABLED\":null}", "{\"AUTOLOAD_ENABLED\":\"true\"}",
         "{\"AUTOLOAD_DELAY\":1.5}", "{\"AUTOLOAD_DELAY\":1e2}", "{\"AUTOLOAD_DELAY\":3601}", "{\"AUTOLOAD_DELAY\":999999999999999999999999}",
         "{\"AUTOLOAD_ENABLED\":true,\"AUTOLOAD_ENABLED\":false}", "{\"AUTOLOAD_DELAY\":1,\"AUTOLOAD_D\\u0045LAY\":2}",

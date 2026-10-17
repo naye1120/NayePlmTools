@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "Автоматично запускати браузер при виконанні навантаження Менеджера.",
   "settings.auto_install_title": "Автоматично встановлювати іконку Менеджера",
   "settings.auto_install_desc": "Автоматично встановлювати додаток менеджера на головний екран PS5.",
+  "settings.kill_disc_title": "Закрити програвач дисків",
+  "settings.kill_disc_desc": "Автоматично закривати програвач дисків під час запуску (для користувачів BD-JB).",
   "settings.scan_usb_title": "Сканувати навантаження з USB",
   "settings.scan_usb_desc": "Увімкнути сканування файлів .elf та .bin у кореневому каталозі USB-накопичувачів (/mnt/usb0-7).",
   "settings.autoload_delay_title": "Затримка автозавантаження",

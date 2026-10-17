@@ -1,4 +1,5 @@
 #include "ps5_launcher.h"
+#include "process_mgr.h"
 #include "pldmgr.h"
 #include "slot.h"
 #include "repository.h"
@@ -14,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <signal.h>
 #include <stdint.h>
 #include <errno.h>
 #include <time.h>
@@ -120,5 +122,69 @@ int ps5_launch_browser(const char *uri) {
     pldmgr_notify("[PLDMGR] !!! Failed to launch browser.");
     return -1;
   }
+  return 0;
+}
+
+/* LncUtil Externs */
+extern int sceLncUtilGetAppIdOfRunningBigApp(void);
+extern int sceLncUtilGetAppTitleId(uint32_t app_id, char *title_id);
+extern int sceLncUtilSuspendApp(uint32_t app_id);
+extern int sceLncUtilKillApp(uint32_t app_id);
+
+int ps5_kill_disc_player(void) {
+  const char *target_process = "SceDiscPlayer";
+  const char *target_title_id = "NPXS40140";
+
+  uint32_t app_id = sceLncUtilGetAppIdOfRunningBigApp();
+  if (app_id == UINT32_MAX) {
+    return 0; /* No app running */
+  }
+
+  char title_id[16] = {0};
+  if (sceLncUtilGetAppTitleId(app_id, title_id) != 0) {
+    return 0; /* Could not get title ID */
+  }
+
+  if (strcmp(title_id, target_title_id) != 0) {
+    return 0; /* Not the disc player */
+  }
+
+  pldmgr_notify("Disc Player detected. Terminating...\n");
+
+  /* 1. Suspend */
+  if (sceLncUtilSuspendApp(app_id) != 0) {
+    pldmgr_notify("Failed to suspend Disc Player");
+    return -1;
+  }
+
+  /* Wait for home screen transition stability */
+  sleep(2);
+
+  /* 2. SIGKILL */
+  pid_t pid = process_find_pid(target_process);
+  if (pid != -1) {
+    pldmgr_log("Sending SIGKILL to %s (PID: %d)\n", target_process, pid);
+    if (kill(pid, SIGKILL) == 0) {
+      pldmgr_log("SIGKILL Sent to Disc Player");
+    } else {
+      pldmgr_notify("Warning: SIGKILL Failed");
+    }
+    sleep(1);
+  }
+
+  /* 3. LncUtil Kill */
+  int result = sceLncUtilKillApp(app_id);
+  if (result == 0) {
+    pldmgr_log("Disc Player Fully Closed");
+  } else {
+    /* Check if it's already gone (crashed/closed) */
+    if ((uint32_t)sceLncUtilGetAppIdOfRunningBigApp() == UINT32_MAX) {
+      pldmgr_log("Disc Player Closed");
+    } else {
+      pldmgr_notify("!!! Failed to kill Disc Player (result: %d)", result);
+      return -1;
+    }
+  }
+
   return 0;
 }

@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "ペイロードマネージャーが実行された時に、ブラウザを自動的に起動します。",
   "settings.auto_install_title": "アプリランチャーの自動インストール",
   "settings.auto_install_desc": "ペイロードマネージャーアプリをPS5のホーム画面に自動でインストールします。",
+  "settings.kill_disc_title": "ディスクプレーヤーを終了",
+  "settings.kill_disc_desc": "起動時にディスクプレーヤーを自動的に終了します（BD-JBユーザー向け）。",
   "settings.scan_usb_title": "USBペイロード検索",
   "settings.scan_usb_desc": "USBドライブのルートディレクトリ（/mnt/usb0-7）から .elf および .bin ファイルを検索します。",
   "settings.autoload_delay_title": "自動実行の遅延",

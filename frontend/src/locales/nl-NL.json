@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "Open de browser automatisch wanneer de Payload Manager-payload wordt uitgevoerd.",
   "settings.auto_install_title": "App automatisch installeren",
   "settings.auto_install_desc": "Installeer de Payload Manager-app automatisch op het startscherm van de PS5.",
+  "settings.kill_disc_title": "Discspeler afsluiten",
+  "settings.kill_disc_desc": "Sluit de Discspeler automatisch af bij het opstarten (voor BD-JB-gebruikers).",
   "settings.scan_usb_title": "USB-payloads zoeken",
   "settings.scan_usb_desc": "Zoek naar .elf- en .bin-bestanden in de hoofdmap van USB-stations (/mnt/usb0-7).",
   "settings.autoload_delay_title": "Wachttijd voor automatisch laden",

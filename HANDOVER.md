@@ -7,7 +7,7 @@
 - 分支：`cn-fork`（upstream = `https://github.com/itsPLK/ps5-payload-manager`）。
   **当前基线 = 上游 v0.6.0（`fe5ca81`）**，2026-10-14 全量合并（分支 `merge-upstream-060`）；
   上一基线 v0.5.2（merge 提交 `97bb4dc`）。合并详情与「已知欠账」见 `FORK-CN.md` §4.1 与 `CHANGELOG.md` 顶部 `.176` 条。
-> - 版本：`MENU_VERSION = 0.6.0.180`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
+> - 版本：`MENU_VERSION = 0.6.1.181`（`include/pldmgr.h`）。fork 规则 = 上游基线 + 构建序号，每次调整构建前 +1。
 >   ⚠ **合并 v0.6.0 后新增两条硬约束**：① 上游 4 个函数栈帧超 32 KB（`slot_write_meta` 111 KB、
 >   `sources_multi_repository_list_json` 66 KB、`payload_mgr_list_json` 53 KB、`slot_migrate_legacy` 42 KB）
 >   已由 fork 堆化修复，**上游 CI 不跑 `tools/check_stack_frames.sh`**，改动相关函数后务必本地跑一次；

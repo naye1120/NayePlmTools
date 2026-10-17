@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "Automatically launch the browser when Payload Manager payload is executed.",
   "settings.auto_install_title": "Auto-install App Launcher",
   "settings.auto_install_desc": "Automatically install the Payload Manager app to the PS5 home screen.",
+  "settings.kill_disc_title": "Kill Disc Player",
+  "settings.kill_disc_desc": "Automatically terminate the Disc Player application on startup (for BD-JB users).",
   "settings.scan_usb_title": "Scan USB Payloads",
   "settings.scan_usb_desc": "Enable scanning for .elf and .bin files in the root directory of USB drives (/mnt/usb0-7).",
   "settings.autoload_delay_title": "Autoload Delay",

@@ -375,7 +375,13 @@ def config_network_tests(binary, storage):
         assert request("POST", "/set_config", '{"AUTO_BROWSER_OPEN":false}')[0] == 200
         status, body = request("GET", "/get_config")
         assert status == 200 and json.loads(body)["AUTO_BROWSER_OPEN"] is False
-        for bad in ['{', '{"AUTOLOAD_ENABLED":false,"AUTOLOAD_DELAY":-1}', '{"FAVORITES":[1]}']:
+        assert json.loads(body)["KILL_DISC_PLAYER_ON_STARTUP"] is True
+        for enabled in [False, True]:
+            assert request("POST", "/set_config", json.dumps({"KILL_DISC_PLAYER_ON_STARTUP": enabled}))[0] == 200
+            for route in ["/get_config", "/autoload_status"]:
+                status, body = request("GET", route)
+                assert status == 200 and json.loads(body)["KILL_DISC_PLAYER_ON_STARTUP"] is enabled
+        for bad in ['{', '{"AUTOLOAD_ENABLED":false,"AUTOLOAD_DELAY":-1}', '{"FAVORITES":[1]}', '{"KILL_DISC_PLAYER_ON_STARTUP":0}']:
             assert request("POST", "/set_config", bad)[0] == 400
         # A genuine filesystem failure must produce 500 and retain old config.
         old = (storage / "nayeplmtools_config.txt").read_bytes()

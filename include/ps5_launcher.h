@@ -24,4 +24,9 @@ int ps5_launch_elf_cancellable(const char *path, PayloadLaunchCancelled cancelle
  */
 int ps5_launch_browser(const char* uri);
 
+/**
+ * Kill the "Disc Player" app (NPXS40140) if it is running.
+ * @return 0 if not running or successfully killed, -1 on error.
+ */
+int ps5_kill_disc_player(void);
 

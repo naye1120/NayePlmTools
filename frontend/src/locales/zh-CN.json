@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "启动 Payload 管理器时自动打开浏览器。",
   "settings.auto_install_title": "自动安装应用启动器图标",
   "settings.auto_install_desc": "自动将 Payload 管理器的网页快捷方式安装到 PS5 主屏幕。",
+  "settings.kill_disc_title": "关闭光盘播放器",
+  "settings.kill_disc_desc": "启动时自动关闭光盘播放器应用（适用于 BD-JB 用户）。",
   "settings.scan_usb_title": "扫描 USB 存储中的 Payload",
   "settings.scan_usb_desc": "启用对 USB 存储根目录（/mnt/usb0-7）中 .elf 和 .bin 文件的扫描。",
   "settings.autoload_delay_title": "自动加载延迟",

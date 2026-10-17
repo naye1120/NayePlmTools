@@ -15,3 +15,8 @@ int launcher_test_fcntl(int,int,...);
 #define poll launcher_test_poll
 #define getsockopt launcher_test_getsockopt
 #define fcntl launcher_test_fcntl
+
+int launcher_test_kill(pid_t,int);
+unsigned int launcher_test_sleep(unsigned int);
+#define kill launcher_test_kill
+#define sleep launcher_test_sleep

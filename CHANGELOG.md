@@ -1,3 +1,12 @@
+## v0.6.1.181 (CN-FORK) — 2026-10-18 · 合并上游 v0.6.1（基线升级）
+
+> 拉取并合并 upstream/main 至 v0.6.1（`6a47b85`）。上游自 v0.6.0 基线仅两个提交：
+> `71f983f` Revert「移除开机杀光盘播放器」把该功能加回、`6a47b85` 版本号 bump 到 v0.6.1。
+> 本 fork 在合并 v0.6.0 时**从未删除** kill_disc_player，配置子系统（`config.c` 三元组键表、
+> `DEFAULT_REPO_ENABLED`/`FAN_*`）、`/get_config` 输出、设置页开关均为上游的超集，
+> 故 `config.h`/`config.c`/`http_server.c`/`SettingsView.jsx` 四处代码冲突一律保留 fork 侧。
+> 仅把版本基线记为 0.6.1、构建序号续到 `.181`；⚠ 数据目录仍按 fork 约定用 `/data/nayeplmtools/`（上游 `/data/pldmgr/` 不采纳）。
+
 ## v0.6.0.180 (CN-FORK) — 2026-10-18 · 修复「刷新总落回仓库配置页」+ 预置源改用 payloads_v2.json（仓库图标接入）
 
 > 用户口径（原文）：「无论在哪个页面刷新，刷新完最后都会在仓库配置页面。另外自定义仓库的图标没有接入过来。」

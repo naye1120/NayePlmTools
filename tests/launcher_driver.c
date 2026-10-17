@@ -29,6 +29,35 @@ int slot_open_payload(const char *path,char *canonical,size_t size) { CHECK(!str
 int slot_open_self_update(const char *path) { (void)path; abort(); }
 int repository_self_update_version_fd(int fd, char *version, size_t size) { (void)fd; (void)version; (void)size; abort(); }
 int slot_version_compare(const char *a, const char *b) { (void)a; (void)b; abort(); }
+/* Disc-player calls are recorded; host tests never signal a real process. */
+static int suspends, app_kills, signals, lookups, slept, app_queries;
+void pldmgr_notify(const char *fmt,...) { (void)fmt; }
+int sceLncUtilGetAppIdOfRunningBigApp(void) {
+    app_queries++;
+    return !strcmp(mode,"disc-none") || (!strcmp(mode,"disc-gone") && app_queries>1) ? -1 : 42;
+}
+int sceLncUtilGetAppTitleId(uint32_t app_id,char *title) {
+    CHECK(app_id==42);
+    if(!strcmp(mode,"disc-title-error")) return -1;
+    strcpy(title,!strcmp(mode,"disc-other") ? "OTHERAPP" : "NPXS40140"); return 0;
+}
+int sceLncUtilSuspendApp(uint32_t app_id) { CHECK(app_id==42); suspends++; return !strcmp(mode,"disc-suspend-error") ? -1 : 0; }
+int sceLncUtilKillApp(uint32_t app_id) { CHECK(app_id==42 && suspends==1); app_kills++; return !strcmp(mode,"disc-kill-error") || !strcmp(mode,"disc-gone") ? -1 : 0; }
+pid_t process_find_pid(const char *name) { CHECK(!strcmp(name,"SceDiscPlayer") && suspends==1); lookups++; return !strcmp(mode,"disc-no-pid") ? -1 : 123; }
+int launcher_test_kill(pid_t pid,int sig) { CHECK(pid==123 && sig==SIGKILL && suspends==1); signals++; return 0; }
+unsigned int launcher_test_sleep(unsigned int seconds) { slept+=(int)seconds; return 0; }
+static int disc_test(void) {
+    int rc=ps5_kill_disc_player();
+    int skipped=!strcmp(mode,"disc-none") || !strcmp(mode,"disc-other") || !strcmp(mode,"disc-title-error");
+    int suspend_failed=!strcmp(mode,"disc-suspend-error");
+    CHECK(rc== (suspend_failed || !strcmp(mode,"disc-kill-error") ? -1 : 0));
+    CHECK(suspends==(skipped ? 0 : 1));
+    CHECK(app_kills==(skipped || suspend_failed ? 0 : 1));
+    CHECK(lookups==app_kills);
+    CHECK(signals==(!strcmp(mode,"disc-no-pid") ? 0 : app_kills));
+    CHECK(slept==2*app_kills+signals);
+    printf("Disc Player: %s passed\n",mode); return 0;
+}
 static void *receive_bytes(void *unused) {
     (void)unused;
     for(;;) { ssize_t n=recv(peer,received+received_bytes,expected_size-received_bytes,0); if(n==0)break;CHECK(n>0);received_bytes+=(size_t)n;if(received_bytes==expected_size)break; }
@@ -66,6 +95,7 @@ ssize_t launcher_test_read(int fd,void *buffer,size_t size) { if(!strcmp(mode,"r
 static int cancelled(void *context) { (void)context;return !strcmp(mode,"cancel-before") || (!strcmp(mode,"cancel-send") && sent_bytes>=68) || (!strcmp(mode,"cancel-wait") && now_ms()-started>=100); }
 int main(int argc,char **argv) {
     CHECK(argc==3);mode=argv[1];fixture=argv[2];signal(SIGPIPE,SIG_IGN);
+    if(!strncmp(mode,"disc-",5)) return disc_test();
     FILE *f=fopen(fixture,"rb");CHECK(f);CHECK(!fseek(f,0,SEEK_END));long length=ftell(f);CHECK(length>0);expected_size=(size_t)length;CHECK(!fclose(f));
     received=malloc(expected_size);CHECK(received);started=now_ms();
     int rc=ps5_launch_elf_cancellable(fixture,cancelled,NULL);

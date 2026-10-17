@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "Automatycznie uruchamiaj przeglądarkę po wykonaniu payloadu.",
   "settings.auto_install_title": "Autoinstalacja skrótu",
   "settings.auto_install_desc": "Automatycznie instaluj skrót do aplikacji na ekranie głównym PS5.",
+  "settings.kill_disc_title": "Zamknij odtwarzacz płyt",
+  "settings.kill_disc_desc": "Automatycznie zamykaj odtwarzacz płyt przy uruchamianiu (dla użytkowników BD-JB).",
   "settings.scan_usb_title": "Skanuj USB",
   "settings.scan_usb_desc": "Włącz skanowanie w poszukiwaniu plików .elf/.bin w głównym katalogu dysków USB.",
   "settings.autoload_delay_title": "Opóźnienie autostartu",

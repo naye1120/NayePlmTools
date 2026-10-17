@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "Lancer automatiquement le navigateur internet lorsque le payload de Payload Manager est exécuté.",
   "settings.auto_install_title": "Installer l'App Launcher auto",
   "settings.auto_install_desc": "Installer automatiquement l'application Payload Manager sur l'écran d'accueil de la PS5.",
+  "settings.kill_disc_title": "Fermer le lecteur de disque",
+  "settings.kill_disc_desc": "Fermer automatiquement le lecteur de disque au démarrage (pour les utilisateurs de BD-JB).",
   "settings.scan_usb_title": "Scanner les payloads USB",
   "settings.scan_usb_desc": "Activer la recherche de fichiers .elf et .bin à la racine des périphériques USB (/mnt/usb0-7).",
   "settings.autoload_delay_title": "Délai de lancement auto",

@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "تشغيل المتصفح تلقائيًا عند تشغيل حمولة مدير الحمولة.",
   "settings.auto_install_title": "تثبيت مشغل التطبيقات تلقائيًا",
   "settings.auto_install_desc": "تثبيت تطبيق مدير الحمولات تلقائيًا على الشاشة الرئيسة لجهاز PS5.",
+  "settings.kill_disc_title": "إغلاق مشغل الأقراص",
+  "settings.kill_disc_desc": "إغلاق تطبيق مشغل الأقراص تلقائيًا عند بدء التشغيل (لمستخدمي BD-JB).",
   "settings.scan_usb_title": "بحث عن الحمولات في USB",
   "settings.scan_usb_desc": "تمكين البحث عن ملفات .elf و .bin في الدليل الجذر لمحركات أقراص USB (/mnt/usb0-7).",
   "settings.autoload_delay_title": "تأخير التحميل التلقائي",

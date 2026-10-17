@@ -172,6 +172,8 @@
   "settings.auto_open_desc": "هنگامی که پیلود منیجر اجرا شد، مرورگر به طور خودکار راه‌اندازی شود.",
   "settings.auto_install_title": "نصب خودکار لانچر برنامه",
   "settings.auto_install_desc": "اضافه کردن خودکار اپلیکیشن پیلود منیجر به صفحه خانه PS5.",
+  "settings.kill_disc_title": "بستن پخش‌کننده دیسک",
+  "settings.kill_disc_desc": "بستن خودکار برنامه پخش‌کننده دیسک هنگام راه‌اندازی (برای کاربران BD-JB).",
   "settings.scan_usb_title": "اسکن کردن پیلودهای USB",
   "settings.scan_usb_desc": "فعال کردن اسکن فایل‌های elf. و bin. در حافظه روت فلش (/mnt/usb0-7)",
   "settings.autoload_delay_title": "تاخیر شروع اجرای خودکار",
