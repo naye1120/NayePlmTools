@@ -132,7 +132,7 @@ static enum MHD_Result add_response_header(struct MHD_Response *resp,
 /* 表 A：**必须是 POST** 的路由（方法闸门 + CSRF 两处都用）。 */
 static int is_post_route(const char *url) {
     const char *routes[] = { ROUTE_UPLOAD, ROUTE_DELETE, ROUTE_SHUTDOWN,
-        ROUTE_APPLY_SELF_UPDATE,
+        ROUTE_APPLY_SELF_UPDATE, ROUTE_RESTART_SELF,
         ROUTE_SET_CONFIG, ROUTE_ABORT, ROUTE_AUTOLOAD_CLEAR, ROUTE_REPO_REFRESH,
         ROUTE_REPO_INSTALL, ROUTE_SOURCES_SET, ROUTE_SOURCES_ADD,
         ROUTE_SOURCES_REMOVE, ROUTE_REPO_CACHE_CLEAR, ROUTE_USB_MOVE_PERFORM, ROUTE_PROCESS_KILL,
@@ -2292,6 +2292,25 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             abody = "{\"ok\":false,\"message\":\"no pending update or launch failed\"}";
         }
         resp = create_buffer_response(strlen(abody), (void *)abody,
+                                               MHD_RESPMEM_PERSISTENT);
+        add_response_header(resp, "Content-Type", "application/json");
+    } else if (strcmp(url, ROUTE_RESTART_SELF) == 0) {
+        /* [CN-FORK] v0.6.1.191 「本程序」卡点「启动/重启」：原地重新拉起一份与当前运行
+         * 版本相同的已安装 ELF（同版本、不改版本，仅重启进程）。复用开机那套干净交接，
+         * 但走 ps5_restart_self（允许等值版本）。安全约束同 apply_self_update：只有加载器
+         * 确实收下 ELF（返回 0）才置 http_keep_running=0 让当前进程退出、腾出 8911；
+         * 盘上没有同版本副本或拉起失败都保持自身存活。 */
+        char rpath[1024];
+        const char *rbody;
+        if (repository_find_running_copy(rpath, sizeof(rpath)) &&
+            ps5_restart_self(rpath) == 0) {
+            pldmgr_log("[PLDMGR] restart_self: handing off to running copy %s\n", rpath);
+            rbody = "{\"ok\":true,\"restarting\":true}";
+            http_keep_running = 0;
+        } else {
+            rbody = "{\"ok\":false,\"message\":\"no installed copy matches the running version, or launch failed\"}";
+        }
+        resp = create_buffer_response(strlen(rbody), (void *)rbody,
                                                MHD_RESPMEM_PERSISTENT);
         add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_LOG) == 0) {

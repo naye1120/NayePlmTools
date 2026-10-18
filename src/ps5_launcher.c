@@ -54,8 +54,13 @@ static int launch_elf(const char *path, PayloadLaunchCancelled cancelled, void *
     int fd=self_update ? slot_open_self_update(path) : slot_open_payload(path,canonical,sizeof(canonical));
     if (self_update && fd >= 0) {
         char version[64];
-        if (repository_self_update_version_fd(fd, version, sizeof(version)) ||
-            slot_version_compare(version, MENU_VERSION) <= 0) { close(fd); return -1; }
+        /* [CN-FORK] v0.6.1.191 self_update 现在有两种语义：1=自更新交接（要求内嵌版本
+         * 严格高于运行版本）；2=原地重启（要求内嵌版本恰好等于运行版本，同版本重拉）。
+         * 读不到内嵌版本时（-2）两种模式都拒绝。 */
+        int cmp = repository_self_update_version_fd(fd, version, sizeof(version)) ? -2
+                : slot_version_compare(version, MENU_VERSION);
+        int allowed = self_update == 2 ? (cmp == 0) : (cmp > 0);
+        if (!allowed) { close(fd); return -1; }
     }
     if (fd<0) { pldmgr_log("[PLDMGR] Payload path rejected: %s\n",path ? path : "(null)"); return -1; }
     int sock=socket(AF_INET,SOCK_STREAM,0);
@@ -112,6 +117,8 @@ int ps5_launch_elf_cancellable(const char *path, PayloadLaunchCancelled cancelle
     return launch_elf(path, cancelled, context, 0);
 }
 int ps5_launch_self_update(const char *path) { return launch_elf(path, NULL, NULL, 1); }
+/* [CN-FORK] v0.6.1.191 原地重启：以「等值版本」闸门重新拉起当前运行的同一份 ELF。 */
+int ps5_restart_self(const char *path) { return launch_elf(path, NULL, NULL, 2); }
 int ps5_launch_elf(const char *path) { return ps5_launch_elf_cancellable(path,NULL,NULL); }
 
 extern int sceSystemServiceLaunchWebBrowser(const char *uri);

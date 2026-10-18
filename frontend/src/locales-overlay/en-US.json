@@ -678,6 +678,10 @@
   "storage_hub.self_restart_btn": "Restart to apply",
   "storage_hub.self_restarting": "Restarting to apply the new version, please wait...",
   "storage_hub.self_restart_fail": "Restart failed: no pending update, or the loader is unavailable",
+  "storage_hub.self_restart_inplace_btn": "Launch / Restart",
+  "storage_hub.self_restart_inplace_hint": "Relaunch the running panel in place (same version, restarts the process only)",
+  "storage_hub.self_restarting_inplace": "Restarting the panel, please wait...",
+  "storage_hub.self_restart_inplace_fail": "Restart failed: no installed copy matches the running version, or the loader is unavailable",
 
   "autoload.saving": "Saving Changes...",
   "autoload.saved": "All Changes Saved",

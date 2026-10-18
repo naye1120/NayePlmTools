@@ -38,6 +38,7 @@ const StorageHub = ({
   onUpload,
   onImportFromUsb,
   onApplySelfUpdate,
+  onRestartSelf,
   config,
   ip,
   scrollTarget,
@@ -576,9 +577,21 @@ const StorageHub = ({
                       </span>
                     </button>
                   ) : (
-                    <span className="text-xs text-zinc-500">
-                      {t("storage_hub.self_up_to_date", "Up to date")}
-                    </span>
+                    /* [CN-FORK] v0.6.1.191 已是最新：右侧额外给一颗「启动/重启」，
+                     * 走 /restart_self 原地重拉当前同版本 ELF（不改版本，仅重启进程）。 */
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onRestartSelf?.()}
+                        className="btn btn-outline text-xs"
+                        title={t("storage_hub.self_restart_inplace_hint", "Relaunch the running panel in place (same version)")}
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>{t("storage_hub.self_restart_inplace_btn", "Restart")}</span>
+                      </button>
+                      <span className="text-xs text-zinc-500">
+                        {t("storage_hub.self_up_to_date", "Up to date")}
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>

@@ -680,6 +680,10 @@
   "storage_hub.self_restart_btn": "重启生效",
   "storage_hub.self_restarting": "正在重启以应用新版本，请稍候…",
   "storage_hub.self_restart_fail": "重启失败：没有待生效的更新，或加载器不可用",
+  "storage_hub.self_restart_inplace_btn": "启动/重启",
+  "storage_hub.self_restart_inplace_hint": "原地重启当前运行的面板（同版本，不改版本，仅重启进程）",
+  "storage_hub.self_restarting_inplace": "正在重启面板，请稍候…",
+  "storage_hub.self_restart_inplace_fail": "重启失败：盘上没有与当前版本一致的已安装副本，或加载器不可用",
 
   "autoload.saving": "保存中……",
   "autoload.saved": "已保存",

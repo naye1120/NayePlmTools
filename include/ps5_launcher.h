@@ -10,6 +10,8 @@
  */
 int ps5_launch_elf(const char* path);
 int ps5_launch_self_update(const char *path);
+/* [CN-FORK] v0.6.1.191 原地重启：重新拉起一份与当前运行版本相同的已安装 ELF（同版本）。 */
+int ps5_restart_self(const char *path);
 
 /* Stop callback is checked before socket work and between send/wait chunks.
  * Connect and total transfer have finite deadlines. Cancellation cannot undo

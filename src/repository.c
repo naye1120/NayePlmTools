@@ -413,6 +413,44 @@ int repository_check_self_update(char *out_path, size_t size, char *version, siz
     return found;
 }
 
+/* [CN-FORK] v0.6.1.191 原地重启用：在自更新目录（/payloads/pldmgr 及 legacy payload-manager）
+ * 里找一份内嵌 PLDMGR_VER 恰好等于当前运行版本的 ELF，交给 ps5_restart_self 走干净交接同版本
+ * 重拉。扫描范围与 check_self_update 一致（只认特权 opener 允许的那个目录）；盘上没有同版本
+ * 副本（比如从没自更新过、只从主机工具直接起）则返回 0，调用方保持自身存活并提示。 */
+int repository_find_running_copy(char *out_path, size_t size) {
+    if (!out_path || size < 64) return 0;
+    out_path[0] = 0;
+    pthread_mutex_lock(&self_update_mutex);
+    DIR *root = opendir(PAYLOADS_STORAGE_DIR);
+    while (root) {
+        struct dirent *dir = readdir(root);
+        if (!dir) break;
+        if (strcasecmp(dir->d_name, "pldmgr") && strcasecmp(dir->d_name, "payload-manager")) continue;
+        char folder[768];
+        snprintf(folder, sizeof(folder), "%s/%s", PAYLOADS_STORAGE_DIR, dir->d_name);
+        DIR *d = opendir(folder);
+        if (!d) continue;
+        struct dirent *file;
+        while ((file = readdir(d))) {
+            char path[1024], candidate[64];
+            snprintf(path, sizeof(path), "%s/%s", folder, file->d_name);
+            int fd = slot_open_self_update(path);
+            if (fd < 0) continue;
+            int valid = repository_self_update_version_fd(fd, candidate, sizeof(candidate));
+            close(fd);
+            if (!valid && !slot_version_compare(candidate, MENU_VERSION) && strlen(path) < size) {
+                strcpy(out_path, path);
+                break;
+            }
+        }
+        closedir(d);
+        if (out_path[0]) break;
+    }
+    if (root) closedir(root);
+    pthread_mutex_unlock(&self_update_mutex);
+    return out_path[0] != 0;
+}
+
 int repository_install_self_update(const RepoPayload *entry, const char *source_url, const char *part_path) {
     if (!repository_self_update_entry_valid(entry, source_url)) return -1;
     int fd = open(part_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);

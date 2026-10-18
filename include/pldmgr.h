@@ -16,6 +16,9 @@
 /* [CN-FORK] 「本程序」卡的重启生效：把已下载好的自更新 slot 用开机同一套
  * 引导交接拉起来（仅加载器确实收下新 ELF 才让当前进程退出、腾出 8911）。 */
 #define ROUTE_APPLY_SELF_UPDATE "/apply_self_update"
+/* [CN-FORK] v0.6.1.191 「本程序」卡的「启动/重启」：原地重新拉起一份与当前运行
+ * 版本相同的已安装 ELF（同版本、不改版本，仅重启进程），复用同一套干净交接。 */
+#define ROUTE_RESTART_SELF "/restart_self"
 #define ROUTE_LOG "/log"
 #define ROUTE_VERSION "/version"
 #define ROUTE_GETIP "/getip"

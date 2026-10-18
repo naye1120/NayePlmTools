@@ -1,10 +1,11 @@
-## v0.6.1.191 (CN-FORK) — 2026-10-18 · 手动上传本程序归入自更新 slot（复用「重启生效」）+ 修复非 URL 外链 404 + 图标目录健壮性
+## v0.6.1.191 (CN-FORK) — 2026-10-18 · 手动上传本程序归入自更新 slot（复用「重启生效」）+ 修复非 URL 外链 404 + 图标目录健壮性 + 本程序行「启动/重启」原地重启
 
-> 用户口径：「留一个也有问题，我手打上传的时候，没有重启选项啊」+ 仓库详情外链 404 截图。
+> 用户口径：「留一个也有问题，我手打上传的时候，没有重启选项啊」+ 仓库详情外链 404 截图 + 「这里加一个 启动/重启按钮」。
 - `repository.c`/`repository.h`：新增 `repository_stage_uploaded_self_update()` —— 把已落盘的手动上传 NayePlmTools ELF（内嵌 PLDMGR_VER 严格高于 MENU_VERSION、且高于已 pending 那份）**复制**进 `/payloads/pldmgr/pldmgr_v<ver>.elf` pending slot（只读不消费源文件），与 `repository_install_self_update` 同一发布块，仅跳过校验和比对（上传无仓库条目）。复用现成的 `/apply_self_update` 干净交接。
 - `payload_mgr.c`：`payload_mgr_import_to_storage_mode` 走完普通导入 + 引导器登记（保持与任意 payload 一致的契约）之后，若 `is_self_update_name(filename)` 且上传比当前运行新，则**额外**调用上面的函数复制一份进自更新 slot，让顶部专属行出现「重启生效」；不比运行新就是 no-op，普通卡照常留在列表（前端 `.190` 的去重过滤仍把它并入顶部行呈现）。
 - `PayloadDetailPanel.jsx`：`getRepoUrl` 只认绝对 http(s) URL，非 URL 的 source/repo_url 不再渲染成可点外链（修「source 被填成人标签时点击 404」）。
 - `sources.c`：`icon_member` 解析图标目录时，单张图标过大/非法/重复键改为**只跳过这一张**（return 0）而非中止整份目录（return -1）。修「一个源里只要有一张图超 12KB（如 2.1MB 的 custom:NayePlmTools），`json_visit_object` 就判定整份目录无效 → 该源所有图标全部消失」。
+- 本程序行「启动/重启」（原地重启）：`pldmgr.h` 新增路由 `/restart_self`；`repository.c`/`repository.h` 新增 `repository_find_running_copy()`（在自更新目录里找一份内嵌版本恰好等于运行版本的 ELF）；`ps5_launcher.c`/`.h` 的 `launch_elf` 增加 `self_update==2` 语义（等值版本闸门）并导出 `ps5_restart_self()`；`http_server.c` 把 `/restart_self` 登记为 POST（方法闸门 + CSRF），仅加载器确收下 ELF 才让当前进程退出、腾出 8911，盘上无同版本副本或拉起失败都保持自身存活。`App.jsx`/`StorageHub.jsx`：顶部「本程序」行「已是最新」态右侧新增「启动/重启」按钮（`btn-outline`），因版本号不变，前端改按「下线→再上线」判定重启完成再整页刷新。
 - `pldmgr.h`：`MENU_VERSION` 0.6.1.190 → 0.6.1.191。
 
 ## v0.6.1.190 (CN-FORK) — 2026-10-18 · 已安装列表去除本程序重复条目

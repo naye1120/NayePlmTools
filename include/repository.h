@@ -32,6 +32,8 @@ int repository_self_update_entry_valid(const RepoPayload *entry, const char *sou
 int repository_self_update_version_fd(int fd, char *version, size_t size);
 /* Returns 1 for a strictly newer update, 0 when none is available. */
 int repository_check_self_update(char *out_path, size_t size, char *version, size_t version_size);
+/* [CN-FORK] v0.6.1.191 原地重启：找一份内嵌版本恰好等于当前运行版本的已安装 ELF（成功 1 / 无 0）。 */
+int repository_find_running_copy(char *out_path, size_t size);
 int repository_install_self_update(const RepoPayload *entry, const char *source_url, const char *part_path);
 /* [CN-FORK] v0.6.1.191 手动上传本程序 ELF 时归入自更新 slot（复用「重启生效」交接）：
  * 仅当内嵌版本严格高于 MENU_VERSION 才暂存到 /payloads/pldmgr/，成功返回 0 并回填版本。 */

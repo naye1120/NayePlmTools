@@ -362,6 +362,28 @@ function App() {
     }, 1500)
   }, [api, addToast, t])
 
+  /* [CN-FORK] v0.6.1.191 「本程序」卡的「启动/重启」：POST /restart_self 让后端原地
+   * 重新拉起一份与当前运行版本相同的已安装 ELF（同版本，不改版本，只重启进程）。
+   * 与「重启生效」不同，版本号不变，所以不能靠「/version 变了」判断 —— 改为等老进程
+   * 下线（/version 请求失败）后新进程再上线（恢复 OK）即整页刷新；超时也兵底刷新。 */
+  const handleRestartSelf = useCallback(async () => {
+    const res = await api('/restart_self', { method: 'POST' })
+    if (!res || !res.includes('"ok":true')) {
+      addToast(t('storage_hub.self_restart_inplace_fail', 'Restart failed: no installed copy matches the running version, or the loader is unavailable'), 'error')
+      return
+    }
+    addToast(t('storage_hub.self_restarting_inplace', 'Restarting the panel, please wait...'), 'info')
+    const started = Date.now()
+    let wentDown = false
+    const timer = setInterval(async () => {
+      if (Date.now() - started > 60000) { clearInterval(timer); window.location.reload(); return }
+      let up = false
+      try { up = (await fetch('/version', { cache: 'no-store' })).ok } catch { up = false }
+      if (!up) wentDown = true
+      else if (wentDown) { clearInterval(timer); window.location.reload() }
+    }, 1000)
+  }, [api, addToast, t])
+
   /* [CN-FORK] v0.6.0 合入：refreshPayloads 从「函数声明」改成「命名 useCallback」。
    * fork 那条「必须是函数声明，否则 Babel async 降级会挂」的坑是 v0.5.2.125 的事了 ——
    * 上游用的是**函数表达式**形式（async function retryPayloads(...)），自引用走的是
@@ -1035,6 +1057,7 @@ function App() {
               onUpload={handleUpload}
               onImportFromUsb={handleImportFromUsb}
               onApplySelfUpdate={handleApplySelfUpdate}
+              onRestartSelf={handleRestartSelf}
               config={config}
               ip={ip}
               scrollTarget={storageScrollTarget}
