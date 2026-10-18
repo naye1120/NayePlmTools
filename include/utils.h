@@ -26,6 +26,9 @@ int pldmgr_utils_safe_mode(void);
  * Source and destination must not overlap. Worst-case capacity is 6*strlen+1. */
 int pldmgr_json_escape(const char *src, char *dst, size_t dst_size);
 int is_pldmgr_name(const char *name);
+/* [CN-FORK] 本程序族身份判定：在上游 is_pldmgr_name（pldmgr / payload-manager …）基础上，
+ * 额外认本 fork 自身名 PLDMGR_APP_NAME（NayePlmTools）—— 供「在线自更新本程序」的身份门槛用。 */
+int is_self_update_name(const char *name);
 int is_pldmgr_official_source(const char *url);
 int is_legacy_official_repo_url(const char *url);
 

@@ -337,6 +337,31 @@ function App() {
     } catch { return null }
   }, [])
 
+  /* [CN-FORK] 「本程序」卡的「重启生效」：POST /apply_self_update 让后端用开机那套
+   * 交接把已下好的新版本拉起来。老进程随即退出（会短暂不可达几秒），新进程
+   * 起来后 /version 返回新版本号 —— 轮询到它变了就整页刷新，用户无需手动重启主机。
+   * 后端只在加载器确实收下新 ELF 时才退出，失败时本进程存活 → 这里只会看到 ok:false。 */
+  const handleApplySelfUpdate = useCallback(async () => {
+    const before = __APP_VERSION__
+    const res = await api('/apply_self_update', { method: 'POST' })
+    if (!res || !res.includes('"ok":true')) {
+      addToast(t('storage_hub.self_restart_fail', 'Restart failed: no pending update, or the loader is unavailable'), 'error')
+      return
+    }
+    addToast(t('storage_hub.self_restarting', 'Restarting to apply the new version, please wait...'), 'info')
+    const started = Date.now()
+    const timer = setInterval(async () => {
+      if (Date.now() - started > 45000) { clearInterval(timer); window.location.reload(); return }
+      try {
+        const r = await fetch('/version', { cache: 'no-store' })
+        if (r.ok) {
+          const v = (await r.text()).trim()
+          if (v && v !== before) { clearInterval(timer); window.location.reload() }
+        }
+      } catch { /* 老进程已退、新进程还没起，继续等 */ }
+    }, 1500)
+  }, [api, addToast, t])
+
   /* [CN-FORK] v0.6.0 合入：refreshPayloads 从「函数声明」改成「命名 useCallback」。
    * fork 那条「必须是函数声明，否则 Babel async 降级会挂」的坑是 v0.5.2.125 的事了 ——
    * 上游用的是**函数表达式**形式（async function retryPayloads(...)），自引用走的是
@@ -912,43 +937,62 @@ function App() {
         })}
       </nav>
 
-      {/* [CN-FORK] v0.5.2.163 手机端二级菜单浮层：每组 3 个子项，叠在底部 nav 上方。
-       * z 压在 nav 之上但低于 toast / 弹窗；点击子项切换 view 并关闭菜单；
-       * 点击外侧关闭。 */}
-      {!isPS5 && mobileMenu && MOBILE_PARENTS[mobileMenu] && (
-        <div
-          className="fixed inset-x-0 bottom-[calc(var(--bar-h)+env(safe-area-inset-bottom))] z-[110] md:hidden"
-          onClick={() => setMobileMenu(null)}
-        >
-          <div className="bg-ps-surface border-t border-ps-border shadow-2xl">
-            <ul className="grid grid-cols-3 divide-x divide-white/5">
-              {MOBILE_PARENTS[mobileMenu].map((childId) => {
-                const child = NAV_ITEMS.find((x) => x.id === childId)
-                if (!child) return null
-                const Icon = child.icon
-                return (
-                  <li key={child.id}>
-                    <button
-                      type="button"
-                      onClick={() => { navigate(child.id); setMobileMenu(null) }}
-                      className={cn(
-                        'w-full flex flex-col items-center justify-center gap-1.5 py-3 transition-colors',
-                        view === child.id
-                          ? 'bg-ps-blue/10 text-ps-blue'
-                          : 'text-white hover:bg-white/[0.05]',
-                      )}
-                      aria-current={view === child.id ? 'page' : undefined}
-                    >
-                      <Icon className="w-5 h-5" />
-                      <span className="text-[12px] font-semibold">{t(child.mobile[0], child.mobile[1])}</span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+      {/* [CN-FORK] v0.5.2.163 手机端二级菜单浮层。
+       * 版式改为「公众号弹出」风格（用户口径：横向的）：一张圆角卡片浮在底部 nav 上方，
+       * 子项横向成行（图标在左、文字在右、左对齐），行间用发丝分隔线；
+       * 点卡片外任意处关闭，点子项切换 view 并关闭。z 压在 nav 之上但低于 toast / 弹窗。 */}
+      {!isPS5 && mobileMenu && MOBILE_PARENTS[mobileMenu] && (() => {
+        /* 弹层对齐到「被点的那一列」：底部 nav 是 4 等分（管理/自动/工具/系统），
+         * 取当前打开分组在顶级项里的列号：靠左半区贴按钮左边缘、靠右半区贴按钮右边缘，
+         * 既保证窄屏不溢出，又让弹层出现在对应按钮正上方。 */
+        const topItems = NAV_ITEMS.filter((i) => !i.parent)
+        const colIndex = topItems.findIndex((i) => i.id === mobileMenu)
+        const cols = topItems.length || 1
+        const pct = (n) => `${(n / cols) * 100}%`
+        const anchorStyle = colIndex >= 0
+          ? (colIndex < cols / 2 ? { left: pct(colIndex) } : { right: pct(cols - 1 - colIndex) })
+          : { right: 0 }
+        return (
+          <div
+            className="fixed inset-0 z-[110] md:hidden"
+            onClick={() => setMobileMenu(null)}
+          >
+            {/* 透明点击捕获层：不遮暗内容（与公众号一致，公众号菜单弹出时背景不变暗），
+                只负责接住「点外侧关闭」。 */}
+            <div className="absolute inset-0" aria-hidden="true" />
+            {/* 不铺满：卡片按内容宽度（w-[min(38vw,8.75rem)]，再窄一档），由 anchorStyle 定位到按钮那一列。 */}
+            <div
+              style={anchorStyle}
+              className="absolute bottom-[calc(var(--bar-h)+env(safe-area-inset-bottom)+0.5rem)] mx-3 w-[min(38vw,8.75rem)] overflow-hidden rounded-2xl border border-ps-border bg-ps-surface shadow-2xl"
+            >
+              <ul className="divide-y divide-white/5">
+                {MOBILE_PARENTS[mobileMenu].map((childId) => {
+                  const child = NAV_ITEMS.find((x) => x.id === childId)
+                  if (!child) return null
+                  const Icon = child.icon
+                  const active = view === child.id
+                  return (
+                    <li key={child.id}>
+                      <button
+                        type="button"
+                        onClick={() => { navigate(child.id); setMobileMenu(null) }}
+                        className={cn(
+                          'w-full flex items-center gap-2 px-3 py-3 text-left transition-colors',
+                          active ? 'bg-ps-blue/10 text-ps-blue' : 'text-white active:bg-white/[0.06]',
+                        )}
+                        aria-current={active ? 'page' : undefined}
+                      >
+                        <Icon className="w-5 h-5 shrink-0" />
+                        <span className="text-sm font-semibold">{t(child.mobile[0], child.mobile[1])}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* MAIN CONTENT AREA */}
       <div className={cn(
@@ -990,6 +1034,7 @@ function App() {
               onDelete={handleDelete}
               onUpload={handleUpload}
               onImportFromUsb={handleImportFromUsb}
+              onApplySelfUpdate={handleApplySelfUpdate}
               config={config}
               ip={ip}
               scrollTarget={storageScrollTarget}

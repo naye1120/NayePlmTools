@@ -189,6 +189,16 @@ int is_pldmgr_name(const char *name) {
             strncasecmp(base, "payloadmanager", 14) == 0);
 }
 
+int is_self_update_name(const char *name) {
+    if (!name || !*name) return 0;
+    const char *base = strrchr(name, '/');
+    base = base ? base + 1 : name;
+    /* 上游族名（pldmgr / payload-manager …）本就被 is_pldmgr_name 认；这里额外认
+     * 本 fork 自身名 NayePlmTools，好让「从用户仓库在线自更新本程序」过身份门槛。 */
+    return is_pldmgr_name(base) ||
+        strncasecmp(base, PLDMGR_APP_NAME, sizeof(PLDMGR_APP_NAME) - 1) == 0;
+}
+
 int is_pldmgr_official_source(const char *url) {
     if (!url) return 0;
     size_t n = strlen(url);

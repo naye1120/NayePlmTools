@@ -13,9 +13,14 @@ import Section from '../ui/Section'
 import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import Switch from '../ui/Switch'
+import PayloadIcon from '../ui/PayloadIcon' /* [CN-FORK] 进程行图标对齐仓库真图标 */
+import { useRepository } from '../../contexts/RepositoryContext'
 
 const ActiveProcessesView = ({ addToast, showConfirm }) => {
   const { t } = useTranslation()
+  /* [CN-FORK] 进程名（如 elfldr.elf / shadowmountplus.elf）按基名回查仓库条目，
+   * 取与仓库栏同一份真图标；对不上时 PayloadIcon 退回名字首字染色块。 */
+  const findRepoEntryForPayload = useRepository()?.findRepoEntryForPayload
   const [processes, setProcesses] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -182,6 +187,7 @@ const ActiveProcessesView = ({ addToast, showConfirm }) => {
           <div className="space-y-3">
             {filteredProcesses.map((p) => {
               const critical = p.name.startsWith('NayePlmTools') || p.name === 'elfldr.elf';
+              const repoEntry = findRepoEntryForPayload ? findRepoEntryForPayload({ filename: p.name, name: p.name }) : null
               return (
                 <div key={p.pid} className={cn(
                   "row-link flex flex-row items-center justify-between p-3 rounded-xl border border-white/10 bg-white/[0.02] hover:border-ps-blue/30 transition-colors"
@@ -190,12 +196,13 @@ const ActiveProcessesView = ({ addToast, showConfirm }) => {
                       抬起来会误导「这行能点」；Kill 按钮也从 opacity-50 + 仅悬停显现改成常显，
                       触屏和遥控器没有 hover 态。 */}
                   <div className="flex items-center min-w-0 flex-1">
-                    <div className={cn(
-                      "p-3 rounded-xl flex-shrink-0",
-                      p.is_daemon ? "bg-ps-blue/10 text-ps-blue" : "bg-white/5 text-zinc-400"
-                    )}>
-                      <Cpu className="w-5 h-5" />
-                    </div>
+                    {/* [CN-FORK] 原来每行写死一个通用 Cpu 图标，跟进程是哪个 payload 无关，
+                        永远和仓库栏不一致。改成复用仓库真图标（按基名回查），无图标时兜底首字。 */}
+                    <PayloadIcon
+                      icon={repoEntry?.icon}
+                      name={repoEntry?.filename || p.name}
+                      className="w-11 h-11 text-lg shrink-0"
+                    />
                     <div className="min-w-0 flex-1 ml-3">
                       <h3 className="text-xl font-bold text-white truncate">{p.name}</h3>
                       <div className="flex items-center text-xs font-mono text-zinc-500 uppercase tracking-wider mt-1">

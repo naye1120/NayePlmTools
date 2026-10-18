@@ -671,6 +671,13 @@
   "storage_hub.remove_payload": "Remove Payload",
   "storage_hub.update_btn": "Update",
   "storage_hub.update_to_version": "Update (to v{{version}})",
+  "storage_hub.self_badge": "This app",
+  "storage_hub.self_running_version": "Running v{{version}}",
+  "storage_hub.self_pending_reboot": "v{{version}} downloaded - applies on next start",
+  "storage_hub.self_up_to_date": "Up to date",
+  "storage_hub.self_restart_btn": "Restart to apply",
+  "storage_hub.self_restarting": "Restarting to apply the new version, please wait...",
+  "storage_hub.self_restart_fail": "Restart failed: no pending update, or the loader is unavailable",
 
   "autoload.saving": "Saving Changes...",
   "autoload.saved": "All Changes Saved",

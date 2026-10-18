@@ -2,6 +2,16 @@
  * Version comparison and slug generation utilities matching C backend (slot.c).
  */
 
+/**
+ * [CN-FORK] 磁贴变体后缀（-me 媒体栏 / -ga 游戏栏）是文件名约定，不属于版本号。
+ * 比较版本前先剥掉尾部的 -me / -ga（或 _me / _ga），做到「不管是 me 还是 ga，
+ * 只要数字版本合适就更新」。只剥这一种确定后缀，不动 1.7beta3 这类真预发布标记。
+ */
+export function stripVariantSuffix(ver) {
+  if (!ver || typeof ver !== 'string') return ver;
+  return ver.replace(/[-_](?:me|ga)$/i, '');
+}
+
 export function slug(input) {
   if (!input || typeof input !== 'string') return 'payload';
   let s = '';

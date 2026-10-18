@@ -132,6 +132,7 @@ static enum MHD_Result add_response_header(struct MHD_Response *resp,
 /* 表 A：**必须是 POST** 的路由（方法闸门 + CSRF 两处都用）。 */
 static int is_post_route(const char *url) {
     const char *routes[] = { ROUTE_UPLOAD, ROUTE_DELETE, ROUTE_SHUTDOWN,
+        ROUTE_APPLY_SELF_UPDATE,
         ROUTE_SET_CONFIG, ROUTE_ABORT, ROUTE_AUTOLOAD_CLEAR, ROUTE_REPO_REFRESH,
         ROUTE_REPO_INSTALL, ROUTE_SOURCES_SET, ROUTE_SOURCES_ADD,
         ROUTE_SOURCES_REMOVE, ROUTE_REPO_CACHE_CLEAR, ROUTE_USB_MOVE_PERFORM, ROUTE_PROCESS_KILL,
@@ -2273,6 +2274,26 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                                                MHD_RESPMEM_PERSISTENT);
         add_response_header(resp, "Content-Type", "text/plain");
         http_keep_running = 0;
+    } else if (strcmp(url, ROUTE_APPLY_SELF_UPDATE) == 0) {
+        /* [CN-FORK] 「本程序」卡点「重启生效」：复用开机那套自更新交接
+         * （repository_check_self_update 找到 /payloads/pldmgr/ 里比运行版本更新、已下好的
+         * slot → ps5_launch_self_update 把它交给加载器拉起）。关键安全约束：
+         * 只有 ps5_launch_self_update 确实返回 0（加载器收下了新 ELF）才置
+         * http_keep_running=0 让当前进程退出、腾出 8911；无待生效更新或拉起失败
+         * 都保持自身存活（新实例启动需几秒，老进程毫秒级退掉，不会撞端口）。 */
+        char apath[1024], aver[64];
+        const char *abody;
+        if (repository_check_self_update(apath, sizeof(apath), aver, sizeof(aver)) &&
+            ps5_launch_self_update(apath) == 0) {
+            pldmgr_log("[PLDMGR] apply_self_update: handing off to %s\n", aver);
+            abody = "{\"ok\":true,\"restarting\":true}";
+            http_keep_running = 0;
+        } else {
+            abody = "{\"ok\":false,\"message\":\"no pending update or launch failed\"}";
+        }
+        resp = create_buffer_response(strlen(abody), (void *)abody,
+                                               MHD_RESPMEM_PERSISTENT);
+        add_response_header(resp, "Content-Type", "application/json");
     } else if (strcmp(url, ROUTE_LOG) == 0) {
         char *resp_buf;
         if (!alloc_response_buffer_sized(&resp_buf, LOG_RESPONSE_BUFFER_SIZE))

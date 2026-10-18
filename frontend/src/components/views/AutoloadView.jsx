@@ -28,6 +28,7 @@ const AutoloadView = ({
   const repoContext = useRepository()
   const getRepoEntry = repoContext?.getRepoEntry
   const findRepoEntryById = repoContext?.findRepoEntryById
+  const findRepoEntryForPayload = repoContext?.findRepoEntryForPayload
   const [subView, setSubView] = useState('list')
   const [localDelayModal, setLocalDelayModal] = useState(false)
   const showDelayModal = delayModalProp !== undefined ? delayModalProp : localDelayModal
@@ -140,19 +141,38 @@ const AutoloadView = ({
       let author = null
       let icon = null
       let sourceName = null
+      // [CN-FORK] 兜底染色块的种子：优先用仓库条目的文件名，与 StorageHub 已安装列表同源，
+      // 保证同一个工具在两页拿到同一个色。没有仓库条目时才退回槽位文件名。
+      let iconSeed = itemObj.filename || displayName || 'Payload'
 
       if (itemObj.kind === 'local') {
         displayName = itemObj.name || parsed.displayName
         version = itemObj.version || parsed.version
         sourceName = t("app.dashboard.other_source_badge", "Other Source")
+        // [CN-FORK] 本地上传的槽位也回查仓库：只要基名/ id 对得上，就吃仓库真图标，
+        // 不再一律退回默认块 —— 这正是「自动加载页图标没跟仓库同步」的根因。
+        const localRepo = findRepoEntryForPayload
+          ? findRepoEntryForPayload({ id: itemObj.id, filename: itemObj.filename, name: itemObj.name })
+          : null
+        if (localRepo) {
+          icon = localRepo.icon || null
+          iconSeed = localRepo.filename || iconSeed
+        }
       } else {
-        const repoMeta = (getRepoEntry && itemObj.source_url && itemObj.id)
+        let repoMeta = (getRepoEntry && itemObj.source_url && itemObj.id)
           ? getRepoEntry(itemObj.source_url, itemObj.id)
           : (findRepoEntryById && itemObj.id ? findRepoEntryById(itemObj.id) : null)
+        // [CN-FORK] 仓库条目 JSON 常不带 id（前端用 slug(name) 现算），后端 item 的 id 口径
+        // 也可能不同 —— (source_url,id) 匹配不到时退回与 StorageHub 同源的「按文件名基名匹配」，
+        // 否则整列图标会退回首字块（用户反馈的「自动加载页图标没跟仓库同步」根因）。
+        if (!repoMeta && findRepoEntryForPayload) {
+          repoMeta = findRepoEntryForPayload({ id: itemObj.id, filename: itemObj.filename, name: itemObj.name })
+        }
         displayName = repoMeta?.name || itemObj.name || itemObj.id || itemObj.filename
         version = itemObj.version || repoMeta?.version || null
         author = repoMeta?.author || itemObj.author || null
         icon = repoMeta?.icon || null
+        if (repoMeta?.filename) iconSeed = repoMeta.filename
         const hasDup = Boolean(itemObj.id && idCounts[itemObj.id] > 1)
         const repName = itemObj.source_name || repoMeta?.source_name || null
         const isOfficial = isOfficialSource(repName, itemObj.source_url || repoMeta?.source_url)
@@ -170,10 +190,10 @@ const AutoloadView = ({
         author,
         icon,
         sourceName,
-        iconName: itemObj.filename || displayName || 'Payload',
+        iconName: iconSeed,
       }
     },
-    [getItemInfo, getRepoEntry, findRepoEntryById, idCounts, config, t]
+    [getItemInfo, getRepoEntry, findRepoEntryById, findRepoEntryForPayload, idCounts, config, t]
   )
 
   const handleToggle = val => session.edit({ enabled: val })

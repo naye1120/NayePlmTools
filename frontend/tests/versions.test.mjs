@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareVersions, slug } from '../src/utils/versions.js';
+import { compareVersions, slug, stripVariantSuffix } from '../src/utils/versions.js';
+
+test('stripVariantSuffix removes only trailing -me/-ga tile variants', () => {
+  assert.equal(stripVariantSuffix('0.6.1.183-me'), '0.6.1.183');
+  assert.equal(stripVariantSuffix('0.6.1.183-ga'), '0.6.1.183');
+  assert.equal(stripVariantSuffix('v0.6.1.184-GA'), 'v0.6.1.184');
+  assert.equal(stripVariantSuffix('1.0.1_me'), '1.0.1');
+  // Non-variant tokens must stay untouched (real pre-release markers, other letters).
+  assert.equal(stripVariantSuffix('1.7beta3'), '1.7beta3');
+  assert.equal(stripVariantSuffix('0.6.1.183'), '0.6.1.183');
+  assert.equal(stripVariantSuffix(null), null);
+});
+
+test('variant suffix no longer suppresses a newer repo version', () => {
+  // Mixed case that used to hide the Update button: repo -me suffix vs plain running build.
+  assert.equal(compareVersions(stripVariantSuffix('0.6.1.184-me'), stripVariantSuffix('0.6.1.183')), 1);
+  assert.equal(compareVersions(stripVariantSuffix('0.6.1.184-ga'), stripVariantSuffix('0.6.1.183-me')), 1);
+  // Same version across variants is treated equal (not an update).
+  assert.equal(compareVersions(stripVariantSuffix('0.6.1.183-me'), stripVariantSuffix('0.6.1.183-ga')), 0);
+});
 
 test('slug correctly formats names into valid slot slugs', () => {
   assert.equal(slug('kstuff-lite'), 'kstuff-lite');

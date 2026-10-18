@@ -1,4 +1,4 @@
-import { compareVersions, slug } from './versions.js';
+import { compareVersions, slug, stripVariantSuffix } from './versions.js';
 import { isSystemPayload } from './helpers.js';
 
 export const OFFICIAL_REPOSITORY_URL = 'https://itsplk.github.io/ps5-payloads-mirror/payloads_v2.json';
@@ -216,9 +216,11 @@ export function getPayloadStatus({ payload, srcUrl, items = [], sources = [], mu
   }
 
   // Matching slot exists for this (source_url, id)
+  /* [CN-FORK] 仓库条目可能带 -me/-ga 磁贴变体后缀，剔掉后再比，
+   * 做到「不管 me 还是 ga，只要数字版本合适就更新」。 */
   const cmp = compareVersions(
-    payload.version,
-    installedSlot.version,
+    stripVariantSuffix(payload.version),
+    stripVariantSuffix(installedSlot.version),
     payload.last_update,
     installedSlot.last_update
   );

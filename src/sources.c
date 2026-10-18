@@ -865,6 +865,7 @@ int sources_repo_install(const char *source_url, const char *id,
     /* Match source */
     SourceEntry src;
     memset(&src, 0, sizeof(src));
+    int src_configured = 0; /* [CN-FORK] 命中用户已配置的仓库源才置 1；自更新只信这类源 */
     if (source_url && source_url[0]) {
         int found = 0;
         char h_req[16];
@@ -887,16 +888,30 @@ int sources_repo_install(const char *source_url, const char *id,
             strncpy(src.id, "custom", sizeof(src.id) - 1);
             strncpy(src.name, "Custom Repository", sizeof(src.name) - 1);
             strncpy(src.url, source_url, sizeof(src.url) - 1);
+        } else {
+            src_configured = 1;
         }
     } else {
-        src = sources[0];
+        if (src_count > 0) { src = sources[0]; src_configured = 1; }
     }
     free(sources);
 
+    /* [CN-FORK] 保留上游 pldmgr 族「仅官方源」自更新门槛不变（现有 run_self_update_tests
+     * 的官方-only 策略就靠这两段）；下方只为本 fork 名（NayePlmTools）另开一条。 */
     int self_update = !strcmp(safe_id, "pldmgr") && is_pldmgr_official_source(src.url);
     if (is_pldmgr_name(safe_id) && (!self_update ||
         (source_url && source_url[0] && !is_pldmgr_official_source(source_url) && strcmp(source_url, src.id)))) {
         json_append(&jb, "{\"ok\":false,\"message\":\"Payload Manager updates require the official repository\"}"); return -1;
+    }
+    /* [CN-FORK] 本 fork 自身名（非 pldmgr 族，如 NayePlmTools）：按用户约定「已配置源
+     * 即可信源」从用户实际添加的仓库在线自更新本程序；未配置的源一律拒绝，避免被
+     * 当普通 payload 落文件、运行程序不变（正是点更新版本不变的根因）。 */
+    if (!self_update && is_self_update_name(safe_id) && !is_pldmgr_name(safe_id)) {
+        if (src_configured) {
+            self_update = 1;
+        } else {
+            json_append(&jb, "{\"ok\":false,\"message\":\"Self-update source is not a configured repository\"}"); return -1;
+        }
     }
     if (self_update && ((mode && mode[0]) || (replace_slot && replace_slot[0]))) {
         json_append(&jb, "{\"ok\":false,\"message\":\"Self-updates do not support storage modes\"}"); return -1;

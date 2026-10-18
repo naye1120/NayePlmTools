@@ -277,26 +277,66 @@ size_t repository_list_json(char *json_buf, size_t buf_size, int force_refresh) 
 /* Self-updates deliberately retain the pre-slot layout: old launchers scan it. */
 static pthread_mutex_t self_update_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* [CN-FORK] 磁贴变体后缀（-me 媒体栏 / -ga 游戏栏）是文件名约定，不属于版本号。
+ * 仓库条目可能把它写进 version 字段（或干脆发 -ga 包）；自更新只认数字版本，
+ * 校验与比对一律忽略尾部的 -me / -ga（或 _me / _ga）——这样「不管 me 还是 ga，
+ * 只要版本号合适就更新」。 */
+static int version_tail_is_variant(const char *p) {
+    if (!p || (p[0] != '-' && p[0] != '_')) return 0;
+    if (p[1] && p[2] && !p[3] &&
+        (!strncasecmp(p + 1, "me", 2) || !strncasecmp(p + 1, "ga", 2))) return 1;
+    return 0;
+}
+static void version_strip_variant(char *v) {
+    if (!v) return;
+    size_t n = strlen(v);
+    if (n >= 3 && (v[n - 3] == '-' || v[n - 3] == '_') &&
+        (!strncasecmp(v + n - 2, "me", 2) || !strncasecmp(v + n - 2, "ga", 2))) {
+        v[n - 3] = '\0';
+    }
+}
+
 static int self_version_valid(const char *version) {
     const char *p = version;
     if (!p) return 0;
     if (*p == 'v' || *p == 'V') p++;
-    /* Stable major.minor.patch releases are understood by every old launcher. */
-    for (int part = 0; part < 3; part++) {
+    /* [CN-FORK] 上游只认 major.minor.patch 三段（原注释：「老引导器都能解析」）。但本 fork 的
+     * MENU_VERSION 带构建序号是四段（如 0.6.1.181），构建时烧进 ELF 的 PLDMGR_VER 也是四段。
+     * 若这里仍限三段就形成死结：清单写四段 → 被本函数判非法（目录过滤 + 安装拒绝 + 开机扫不到）；
+     * 清单改写三段 → 又和 ELF 里烧的四段版本号不相等（repository_install_self_update 要求
+     * slot_version_compare(embedded, entry->version)==0），照样被拒。结果 fork 永远走不了
+     * payloads_v2.json 的在线自更新，只能靠上传。放宽到 3~4 段纯数字（每段 1~9 位）：既兼容
+     * 上游三段发布，也让 fork 的四段构建号生效；第五段及以后仍判非法。 */
+    int parts = 0;
+    while (parts < 4) {
         int digits = 0;
         while (*p >= '0' && *p <= '9') { p++; if (++digits > 9) return 0; }
         if (!digits) return 0;
-        if (part < 2 && *p++ != '.') return 0;
+        parts++;
+        if (*p != '.') break;
+        p++;
     }
-    return *p == '\0';
+    return parts >= 3 && (*p == '\0' || version_tail_is_variant(p));
 }
 
 int repository_self_update_entry_valid(const RepoPayload *entry, const char *source_url) {
-    if (!entry || !is_pldmgr_official_source(source_url) || strcmp(entry->id, "pldmgr") ||
-        !is_pldmgr_name(entry->filename) || strchr(entry->filename, '/') ||
-        strchr(entry->filename, '\\') || strstr(entry->filename, "..") ||
-        !self_version_valid(entry->version) || !entry->checksum[0] ||
-        !repository_checksum_valid(entry->checksum)) return 0;
+    if (!entry) return 0;
+    /* [CN-FORK] 分两条身份：
+     *  · fork 自身名（非 pldmgr 族，如 NayePlmTools）：源可信性已由调用方
+     *    （sources_repo_install 的 src_configured）把关，此处只校条目形态；
+     *  · 上游 pldmgr 族：依旧要求官方源 + id=="pldmgr"，保持既有策略与测试不变。
+     * 两条都要求 version 为 3~4 段数字（尾部 -me/-ga 变体后缀会被忽略），带真校验和。 */
+    int fork_only = is_self_update_name(entry->id) && !is_pldmgr_name(entry->id) &&
+        !is_pldmgr_name(entry->filename) && !is_pldmgr_name(entry->name);
+    if (fork_only) {
+        if (!is_self_update_name(entry->filename)) return 0;
+    } else if (!is_pldmgr_official_source(source_url) || strcmp(entry->id, "pldmgr") ||
+               !is_pldmgr_name(entry->filename)) {
+        return 0;
+    }
+    if (strchr(entry->filename, '/') || strchr(entry->filename, '\\') ||
+        strstr(entry->filename, "..") || !self_version_valid(entry->version) ||
+        !entry->checksum[0] || !repository_checksum_valid(entry->checksum)) return 0;
     const char *ext = strrchr(entry->filename, '.');
     return ext && (!strcasecmp(ext, ".elf") || !strcasecmp(ext, ".bin"));
 }
@@ -377,9 +417,14 @@ int repository_install_self_update(const RepoPayload *entry, const char *source_
     if (!repository_self_update_entry_valid(entry, source_url)) return -1;
     int fd = open(part_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     if (fd < 0) return -1;
-    char version[64], hash[65];
+    char version[64], hash[65], want_ver[64];
+    /* [CN-FORK] 仓库 version 可能带 -me/-ga 变体后缀；内嵌 PLDMGR_VER 永远是纯数字。
+     * 比前先把变体后缀剖掉，做到「不管 me/ga，只要数字版本相等且更新就装」。 */
+    strncpy(want_ver, entry->version, sizeof(want_ver) - 1);
+    want_ver[sizeof(want_ver) - 1] = '\0';
+    version_strip_variant(want_ver);
     int invalid = repository_self_update_version_fd(fd, version, sizeof(version)) ||
-        slot_version_compare(version, entry->version) ||
+        slot_version_compare(version, want_ver) ||
         slot_version_compare(version, MENU_VERSION) <= 0 ||
         compute_sha256_file(part_path, hash) || strcasecmp(hash, entry->checksum) || fsync(fd);
     close(fd);

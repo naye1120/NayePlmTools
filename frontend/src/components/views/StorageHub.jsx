@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { QRCodeSVG } from 'qrcode.react'
 import { cn, isPS5, isIOS, getBaseName, parsePayloadName } from '../../utils/helpers'
 import { getPayloadStatus, resolveSourceDisplayName, isRepositoryPayloadVisible } from '../../utils/payloadStatus'
-import { slug } from '../../utils/versions'
+import { slug, compareVersions, stripVariantSuffix } from '../../utils/versions'
 import { formatSyncTime } from '../../utils/syncTime'
 import PayloadName from '../ui/PayloadName'
 import PayloadIcon from '../ui/PayloadIcon'
@@ -19,6 +19,12 @@ import EmptyState from '../ui/EmptyState'
 import LoadingState from '../ui/LoadingState'
 import Segmented from '../ui/Segmented' /* [CN-FORK] v0.5.2.97 互斥档位统一 */
 
+/* [CN-FORK] 宿主程序（本 fork 自己）在仓库里的归一化基名：
+ * getBaseName("NayePlmTools_v0.6.1.185-me.elf") === 'nayeplmtools'。前端没有 __APP_NAME__
+ * 常量（全站 App.jsx/AboutView 都直接写死 "NayePlmTools"），故这里同样写死基名做匹配，
+ * 用它把「云端仓库里的那条 NayePlmTools」认领为本程序的自更新目标。 */
+const SELF_APP_BASE = 'nayeplmtools'
+
 const StorageHub = ({
   items = [],
   self = null,
@@ -31,6 +37,7 @@ const StorageHub = ({
   onDelete,
   onUpload,
   onImportFromUsb,
+  onApplySelfUpdate,
   config,
   ip,
   scrollTarget,
@@ -159,6 +166,38 @@ const StorageHub = ({
       }
     })
   }, [sources, items, multiSources, self])
+
+  /* [CN-FORK] 宿主程序自身的「运行 / 待更新 / 已下载待重启」状态，渲染成已安装区顶部
+   * 一条独立卡片。数据来源：后端 /list_payloads 顶层 self={running_version,pending_version}
+   * （running=当前 MENU_VERSION，pending=/payloads/pldmgr/ 里比运行版本更新、等重启接管的 slot），
+   * 仓库目标则从 enrichedSources 里按基名 nayeplmtools 认领。版本比对一律先剥 -me/-ga 变体后缀，
+   * 且「有更新」必须仓库数字版本严格高于运行版本 —— 相等或更旧都不给按钮，杜绝「更到更旧」。 */
+  const selfUpdateInfo = useMemo(() => {
+    if (!self) return null
+    const running = self.running_version || null
+    const pending = self.pending_version || null
+    const pendingNewer = Boolean(pending && running &&
+      compareVersions(stripVariantSuffix(pending), stripVariantSuffix(running)) > 0)
+    let repoEntry = null
+    let repoSrcId = null
+    let repoSrcUrl = null
+    for (const src of enrichedSources) {
+      const found = (src.payloads || []).find(
+        (rp) => getBaseName(rp.filename || rp.name || rp.id || '') === SELF_APP_BASE
+      )
+      if (found) {
+        repoEntry = found
+        repoSrcId = src.id
+        repoSrcUrl = src.url
+        break
+      }
+    }
+    const remoteVersion = repoEntry?.version ||
+      (repoEntry?.filename ? parsePayloadName(repoEntry.filename).version : null)
+    const hasUpdate = Boolean(!pendingNewer && repoEntry && remoteVersion && running &&
+      compareVersions(stripVariantSuffix(remoteVersion), stripVariantSuffix(running)) > 0)
+    return { running, pending, pendingNewer, repoEntry, repoSrcId, repoSrcUrl, remoteVersion, hasUpdate }
+  }, [self, enrichedSources])
 
   // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const resolvedPayloadData = useMemo(() => {
@@ -482,6 +521,60 @@ const StorageHub = ({
         count={t("storage_hub.files_count", "{{count}} File", { count: internalPayloads.length })}
         bodyClass={cn("grid gap-3", isPS5 ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3")}
       >
+          {/* [CN-FORK] 本程序（宿主）自更新状态行：始终置顶，不走普通 payload 的▶启动/🗑删除
+              （你正运行在它里面，这两个动作对它无意义），右侧改成「待重启 / 更新按钮 / 已是最新」三态。 */}
+          {selfUpdateInfo && (
+            <div className="col-span-full flex flex-col justify-center p-3 rounded-xl border border-ps-blue/30 bg-ps-blue/[0.06] relative overflow-hidden">
+              <div className="flex flex-row items-center justify-between w-full gap-3">
+                <div className="flex items-center space-x-3 min-w-0 flex-1">
+                  <PayloadIcon name="NayePlmTools" className="w-16 h-16 sm:w-20 sm:h-20 text-2xl shrink-0" />
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-white font-semibold truncate">NayePlmTools</span>
+                      <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-ps-blue/80 border border-ps-blue/40 rounded px-1.5 py-0.5">
+                        {t("storage_hub.self_badge", "This app")}
+                      </span>
+                    </div>
+                    <div className="text-zinc-400 text-xs">
+                      {t("storage_hub.self_running_version", "Running v{{version}}", { version: (selfUpdateInfo.running || '?').replace(/^v/i, '') })}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center shrink-0 ml-3">
+                  {selfUpdateInfo.pendingNewer ? (
+                    <div className="flex flex-col items-end gap-1.5 max-w-[55%]">
+                      <span className="text-xs text-amber-400 font-medium text-right">
+                        {t("storage_hub.self_pending_reboot", "v{{version}} downloaded - applies on next start", { version: (selfUpdateInfo.pending || '').replace(/^v/i, '') })}
+                      </span>
+                      {/* [CN-FORK] 已下好新版、只等重启：给一个「重启生效」按钮，直接走后端
+                          开机那套交接把新 slot 拉起来（无需手动重启主机）。 */}
+                      <button
+                        onClick={() => onApplySelfUpdate?.()}
+                        className="btn btn-ok w-full sm:w-auto text-xs"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>{t("storage_hub.self_restart_btn", "Restart to apply")}</span>
+                      </button>
+                    </div>
+                  ) : selfUpdateInfo.hasUpdate ? (
+                    <button
+                      onClick={() => onInstall(selfUpdateInfo.repoEntry, selfUpdateInfo.repoSrcId, selfUpdateInfo.repoSrcUrl)}
+                      className="btn btn-ok w-full sm:w-auto text-xs"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>
+                        {t("storage_hub.update_to_version", "Update (to v{{version}})", { version: (selfUpdateInfo.remoteVersion || '').replace(/^v/i, '') })}
+                      </span>
+                    </button>
+                  ) : (
+                    <span className="text-xs text-zinc-500">
+                      {t("storage_hub.self_up_to_date", "Up to date")}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           {internalPayloads.length === 0 ? (
             <EmptyState
               className="col-span-full"
@@ -509,8 +602,16 @@ const StorageHub = ({
                   break
                 }
               }
-              const hasUpdate = Boolean(remoteMatch && (remoteMatch.isUpdate || remoteMatch.filename !== fileName))
               const remoteVersion = remoteMatch?.version || (remoteMatch?.filename ? parsePayloadName(remoteMatch.filename).version : null)
+              /* [CN-FORK] 「有更新」必须仓库版本严格高于已安装版本。旧判定用「文件名不同 = 可升」，
+               * 无法区分升/降级：仓库里放了更旧的版本（如已安装 0.6.1.182、仓库 NayePlmTools 0.6.1.181）
+               * 也会显示「更新（至更旧版本）」，点了被安装链拒绝 → 版本纹丝不动（用户反馈）。 */
+              const installedVersion = parsePayloadName(fileName).version
+              /* [CN-FORK] 仓库来的一律先剔掉 -me/-ga 变体后缀再比，不管发的是 me 还是 ga 包，
+               * 只要数字版本比当前新就认可为「有更新」。 */
+              const repoNewer = Boolean(remoteVersion && installedVersion &&
+                compareVersions(stripVariantSuffix(remoteVersion), stripVariantSuffix(installedVersion)) > 0)
+              const hasUpdate = Boolean(remoteMatch && (remoteMatch.isUpdate || repoNewer))
               return (
                 <div
                   key={path}
@@ -526,13 +627,15 @@ const StorageHub = ({
                 >
                   <div className="flex flex-row items-center justify-between w-full">
                     <div className="flex items-center space-x-3 min-w-0 flex-1">
-                      {/* [CN-FORK] 已安装列表图标与仓库卡片同源：命中仓库条目就取其真图标
-                       * (remoteMatch.icon)，没有则 PayloadIcon 兜底为名字首字染色块，
-                       * 不再是原先写死的立方体。name 传仓库文件名与 PayloadCard 一致，保证同色同字。 */}
+                      {/* [CN-FORK] 已安装列表图标与仓库卡片同源且同尺寸（用户口径：
+                       * 「已安装 payload 和仓库 payload 图标大小一样」）：命中仓库条目就取其真图标
+                       * (remoteMatch.icon)，没有则 PayloadIcon 兜底为名字首字染色块。
+                       * name 传仓库文件名与 PayloadCard 一致，保证同色同字；className 尺寸与
+                       * PayloadCard 的图标位完全对齐（w-16 / sm:w-20 + text-2xl）。 */}
                       <PayloadIcon
                         icon={remoteMatch?.icon}
                         name={remoteMatch?.filename || fileName}
-                        className="w-9 h-9 text-base shrink-0"
+                        className="w-16 h-16 sm:w-20 sm:h-20 text-2xl shrink-0"
                       />
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <PayloadName path={fileName} className="text-white font-semibold" stacked />

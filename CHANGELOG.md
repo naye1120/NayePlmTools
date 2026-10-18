@@ -1,3 +1,28 @@
+## v0.6.1.188 (CN-FORK) — 2026-10-18 · 本程序在线自更新（含「重启生效」）+ 移动端二级菜单公众号化 + 个性化软件宫格
+
+> 折叠 `.182–.188` 未发布序号（`.181` 是上个已发布 Release，本批为其后累积改动，一次对外）。
+
+### ① 本程序（NayePlmTools）在线自更新 + 重启生效
+- `pldmgr.h`：新增路由 `/apply_self_update`；`MENU_VERSION` 0.6.1.181 → 0.6.1.188。
+- `utils.c`/`utils.h`：新增 `is_self_update_name()`，在上游 pldmgr 族名之外认本 fork 自身名 `PLDMGR_APP_NAME`（NayePlmTools）作为自更新身份。
+- `repository.c`：自更新版本校验放宽到 3~4 段纯数字（兼容 fork 四段构建号），比对前剥离 `-me`/`-ga` 变体后缀——「不管 me/ga，数字版本合适就更新」；fork 名条目走「已配置源即可信源」的身份分支，官方 pldmgr 族策略不变。
+- `sources.c`：`sources_repo_install` 增加 `src_configured` 门槛，fork 名自更新仅允许从用户实际添加的仓库拉取，未配置源一律拒绝。
+- `http_server.c`：把 `/apply_self_update` 登记为 POST 路由（方法闸门 + CSRF）。
+- `StorageHub.jsx` / `RepositoryContext.jsx` / `versions.js` / `payloadStatus.js`：「本程序」卡展示 running/pending 版本，新增「重启生效」按钮（仅加载器确收下 ELF 才让当前进程退出、腾出 8911）；前端版本比对剥离变体后缀。
+
+### ② 移动端二级菜单公众号化 + 文案（用户口径）
+> 原文：「手机端页面工具 和系统的弹出二级菜单用那种跟公众号弹出方式类似的样式（横向的）」「横向不要铺满」「是哪个按钮，在那个按钮的位置弹出」「PKG 改名 PKG安装，配置 改成 常用配置，游戏 改成 游戏管理」。
+- `App.jsx`：工具/系统二级菜单改为公众号式横向浮层（图标左、文字右、行间发丝分隔、背景不遮暗），按被点按钮所在列锚定弹出；卡片宽度逐档收窄至 `w-[min(38vw,8.75rem)]`。
+- `zh-CN.json`：`pkg_mobile`→「PKG安装」、`common_entries_mobile`→「常用配置」、`game_manage_mobile`→「游戏管理」。
+
+### ③ 个性化软件弹窗：移除换图/换背景 + 卡片宫格（用户口径）
+> 原文：「去掉个性化软件中的图标和背景的修改功能」「个性化软件调整这种布局」「每行默认换3列」。
+- `SystemAppsModal.jsx`：移除图标/背景上传与恢复，仅保留主机自带图标的只读预览 + 置顶/隐藏开关；列表改为卡片宫格 `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`。
+
+### ④ 已安装 payload 图标尺寸对齐仓库（用户口径）
+> 原文：「已安装payload 和仓库payload图标的大小一样」。
+- `StorageHub.jsx`：已安装列表项与自更新行图标统一为 `w-16 h-16 sm:w-20 sm:h-20`，与仓库卡片 `PayloadCard` 同源尺寸。
+
 ## v0.6.1.181 (CN-FORK) — 2026-10-18 · 合并上游 v0.6.1（基线升级）+ 已安装列表图标对齐仓库
 
 > 拉取并合并 upstream/main 至 v0.6.1（`6a47b85`）。上游自 v0.6.0 基线仅两个提交：

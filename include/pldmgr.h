@@ -13,6 +13,9 @@
 #define ROUTE_DELETE "/manage:delete"
 #define ROUTE_LOAD_PAYLOAD "/loadpayload:"
 #define ROUTE_SHUTDOWN "/shutdown"
+/* [CN-FORK] 「本程序」卡的重启生效：把已下载好的自更新 slot 用开机同一套
+ * 引导交接拉起来（仅加载器确实收下新 ELF 才让当前进程退出、腾出 8911）。 */
+#define ROUTE_APPLY_SELF_UPDATE "/apply_self_update"
 #define ROUTE_LOG "/log"
 #define ROUTE_VERSION "/version"
 #define ROUTE_GETIP "/getip"
@@ -183,7 +186,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.6.1.181" /* [CN-FORK] 本 fork 版本：上游基线 0.6.1（已合并 upstream/main v0.6.1，merge 见 HANDOVER.md §0）+ 构建序号（.181，延续自 0.5.1 时代的计数）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.6.1.188" /* [CN-FORK] 本 fork 版本：上游基线 0.6.1（已合并 upstream/main v0.6.1，merge 见 HANDOVER.md §0）+ 构建序号（.188，本程序卡新增「重启生效」按钮）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，

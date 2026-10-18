@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { slug } from '../utils/versions';
+import { getBaseName } from '../utils/helpers';
 import { createRepositoryIconCache } from '../utils/repositoryIcons';
 import { normalizeUrl } from '../utils/payloadStatus';
 
@@ -184,6 +185,28 @@ export const RepositoryProvider = ({ children }) => {
     [repoIndex]
   );
 
+  /* [CN-FORK] 统一的「给一个 payload（进程名 / 本地槽位名 / 仓库 id）回查它对应的仓库条目」入口，
+   * 供自动加载页、活动进程页与仓库卡片共用同一份真图标 + 同一个兜底种子（保证同图同色）。
+   * 匹配优先级：① 精确 id → ② 精确文件名 → ③ 归一基名（去版本号/扩展名/非字母数字后）相等。
+   * 只做「相等」不做前缀包含，宁缺毋滥——对不上就回退到首字染色块，不会张冠李戴。 */
+  const findRepoEntryForPayload = useCallback(
+    (query) => {
+      if (!query) return null;
+      const { id, filename, name } = query;
+      if (id) { const byId = findRepoEntryById(id); if (byId) return byId; }
+      if (filename) { const byFn = findRepoEntryByFilename(filename); if (byFn) return byFn; }
+      const squash = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const nb = squash(getBaseName(filename || name || id || ''));
+      if (!nb) return null;
+      let found = null;
+      repoIndex.forEach((srcMap) => srcMap.forEach((entry) => {
+        if (!found && (squash(getBaseName(entry.filename)) === nb || squash(entry.id) === nb || squash(getBaseName(entry.name)) === nb)) found = entry;
+      }));
+      return found;
+    },
+    [findRepoEntryById, findRepoEntryByFilename, repoIndex]
+  );
+
   return (
     <RepositoryContext.Provider
       value={{
@@ -197,6 +220,7 @@ export const RepositoryProvider = ({ children }) => {
         getRepoEntry,
         findRepoEntryById,
         findRepoEntryByFilename,
+        findRepoEntryForPayload,
       }}
     >
       {children}
