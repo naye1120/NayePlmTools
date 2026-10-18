@@ -471,3 +471,102 @@ done:
     pthread_mutex_unlock(&self_update_mutex);
     return result;
 }
+
+/* [CN-FORK] v0.6.1.191 手动上传「本程序」自身时，在普通导入之外「额外复制」一份进
+ * 与在线自更新同一个 slot（/payloads/pldmgr/pldmgr_v<ver>.elf），让顶部「本程序」卡
+ * 复用现成的「重启生效」干净交接（/apply_self_update 只认这个目录）。src_path 是刚落盘
+ * 的普通 payload，本函数只读不消费（用 copy 而非 rename），普通卡与引导器登记照常保留。
+ * 仅当 ELF 内嵌 PLDMGR_VER 严格高于 MENU_VERSION、且高于已 pending 的那份时才发布；否则
+ * no-op（不比当前运行新就不动）。与 repository_install_self_update 同一发布块，区别只在：
+ * 手动上传没有仓库条目、无 checksum 可校，故跳过校验和比对（文件是用户自己给的，
+ * 信任边界等同▶启动）。 */
+int repository_stage_uploaded_self_update(const char *src_path, char *out_version, size_t out_version_size) {
+    if (!src_path || !*src_path) return -1;
+    if (out_version && out_version_size > 0) out_version[0] = '\0';
+    int fd = open(src_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) return -1;
+    char version[64];
+    /* 内嵌 PLDMGR_VER 永远是纯数字（无 -me/-ga 后缀），只接受严格高于当前运行的上传。 */
+    int bad = repository_self_update_version_fd(fd, version, sizeof(version)) ||
+        slot_version_compare(version, MENU_VERSION) <= 0;
+    close(fd);
+    if (bad) return -1;
+    pthread_mutex_lock(&self_update_mutex);
+    char previous[1024], pending[64];
+    check_self_update(previous, sizeof(previous), pending, sizeof(pending));
+    int result = -1;
+    if (slot_version_compare(version, pending) <= 0) goto staged_done;
+    const char *folder = PAYLOADS_STORAGE_DIR "/pldmgr";
+    if (mkdir(folder, 0755) && errno != EEXIST) goto staged_done;
+    int parent_fd = open(PAYLOADS_STORAGE_DIR, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (parent_fd < 0) goto staged_done;
+    int parent_sync = fsync(parent_fd);
+    close(parent_fd);
+    if (parent_sync) goto staged_done;
+    int dir_fd = open(folder, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (dir_fd < 0) goto staged_done;
+    const char *v = version + (version[0] == 'v' || version[0] == 'V');
+    char filename[128];
+    snprintf(filename, sizeof(filename), "pldmgr_v%s.elf", v);
+    /* 复制而非 rename：src_path 是刚落盘的普通 payload（要留给普通卡与引导器），这里只是
+     * 「额外」往自更新 slot 放一份。先写同目录 .part 再 rename，保证发布原子性。
+     * 缓冲走堆 —— 真机连接线程栈只有 64KB（见 game_saves.c 的同类事故记录）。 */
+    int src_fd = open(src_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (src_fd < 0) { close(dir_fd); goto staged_done; }
+    const char *part = "pldmgr_upl.part";
+    int dst_fd = openat(dir_fd, part, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (dst_fd < 0) { close(src_fd); close(dir_fd); goto staged_done; }
+    char *buf = malloc(16384);
+    int copied = buf ? 0 : -1;
+    ssize_t n = 0;
+    while (copied == 0 && (n = read(src_fd, buf, 16384)) > 0) {
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = write(dst_fd, buf + off, n - off);
+            if (w <= 0) { copied = -1; break; }
+            off += w;
+        }
+    }
+    if (n < 0) copied = -1;
+    free(buf);
+    close(src_fd);
+    if (copied != 0 || fsync(dst_fd)) {
+        close(dst_fd);
+        unlinkat(dir_fd, part, 0);
+        close(dir_fd);
+        goto staged_done;
+    }
+    close(dst_fd);
+    if (renameat(dir_fd, part, dir_fd, filename)) {
+        unlinkat(dir_fd, part, 0);
+        close(dir_fd);
+        goto staged_done;
+    }
+    result = 0;
+    if (out_version && out_version_size > 0) {
+        strncpy(out_version, version, out_version_size - 1);
+        out_version[out_version_size - 1] = '\0';
+    }
+    if (fsync(dir_fd)) {
+        pldmgr_log("[PLDMGR] Uploaded self-update published; directory sync failed.\n");
+    } else {
+        int scan_fd = dup(dir_fd);
+        DIR *d = scan_fd >= 0 ? fdopendir(scan_fd) : NULL;
+        if (!d && scan_fd >= 0) close(scan_fd);
+        struct dirent *file;
+        while (d && (file = readdir(d))) {
+            const char *ext = strrchr(file->d_name, '.');
+            if (strcmp(file->d_name, filename) && is_pldmgr_name(file->d_name) && ext &&
+                (!strcasecmp(ext, ".elf") || !strcasecmp(ext, ".bin"))) {
+                if (unlinkat(dir_fd, file->d_name, 0))
+                    pldmgr_log("[PLDMGR] Could not remove previous self-update: %s\n", file->d_name);
+            }
+        }
+        if (d) closedir(d);
+        if (fsync(dir_fd)) pldmgr_log("[PLDMGR] Uploaded self-update cleanup sync failed.\n");
+    }
+    close(dir_fd);
+staged_done:
+    pthread_mutex_unlock(&self_update_mutex);
+    return result;
+}

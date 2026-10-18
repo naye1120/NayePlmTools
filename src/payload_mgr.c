@@ -879,6 +879,17 @@ int payload_mgr_import_to_storage_mode(const char *filename, const char *temp_pa
                    installed_path);
     else
         payload_mgr_autoloader_sync(filename, installed_path, payload_mgr_is_self_payload(filename));
+
+    /* [CN-FORK] v0.6.1.191 手动上传「本程序」自身：普通导入 + 引导器登记照常走完（保持与
+     * 任意 payload 一致的契约，开机仍会被引导器接管），这里只是「额外」把已落盘的这份
+     * 复制进自更新 slot（/payloads/pldmgr/），让顶部专属行出现「重启生效」的干净交接。
+     * repository_stage_uploaded_self_update 内部只在 ELF 内嵌版本严格高于当前运行、且高于
+     * 已 pending 的那份时才发布；不满足就是 no-op，普通卡照常留在列表里。 */
+    if (is_self_update_name(filename) && access(installed_path, F_OK) == 0) {
+        char staged[64] = "";
+        if (repository_stage_uploaded_self_update(installed_path, staged, sizeof(staged)) == 0)
+            pldmgr_log("[PLDMGR] Uploaded self-update also staged for restart: v%s\n", staged);
+    }
     return 0;
 }
 

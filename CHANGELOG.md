@@ -1,3 +1,11 @@
+## v0.6.1.191 (CN-FORK) — 2026-10-18 · 手动上传本程序归入自更新 slot（复用「重启生效」）+ 修复非 URL 外链 404
+
+> 用户口径：「留一个也有问题，我手打上传的时候，没有重启选项啊」+ 仓库详情外链 404 截图。
+- `repository.c`/`repository.h`：新增 `repository_stage_uploaded_self_update()` —— 把已落盘的手动上传 NayePlmTools ELF（内嵌 PLDMGR_VER 严格高于 MENU_VERSION、且高于已 pending 那份）**复制**进 `/payloads/pldmgr/pldmgr_v<ver>.elf` pending slot（只读不消费源文件），与 `repository_install_self_update` 同一发布块，仅跳过校验和比对（上传无仓库条目）。复用现成的 `/apply_self_update` 干净交接。
+- `payload_mgr.c`：`payload_mgr_import_to_storage_mode` 走完普通导入 + 引导器登记（保持与任意 payload 一致的契约）之后，若 `is_self_update_name(filename)` 且上传比当前运行新，则**额外**调用上面的函数复制一份进自更新 slot，让顶部专属行出现「重启生效」；不比运行新就是 no-op，普通卡照常留在列表（前端 `.190` 的去重过滤仍把它并入顶部行呈现）。
+- `PayloadDetailPanel.jsx`：`getRepoUrl` 只认绝对 http(s) URL，非 URL 的 source/repo_url 不再渲染成可点外链（修「source 被填成人标签时点击 404」）。
+- `pldmgr.h`：`MENU_VERSION` 0.6.1.190 → 0.6.1.191。
+
 ## v0.6.1.190 (CN-FORK) — 2026-10-18 · 已安装列表去除本程序重复条目
 
 > 用户口径：「这两个，要么统一，要么只保留一个」—— 保留顶部专属自更新行，剔除普通宫格里的同名卡。

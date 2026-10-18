@@ -28,17 +28,19 @@ const GithubIcon = ({ className = "w-4 h-4" }) => (
   </svg>
 );
 
+/* [CN-FORK] v0.6.1.191 只认绝对 http(s) URL：外部仓库清单的 source 常被误填成
+ * 「github release v0.x.x」这类人类标签，若直接当 href，浏览器会按面板自身域名相对
+ * 解析（http://<ps5-ip>:8911/github release v0.x.x）→ 404。非 URL 一律不渲染成外链。 */
+const isHttpUrl = (u) => typeof u === 'string' && /^https?:\/\//i.test(u.trim());
+
 const getRepoUrl = (p) => {
   if (!p) return null;
-  if (p.repository) return p.repository;
-  if (p.repo_url) return p.repo_url;
-  if (p.source) {
-    return p.source.replace(/\/releases(\/.*)?$/, '');
-  }
-  if (p.source_direct) {
-    return p.source_direct.replace(/\/releases(\/.*)?$/, '');
-  }
-  return null;
+  let candidate = null;
+  if (p.repository) candidate = p.repository;
+  else if (p.repo_url) candidate = p.repo_url;
+  else if (p.source) candidate = p.source.replace(/\/releases(\/.*)?$/, '');
+  else if (p.source_direct) candidate = p.source_direct.replace(/\/releases(\/.*)?$/, '');
+  return isHttpUrl(candidate) ? candidate.trim() : null;
 };
 
 const getReadmeUrls = (payload, srcUrl) => {
