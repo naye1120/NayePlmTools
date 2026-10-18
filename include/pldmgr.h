@@ -189,7 +189,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.6.1.191" /* [CN-FORK] 本 fork 版本：上游基线 0.6.1（已合并 upstream/main v0.6.1，merge 见 HANDOVER.md §0）+ 构建序号（.191，手动上传本程序归入自更新 slot 复用「重启生效」 + 修复仓库详情非 URL 外链 404）；每次调整构建自动 +1 */
+#define MENU_VERSION "0.6.1.192" /* [CN-FORK] 本 fork 版本：上游基线 0.6.1（已合并 upstream/main v0.6.1，merge 见 HANDOVER.md §0）+ 构建序号（.192，与 .191 同代码集，仅版本号 +1 作为面板内 OTA 自更新的验证目标）；每次调整构建自动 +1 */
 /* [CN-FORK] v0.5.2.155 下面这几个路径宏允许宿主测试用 -D 覆盖（`#ifndef` 保护）。
  * 「逗号列表 ↔ autoload.txt 行」的写回幂等是个纯逻辑问题（`.154`/`.155` 两轮都在修
  * 用户报的「自动加载页面自己增加 1 秒延时」），但这些路径原先写死在头文件里，
