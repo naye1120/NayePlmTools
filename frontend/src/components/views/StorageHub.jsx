@@ -537,7 +537,9 @@ const StorageHub = ({
             <div className="col-span-full flex flex-col justify-center p-3 rounded-xl border border-ps-blue/30 bg-ps-blue/[0.06] relative overflow-hidden">
               <div className="flex flex-row items-center justify-between w-full gap-3">
                 <div className="flex items-center space-x-3 min-w-0 flex-1">
-                  <PayloadIcon name="NayePlmTools" className="w-16 h-16 sm:w-20 sm:h-20 text-2xl shrink-0" />
+                  {/* [CN-FORK] v0.6.1.193 与仓库目录卡/普通已安装卡图标同源：命中仓库条目（repoEntry）
+                      就传它解析出的真图标 icon，没有才回退到名字首字染色块（之前只传 name 导致真图标不显示）。 */}
+                  <PayloadIcon icon={selfUpdateInfo.repoEntry?.icon} name="NayePlmTools" className="w-16 h-16 sm:w-20 sm:h-20 text-2xl shrink-0" />
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-white font-semibold truncate">NayePlmTools</span>
