@@ -539,7 +539,7 @@ const StorageHub = ({
                 <div className="flex items-center space-x-3 min-w-0 flex-1">
                   {/* [CN-FORK] v0.6.1.193 与仓库目录卡/普通已安装卡图标同源：命中仓库条目（repoEntry）
                       就传它解析出的真图标 icon，没有才回退到名字首字染色块（之前只传 name 导致真图标不显示）。 */}
-                  <PayloadIcon icon={selfUpdateInfo.repoEntry?.icon} name="NayePlmTools" className="w-16 h-16 sm:w-20 sm:h-20 text-2xl shrink-0" />
+                  <PayloadIcon icon={selfUpdateInfo.repoEntry?.icon} name="NayePlmTools" className="w-8 h-8 sm:w-10 sm:h-10 text-sm rounded-lg shrink-0" />
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-white font-semibold truncate">NayePlmTools</span>
@@ -655,11 +655,11 @@ const StorageHub = ({
                        * 「已安装 payload 和仓库 payload 图标大小一样」）：命中仓库条目就取其真图标
                        * (remoteMatch.icon)，没有则 PayloadIcon 兜底为名字首字染色块。
                        * name 传仓库文件名与 PayloadCard 一致，保证同色同字；className 尺寸与
-                       * PayloadCard 的图标位完全对齐（w-16 / sm:w-20 + text-2xl）。 */}
+                       * PayloadCard 的图标位完全对齐（v0.6.1.194 按用户口径减半：w-8 / sm:w-10 + text-sm + rounded-lg）。 */}
                       <PayloadIcon
                         icon={remoteMatch?.icon}
                         name={remoteMatch?.filename || fileName}
-                        className="w-16 h-16 sm:w-20 sm:h-20 text-2xl shrink-0"
+                        className="w-8 h-8 sm:w-10 sm:h-10 text-sm rounded-lg shrink-0"
                       />
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <PayloadName path={fileName} className="text-white font-semibold" stacked />

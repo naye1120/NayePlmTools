@@ -30,7 +30,7 @@ const PayloadCard = ({ payload, onClick, statusInfo, isUpdate: isUpdateProp, isI
         <PayloadIcon
           icon={payload.icon}
           name={payload.filename}
-          className="w-16 h-16 sm:w-20 sm:h-20 text-2xl shadow-md"
+          className="w-8 h-8 sm:w-10 sm:h-10 text-sm rounded-lg shadow-md"
         />
       </div>
 
