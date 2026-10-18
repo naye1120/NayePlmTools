@@ -194,8 +194,8 @@ export default function SystemAppsModal({ show, onClose, addToast }) {
               })}
             </p>
             {/* 卡片宫格（用户口径的版式）：默认每行三列（窄屏逐级降为两列 / 单列）。
-                每张卡 = 上半「图标 + 名称 / TID」，一道发丝分隔线，下半「置顶 / 隐藏」
-                左右分列的两颗开关。 */}
+                每张卡 = 最左「图标」独占一列（垂直居中），右列自上而下是「名称 / TID」、
+                一道发丝分隔线、「置顶 / 隐藏」左右分列的两颗开关。 */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {shown.map((a) => {
                 const rowBusy = busyTid === a.tid
@@ -205,58 +205,60 @@ export default function SystemAppsModal({ show, onClose, addToast }) {
                   <div
                     key={a.tid}
                     className={cn(
-                      'rounded-xl border border-white/10 bg-white/[0.02] p-3 flex flex-col gap-3',
+                      'rounded-xl border border-white/10 bg-white/[0.02] p-3 flex items-stretch gap-3',
                       rowBusy && 'opacity-60',
                     )}
                   >
-                    {/* 上半：图标 + 名称 / TID。图标位尺寸写死，图 404 退回中性占位
+                    {/* 图标：最左边独占一列、垂直居中。尺寸写死，图 404 退回中性占位
                         且与真图占同一固定方框，卡片高度不随图片成败变化。 */}
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="relative w-14 h-14 shrink-0 rounded-xl overflow-hidden bg-white/5 border border-white/10 flex items-center justify-center">
-                        {iconFailed[a.tid] ? (
-                          <AppWindow className="w-7 h-7 text-zinc-600" aria-hidden="true" />
-                        ) : (
-                          <img
-                            src={iconSrc}
-                            alt=""
-                            loading="lazy"
-                            className="w-full h-full object-cover"
-                            onError={() => setIconFailed((m) => ({ ...m, [a.tid]: true }))}
-                          />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
+                    <div className="relative w-14 h-14 shrink-0 self-center rounded-xl overflow-hidden bg-white/5 border border-white/10 flex items-center justify-center">
+                      {iconFailed[a.tid] ? (
+                        <AppWindow className="w-7 h-7 text-zinc-600" aria-hidden="true" />
+                      ) : (
+                        <img
+                          src={iconSrc}
+                          alt=""
+                          loading="lazy"
+                          className="w-full h-full object-cover"
+                          onError={() => setIconFailed((m) => ({ ...m, [a.tid]: true }))}
+                        />
+                      )}
+                    </div>
+
+                    {/* 右列：名称 / TID 在上，一道发丝分隔线，置顶 / 隐藏两颗开关在下。 */}
+                    <div className="flex-1 min-w-0 flex flex-col gap-3">
+                      <div className="min-w-0">
                         <p className="text-white panel-note font-semibold truncate">{a.name || a.tid}</p>
                         <p className="text-zinc-500 panel-tiny mt-0.5 leading-snug font-mono tracking-wide truncate">
                           {rowBusy ? busyText(a.tid) : a.tid}
                         </p>
                       </div>
-                    </div>
 
-                    {/* 分隔线：把「是哪一条」与「要改什么」分成上下两块。 */}
-                    <div className="h-px bg-white/10" aria-hidden="true" />
+                      {/* 分隔线：把「是哪一条」与「要改什么」分成上下两块。 */}
+                      <div className="h-px bg-white/10" aria-hidden="true" />
 
-                    {/* 下半：置顶在左、隐藏在右，两端对齐。每个开关前带小字标签 ——
-                        电视端没有 hover，光看两颗长得一样的滑块分不出哪个是哪个。
-                        方向都不取反：开=置顶 / 开=隐藏。 */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="panel-tiny font-semibold text-zinc-400">{t('appsys.pin', '置顶')}</span>
-                        <Switch
-                          checked={!!a.pinned}
-                          disabled={busyTid !== ''}
-                          label={`${a.name || a.tid} ${t('appsys.pin_label', '置顶（写进主机主屏固定列表，排在最前）')}`}
-                          onChange={(v) => setPinned(a.tid, v)}
-                        />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="panel-tiny font-semibold text-zinc-400">{t('appsys.hide', '隐藏')}</span>
-                        <Switch
-                          checked={!!a.hidden}
-                          disabled={busyTid !== ''}
-                          label={`${a.name || a.tid} ${t('appsys.hide_label', '隐藏（从主屏藏起来）')}`}
-                          onChange={(v) => setHidden(a.tid, v)}
-                        />
+                      {/* 置顶在左、隐藏在右，两端对齐。每个开关前带小字标签 ——
+                          电视端没有 hover，光看两颗长得一样的滑块分不出哪个是哪个。
+                          方向都不取反：开=置顶 / 开=隐藏。 */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="panel-tiny font-semibold text-zinc-400">{t('appsys.pin', '置顶')}</span>
+                          <Switch
+                            checked={!!a.pinned}
+                            disabled={busyTid !== ''}
+                            label={`${a.name || a.tid} ${t('appsys.pin_label', '置顶（写进主机主屏固定列表，排在最前）')}`}
+                            onChange={(v) => setPinned(a.tid, v)}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="panel-tiny font-semibold text-zinc-400">{t('appsys.hide', '隐藏')}</span>
+                          <Switch
+                            checked={!!a.hidden}
+                            disabled={busyTid !== ''}
+                            label={`${a.name || a.tid} ${t('appsys.hide_label', '隐藏（从主屏藏起来）')}`}
+                            onChange={(v) => setHidden(a.tid, v)}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>

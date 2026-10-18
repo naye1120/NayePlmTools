@@ -84,6 +84,15 @@ const REFERENCES = [
  * 日期是琥珀色、能力清单是蓝色。 */
 const CHANGELOG = [
   {
+    date: "2026-10-18",
+    items: [
+      "本程序在线自更新：面板能从你已配置的仓库直接更新自身，下载好后点「重启生效」即接管（仅加载器确收下新 ELF 才让当前进程退出）。",
+      "移动端「工具 / 系统」二级菜单改成公众号式横向弹出，按被点按钮所在位置锚定，不再铺满整行。",
+      "「个性化软件」弹窗重排：移除换图标 / 换背景（只留主机自带图标的预览与置顶 / 隐藏），列表改卡片宫格，图标移到最左独占一列。",
+      "已安装 payload 的图标尺寸与仓库卡片统一。",
+    ],
+  },
+  {
     date: "2026-10-14",
     items: [
       "合并上游 v0.6.0 —— 上游版本从 v0.5.2 跳到 v0.6.0（「关于本 Fork」里的上游版本号已同步）。底层换成新的仓库上下文、槽位管理、进程管理与日志服务，并带上上游这一版的稳定性修复。",
@@ -230,8 +239,8 @@ const AboutView = ({ version }) => {
               </a>
             </dd>
             <dt className="text-zinc-500">{t("donate.fork_upstream_version", "上游版本")}</dt>
-            {/* [CN-FORK] v0.6.0.176 合并上游 v0.6.0 后同步（用户口径：「这里上游版本没更新」）。 */}
-            <dd className="text-white font-semibold">v0.6.0</dd>
+            {/* [CN-FORK] v0.6.1.189 合并上游 v0.6.1 后同步（原写死 v0.6.0 已过时）。 */}
+            <dd className="text-white font-semibold">v0.6.1</dd>
             <dt className="text-zinc-500">{t("donate.fork_version", "本 Fork 版本")}</dt>
             {/* [CN-FORK] v0.5.2.113 现读构建时烧入的 __APP_VERSION__（vite.config.js
                 从 include/pldmgr.h 的 MENU_VERSION 取）。dev server 下它是 'dev'。 */}
