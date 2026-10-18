@@ -454,9 +454,14 @@ static int valid_icon(const char *value) {
 }
 static int icon_member(const char *key, const char *start, const char *end, void *context) {
     IconCatalog *catalog = context; char value[12289];
-    if (!key[0] || strlen(key) >= 128 || catalog->count >= 4096 ||
-        json_decode_string(start, end, value, sizeof(value)) || !valid_icon(value)) return -1;
-    for (size_t i = 0; i < catalog->count; i++) if (!strcmp(catalog->keys[i], key)) return -1;
+    /* [CN-FORK] v0.6.1.191 单张图标过大/非法/重复键只跳过这一张（return 0），绝不 return -1：
+     * json_visit_object 里任一成员返回 -1 会让整份图标目录被判无效（一颗老鼠屎坏一锅粥），
+     * 症状就是「某个源里只要有一张图超标（如 2MB 的 custom 图标），该源所有图标全部消失」。
+     * 结构非法在到达本回调前已被 json_value/json_string 拦下，这里 return 0 只会跳过合法 JSON
+     * 但超标/非法 base64/重复的图标。 */
+    if (!key[0] || strlen(key) >= 128 || catalog->count >= 4096) return 0;
+    if (json_decode_string(start, end, value, sizeof(value)) || !valid_icon(value)) return 0;
+    for (size_t i = 0; i < catalog->count; i++) if (!strcmp(catalog->keys[i], key)) return 0;
     strcpy(catalog->keys[catalog->count++], key);
     return 0;
 }
