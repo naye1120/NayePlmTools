@@ -62,8 +62,9 @@ const StorageHub = ({
 
   const { sources, repoData, loading, error, fetchRemote } = useRepository()
 
-  /* [CN-FORK] 已安装的 Payload：payloads 是路径数组，USB 的那批归下面的板块 */
-  const internalPayloads = payloads.filter(p => !p.includes('/mnt/usb'))
+  /* [CN-FORK] 已安装的 Payload：payloads 是路径数组，USB 的那批归下面的板块。
+   * internalPayloads 在下方 selfUpdateInfo 之后计算 —— 需要它来判断是否剔除「本程序自身」
+   * 那条重复条目（宿主已由顶部专属自更新行统一呈现）。 */
 
   /* [CN-FORK] v0.5.1.65 默认云端仓库已关闭：这一版不发请求、也不列目录。
    * v0.6.0 把仓库数据搬进 RepositoryContext 后，「mount 即拉取」的行为挪到了 provider
@@ -198,6 +199,14 @@ const StorageHub = ({
       compareVersions(stripVariantSuffix(remoteVersion), stripVariantSuffix(running)) > 0)
     return { running, pending, pendingNewer, repoEntry, repoSrcId, repoSrcUrl, remoteVersion, hasUpdate }
   }, [self, enrichedSources])
+
+  /* [CN-FORK] 普通已安装宫格：USB 那批归下方板块；当顶部有本程序专属自更新行时
+   * （selfUpdateInfo 非空），把宫格里基名为 nayeplmtools 的同名条目剔除 —— 宿主自身只由
+   * 那条专属行统一呈现「运行版本 / 待重启 / 已是最新 / 更新」，不再重复一张语义矛盾的普通卡。 */
+  const internalPayloads = useMemo(() => {
+    const base = payloads.filter((p) => !p.includes('/mnt/usb'))
+    return selfUpdateInfo ? base.filter((p) => getBaseName(p) !== SELF_APP_BASE) : base
+  }, [payloads, selfUpdateInfo])
 
   // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const resolvedPayloadData = useMemo(() => {
