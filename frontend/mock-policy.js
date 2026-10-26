@@ -56,8 +56,15 @@ export function mutationAuthorized(headers) {
   if (headers.referer !== undefined) return sameOrigin(headers.referer, headers.host, true)
   return headers['x-pldmgr-request'] === '1'
 }
+/** 回归脚本专用的 mock 端点：真机上没有对应路由，不该参与「镜像真机方法闸门」这件事。
+ *  不加白名单时这些路径的 expected 会被算成 GET，脚本用 POST 打就恒 405
+ *  —— game112 从方法闸门上线那版（v0.6.0.177）起就一直卡在第一句 `mockPost('/reset')`；
+ *  放行 /reset 之后又卡在 `/_music_host_fail`，所以这里把整批测试钩子一起放行：
+ *  `/reset` + 所有 `/_*`（`/_game_list_cache`、`/_host_rename_fail`、`/_music_host_fail` …）。 */
+const isMockOnly = (path) => path === '/reset' || path.startsWith('/_')
 export function mutationPolicy(req, res, next) {
   res.set('Vary', 'Origin')
+  if (isMockOnly(req.path)) return next()
   const trusted = sameOrigin(req.headers.origin, req.headers.host)
   if (trusted) res.set('Access-Control-Allow-Origin', req.headers.origin)
   /* 方法闸门只看表 A；psaccounts 的 /api/* 在原生侧是 GET、POST 都放行，
