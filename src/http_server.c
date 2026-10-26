@@ -2989,6 +2989,7 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!alloc_response_buffer(&resp_buf)) {
             free(raw); free(esc);
             return send_out_of_memory(conn);
+        }
         json_format(resp_buf, RESPONSE_BUFFER_SIZE,
                     "{\"AUTOLOAD_ENABLED\":%s,\"AUTOLOAD_LIST\":\"%s\",\"LAST_"
                     "REPOSITORY_UPDATE\":%ld,"
