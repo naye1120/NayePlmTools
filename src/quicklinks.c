@@ -75,7 +75,7 @@ static void load_quicklinks(QuicklinksStore *s) {
         const char *p = arr_start + 1;
         const char *limit = json + size;
         while (s->count < MAX_QUICKLINKS && (p = strchr(p, '{')) != NULL) {
-            /* [CN-FORK] v0.6.1.195 修「点一次刷新，快捷入口全部消失」：
+            /* [CN-FORK] v0.6.3.195 修「点一次刷新，快捷入口全部消失」：
              * json_extract_string 的 end 是**开区间**（内部要求 r.p == end，即指向 '}'
              * 之后才算解析完整），这里原先直接把 strchr 得到的 '}' 当 end 传进去，于是
              * 每个条目都判成 JSON_STRING_INVALID、name/url 皆空被跳过 —— 整份清单读回来

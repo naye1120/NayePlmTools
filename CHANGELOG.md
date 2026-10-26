@@ -1,4 +1,4 @@
-## v0.6.1.195 (CN-FORK) — 2026-10-26 · 修「快捷入口点刷新后全部消失」+ 合并上游 v0.6.2/v0.6.3
+## v0.6.3.195 (CN-FORK) — 2026-10-26 · 修「快捷入口点刷新后全部消失」+ 合并上游 v0.6.2/v0.6.3
 
 > 用户口径：「快捷入口点击刷新后会全部消失」+「冲突的以我们为准，然后合并」。
 
@@ -16,7 +16,7 @@
   - `PayloadButton.jsx`：上游改了它，fork 已在 v0.6.0 拆分重构（`PayloadIcon` + `PayloadName`），维持删除。
   - `config.c`：上游的「平行数组 + `for(i<6)`」与 fork 的 `SettingKey{key,offset,type,min,max}` 表冲突，两个新键手工挂进表（12 → 14 键，`SETTING_MASK` 位图仍在 uint32 内）。
   - `App.jsx` dashboard 视图块、`StorageHub.jsx` 页头、`mock-server.js` `/get_config`：均取 fork 版。
-- `pldmgr.h`：`MENU_VERSION` 0.6.1.194 → 0.6.1.195。
+- `pldmgr.h`：`MENU_VERSION` 0.6.1.194 → 0.6.3.195。
 
 ## v0.6.1.194 (CN-FORK) — 2026-10-18 · payload 图标减半
 

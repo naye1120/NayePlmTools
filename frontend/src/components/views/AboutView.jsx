@@ -63,7 +63,7 @@ const REFERENCES = [
   { author: 'blackbearreloaded', authorUrl: 'https://github.com/blackbearreloaded', project: 'ps5-at9-converter（浏览器端 ATRAC9 编码器移植自它）', projectUrl: 'https://github.com/blackbearreloaded/ps5-at9-converter' },
   { author: 'Thealexbarney', authorUrl: 'https://github.com/Thealexbarney', project: 'LibAtrac9（ATRAC9 解码表来源，MIT）', projectUrl: 'https://github.com/Thealexbarney/LibAtrac9' },
   { author: 'nothings', authorUrl: 'https://github.com/nothings', project: 'stb（stb_image / stb_image_write）', projectUrl: 'https://github.com/nothings/stb' },
-  /* [CN-FORK] v0.6.1.195 补：markdown 里的表情用的是 Twemoji 图集（CC BY 4.0 要求署名），
+  /* [CN-FORK] v0.6.3.195 补：markdown 里的表情用的是 Twemoji 图集（CC BY 4.0 要求署名），
    * 之前只写在 index.html 的 meta 与 sprites.css 注释里，关于页这份清单漏了。 */
   { author: 'Twitter, Inc. 及贡献者', authorUrl: 'https://github.com/jdecked/twemoji', project: 'Twemoji（表情图集，CC BY 4.0；本分支为内置缩放版）', projectUrl: 'https://github.com/jdecked/twemoji' },
 
@@ -206,7 +206,7 @@ const CHANGELOG = [
 
 const CHANGELOG_COUNT = CHANGELOG.reduce((n, g) => n + g.items.length, 0)
 
-/* [CN-FORK] v0.6.1.195 上游基线版本：合并 upstream/main 后必须同步这里
+/* [CN-FORK] v0.6.3.195 上游基线版本：合并 upstream/main 后必须同步这里
  * （.176 → v0.6.0、.189 → v0.6.1、.195 → v0.6.3）。写成常量是为了少一处散落的硬编码，
  * 以后合并上游只改这一行 + 下面 CHANGELOG 顶部的分组。 */
 const UPSTREAM_VERSION = 'v0.6.3'
@@ -266,7 +266,7 @@ const AboutView = ({ version }) => {
               </a>
             </dd>
             <dt className="text-zinc-500">{t("donate.fork_upstream_version", "上游版本")}</dt>
-            {/* [CN-FORK] v0.6.1.195 合并上游 v0.6.3 后同步（.189 写的是 v0.6.1）。 */}
+            {/* [CN-FORK] v0.6.3.195 合并上游 v0.6.3 后同步（.189 写的是 v0.6.1）。 */}
             <dd className="text-white font-semibold">{UPSTREAM_VERSION}</dd>
             <dt className="text-zinc-500">{t("donate.fork_version", "本 Fork 版本")}</dt>
             {/* [CN-FORK] v0.5.2.113 现读构建时烧入的 __APP_VERSION__（vite.config.js
