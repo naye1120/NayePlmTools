@@ -73,9 +73,21 @@ static void load_quicklinks(QuicklinksStore *s) {
     if (arr_start) arr_start = strchr(arr_start, '[');
     if (arr_start) {
         const char *p = arr_start + 1;
+        const char *limit = json + size;
         while (s->count < MAX_QUICKLINKS && (p = strchr(p, '{')) != NULL) {
-            const char *end = strchr(p, '}');
-            if (!end) break;
+            /* [CN-FORK] v0.6.1.195 修「点一次刷新，快捷入口全部消失」：
+             * json_extract_string 的 end 是**开区间**（内部要求 r.p == end，即指向 '}'
+             * 之后才算解析完整），这里原先直接把 strchr 得到的 '}' 当 end 传进去，于是
+             * 每个条目都判成 JSON_STRING_INVALID、name/url 皆空被跳过 —— 整份清单读回来
+             * 恒 0 条。病灶只在「读」这一侧，文件一直是好的：
+             *   ① payload 重启后第一次 GET /quicklinks，load 得 0 条，随后的 app.db 同步
+             *      现场枚举出全部条目、标 dirty 落盘，于是这次能看见；
+             *   ② 再点刷新（或任何第二次请求），load 依旧 0 条，而同步的 mtime/size/ip
+             *      闸门已命中直接跳过 → 返回空清单。
+             * 即「第一次进页面正常，点一下刷新就全没了」。改用 json_find_object_end 正确定界，
+             * 顺带不怕 name/url 里出现 '}'。 */
+            const char *end = NULL;
+            if (json_find_object_end(p, limit, &end) != 0) break;
 
             char name[128] = "", url[512] = "", src[16] = "";
             json_extract_string(p, end, "name", name, sizeof(name));
@@ -88,7 +100,7 @@ static void load_quicklinks(QuicklinksStore *s) {
                          strcmp(src, "auto") == 0 ? "auto" : "manual");
                 s->count++;
             }
-            p = end + 1;
+            p = end;   /* end 已是 '}' 之后的位置，不能再 +1 跳过下一个条目 */
         }
     }
 
