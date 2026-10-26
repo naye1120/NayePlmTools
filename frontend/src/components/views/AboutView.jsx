@@ -63,6 +63,9 @@ const REFERENCES = [
   { author: 'blackbearreloaded', authorUrl: 'https://github.com/blackbearreloaded', project: 'ps5-at9-converter（浏览器端 ATRAC9 编码器移植自它）', projectUrl: 'https://github.com/blackbearreloaded/ps5-at9-converter' },
   { author: 'Thealexbarney', authorUrl: 'https://github.com/Thealexbarney', project: 'LibAtrac9（ATRAC9 解码表来源，MIT）', projectUrl: 'https://github.com/Thealexbarney/LibAtrac9' },
   { author: 'nothings', authorUrl: 'https://github.com/nothings', project: 'stb（stb_image / stb_image_write）', projectUrl: 'https://github.com/nothings/stb' },
+  /* [CN-FORK] v0.6.1.195 补：markdown 里的表情用的是 Twemoji 图集（CC BY 4.0 要求署名），
+   * 之前只写在 index.html 的 meta 与 sprites.css 注释里，关于页这份清单漏了。 */
+  { author: 'Twitter, Inc. 及贡献者', authorUrl: 'https://github.com/jdecked/twemoji', project: 'Twemoji（表情图集，CC BY 4.0；本分支为内置缩放版）', projectUrl: 'https://github.com/jdecked/twemoji' },
 
   /* ── 风扇与系统 ── */
   { author: 'drakmor', authorUrl: 'https://github.com/drakmor', project: 'ps5-hwinfo（温度 / 传感器）', projectUrl: 'https://github.com/drakmor/ps5-hwinfo' },
@@ -83,6 +86,18 @@ const REFERENCES = [
  * 没有 date 的那一组（第一版能力清单）用 `title` 当标题，样式上区分开：
  * 日期是琥珀色、能力清单是蓝色。 */
 const CHANGELOG = [
+  {
+    date: "2026-10-26",
+    items: [
+      "合并上游 v0.6.2 / v0.6.3：上游版本从 v0.6.1 升到 v0.6.3，带来详情页发布说明、加载完成后自动返回、窄屏控件修复等一批改进（详见下面几条）。",
+      "载荷详情页新增「版本发布说明」折叠区：直接读该载荷在 GitHub 上对应版本的发布说明，不用再跳出去看；没有对应版本时这块不出现。",
+      "设置新增「全部加载成功后返回」：全部载荷加载成功约 3 秒后自动回到「管理 Payload」；有失败或被跳过时停在结果页，方便看清是哪一条出了问题。默认关闭。",
+      "手机竖屏（以及窄窗口）下「获取载荷」页的上传与搜索控件不再被挤出屏幕，空间不够时自动换行。",
+      "payload 图标与仓库目录会被记住：重开面板立刻显示上次拿到的图标，不用先等仓库刷新转一圈。",
+      "修复「快捷入口点一次刷新就全部消失」：读取清单时对 JSON 边界的判断差了一个字节，导致整份清单读回来恒为 0 条。文件本身一直是好的，修好后刷新即恢复；已被清掉的自动条目会在下次仓库同步时重新收录。",
+      "emoji 仍用内置图集（不跟上游改成从公共 CDN 取图）：主机不联网也能正常显示表情，代价是程序体积略大一些。",
+    ],
+  },
   {
     date: "2026-10-18",
     items: [
@@ -173,7 +188,7 @@ const CHANGELOG = [
   },
   {
     title: "常用入口",
-    items: ["手动添加插件 / 局域网服务快捷卡片，逐条 TCP 探活，点卡片新标签打开。"],
+    items: ["手动添加插件 / 局域网服务快捷卡片，逐条 TCP 探活，点卡片新标签打开；已安装应用的 http 磁贴链接自动收录（标「自动」），手动删掉的不会再被加回；点灰点条目时，若能在本机对上对应程序会先把它拉起来，起来后同样新标签打开。"],
   },
   {
     title: "风扇温控",
@@ -190,6 +205,11 @@ const CHANGELOG = [
 ]
 
 const CHANGELOG_COUNT = CHANGELOG.reduce((n, g) => n + g.items.length, 0)
+
+/* [CN-FORK] v0.6.1.195 上游基线版本：合并 upstream/main 后必须同步这里
+ * （.176 → v0.6.0、.189 → v0.6.1、.195 → v0.6.3）。写成常量是为了少一处散落的硬编码，
+ * 以后合并上游只改这一行 + 下面 CHANGELOG 顶部的分组。 */
+const UPSTREAM_VERSION = 'v0.6.3'
 
 const AboutView = ({ version }) => {
   const { t } = useTranslation()
@@ -246,8 +266,8 @@ const AboutView = ({ version }) => {
               </a>
             </dd>
             <dt className="text-zinc-500">{t("donate.fork_upstream_version", "上游版本")}</dt>
-            {/* [CN-FORK] v0.6.1.189 合并上游 v0.6.1 后同步（原写死 v0.6.0 已过时）。 */}
-            <dd className="text-white font-semibold">v0.6.1</dd>
+            {/* [CN-FORK] v0.6.1.195 合并上游 v0.6.3 后同步（.189 写的是 v0.6.1）。 */}
+            <dd className="text-white font-semibold">{UPSTREAM_VERSION}</dd>
             <dt className="text-zinc-500">{t("donate.fork_version", "本 Fork 版本")}</dt>
             {/* [CN-FORK] v0.5.2.113 现读构建时烧入的 __APP_VERSION__（vite.config.js
                 从 include/pldmgr.h 的 MENU_VERSION 取）。dev server 下它是 'dev'。 */}

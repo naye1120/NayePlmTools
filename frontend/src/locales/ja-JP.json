@@ -245,5 +245,12 @@
   "settings.cache_clearing": "削除中…",
   "settings.cache_cleared": "リポジトリのキャッシュを削除しました。",
   "settings.cache_failed": "リポジトリのキャッシュを削除できませんでした。",
-  "settings.cache_desc": "ダウンロード済みのカタログとアイコンを削除し、再取得します。インストール済みのペイロードと設定は保持されます。"
+  "settings.cache_desc": "ダウンロード済みのカタログとアイコンを削除し、再取得します。インストール済みのペイロードと設定は保持されます。",
+  "settings.dashboard_icons_title": "ダッシュボードのペイロードアイコン",
+  "settings.dashboard_icons_desc": "ダッシュボードにペイロードアイコンを表示します。非表示にするとテキストの表示領域が広がります。",
+  "payload_detail.release_details": "リリース詳細",
+  "payload_detail.loading_release": "リリース詳細を読み込み中...",
+  "payload_detail.no_release_notes": "このバージョンのリリースノートはありません。",
+  "settings.autoload_return_title": "自動読み込み後に戻る",
+  "settings.autoload_return_desc": "すべてのペイロードの読み込みに成功したら、3秒後にダッシュボードに自動的に戻ります。"
 }

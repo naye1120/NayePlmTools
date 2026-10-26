@@ -8,12 +8,14 @@ typedef struct PldmgrConfig {
     int  autoload_enabled;       /* Default: 0  (off) */
     long last_repository_update; /* Default: 0 */
     int  auto_browser_open;      /* Default: 1  (on) */
+    int  autoload_return_to_dashboard; /* Default: 0 (off) */
     int  autoload_delay;         /* Default: 5  (seconds) */
     /* [CN-FORK] BD-JB 用户开机杀光盘播放器。上游 v0.6.0 已整体删除该功能，
      * 本 fork 的设置页仍有开关、main.c 仍在用，故保留（见 CHANGELOG .176）。 */
     int  kill_disc_player;       /* Default: 1  (on) */
     int  scan_usb_payloads;      /* Default: 0  (off) */
     int  auto_install_app;       /* Default: 1  (on) */
+    int  show_dashboard_icons;   /* Default: 1  (on) */
     int  multi_sources_enabled;  /* Default: 0  (off) */
     /* [CN-FORK] v0.5.1.65 内置默认云端仓库（Official Repository / REPOSITORY_SOURCE_URL）总开关 */
     int  default_repo_enabled;   /* Default: 1  (on)  */
@@ -41,7 +43,8 @@ enum { CONFIG_INVALID = -2 };
 /* Apply a JSON config update sent from the frontend /set_config route.
  * Handles AUTOLOAD_ENABLED, AUTO_BROWSER_OPEN, AUTOLOAD_DELAY,
  * KILL_DISC_PLAYER_ON_STARTUP, SCAN_USB_PAYLOADS, AUTO_INSTALL_APP,
- * MULTI_SOURCES_ENABLED, DEFAULT_REPO_ENABLED, and AUTOLOAD_LIST.
+ * MULTI_SOURCES_ENABLED, DEFAULT_REPO_ENABLED, SHOW_DASHBOARD_ICONS,
+ * AUTOLOAD_RETURN_TO_DASHBOARD, and AUTOLOAD_LIST.
  * Booleans must be JSON booleans; delay is an integer from 0 to 3600 seconds.
  * Returns 0, CONFIG_INVALID for bad input, or -1 for persistence failure.
  * All input is validated first; each file publishes atomically, but a multi-file

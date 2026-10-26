@@ -247,5 +247,12 @@
   "settings.cache_clearing": "Clearing…",
   "settings.cache_cleared": "Repository cache cleared.",
   "settings.cache_failed": "Could not clear repository cache.",
-  "settings.cache_desc": "Clear downloaded catalogs and icons, then fetch fresh copies. Installed payloads and your settings are preserved."
+  "settings.cache_desc": "Clear downloaded catalogs and icons, then fetch fresh copies. Installed payloads and your settings are preserved.",
+  "settings.dashboard_icons_title": "Dashboard Payload Icons",
+  "settings.dashboard_icons_desc": "Show payload icons on the dashboard. Hiding them leaves more space for text.",
+  "payload_detail.release_details": "Release details",
+  "payload_detail.loading_release": "Loading release details...",
+  "payload_detail.no_release_notes": "No release notes available for this version.",
+  "settings.autoload_return_title": "Return After Autoload",
+  "settings.autoload_return_desc": "Automatically return to the dashboard 3 seconds after all payloads load successfully."
 }

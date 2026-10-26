@@ -65,7 +65,7 @@ To create a repository, you must host a JSON file that conforms to the following
 | **`icons_url`** (top-level) | String | No | Relative or absolute HTTP/HTTPS URL of a separate icon catalog. Requires the object wrapper. |
 | **`icon_key`** (item-level) | String | No | Key in the separate catalog’s `icons` map, up to 127 UTF-8 bytes. Multiple payloads can share one key. |
 | **`details_url`** (item-level) | String | No | URL to documentation or README markdown for the payload. |
-| **`release_notes`** (item-level) | String | No | Markdown release notes for this version. The backend field holds up to 2047 UTF-8 bytes, with UTF-8-safe truncation and an ellipsis when exceeded. This is a byte budget, not 2000 Unicode characters. |
+| **`release_notes`** (item-level) | String | No | Legacy inline release notes for this version. The frontend ignores this field and fetches current notes directly from GitHub for the catalog download tag or version, shown in the collapsible Release details section above the README. It never substitutes GitHub’s latest release. The backend field holds up to 2047 UTF-8 bytes, with UTF-8-safe truncation and an ellipsis when exceeded. This is a byte budget, not 2000 Unicode characters. |
 | **`source`** (item-level) | String | No | Link to the upstream source repository or releases page. |
 
 ---

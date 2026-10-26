@@ -249,5 +249,12 @@
   "settings.cache_clearing": "Suppression…",
   "settings.cache_cleared": "Cache des dépôts vidé.",
   "settings.cache_failed": "Impossible de vider le cache des dépôts.",
-  "settings.cache_desc": "Supprime les catalogues et icônes téléchargés, puis les télécharge à nouveau. Les payloads installés et les paramètres sont conservés."
+  "settings.cache_desc": "Supprime les catalogues et icônes téléchargés, puis les télécharge à nouveau. Les payloads installés et les paramètres sont conservés.",
+  "settings.dashboard_icons_title": "Icônes des payloads sur le tableau de bord",
+  "settings.dashboard_icons_desc": "Afficher les icônes des payloads sur le tableau de bord. Les masquer laisse plus de place au texte.",
+  "payload_detail.release_details": "Détails de la version",
+  "payload_detail.loading_release": "Chargement des détails de la version...",
+  "payload_detail.no_release_notes": "Aucune note de version disponible pour cette version.",
+  "settings.autoload_return_title": "Retour après le chargement automatique",
+  "settings.autoload_return_desc": "Revenir automatiquement au tableau de bord 3 secondes après le chargement réussi de tous les payloads."
 }

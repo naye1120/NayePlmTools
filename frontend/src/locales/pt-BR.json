@@ -249,5 +249,12 @@
   "settings.cache_clearing": "Limpando…",
   "settings.cache_cleared": "Cache dos repositórios limpo.",
   "settings.cache_failed": "Não foi possível limpar o cache dos repositórios.",
-  "settings.cache_desc": "Remove os catálogos e ícones baixados e baixa novas cópias. Os payloads instalados e as configurações são preservados."
+  "settings.cache_desc": "Remove os catálogos e ícones baixados e baixa novas cópias. Os payloads instalados e as configurações são preservados.",
+  "settings.dashboard_icons_title": "Ícones de payloads no painel",
+  "settings.dashboard_icons_desc": "Mostrar ícones de payloads no painel. Ocultá-los deixa mais espaço para o texto.",
+  "payload_detail.release_details": "Detalhes da versão",
+  "payload_detail.loading_release": "Carregando detalhes da versão...",
+  "payload_detail.no_release_notes": "Nenhuma nota de lançamento disponível para esta versão.",
+  "settings.autoload_return_title": "Retornar após carregamento automático",
+  "settings.autoload_return_desc": "Retornar automaticamente ao painel 3 segundos após todos os payloads serem carregados com sucesso."
 }

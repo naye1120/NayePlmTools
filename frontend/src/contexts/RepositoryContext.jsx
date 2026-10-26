@@ -12,11 +12,11 @@ const RepositoryContext = createContext();
 export const useRepository = () => useContext(RepositoryContext);
 
 export const RepositoryProvider = ({ children }) => {
-  const [repoData, setRepoData] = useState(null);
+  const [iconCache] = useState(() => createRepositoryIconCache(apiFetch));
+  const [repoData, setRepoData] = useState(() => iconCache.restore());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
-  const [iconCache] = useState(() => createRepositoryIconCache(apiFetch));
   const requestGeneration = useRef(0);
 
   const fetchRemote = useCallback(async (force = false) => {
@@ -31,12 +31,15 @@ export const RepositoryProvider = ({ children }) => {
       if (generation !== requestGeneration.current) return;
 
       const hydrated = await iconCache.hydrate(data);
-      if (generation === requestGeneration.current) setRepoData(hydrated);
+      if (generation === requestGeneration.current) {
+        iconCache.remember(data);
+        setRepoData(hydrated);
+      }
     } catch (err) {
       console.error(err);
       if (generation === requestGeneration.current) {
         setError(true);
-        setRepoData({ sources: [] });
+        setRepoData(previous => previous || { sources: [] });
       }
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
@@ -54,11 +57,10 @@ export const RepositoryProvider = ({ children }) => {
 
   // Fetch once on mount
   useEffect(() => {
-    if (repoData === null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      fetchRemote();
-    }
-  }, [fetchRemote, repoData]);
+    // Show the saved catalog immediately, but always refresh it on opening.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchRemote();
+  }, [fetchRemote]);
 
   // Normalized sources list
   const sources = useMemo(() => {

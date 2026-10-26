@@ -87,6 +87,8 @@ const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate,
   const autoOpen = config.AUTO_BROWSER_OPEN !== false
   const autoInstall = config.AUTO_INSTALL_APP !== false
   const autoloadDelay = config.AUTOLOAD_DELAY || 5
+  /* 上游 v0.6.2 #123：默认关（后端 config.c 的 defaults 里也是 0）。 */
+  const autoloadReturn = config.AUTOLOAD_RETURN_TO_DASHBOARD === true
   /* [CN-FORK] v0.5.2.67 默认开启多来源（后端缺键时按开处理，与 config_read 默认值一致） */
   const multiSources = config.MULTI_SOURCES_ENABLED !== false
   /* [CN-FORK] v0.5.2.67 默认云端仓库总开关：本版默认关（后端缺键时按关处理，与 config_read 默认值一致） */
@@ -217,6 +219,20 @@ const SettingsView = ({ config, onSaveConfig, addToast, setShowLogs, onNavigate,
             />
             <span className="text-ps-blue font-bold text-lg tabular-nums ml-4">{autoloadDelay}s</span>
           </div>
+        </SettingRow>
+
+        {/* 上游 v0.6.2 #123「自动加载成功后自动返回」。上游的原意是回 dashboard，
+            fork 没有 dashboard 视图（「管理 Payload」一页统管），所以 handleFinish
+            在 App.jsx 里改指向 storage；文案也据此改写，不再提「仪表盘」。 */}
+        <SettingRow
+          title={t("settings.autoload_return_title", "全部加载成功后返回")}
+          description={t("settings.autoload_return_desc", "全部 payload 加载成功后约 3 秒自动返回「管理 Payload」；有失败或被跳过时停在结果页，方便查看原因。")}
+        >
+          <Switch
+            checked={autoloadReturn}
+            onChange={(v) => onSaveConfig({ AUTOLOAD_RETURN_TO_DASHBOARD: v })}
+            label={t("settings.autoload_return_title", "全部加载成功后返回")}
+          />
         </SettingRow>
 
         {/* [CN-FORK] v0.5.2.158 「个性化软件」：整行点开一个弹窗，里面逐款给开关。

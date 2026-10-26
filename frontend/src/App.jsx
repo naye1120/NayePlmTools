@@ -446,11 +446,15 @@ function App() {
     addToast(t("app.toasts.sequence_aborted", "Sequence Aborted"), "error")
   }
 
-  const handleFinish = async () => {
+  const handleFinish = useCallback(async () => {
     await mutationFetch('/autoload_clear').catch(() => { })
     setAutoloadStatus(null)
-    window.location.reload()
-  }
+    /* [CN-FORK] 上游 v0.6.2 这里从 window.location.reload() 改成 navigate('dashboard')
+     * （#123「自动加载成功后回仪表盘」）。fork 没有 dashboard 视图 —— 那个 id 不会命中
+     * 任何 view === '…' 分支，整页会变成空白（见本文件顶部关于未知 view id 的注释）。
+     * 所以改指向 storage：fork 的「管理 Payload」就是事实上的主页。 */
+    navigate('storage')
+  }, [navigate])
 
   const loadPayload = async (slotOrPath, presentation = {}) => {
     if (!slotOrPath) return
@@ -750,7 +754,7 @@ function App() {
   const isAutoloadActive = autoloadStatus && Number.isFinite(autoloadStatus.remaining) && autoloadStatus.remaining >= 0;
 
   if (isAutoloadActive) {
-    return <AutoloadOverlay status={autoloadStatus} items={items} itemsLoading={loadingPayloads} onCancel={handleAbort} onFinish={handleFinish} isPS5={isPS5} />;
+    return <AutoloadOverlay autoReturn={config.AUTOLOAD_RETURN_TO_DASHBOARD === true} status={autoloadStatus} items={items} itemsLoading={loadingPayloads} onCancel={handleAbort} onFinish={handleFinish} isPS5={isPS5} />;
   }
 
   return (

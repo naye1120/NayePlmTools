@@ -247,5 +247,12 @@
   "settings.cache_clearing": "در حال پاک کردن…",
   "settings.cache_cleared": "حافظهٔ موقت مخزن‌ها پاک شد.",
   "settings.cache_failed": "پاک کردن حافظهٔ موقت مخزن‌ها ممکن نشد.",
-  "settings.cache_desc": "فهرست‌ها و نمادهای دریافت‌شده را پاک و دوباره دریافت می‌کند. پیلودهای نصب‌شده و تنظیمات حفظ می‌شوند."
+  "settings.cache_desc": "فهرست‌ها و نمادهای دریافت‌شده را پاک و دوباره دریافت می‌کند. پیلودهای نصب‌شده و تنظیمات حفظ می‌شوند.",
+  "settings.dashboard_icons_title": "نمادهای پیلود در داشبورد",
+  "settings.dashboard_icons_desc": "نمایش نمادهای پیلود در داشبورد. پنهان کردن آن‌ها فضای بیشتری برای متن فراهم می‌کند.",
+  "payload_detail.release_details": "جزئیات انتشار",
+  "payload_detail.loading_release": "در حال بارگیری جزئیات انتشار...",
+  "payload_detail.no_release_notes": "یادداشت انتشاری برای این نسخه موجود نیست.",
+  "settings.autoload_return_title": "بازگشت پس از بارگیری خودکار",
+  "settings.autoload_return_desc": "۳ ثانیه پس از بارگیری موفق همه پیلودها، به‌طور خودکار به داشبورد بازگردید."
 }

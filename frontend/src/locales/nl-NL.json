@@ -247,5 +247,12 @@
   "settings.cache_clearing": "Wissen…",
   "settings.cache_cleared": "Repositorycache gewist.",
   "settings.cache_failed": "De repositorycache kon niet worden gewist.",
-  "settings.cache_desc": "Wis gedownloade catalogi en pictogrammen en download ze opnieuw. Geïnstalleerde payloads en instellingen blijven behouden."
+  "settings.cache_desc": "Wis gedownloade catalogi en pictogrammen en download ze opnieuw. Geïnstalleerde payloads en instellingen blijven behouden.",
+  "settings.dashboard_icons_title": "Payloadpictogrammen op het dashboard",
+  "settings.dashboard_icons_desc": "Toon payloadpictogrammen op het dashboard. Verberg ze voor meer ruimte voor tekst.",
+  "payload_detail.release_details": "Releasedetails",
+  "payload_detail.loading_release": "Releasedetails laden...",
+  "payload_detail.no_release_notes": "Geen releaseopmerkingen beschikbaar voor deze versie.",
+  "settings.autoload_return_title": "Terugkeren na autoload",
+  "settings.autoload_return_desc": "Keer automatisch terug naar het dashboard 3 seconden nadat alle payloads met succes zijn geladen."
 }

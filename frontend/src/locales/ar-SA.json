@@ -255,5 +255,12 @@
   "settings.cache_clearing": "جارٍ المسح…",
   "settings.cache_cleared": "تم مسح ذاكرة المستودعات المؤقتة.",
   "settings.cache_failed": "تعذر مسح ذاكرة المستودعات المؤقتة.",
-  "settings.cache_desc": "امسح الكتالوجات والأيقونات المحملة ثم أعد تنزيلها. تبقى الحمولات المثبتة والإعدادات محفوظة."
+  "settings.cache_desc": "امسح الكتالوجات والأيقونات المحملة ثم أعد تنزيلها. تبقى الحمولات المثبتة والإعدادات محفوظة.",
+  "settings.dashboard_icons_title": "أيقونات الحمولات في لوحة التحكم",
+  "settings.dashboard_icons_desc": "عرض أيقونات الحمولات في لوحة التحكم. إخفاؤها يترك مساحة أكبر للنص.",
+  "payload_detail.release_details": "تفاصيل الإصدار",
+  "payload_detail.loading_release": "جارٍ تحميل تفاصيل الإصدار...",
+  "payload_detail.no_release_notes": "لا توجد ملاحظات إصدار متاحة لهذا الإصدار.",
+  "settings.autoload_return_title": "العودة بعد التحميل التلقائي",
+  "settings.autoload_return_desc": "العودة تلقائيًا إلى لوحة التحكم بعد 3 ثوانٍ من تحميل جميع الحمولات بنجاح."
 }

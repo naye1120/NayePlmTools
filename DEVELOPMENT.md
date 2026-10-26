@@ -283,20 +283,23 @@ header already exist. For a new checkout, follow the normal build setup first.
 The ELF target currently does not track ordinary header dependencies; use a new
 candidate filename or force the ELF target to rebuild after header-only edits.
 
-Markdown emoji use bundled Twemoji PNG sprites. The 3,838 assets share one
-20px-tile image embedded in the single HTML file; no CDN or external emoji
-requests occur. A postbuild check verifies the PNG is embedded exactly once,
-attribution remains and the old Twemoji CDN URL is absent. Source/license/attribution and optional regeneration instructions
-are in `frontend/src/assets/emoji/README.md`; builds need no asset download.
-Native Unicode emoji can render as missing glyph boxes on PS5, so Unicode is
-kept as the safe text fallback when DOM sanitization is unavailable.
+Markdown emoji use Twemoji v15.1.0 PNG artwork fetched on demand from jsDelivr.
+Only the identifier manifest is bundled; the large sprite atlas is removed.
+A postbuild check verifies the pinned CDN URL, attribution and compact HTML.
+Source/license and regeneration instructions are in
+`frontend/src/assets/emoji/README.md`; builds need no asset download.
+The browser HTTP cache and a bounded localStorage cache retain fetched glyphs
+for offline use on both secure origins and the PS5's HTTP origin. Uncached
+artwork falls back to Unicode when offline; it retries on subsequent rendering.
+Native image loading handles rendering independently of fetch/Blob/FileReader
+caching, so legacy WebKit cache failures cannot suppress downloaded emoji.
 
 DOMPurify first removes untrusted media, classes/styles, forms and scripts while
-retaining links/code/tables/headings. Sanitized text nodes produce sprite spans;
+retaining links/code/tables/headings. Sanitized text nodes produce emoji spans;
 a second pass sanitizes the final HTML, including those trusted classes and
-accessibility attributes. Loaded notes and browser-cached README responses remain
-readable without WAN; this does not add persistent caching or offline uncached
-downloads.
+accessibility attributes. Artwork URLs come exclusively from the pinned
+manifest, and arbitrary markdown images remain blocked. Loaded notes and
+browser-cached README responses remain readable without WAN.
 
 All shipped locales are registered, including Dutch. Active-key coverage,
 interpolation/React markup, and locale cardinal forms are mandatory Node checks.

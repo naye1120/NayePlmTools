@@ -42,7 +42,10 @@ static const SettingKey setting_keys[] = {
     {"SCAN_USB_PAYLOADS",           offsetof(PldmgrConfig, scan_usb_payloads),     SET_BOOL, 0, 1},
     {"AUTO_INSTALL_APP",            offsetof(PldmgrConfig, auto_install_app),      SET_BOOL, 0, 1},
     {"MULTI_SOURCES_ENABLED",       offsetof(PldmgrConfig, multi_sources_enabled), SET_BOOL, 0, 1},
-    /* ── [CN-FORK] 以下 6 个键上游 v0.6.0 没有 ───────────────────── */
+    /* ── 上游 v0.6.2 新增的两键（合并 upstream/main 时手工挂进本表）──────── */
+    {"SHOW_DASHBOARD_ICONS",        offsetof(PldmgrConfig, show_dashboard_icons),   SET_BOOL, 0, 1},
+    {"AUTOLOAD_RETURN_TO_DASHBOARD", offsetof(PldmgrConfig, autoload_return_to_dashboard), SET_BOOL, 0, 1},
+    /* ── [CN-FORK] 以下 6 个键上游没有 ───────────────────── */
     {"KILL_DISC_PLAYER_ON_STARTUP", offsetof(PldmgrConfig, kill_disc_player),      SET_BOOL, 0, 1},
     {"DEFAULT_REPO_ENABLED",        offsetof(PldmgrConfig, default_repo_enabled),  SET_BOOL, 0, 1},
     {"FAN_CONTROL_ENABLED",         offsetof(PldmgrConfig, fan_enabled),           SET_BOOL, 0, 1},
@@ -72,6 +75,10 @@ static void defaults(PldmgrConfig *cfg) {
         .default_repo_enabled = 0,
         /* [CN-FORK] BD-JB 用户开机杀光盘播放器默认开。 */
         .kill_disc_player = 1,
+        /* 上游 v0.6.2：仪表盘 payload 图标默认显示（关掉只是省地方，卡片尺寸不变）。 */
+        .show_dashboard_icons = 1,
+        /* 上游 v0.6.2：自动加载全部成功后回仪表盘，默认关（用户口径：结果要多停一会儿）。 */
+        .autoload_return_to_dashboard = 0,
         /* [CN-FORK] 风扇温控（模型 A）默认关，目标温度 72°C。 */
         .fan_enabled = 0, .fan_target = 72, .fan_applied = 0, .fan_interval = 7,
     };

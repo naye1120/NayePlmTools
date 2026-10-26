@@ -245,5 +245,12 @@
   "settings.cache_clearing": "กำลังล้าง…",
   "settings.cache_cleared": "ล้างแคชคลังเพย์โหลดแล้ว",
   "settings.cache_failed": "ไม่สามารถล้างแคชคลังเพย์โหลดได้",
-  "settings.cache_desc": "ล้างรายการและไอคอนที่ดาวน์โหลด แล้วดาวน์โหลดใหม่ เพย์โหลดที่ติดตั้งและการตั้งค่าจะยังคงอยู่"
+  "settings.cache_desc": "ล้างรายการและไอคอนที่ดาวน์โหลด แล้วดาวน์โหลดใหม่ เพย์โหลดที่ติดตั้งและการตั้งค่าจะยังคงอยู่",
+  "settings.dashboard_icons_title": "ไอคอนเพย์โหลดบนแดชบอร์ด",
+  "settings.dashboard_icons_desc": "แสดงไอคอนเพย์โหลดบนแดชบอร์ด การซ่อนไอคอนจะเพิ่มพื้นที่สำหรับข้อความ",
+  "payload_detail.release_details": "รายละเอียดรุ่น",
+  "payload_detail.loading_release": "กำลังโหลดรายละเอียดรุ่น...",
+  "payload_detail.no_release_notes": "ไม่มีบันทึกประจำรุ่นสำหรับเวอร์ชันนี้",
+  "settings.autoload_return_title": "กลับหลังโหลดอัตโนมัติ",
+  "settings.autoload_return_desc": "กลับไปยังแดชบอร์ดโดยอัตโนมัติ 3 วินาทีหลังจากโหลดเพย์โหลดทั้งหมดสำเร็จ"
 }

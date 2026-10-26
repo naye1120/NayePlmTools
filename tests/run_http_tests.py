@@ -376,12 +376,22 @@ def config_network_tests(binary, storage):
         status, body = request("GET", "/get_config")
         assert status == 200 and json.loads(body)["AUTO_BROWSER_OPEN"] is False
         assert json.loads(body)["KILL_DISC_PLAYER_ON_STARTUP"] is True
+        assert json.loads(body)["AUTOLOAD_RETURN_TO_DASHBOARD"] is False
+        for enabled in [True, False]:
+            assert request("POST", "/set_config", json.dumps({"AUTOLOAD_RETURN_TO_DASHBOARD": enabled}))[0] == 200
+            status, body = request("GET", "/get_config")
+            assert status == 200 and json.loads(body)["AUTOLOAD_RETURN_TO_DASHBOARD"] is enabled
+        assert json.loads(body)["SHOW_DASHBOARD_ICONS"] is True
+        for enabled in [False, True]:
+            assert request("POST", "/set_config", json.dumps({"SHOW_DASHBOARD_ICONS": enabled}))[0] == 200
+            status, body = request("GET", "/get_config")
+            assert status == 200 and json.loads(body)["SHOW_DASHBOARD_ICONS"] is enabled
         for enabled in [False, True]:
             assert request("POST", "/set_config", json.dumps({"KILL_DISC_PLAYER_ON_STARTUP": enabled}))[0] == 200
             for route in ["/get_config", "/autoload_status"]:
                 status, body = request("GET", route)
                 assert status == 200 and json.loads(body)["KILL_DISC_PLAYER_ON_STARTUP"] is enabled
-        for bad in ['{', '{"AUTOLOAD_ENABLED":false,"AUTOLOAD_DELAY":-1}', '{"FAVORITES":[1]}', '{"KILL_DISC_PLAYER_ON_STARTUP":0}']:
+        for bad in ['{', '{"AUTOLOAD_ENABLED":false,"AUTOLOAD_DELAY":-1}', '{"FAVORITES":[1]}', '{"KILL_DISC_PLAYER_ON_STARTUP":0}', '{"AUTOLOAD_RETURN_TO_DASHBOARD":0}']:
             assert request("POST", "/set_config", bad)[0] == 400
         # A genuine filesystem failure must produce 500 and retain old config.
         old = (storage / "nayeplmtools_config.txt").read_bytes()

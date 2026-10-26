@@ -713,5 +713,7 @@
   "thermal.fan_hint_notapplied": "已启用但尚未生效：设定目标温度后点「应用」。",
   "thermal.read_fail": "读取失败",
   "thermal.safe_mode": "主机处于安全模式（safe_mode），温控探测已停用。",
-  "thermal.pending": "温控数据待接入"
+  "thermal.pending": "温控数据待接入",
+  "settings.autoload_return_title": "全部加载成功后返回",
+  "settings.autoload_return_desc": "全部载荷加载成功后约 3 秒自动返回「管理 Payload」；有失败或被跳过时停在结果页，方便查看原因。"
 }

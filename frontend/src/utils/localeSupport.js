@@ -4,8 +4,8 @@ export const LANGUAGE_NAMES = {
   'de-DE': 'Deutsch', 'fr-FR': 'Français', 'es-ES': 'Español',
   'it-IT': 'Italiano', 'pt-BR': 'Português (Brasil)', 'ru-RU': 'Русский',
   'uk-UA': 'Українська', 'ar-SA': 'العربية', 'fa-IR': 'فارسی',
-  'tr-TR': 'Türkçe', 'zh-CN': '简体中文', 'ja-JP': '日本語',
-  'ko-KR': '한국어', 'th-TH': 'ไทย',
+  'tr-TR': 'Türkçe', 'zh-CN': '简体中文', 'zh-TW': '繁體中文',
+  'ja-JP': '日本語', 'ko-KR': '한국어', 'ro-RO': 'Română', 'th-TH': 'ไทย',
 };
 
 // Cardinal rules for the app's supported locales when older WebKit has no
@@ -15,7 +15,8 @@ export function fallbackCardinalRule(language) {
   const categories = ['zh', 'ja', 'ko', 'th'].includes(lang) ? ['other']
     : lang === 'ar' ? ['zero', 'one', 'two', 'few', 'many', 'other']
       : ['pl', 'ru', 'uk'].includes(lang) ? ['one', 'few', 'many', 'other']
-        : ['fr', 'pt', 'es', 'it'].includes(lang) ? ['one', 'many', 'other'] : ['one', 'other'];
+        : ['fr', 'pt', 'es', 'it'].includes(lang) ? ['one', 'many', 'other']
+          : lang === 'ro' ? ['one', 'few', 'other'] : ['one', 'other'];
   return {
     resolvedOptions: () => ({ pluralCategories: categories.slice() }),
     select(value) {
@@ -38,6 +39,11 @@ export function fallbackCardinalRule(language) {
       if (['fr', 'pt', 'es', 'it'].includes(lang)) {
         if (['fr', 'pt'].includes(lang) ? i === 0 || i === 1 : n === 1 && (lang === 'es' || integer)) return 'one';
         if (integer && n !== 0 && n % 1000000 === 0) return 'many';
+        return 'other';
+      }
+      if (lang === 'ro') {
+        if (integer && n === 1) return 'one';
+        if (!integer || n === 0 || (n % 100 >= 1 && n % 100 <= 19)) return 'few';
         return 'other';
       }
       if (lang === 'fa') return i === 0 || n === 1 ? 'one' : 'other';

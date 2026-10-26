@@ -2,28 +2,25 @@
 
 PS5 Payload Manager supports multiple languages to provide an accessible and intuitive experience for users worldwide.
 
-Translation files live in `frontend/src/locales/`. Some strings have been
-prepared with AI assistance; community corrections remain welcome. Structural
-checks do not certify that wording is natural or correct. All 17 bundled locales
-are available, including Dutch; there is no percentage-based language-hiding rule.
+Translation files live in `frontend/src/locales/`. Community contributions and corrections are always welcome.
 
 ## Maintaining Translations
 
-Use stable keys from the active UI and preserve `{{interpolation}}` placeholders
-and React translation markup such as `<1>...</1>` or `<strong>...</strong>`.
-Provide each language's cardinal forms (`_one`, `_few`, `_many`, `_other`, etc.)
-for count labels. Product names and technical terms can legitimately match English.
-Only active features should have translation keys. Self-update uses the Get
-Payloads download notice; the former notification toggle/banner and Disc Player
-auto-close remain absent.
+- Use stable translation keys matching the active UI.
+- Preserve `{{interpolation}}` placeholders and React translation markup such as `<1>...</1>` or `<strong>...</strong>`.
+- Provide each language's cardinal forms (`_one`, `_few`, `_many`, `_other`, etc.) for count labels based on that language's plural rules.
+- Technical terms, acronyms, and product names (such as ELF, PID, PS5, etc.) can legitimately remain in English where conventional.
+- Only active features should have translation keys.
 
-From `frontend/`, `npm run extract` updates the **English** catalog only. Review
-its diff before keeping it, especially dynamic categories and plural entries;
-it does not translate other locales. Update those locales explicitly, then run
-`npm test` and `npm run build`. The locale suite checks active source-key coverage,
-placeholders, markup, required plural forms and obsolete entries. Browser checks
-include Dutch selection, reload persistence, fallback and representative locales.
-Native-speaker wording review and console layout testing remain useful.
+### Workflow
+
+1. From `frontend/`, run `npm run extract` to update the **English** catalog (`en-US.json`) with any new UI keys.
+2. Update the respective locale files explicitly in `frontend/src/locales/`.
+3. If adding a new locale:
+   - Register its native display name in `frontend/src/utils/localeSupport.js` (`LANGUAGE_NAMES`).
+   - If older WebKit / PS5 browsers require fallback cardinal rules without `Intl.PluralRules`, define them in `fallbackCardinalRule`.
+   - Add the language to the Supported Languages table below.
+4. Run `npm test` and `npm run build` from `frontend/` to verify that key coverage, placeholders, markup, and plural forms are valid.
 
 ---
 
@@ -44,6 +41,7 @@ Please [open a new Issue](https://github.com/itsPLK/ps5-payload-manager/issues/n
 | :--- | :---: |
 | **Arabic** | `ar-SA` |
 | **Chinese Simplified** | `zh-CN` |
+| **Chinese Traditional** | `zh-TW` |
 | **Dutch** | `nl-NL` |
 | **English** | `en-US` |
 | **French** | `fr-FR` |
@@ -54,6 +52,7 @@ Please [open a new Issue](https://github.com/itsPLK/ps5-payload-manager/issues/n
 | **Persian** | `fa-IR` |
 | **Polish** | `pl-PL` |
 | **Portuguese (Brazilian)** | `pt-BR` |
+| **Romanian** | `ro-RO` |
 | **Russian** | `ru-RU` |
 | **Spanish** | `es-ES` |
 | **Thai** | `th-TH` |

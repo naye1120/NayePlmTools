@@ -1,3 +1,23 @@
+## v0.6.1.195 (CN-FORK) — 2026-10-26 · 修「快捷入口点刷新后全部消失」+ 合并上游 v0.6.2/v0.6.3
+
+> 用户口径：「快捷入口点击刷新后会全部消失」+「冲突的以我们为准，然后合并」。
+
+### 修 bug：快捷入口刷新后清空
+- `quicklinks.c`：`load_quicklinks` 把 `strchr` 得到的 `'}'` 当 `json_extract_string` 的 `end` 传进去，而该函数的 `end` 是**开区间**（内部要求 `r.p == end`，即指向 `'}'` 之后）。于是每个条目都判成 `JSON_STRING_INVALID`、`name`/`url` 皆空被跳过，整份清单读回来恒 0 条。改用 `json_find_object_end` 正确定界，游标 `p = end` 不再 `+1`。
+- 现象成因：payload 重启后第一次 `GET /quicklinks` 的 load 得 0 条，随后的 app.db 同步现场枚举出全部条目并标 dirty 落盘，所以这一次能看见；再点刷新，load 依旧 0 条而同步的 mtime/size/ip 闸门已命中直接跳过，于是返回空清单。**文件一直是好的，只是读不回来。**
+- 验证：用真机 `/data/nayeplmtools/quicklinks.json`（9 条 auto）在宿主跑解析对比 —— 旧实现 9 条全 `rc=-2`、`count=0`；新实现 `count=9`、字段正确。
+
+### 合并上游 v0.6.2 + v0.6.3（12 提交 / 60 文件）
+- **采纳**：`#123` 自动加载全部成功后 3 秒返回（设置页新增「全部加载成功后返回」，默认关）；`#126` 窄屏上传控件换行；`#133` payload 详情页可折叠的 Release details（新增 `utils/releaseNotes.js` + `ui/ReleaseDetails.jsx`）；payload 图标/目录跨会话缓存（`repositoryIcons.js` 持久化到 localStorage）；PS5 隐藏原生 `<details>` 三角；新增繁体中文 / 罗马尼亚语语言包。
+- **按「以我们为准」处理**：
+  - `#131` 仪表盘图标开关：fork 没有 dashboard 视图，**不接前端开关**；后端 `SHOW_DASHBOARD_ICONS` 键与默认值照收（无害，`/get_config` 形状与上游一致）。
+  - `#123` 的落点从 `navigate('dashboard')` 改为 `navigate('storage')` —— `dashboard` 这个 id 在 fork 里不命中任何 `view === '…'` 分支，会渲染成整页空白。
+  - `emoji` 改 CDN（`#130`）**不跟**：fork 继续用内置 `assets/emoji/sprites.*`，主机无需连 jsdelivr（上游 v0.6.3 本身就是该方案在 PS5 老 WebKit 上翻车后的 hotfix）。
+  - `PayloadButton.jsx`：上游改了它，fork 已在 v0.6.0 拆分重构（`PayloadIcon` + `PayloadName`），维持删除。
+  - `config.c`：上游的「平行数组 + `for(i<6)`」与 fork 的 `SettingKey{key,offset,type,min,max}` 表冲突，两个新键手工挂进表（12 → 14 键，`SETTING_MASK` 位图仍在 uint32 内）。
+  - `App.jsx` dashboard 视图块、`StorageHub.jsx` 页头、`mock-server.js` `/get_config`：均取 fork 版。
+- `pldmgr.h`：`MENU_VERSION` 0.6.1.194 → 0.6.1.195。
+
 ## v0.6.1.194 (CN-FORK) — 2026-10-18 · payload 图标减半
 
 > 用户口径：「图标调成现在的一半大小」（已安装宫格 + 仓库目录卡的图标偏大）。

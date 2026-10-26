@@ -32,6 +32,7 @@ const items = [
   { slot: 'local/next', filename: 'next.elf', name: 'Next', kind: 'local' },
 ]
 const overlayItems = [...items, { slot: 'repo/demo@bbabc123', id: 'demo', filename: 'demo.elf', version: '1.1', source_url: 'https://mirror.invalid/payloads.json' }]
+const finishOverlay = () => { window.__overlayFinishes = (window.__overlayFinishes || 0) + 1 }
 function Harness() {
   const [config, setConfig] = useState({}), [mounted, setMounted] = useState(true)
   const [view, setView] = useState('autoload'), [status, setStatus] = useState({ state: 'countdown', remaining: 5, delay: 5 })
@@ -47,7 +48,7 @@ function Harness() {
   }, [])
   window.editor = { mount: setMounted, config: setConfig, show: setView, status: setStatus, logs: setLogs, itemsLoading: setOverlayItemsLoading }
   if (!mounted) return <div>Other section</div>
-  if (view === 'overlay') return <RepositoryProvider><AutoloadOverlay status={status} items={overlayItemsLoading ? [] : overlayItems} itemsLoading={overlayItemsLoading} onCancel={() => {}} onFinish={() => {}} /></RepositoryProvider>
+  if (view === 'overlay') return <RepositoryProvider><AutoloadOverlay autoReturn={config.AUTOLOAD_RETURN_TO_DASHBOARD === true} status={status} items={overlayItemsLoading ? [] : overlayItems} itemsLoading={overlayItemsLoading} onCancel={() => {}} onFinish={finishOverlay} /></RepositoryProvider>
   if (view === 'logs') return <div style={{ height: 300 }}><LogViewer logs={logs} /></div>
   if (view === 'processes') return <ActiveProcessesView addToast={() => {}} showConfirm={(_, __, callback) => callback()} />
   if (view === 'app') return <RepositoryProvider><App /></RepositoryProvider>

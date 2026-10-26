@@ -63,3 +63,54 @@ test('a cached latest revision also prevents an older pending fetch from replaci
   oldResolve({ok:true,json:async()=>({icons:{shared:icon}})}); await old
   await cache.hydrate(catalog('r2')); assert.equal(calls, 2)
 })
+
+const memoryStorage = () => {
+  const values = new Map()
+  return {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  }
+}
+
+test('reopening reuses persistent icons; revision changes and clearing fetch fresh icons', async () => {
+  const storage = memoryStorage()
+  let calls = 0
+  const fetchIcons = async () => {
+    calls++
+    return { ok: true, json: async () => ({ icons: { shared: icon } }) }
+  }
+  await createRepositoryIconCache(fetchIcons, storage).hydrate(catalog())
+  const reopened = createRepositoryIconCache(fetchIcons, storage)
+  assert.equal((await reopened.hydrate(catalog())).sources[0].payloads[0].icon, icon)
+  assert.equal(calls, 1)
+  await reopened.hydrate(catalog('r2'))
+  assert.equal(calls, 2)
+  reopened.clear()
+  await createRepositoryIconCache(fetchIcons, storage).hydrate(catalog('r2'))
+  assert.equal(calls, 3)
+})
+
+test('unavailable or corrupt storage does not prevent icons from loading', async () => {
+  const fetchIcons = async () => ({ ok: true, json: async () => ({ icons: { shared: icon } }) })
+  for (const storage of [
+    { getItem() { throw Error('denied') }, setItem() { throw Error('quota') }, removeItem() { throw Error('denied') } },
+    { getItem: () => 'invalid json', setItem() {}, removeItem() {} },
+  ]) {
+    const cache = createRepositoryIconCache(fetchIcons, storage)
+    assert.equal((await cache.hydrate(catalog())).sources[0].payloads[0].icon, icon)
+    cache.clear()
+  }
+})
+
+test('clearing during download prevents persistence after reopening', async () => {
+  const storage = memoryStorage()
+  let resolve
+  const cache = createRepositoryIconCache(() => new Promise(done => { resolve = done }), storage)
+  const pending = cache.hydrate(catalog())
+  cache.clear()
+  resolve({ ok: true, json: async () => ({ icons: { shared: icon } }) })
+  await pending
+  const reopened = createRepositoryIconCache(async () => ({ ok: false }), storage)
+  assert.equal((await reopened.hydrate(catalog())).sources[0].payloads[0].icon, null)
+})

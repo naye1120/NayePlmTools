@@ -122,7 +122,12 @@ const mockConfig = {
   /* [CN-FORK] v0.5.2.67 默认开多来源，才能列出预置的 repo.630810.xyz（内置官方源已默认关） */
   MULTI_SOURCES_ENABLED: true,
   /* [CN-FORK] v0.5.2.67 默认云端仓库总开关改为默认关（与 src/config.c config_read 默认值一致） */
-  DEFAULT_REPO_ENABLED: false
+  DEFAULT_REPO_ENABLED: false,
+  /* 上游 v0.6.2 新增两键：图标显示默认开、加载完成后返回默认关（与 config.c defaults 一致）。
+   * SHOW_DASHBOARD_ICONS 在 fork 里没有消费方（没有 dashboard 视图），留着只为让
+   * /get_config 的形状与后端一致，免得前端读到 undefined 又各自兜底一套默认值。 */
+  SHOW_DASHBOARD_ICONS: true,
+  AUTOLOAD_RETURN_TO_DASHBOARD: false
 };
 /* [CN-FORK] v0.5.1.64 删除 readHardwareEnabled：主页硬件信息功能（/system_stats + stats.c）已整体下线 */
 

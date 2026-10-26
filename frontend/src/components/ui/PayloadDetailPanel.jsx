@@ -8,7 +8,6 @@ import {
   CircleUser,
   ExternalLink,
   FileText,
-  Sparkles,
   Trash2,
   Globe,
 } from 'lucide-react';
@@ -17,6 +16,7 @@ import { isGitHubUrl } from '../../utils/payloadStatus';
 import { useTranslation } from 'react-i18next';
 import PayloadIcon from './PayloadIcon';
 import Modal from './Modal';
+import ReleaseDetails from './ReleaseDetails';
 
 const GithubIcon = ({ className = "w-4 h-4" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -354,22 +354,10 @@ const PayloadDetailPanel = ({
         </div>
       </div>
 
-      {/* Release Notes / What's New */}
-      {payload.release_notes && (
-        <div className="mt-8 space-y-3 min-w-0 max-w-full">
-          <h3 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-ps-blue" />
-            <span>{t("payload_detail.whats_new", "What's New")}</span>
-          </h3>
-          <div className="glass-panel p-5 sm:p-6 rounded-2xl border border-white/5 bg-black/20 min-w-0 max-w-full overflow-hidden">
-            <div
-              className="markdown-body text-sm min-w-0 max-w-full"
-              onClick={handleMarkdownClick}
-              dangerouslySetInnerHTML={{ __html: parseMarkdown(payload.release_notes) }}
-            />
-          </div>
-        </div>
-      )}
+      <ReleaseDetails
+        key={JSON.stringify([srcUrl, payload.id, payload.filename, payload.version, payload.source_direct, payload.url, payload.source, payload.repository, payload.repo_url])}
+        payload={payload} onMarkdownClick={handleMarkdownClick}
+      />
 
       {/* Full Description / README Section */}
       <div className="mt-8 space-y-4 min-w-0 max-w-full">

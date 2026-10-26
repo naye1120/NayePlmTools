@@ -245,5 +245,12 @@
   "settings.cache_clearing": "지우는 중…",
   "settings.cache_cleared": "저장소 캐시를 지웠습니다.",
   "settings.cache_failed": "저장소 캐시를 지울 수 없습니다.",
-  "settings.cache_desc": "다운로드한 목록과 아이콘을 지우고 다시 다운로드합니다. 설치된 페이로드와 설정은 유지됩니다."
+  "settings.cache_desc": "다운로드한 목록과 아이콘을 지우고 다시 다운로드합니다. 설치된 페이로드와 설정은 유지됩니다.",
+  "settings.dashboard_icons_title": "대시보드 페이로드 아이콘",
+  "settings.dashboard_icons_desc": "대시보드에 페이로드 아이콘을 표시합니다. 숨기면 텍스트 공간이 늘어납니다.",
+  "payload_detail.release_details": "릴리스 세부 정보",
+  "payload_detail.loading_release": "릴리스 세부 정보 로딩 중...",
+  "payload_detail.no_release_notes": "이 버전의 릴리스 노트가 없습니다.",
+  "settings.autoload_return_title": "자동 로딩 후 돌아가기",
+  "settings.autoload_return_desc": "모든 페이로드가 성공적으로 로드되면 3초 후 대시보드로 자동으로 돌아갑니다."
 }

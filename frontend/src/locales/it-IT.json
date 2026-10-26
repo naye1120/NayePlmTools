@@ -249,5 +249,12 @@
   "settings.cache_clearing": "Svuotamento…",
   "settings.cache_cleared": "Cache dei repository svuotata.",
   "settings.cache_failed": "Impossibile svuotare la cache dei repository.",
-  "settings.cache_desc": "Elimina i cataloghi e le icone scaricati, poi scaricali di nuovo. I payload installati e le impostazioni vengono mantenuti."
+  "settings.cache_desc": "Elimina i cataloghi e le icone scaricati, poi scaricali di nuovo. I payload installati e le impostazioni vengono mantenuti.",
+  "settings.dashboard_icons_title": "Icone dei payload nella dashboard",
+  "settings.dashboard_icons_desc": "Mostra le icone dei payload nella dashboard. Nasconderle lascia più spazio al testo.",
+  "payload_detail.release_details": "Dettagli della versione",
+  "payload_detail.loading_release": "Caricamento dei dettagli della versione...",
+  "payload_detail.no_release_notes": "Nessuna nota di rilascio disponibile per questa versione.",
+  "settings.autoload_return_title": "Ritorno dopo il caricamento automatico",
+  "settings.autoload_return_desc": "Torna automaticamente alla dashboard 3 secondi dopo il caricamento riuscito di tutti i payload."
 }

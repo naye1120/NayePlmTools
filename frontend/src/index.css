@@ -3,6 +3,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Older PS5 WebKit draws its disclosure marker even with list-style: none. */
+.release-details-summary::-webkit-details-marker { display: none; }
+
 /** 
  * LEGACY FALLBACKS
  * These ensure basic functionality on PS5 firmware < 5.0 (Safari < 15.4)

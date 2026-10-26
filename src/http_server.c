@@ -2989,13 +2989,14 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         if (!alloc_response_buffer(&resp_buf)) {
             free(raw); free(esc);
             return send_out_of_memory(conn);
-        }
         json_format(resp_buf, RESPONSE_BUFFER_SIZE,
                     "{\"AUTOLOAD_ENABLED\":%s,\"AUTOLOAD_LIST\":\"%s\",\"LAST_"
                     "REPOSITORY_UPDATE\":%ld,"
                     "\"AUTO_BROWSER_OPEN\":%s,\"AUTOLOAD_DELAY\":%d,"
                     "\"KILL_DISC_PLAYER_ON_STARTUP\":%s,\"SCAN_USB_PAYLOADS\":%s,"
-                    "\"AUTO_INSTALL_APP\":%s,\"MULTI_SOURCES_ENABLED\":%s,"
+                    "\"AUTO_INSTALL_APP\":%s,"
+                    "\"AUTOLOAD_RETURN_TO_DASHBOARD\":%s,\"SHOW_DASHBOARD_ICONS\":%s,"
+                    "\"MULTI_SOURCES_ENABLED\":%s,"
                     "\"DEFAULT_REPO_ENABLED\":%s,\"ARCHIVE_GLOBAL_CONFIG\":\"%s\","
                     "\"MEDIA_ARCHIVE_CONFIG\":\"%s\","
                     "\"FAVORITES\":\"%s\",\"FAVORITES_INITIALIZED\":%s}",
@@ -3003,6 +3004,8 @@ enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                     cfg.auto_browser_open ? "true" : "false", cfg.autoload_delay,
                     cfg.kill_disc_player ? "true" : "false", cfg.scan_usb_payloads ? "true" : "false",
                     cfg.auto_install_app ? "true" : "false",
+                    cfg.autoload_return_to_dashboard ? "true" : "false",
+                    cfg.show_dashboard_icons ? "true" : "false",
                     cfg.multi_sources_enabled ? "true" : "false",
                     cfg.default_repo_enabled ? "true" : "false",
                     ag_escaped, ma_escaped, fav_escaped, fav_exists ? "true" : "false");

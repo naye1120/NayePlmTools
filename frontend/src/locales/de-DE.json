@@ -247,5 +247,12 @@
   "settings.cache_clearing": "Wird geleert…",
   "settings.cache_cleared": "Repository-Cache geleert.",
   "settings.cache_failed": "Repository-Cache konnte nicht geleert werden.",
-  "settings.cache_desc": "Geladene Kataloge und Symbole löschen und neu laden. Installierte Payloads und Einstellungen bleiben erhalten."
+  "settings.cache_desc": "Geladene Kataloge und Symbole löschen und neu laden. Installierte Payloads und Einstellungen bleiben erhalten.",
+  "settings.dashboard_icons_title": "Payload-Symbole im Dashboard",
+  "settings.dashboard_icons_desc": "Payload-Symbole im Dashboard anzeigen. Durch Ausblenden bleibt mehr Platz für Text.",
+  "payload_detail.release_details": "Veröffentlichungsdetails",
+  "payload_detail.loading_release": "Veröffentlichungsdetails werden geladen...",
+  "payload_detail.no_release_notes": "Keine Versionshinweise für diese Version verfügbar.",
+  "settings.autoload_return_title": "Rückkehr nach Autoload",
+  "settings.autoload_return_desc": "3 Sekunden nach dem erfolgreichen Laden aller Payloads automatisch zum Dashboard zurückkehren."
 }
