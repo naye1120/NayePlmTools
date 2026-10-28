@@ -1,3 +1,29 @@
+## v0.6.3.197 (CN-FORK) — 2026-10-29 · 修「开机不自启」：引导器目录/清单按需创建 + 启动即登记
+
+> 用户口径：「程序被拉起的时候没有自动创建 autoloader 文件夹，有文件夹也没有写入文件」。
+
+### 修 bug：`/data/ps5_autoloader` 不建、清单不写、启动不登记
+- **真机取证**（192.168.1.214）：目录**存在**（别的载荷建的），`autoload.txt` 只有一行 `@sync`
+  —— 没有本工具条目、目录里也没有 ELF；本工具那份躺在**旧布局**
+  `/data/nayeplmtools/payloads/NayePlmTools/NayePlmTools_0.6.3.196-me.elf`。
+- **四个原因**（全在 `src/payload_mgr.c`）：
+  1. `payload_mgr_bootstrap_self_sync()` 第一句 `stat(PS5_AUTOLOADER_DIR)` 失败就 `return`
+     → 目录不存在时**永不创建**（`.196` 那版还专门写了「这个目录归引导器所有，我们不建」）；
+  2. `payload_mgr_autoloader_sync()`：目录不存在 `return 1`；**目录在、`autoload.txt` 不在**
+     时 `fopen(...,"r")` 失败 → `sync skipped` + `return -1` —— 就是「有文件夹也没写入文件」；
+  3. 启动对账里「清单没有本工具条目 → leaving it alone」（旧口径「登记只发生在用户明确安装时」）
+     → 换机、手清目录、引导器重建清单之后，本工具**永远不再自启**；
+  4. 找自己那份 ELF 只扫 `payloads/pldmgr` 与 `local|repo` 槽位，**漏了旧布局
+     `payloads/<工具名>/`** —— 真机上正好是后者，于是「找不到自己」。
+- **改法**：
+  - 新增 `autoloader_ensure_dir()`：目录不存在 `mkdir 0777`（容忍 EEXIST），成功/失败都留日志；
+  - `payload_mgr_autoloader_sync()` 改用它，`autoload.txt` 不存在当成空清单继续
+    （只有 ENOENT 这样，权限等错误仍算失败）；
+  - `payload_mgr_bootstrap_self_sync()`：目录/清单按需建；**无条目 → 启动即登记**
+    （`allow_register=1`：落 ELF + 写条目 + 自动补 `!1000` 延时行，与网页上传同一套）；
+    新增旧布局扫描；条目在但文件缺失/残包 → **同版本才补**，在册版本更新则只留痕、绝不降级。
+  - 护栏保留：找不到自己那份 ELF → 不写指向空气的条目；候选版本更旧 → 不动。
+
 ## v0.6.3.196 (CN-FORK) — 2026-10-28 · 修「兼容导入必报写入失败」+ 拉取/推送提示说清原因
 
 > 用户口径：「远程的存档拉取不回来，不是一个用户」「兼容导入提示写入失败」「下载的位置也不能导入」

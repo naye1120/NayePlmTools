@@ -229,6 +229,28 @@ static void autoloader_variant_suffix(const char *filename, char *out, size_t ou
     snprintf(out, out_size, "%s", dash);
 }
 
+/* [CN-FORK] v0.6.3.197 引导器目录按需创建。
+ * 旧口径（≤ .196）是「这个目录归越狱引导器所有，我们不建」，真机反馈是反过来的：
+ * 「程序被拉起的时候没有自动创建 autoloader 文件夹」。目录只是个约定落点 ——
+ * 没装引导器的机器上它就是个空目录 + 一份清单，等装了引导器立刻生效，建出来是安全的。
+ * 真机 2026-10-29 取证（192.168.1.214）：/data/ps5_autoloader 是别的载荷建的，
+ * autoload.txt 里只有一行 `@sync`，本工具既没登记条目、也没把 ELF 落进去。 */
+static int autoloader_ensure_dir(void) {
+    struct stat st;
+    if (stat(PS5_AUTOLOADER_DIR, &st) == 0) {
+        if (S_ISDIR(st.st_mode)) return 0;
+        pldmgr_log("[AutoloaderSync] %s exists but is not a directory — sync skipped\n",
+                   PS5_AUTOLOADER_DIR);
+        return -1;
+    }
+    if (mkdir(PS5_AUTOLOADER_DIR, 0777) != 0 && errno != EEXIST) {
+        pldmgr_log("[AutoloaderSync] cannot create %s: %s\n", PS5_AUTOLOADER_DIR, strerror(errno));
+        return -1;
+    }
+    pldmgr_log("[AutoloaderSync] created %s\n", PS5_AUTOLOADER_DIR);
+    return 0;
+}
+
 /* [CN-FORK] 安装 payload 后，若 /data/ps5_autoloader/autoload.txt 中已登记同一工具
  * （按去除版本号的 folder_name 匹配），则把新 ELF 同步到该目录、更新 txt、删除旧文件。
  * 没登记时：本工具（allow_register）追加登记，别的载荷什么都不做。
@@ -243,28 +265,20 @@ int payload_mgr_autoloader_sync(const char *new_filename, const char *new_file_p
     if (!new_filename || !new_filename[0] || !new_file_path || !new_file_path[0]) return -1;
     if (strchr(new_filename, '/') || strstr(new_filename, "..")) return -1;
 
-    struct stat dir_st;
-    if (stat(PS5_AUTOLOADER_DIR, &dir_st) != 0 || !S_ISDIR(dir_st.st_mode)) {
-        /* [CN-FORK] v0.6.3.196 **这个目录归越狱引导器所有，我们不建它** ——
-         * 没装引导器的机器上凭空多一个 /data/ps5_autoloader 毫无意义（里面没有
-         * autoload.txt，引导器也不会去读）。
-         * 但「没检测到」这件事原来**一个字都不留**：真机上装完载荷、
-         * `/data/ps5_autoloader` 一直不出现，日志、界面、返回值三处都看不出原因
-         * （2026-10-28 实测：/data 下只有 nayeplmtools / pkg / accounts /
-         * ps5-account-tools / homebrew，连目录都没有，日志里也没有 AutoloaderSync）。
-         * 现在留一行 —— 看到它就知道该去装引导器，而不是继续怀疑本工具的同步逻辑。 */
-        pldmgr_log("[AutoloaderSync] %s 不存在（本机没装越狱引导器）—— 跳过同步\n",
-                   PS5_AUTOLOADER_DIR);
-        return 1;
-    }
+    if (autoloader_ensure_dir() != 0) return -1;
 
+    /* [CN-FORK] v0.6.3.197 清单本身也可能不存在（目录刚建出来、或引导器还没写过）：
+     * 以前这里直接 `cannot read ... sync skipped` 返回 -1 —— 目录在、txt 不在的机器上
+     * 永远同步不了。现在把「不存在」当成空清单，交给下面 allow_register 分支建出来；
+     * 其它 errno（权限等）仍然算失败。 */
     FILE *f = fopen(PS5_AUTOLOADER_CONFIG, "r");
-    if (!f) {
-        /* 目录在、txt 读不开：以前这里静默 return，现在留痕 */
+    if (!f && errno != ENOENT) {
         pldmgr_log("[AutoloaderSync] cannot read %s: %s — sync skipped\n",
                    PS5_AUTOLOADER_CONFIG, strerror(errno));
         return -1;
     }
+    if (!f)
+        pldmgr_log("[AutoloaderSync] %s not found — creating it\n", PS5_AUTOLOADER_CONFIG);
 
     char new_folder[128];
     pldmgr_utils_get_payload_folder_name(new_filename, new_folder, sizeof(new_folder));
@@ -277,7 +291,7 @@ int payload_mgr_autoloader_sync(const char *new_filename, const char *new_file_p
     int    our_idx    = -1;   /* 本工具条目在 lines[] 里的下标 */
     char   old_filename[256] = "";
 
-    while (line_count < 100 && fgets(lines[line_count], (int)sizeof(lines[0]), f)) {
+    while (f && line_count < 100 && fgets(lines[line_count], (int)sizeof(lines[0]), f)) {
         char clean[256];
         strncpy(clean, lines[line_count], sizeof(clean) - 1);
         clean[sizeof(clean) - 1] = '\0';
@@ -301,7 +315,7 @@ int payload_mgr_autoloader_sync(const char *new_filename, const char *new_file_p
         }
         line_count++;
     }
-    fclose(f);
+    if (f) fclose(f);
 
     if (!matched && !same_name) {
         if (!allow_register) {
@@ -404,18 +418,22 @@ int payload_mgr_autoloader_sync(const char *new_filename, const char *new_file_p
  * 自己更新也成功了，但 /data/ps5_autoloader/ 一直停在旧版本，只有「网页上传」
  * 那一条路会顺带同步。
  *
- * 规则（宁可不动，也不做让人意外的改动）：
- *   - 没装引导器目录 / autoload.txt 读不开 → 只留日志，不动；
- *   - autoload.txt 里没有本工具这一条 → 不新登记（登记只发生在用户明确安装时）；
- *   - storage 与 payloads/pldmgr 里都找不到自己的 ELF → 不动；
- *   - 候选版本不比在册版本新 → 不动 —— 绝不把引导器退回旧版本。 */
+ * v0.6.3.197 改口径（用户 2026-10-29：「程序被拉起的时候没有自动创建 autoloader
+ * 文件夹，有文件夹也没有写入文件」）：
+ *   - 目录不存在 → 建（见 autoloader_ensure_dir）；
+ *   - autoload.txt 不存在 → 当成空清单，下面会建出来；
+ *   - 清单里没有本工具 → **启动即登记**（旧规则「不新登记」是反的：装完就该自启）；
+ *   - 清单里有条目、但目录里那份文件不在/是残包 → 用 storage 里同版本那份补回去。
+ *
+ * 仍然保留的护栏（宁可不动，也不做让人意外的改动）：
+ *   - storage / 自更新目录 / 旧布局里都找不到自己的 ELF → 不动（不写指向空气的条目）；
+ *   - 候选版本比在册版本旧 → 不动 —— 绝不把引导器退回旧版本。 */
 void payload_mgr_bootstrap_self_sync(void) {
-    struct stat st;
-    if (stat(PS5_AUTOLOADER_DIR, &st) != 0 || !S_ISDIR(st.st_mode)) return;
+    if (autoloader_ensure_dir() != 0) return;
 
-    /* 1) 引导器里现在登记的是哪一份 */
+    /* 1) 引导器里现在登记的是哪一份（清单不存在 = 一条都没登记，不算错误） */
     FILE *f = fopen(PS5_AUTOLOADER_CONFIG, "r");
-    if (!f) {
+    if (!f && errno != ENOENT) {
         pldmgr_log("[AutoloaderSync] cannot read %s: %s — reconcile skipped\n",
                    PS5_AUTOLOADER_CONFIG, strerror(errno));
         return;
@@ -423,7 +441,7 @@ void payload_mgr_bootstrap_self_sync(void) {
     char entry_name[256] = "";
     char entry_version[64] = "";
     char line[256];
-    while (fgets(line, sizeof(line), f)) {
+    while (f && fgets(line, sizeof(line), f)) {
         char clean[256];
         strncpy(clean, line, sizeof(clean) - 1);
         clean[sizeof(clean) - 1] = '\0';
@@ -435,14 +453,9 @@ void payload_mgr_bootstrap_self_sync(void) {
         autoloader_version_of(clean, entry_version, sizeof(entry_version));
         break;
     }
-    fclose(f);
-    if (!entry_name[0]) {
-        pldmgr_log("[AutoloaderSync] %s has no %s entry — leaving it alone\n",
-                   PS5_AUTOLOADER_CONFIG, PLDMGR_APP_NAME);
-        return;
-    }
+    if (f) fclose(f);
 
-    /* 2) 找 storage / 自更新目录里最新的一份自己 */
+    /* 2) 找 storage / 自更新目录 / 旧布局里最新的一份自己 */
     char best_path[640] = "";
     char best_name[256] = "";
     char best_version[64] = "";
@@ -489,14 +502,81 @@ void payload_mgr_bootstrap_self_sync(void) {
         slot_free_all(slots);
     }
 
+    /* 2c. 旧布局 payloads/<工具名>/ —— v0.5.x 的上传落点，slot 化之后不再写，
+     *     但真机上就是它（2026-10-29 实测：/data/nayeplmtools/payloads/NayePlmTools/
+     *     NayePlmTools_0.6.3.196-me.elf）。老版本装的机器升级上来时，这里是唯一
+     *     能找到自己那份 ELF 的地方 —— 漏了它，启动登记会误判成「storage 里没有」。 */
+    DIR *root = opendir(PAYLOADS_STORAGE_DIR);
+    if (root) {
+        struct dirent *ent;
+        while ((ent = readdir(root)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            if (!strcasecmp(ent->d_name, "local") || !strcasecmp(ent->d_name, "repo")) continue;
+            if (!is_self_update_name(ent->d_name)) continue;
+            char legacy_dir[512];
+            snprintf(legacy_dir, sizeof(legacy_dir), "%s/%s", PAYLOADS_STORAGE_DIR, ent->d_name);
+            DIR *sd = opendir(legacy_dir);
+            if (!sd) continue;
+            struct dirent *se;
+            while ((se = readdir(sd)) != NULL) {
+                if (se->d_name[0] == '.') continue;
+                char ver[64];
+                autoloader_version_of(se->d_name, ver, sizeof(ver));
+                if (!ver[0]) continue;
+                char cand[640];
+                snprintf(cand, sizeof(cand), "%s/%s", legacy_dir, se->d_name);
+                if (!payload_file_sane(cand)) continue;
+                if (best_version[0] && slot_version_compare(ver, best_version) <= 0) continue;
+                char suffix[8];
+                autoloader_variant_suffix(se->d_name, suffix, sizeof(suffix));
+                snprintf(best_version, sizeof(best_version), "%s", ver);
+                snprintf(best_path, sizeof(best_path), "%s", cand);
+                snprintf(best_name, sizeof(best_name), "%s_%s%s.elf", PLDMGR_APP_NAME, ver, suffix);
+            }
+            closedir(sd);
+        }
+        closedir(root);
+    }
+
     if (!best_path[0]) {
         pldmgr_log("[AutoloaderSync] no installed %s copy in storage — bootloader left at %s\n",
-                   PLDMGR_APP_NAME, entry_name);
+                   PLDMGR_APP_NAME, entry_name[0] ? entry_name : "(none)");
         return;
     }
 
-    /* 3) 只在确实变新时才动 */
-    if (entry_version[0] && slot_version_compare(best_version, entry_version) <= 0) return;
+    /* 3) 清单里没有本工具 → 启动即登记。
+     * 旧规则是「登记只发生在用户明确安装时」，结果就是：换机/手清过目录/引导器自己
+     * 重建了清单之后，本工具永远不会再自启，用户只能每次手动注入。allow_register=1
+     * 会走「复制 ELF + 写条目 + 补 !1000 延时行」那套，与网页上传完全一致。 */
+    if (!entry_name[0]) {
+        pldmgr_log("[AutoloaderSync] startup register: %s -> %s\n", best_name,
+                   PS5_AUTOLOADER_CONFIG);
+        payload_mgr_autoloader_sync(best_name, best_path, 1);
+        return;
+    }
+
+    /* 4) 在册条目指向的文件可能根本不在（换机、手动清过目录、0 字节残包）——
+     *    「登记了却加载不到」在开机时表现为本工具完全不启动，而旧代码在这种情况下
+     *    因为「版本不比在册的新」直接 return，永远修不回来。同版本才补，绝不借机降级。 */
+    char entry_path[600];
+    snprintf(entry_path, sizeof(entry_path), "%s/%s", PS5_AUTOLOADER_DIR, entry_name);
+    int entry_sane = payload_file_sane(entry_path);
+
+    /* 5) 版本不旧于手上这份 → 正常情况下不动 */
+    int cmp = entry_version[0] ? slot_version_compare(best_version, entry_version) : 1;
+    if (cmp <= 0) {
+        if (entry_sane) return;
+        if (cmp < 0) {
+            /* 在册版本比 storage 里任何一份都新，而目录里那份又不在：只能留痕，
+             * 绝不拿旧包顶上去（那等于把引导器降级）。 */
+            pldmgr_log("[AutoloaderSync] %s missing/broken and no %s copy in storage — "
+                       "reinstall %s to repair\n", entry_path, entry_version, PLDMGR_APP_NAME);
+            return;
+        }
+        pldmgr_log("[AutoloaderSync] %s missing/broken — repairing from %s\n", entry_path, best_path);
+        payload_mgr_autoloader_sync(entry_name, best_path, 0);
+        return;
+    }
     if (slot_version_compare(best_version, MENU_VERSION) < 0)
         pldmgr_log("[AutoloaderSync] note: autoloader gets %s while running %s — "
                    "install %s through the payload manager to sync it\n",
