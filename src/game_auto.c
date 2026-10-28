@@ -708,6 +708,15 @@ typedef struct {
     long long files;
     long long bytes;
     char first_err[200];
+    /* [CN-FORK] v0.6.3.196 「跳过」也要能说清为什么。
+     *
+     * 老版本只回一句「跳过 1」，而跳过最常见的原因是**换机 / 重装之后 uid 变了**：
+     * 远端那份 `<TID>/<旧uid>.zip` 明明在，但拉取只认当前用户的包（用户口径：
+     * 「远端只拉取当前用户的」），于是每次都静默跳过 —— 用户看到的就是「拉不回来」。
+     * 真机取证（2026-10-28）：本机 uid 1d8340e1、远端只有 1a1d3627.zip，
+     * 日志连打三次 `成功 0 / 跳过 1`，一个字都没提「是哪个用户没找到」。
+     * 所以这里记下**第一个被跳过的 uid**，结束提示里原样说出来。 */
+    char skip_note[240];
 } ga_res_t;
 
 static int ga_tid_ok(const char *t) {
@@ -761,9 +770,14 @@ static void ga_do_inner(const char *tid, int act, const char *only_uid,
         if (nu <= 0 && act == GA_ACT_PULL) nu = game_saves_user_ids(uids, 16);
     }
     if (nu <= 0) {
+        /* [CN-FORK] v0.6.3.196 这句原来只说「主机上还没有这个游戏的存档」，用户看完
+         * 不知道下一步该干什么（真机上最常见的情形是换机/重装后**本机确实还没有**
+         * 这款游戏的存档目录，于是手动推送必然走到这里）。把「为什么」和「怎么办」
+         * 一起写进同一句 —— 它是唯一会给用户看的那一行。 */
         snprintf(res->first_err, sizeof(res->first_err),
-                 act == GA_ACT_PUSH ? "主机上还没有这个游戏的存档"
-                                    : "主机上没有可用的用户目录");
+                 act == GA_ACT_PUSH
+                     ? "本机还没有这个游戏的存档（先玩一次让它存个档，或用「兼容导入」导入）"
+                     : "本机没有可用的用户目录，拉取无从落盘");
         res->failed = 1;
         return;
     }
@@ -800,6 +814,9 @@ static void ga_do_inner(const char *tid, int act, const char *only_uid,
                              &rsrc, serr, sizeof(serr));
             if (st == SR_ENOTFOUND) {
                 res->skipped++;
+                if (!res->skip_note[0])
+                    snprintf(res->skip_note, sizeof(res->skip_note),
+                             "远端没有当前用户（%s）的存档，未拉取", uids[i]);
                 continue;
             }
             if (st == 0) {
@@ -825,6 +842,10 @@ static void ga_do_inner(const char *tid, int act, const char *only_uid,
             res->bytes += bytes;
         } else if (rc == SR_ENOTFOUND) {
             res->skipped++;
+            /* 与上面 sr_stat 那条同一口径：这里也要说清是**哪个用户**没有。 */
+            if (!res->skip_note[0])
+                snprintf(res->skip_note, sizeof(res->skip_note),
+                         "远端没有当前用户（%s）的存档，未拉取", uids[i]);
         } else {
             res->failed++;
             if (!res->first_err[0]) snprintf(res->first_err, sizeof(res->first_err), "%s", err);
@@ -950,15 +971,21 @@ static void ga_do(const char *tid, int act, const char *only_uid, ga_res_t *res,
     if (res->newer > 0)
         snprintf(newer, sizeof(newer), " · 无需拉取 %d（未覆盖）", res->newer);
 
+    /* 结尾那一句：失败原因优先，没有失败就用「跳过」的原因。
+     * [CN-FORK] v0.6.3.196 原来只挂 first_err —— 而「跳过」不设 first_err，
+     * 于是屏幕上只剩「成功 0 / 跳过 1」这种没人看得懂的一行（真机上连打三次）。 */
+    const char *tail = res->first_err[0] ? res->first_err
+                     : (res->skip_note[0] ? res->skip_note : "");
+
     pldmgr_log("[PLDMGR] saves: 远程%s 结束 · %s · 成功 %d / 跳过 %d / 失败 %d%s · "
                "%s · 用时 %.0f ms%s%s\n",
                an, tid, res->ok, res->skipped, res->failed, newer, qty, ms,
-               res->first_err[0] ? " · " : "", res->first_err);
+               tail[0] ? " · " : "", tail);
     /* 屏幕上那一条。失败原因**另起一行**打 —— 通知是给人扫一眼的，
      * 混在计数那一行里最容易被当成背景噪声划过去。 */
     pldmgr_notify("远程%s 结束\n%s · 成功 %d / 跳过 %d / 失败 %d%s\n%s · 用时 %.0f ms%s%s",
                   an, tid, res->ok, res->skipped, res->failed, newer, qty, ms,
-                  res->first_err[0] ? "\n" : "", res->first_err);
+                  tail[0] ? "\n" : "", tail);
 
     /* 拉完了才放行 —— 收尾在「结束」之后，这样用户看到的是
      * 「拉取成功」然后才是「游戏回来了」（用户口径：拉取成功 → 恢复游戏）。
@@ -1054,8 +1081,13 @@ int game_auto_sync_action(const char *body, size_t len,
         snprintf(note, sizeof(note),
                  "远程没有比本地更新的一份，已跳过拉取（%d 份未覆盖）", res.newer);
     else if (res.ok == 0 && res.skipped > 0)
-        snprintf(note, sizeof(note), act == GA_ACT_PUSH ? "没有可推送的存档"
-                                                        : "远程还没有这个游戏的存档");
+        /* [CN-FORK] v0.6.3.196 原来一律说「远程还没有这个游戏的存档」—— 在换机
+         * （uid 变了）的场景里这是**假话**：远端那份存档就在，只是不属于当前用户。
+         * 优先用 ga_do_inner 记下的那句（带 uid）。 */
+        snprintf(note, sizeof(note), "%s",
+                 res.skip_note[0] ? res.skip_note
+                 : (act == GA_ACT_PUSH ? "没有可推送的存档"
+                                       : "远端还没有这个游戏的存档"));
     else if (act == GA_ACT_PUSH)
         snprintf(note, sizeof(note), "已推送 %d 份（%lld 字节）", res.ok, res.bytes);
     else

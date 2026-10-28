@@ -600,7 +600,12 @@ static void t_sync(void) {
     CHECK(game_auto_sync_action(body, strlen(body), out, sizeof(out), msg, sizeof(msg)) == 0,
           "远端没存档时拉取不该算失败：%s", msg);
     CHECK(strstr(out, "\"ok\":true") != NULL, "远端没存档该回 ok:true：%s", out);
-    CHECK(strstr(out, "远程还没有") != NULL, "提示要说清是远程还没有：%s", out);
+    /* [CN-FORK] v0.6.3.196 措辞从笼统的「远程还没有这个游戏的存档」改成**点名当前
+     * 用户** —— 换机之后远端那份老 uid 的包明明在，旧文案是假话，用户看完也不知道
+     * 该干什么（真机连打三次「成功 0 / 跳过 1」，谁也没看懂）。 */
+    CHECK(strstr(out, "远端没有当前用户") != NULL,
+          "提示要说清是**当前用户**在远端没有存档：%s", out);
+    CHECK(strstr(out, "未拉取") != NULL, "跳过时要明说「未拉取」：%s", out);
     /* 而且**不能动本地的存档** —— 拉失败把用户的存档弄没是最坏的 */
     CHECK(exists(SAVE_FILE), "拉取失败不该动本地存档");
 

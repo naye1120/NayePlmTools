@@ -244,8 +244,19 @@ int payload_mgr_autoloader_sync(const char *new_filename, const char *new_file_p
     if (strchr(new_filename, '/') || strstr(new_filename, "..")) return -1;
 
     struct stat dir_st;
-    if (stat(PS5_AUTOLOADER_DIR, &dir_st) != 0 || !S_ISDIR(dir_st.st_mode))
-        return 1; /* 这台机器没装越狱引导器：不是错误，静默跳过 */
+    if (stat(PS5_AUTOLOADER_DIR, &dir_st) != 0 || !S_ISDIR(dir_st.st_mode)) {
+        /* [CN-FORK] v0.6.3.196 **这个目录归越狱引导器所有，我们不建它** ——
+         * 没装引导器的机器上凭空多一个 /data/ps5_autoloader 毫无意义（里面没有
+         * autoload.txt，引导器也不会去读）。
+         * 但「没检测到」这件事原来**一个字都不留**：真机上装完载荷、
+         * `/data/ps5_autoloader` 一直不出现，日志、界面、返回值三处都看不出原因
+         * （2026-10-28 实测：/data 下只有 nayeplmtools / pkg / accounts /
+         * ps5-account-tools / homebrew，连目录都没有，日志里也没有 AutoloaderSync）。
+         * 现在留一行 —— 看到它就知道该去装引导器，而不是继续怀疑本工具的同步逻辑。 */
+        pldmgr_log("[AutoloaderSync] %s 不存在（本机没装越狱引导器）—— 跳过同步\n",
+                   PS5_AUTOLOADER_DIR);
+        return 1;
+    }
 
     FILE *f = fopen(PS5_AUTOLOADER_CONFIG, "r");
     if (!f) {

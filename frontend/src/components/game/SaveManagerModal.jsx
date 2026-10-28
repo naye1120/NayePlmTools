@@ -653,7 +653,14 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                   <div className="mt-3">
                     <p className="panel-tiny text-zinc-500 mb-1.5">{t('game.remote_saves', '远程存档')}</p>
                     {saves.length === 0 ? (
-                      <Note tone="muted">{t('game.remote_no_local', '本地还没有存档，无法定位远程用户')}</Note>
+                      /* [CN-FORK] v0.6.3.196 换机/重装之后本机一个存档目录都没有，这段
+                       * 是用户唯一能看到的话。原来只说「无法定位远程用户」，等于把
+                       * 「你的存档还在远端、但界面查不到」这件事瞒住了 —— 真机上用户
+                       * 就是卡在这里（远端明明有 1a1d3627.zip，界面一片空白）。
+                       * 现在把出路一起写出来：走「兼容导入」，它会改签到当前用户。 */
+                      <Note tone="muted">
+                        {t('game.remote_no_local', '本机还没有这款游戏的存档，查不到远端属于谁。远端若有旧账号的备份，请用「兼容导入」导入（会自动改签到当前用户）。')}
+                      </Note>
                     ) : (
                       <div className="space-y-1.5">
                         {saves.map((sv) => {
@@ -672,7 +679,7 @@ export default function SaveManagerModal({ show, game, onClose, addToast, showCo
                                 ) : !ri.configured ? (
                                   <span className="text-zinc-500">{t('game.remote_unset_short', '未配置远程位置')}</span>
                                 ) : !ri.exists ? (
-                                  <span className="text-zinc-500">{t('game.remote_no_save', '远端暂无此用户存档')}</span>
+                                  <span className="text-zinc-500">{t('game.remote_no_save', '远端没有这个用户的存档')}</span>
                                 ) : ri.error ? (
                                   <span className="text-amber-400/90">{ri.error}</span>
                                 ) : (

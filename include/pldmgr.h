@@ -189,7 +189,7 @@
 #define ROUTE_TILE_GROUP_PIN "/tile_group_pin"     /* POST：置顶 / 取消置顶 */
 #define ROUTE_TILE_GROUP_ORDER "/tile_group_order" /* POST：按给定顺序重排已固定项 */
 
-#define MENU_VERSION "0.6.3.195" /* [CN-FORK] 本 fork 版本 = **已合并的上游版本 + 构建序号**（硬规矩，见 HANDOVER）
+#define MENU_VERSION "0.6.3.196" /* [CN-FORK] 本 fork 版本 = **已合并的上游版本 + 构建序号**（硬规矩，见 HANDOVER）
                                   * 基线必须与「关于本 Fork → 上游版本」逐字相同，否则用户看到
                                   * 「本 Fork 比上游还旧」；合并上游时这两处一起改。
                                   * 当前：上游 v0.6.3（merge 94f5cdf）+ .195（修快捷入口刷新后全部消失）。 */
