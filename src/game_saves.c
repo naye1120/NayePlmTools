@@ -396,9 +396,21 @@ static int gs_root_or_create(const char *tid, const char *uid,
     snprintf(out->uid, sizeof(out->uid), "%s", use);
     snprintf(out->kind, sizeof(out->kind), "PS5");
     snprintf(out->path, sizeof(out->path), "%s/%s/savedata_prospero/%s", GS_HOME, use, tid);
-    char parent[640];
-    snprintf(parent, sizeof(parent), "%s/%s/savedata_prospero", GS_HOME, use);
-    if (ensure_dir_recursive(parent) != 0) {
+    /* 🔴 [CN-FORK] v0.6.3.196 **建到 <TID> 为止，不能只建到 savedata_prospero**。
+     *
+     * 老代码只 ensure_dir_recursive(parent)（= …/savedata_prospero），<TID> 那一层
+     * 留给「整份替换」去 rename 出来 —— 对 upload / 远程拉取（gs_swap_dir 走
+     * `rename(src, target)`，目标不存在正好）是成立的，但**兼容导入不吃这一套**：
+     * gs_gx_merge 是把暂存目录里的文件逐个 `rename(<stage>/<名>, <TID>/<名>)`，
+     * 目标目录不存在时 rename 回 ENOENT，于是导入必报
+     *   「写入存档目录失败（磁盘满？）」
+     * 而磁盘其实是空的。真机取证（2026-10-28，192.168.1.214）：
+     *   /user/home 下只有 1d8340e1，savedata_prospero 是**空的**（mtime 正是
+     *   用户点导入那一刻），savedata 根本不存在 → 主机上还没有这款游戏的存档目录
+     *   → 走到这个分支 → 只建了 savedata_prospero → 导入 100% 失败。
+     * 这个分支的契约就是「函数名里的 or_create」，所以在这里把根建全。
+     * gs_swap_dir 对「目标已存在但为空」也走得通（①搬 0 条 ②搬进去），无副作用。 */
+    if (ensure_dir_recursive(out->path) != 0) {
         if (err) snprintf(err, errsz, "无法创建存档目录（%s）", strerror(errno));
         return -1;
     }
@@ -2675,7 +2687,11 @@ int game_saves_remote_info(const char *tid, const char *save, char *buf, size_t 
     }
     char mtstr[32];
     struct tm tmv;
-    if (mt > 0 && gmtime_r(&mt, &tmv))
+    /* [CN-FORK] v0.6.3.196 `gmtime_r` → `localtime_r`：全仓唯一一处 UTC。
+     * 真机取证（2026-10-28）：远端 1a1d3627.zip 的 SMB mtime 是 21:56，这里却显示
+     * 13:56 —— 正好差 8 小时。前端「远程存档」那一行的时间与本地列表（gs_fmt_mtime
+     * 走 localtime_r）对不上，用户按它判「哪份更新」会判反。 */
+    if (mt > 0 && localtime_r(&mt, &tmv))
         strftime(mtstr, sizeof(mtstr), "%Y-%m-%d %H:%M", &tmv);
     else
         mtstr[0] = 0;
@@ -2976,26 +2992,33 @@ static int gs_gx_cb(void *user, const char *name, const unsigned char *data,
 }
 
 /* 把暂存目录里的普通文件逐个 rename 进存档目录（同名覆盖）。
- * 只搬普通文件：gs_gx_cb 已经把包里所有名字压平了，暂存目录里不可能有子目录。 */
+ * 只搬普通文件：gs_gx_cb 已经把包里所有名字压平了，暂存目录里不可能有子目录。
+ *
+ * [CN-FORK] v0.6.3.196 失败时**把 errno 留出来**：调用方原来只会说一句
+ * 「写入存档目录失败（磁盘满？）」，而这条路上真正的错法是 ENOENT（目标 <TID>
+ * 目录不存在，见 gs_root_or_create 的注释）—— 磁盘一个字节都没满。日志里必须有
+ * 具体的 errno，否则下次再出这种事还是只能靠猜。 */
 static int gs_gx_merge(const char *stage, const char *dst) {
     DIR *d = opendir(stage);
     if (!d) return -1;
     struct dirent *e;
     char sp[1200], dp[1200];
-    int rc = 0;
+    int rc = 0, e_saved = 0;
     while ((e = readdir(d)) != NULL) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         if (snprintf(sp, sizeof(sp), "%s/%s", stage, e->d_name) >= (int)sizeof(sp) ||
             snprintf(dp, sizeof(dp), "%s/%s", dst, e->d_name) >= (int)sizeof(dp)) {
             rc = -1;
+            e_saved = ENAMETOOLONG;
             break;
         }
         struct stat st;
         if (lstat(sp, &st) != 0) continue;
         if (!S_ISREG(st.st_mode)) continue;
-        if (rename(sp, dp) != 0) { rc = -1; break; }
+        if (rename(sp, dp) != 0) { rc = -1; e_saved = errno; break; }
     }
     closedir(d);
+    if (rc != 0) errno = e_saved;   /* closedir 会把 errno 覆盖掉 */
     return rc;
 }
 
@@ -3104,8 +3127,13 @@ int game_saves_import_garlic(const char *tid, const char *save, const char *name
     }
 
     if (gs_gx_merge(stage, r.path) != 0) {
+        int e = errno;   /* 必须在 gs_rmtree 之前取：它会改 errno */
         gs_rmtree(stage);
-        if (msg) snprintf(msg, msgsz, "写入存档目录失败（磁盘满？）");
+        pldmgr_log("[PLDMGR] saves: %s garlic 导入 合并失败 -> %s (%s)\n",
+                   tid, r.path, strerror(e));
+        /* 老文案「磁盘满？」把 ENOENT 这种最常见的错法指向了完全无关的原因
+         * （真机 2026-10-28 就是这个：目标 <TID> 目录不存在，盘是空的）。 */
+        if (msg) snprintf(msg, msgsz, "写入存档目录失败（%s）", strerror(e));
         return -1;
     }
     gs_rmtree(stage);

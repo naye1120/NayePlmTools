@@ -1039,6 +1039,31 @@ int main(void) {
                                        msg, sizeof(msg)) < 0,
               "带 / 的 uid 居然成功了");
 
+        /* ⑦ [CN-FORK] v0.6.3.196 主机上**还没有**这款游戏的存档目录时，导入必须自己
+         * 把 `<TID>` 那一层建出来。
+         *
+         * 真机事故（2026-10-28，192.168.1.214）：换机后
+         *   /user/home 下只有一个用户，savedata_prospero 是**空的**（mtime 正是用户
+         *   点「兼容导入」那一刻 —— 说明目录被我们建了、但只建到这一层），
+         *   savedata 根本不存在。导入报「写入存档目录失败（磁盘满？）」。
+         * 根因：gs_root_or_create 只 ensure_dir_recursive(savedata_prospero)，
+         * `<TID>` 留给「整份替换」的 rename 去生成 —— 而兼容导入是
+         * `rename(<stage>/<名>, <TID>/<名>)`，目标目录不存在就是 ENOENT。
+         * 盘一个字节都没满，报「磁盘满」纯属误导。
+         * 这条用例把「目录不存在 → 导入要能自己建」钉住，防止再退回去。 */
+        {
+            const char *nt = "PPSA077777";
+            char nd[900];
+            snprintf(nd, sizeof(nd), "%s/" U2 "/savedata_prospero/%s", HOME, nt);
+            CHECK(access(nd, F_OK) != 0,
+                  "这个用例要求目标存档目录一开始不存在（先跑过就失去意义了）: %s", nd);
+            CHECK(game_saves_import_garlic(nt, U2, "sdimg_FRESH", raw, sizeof(raw),
+                                           &nf, msg, sizeof(msg)) == 0,
+                  "目标存档目录不存在时导入失败（真机 v0.6.3.196 的那条）: %s", msg);
+            snprintf(p, sizeof(p), "%s/sdimg_FRESH", nd);
+            CHECK(exists_reg(p), "导入没落到新建出来的存档目录里: %s", p);
+        }
+
         unlink(z1);
         unlink(z2);
         unlink(gz);
